@@ -199,6 +199,10 @@ typedef struct {
 } LineBoxGlyph;
 
 size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph **out);
+/* What `line_box_glyphs` reads, asked under the caller's resting drive: the fill's atomic inlines and its §10.8
+   extents at the derived width (`line_box_atomics_ask`, then `line_box_extents_ask`). False ("not yet") when one
+   stopped; asking again continues, and the read then finds both answered. */
+bool line_box_glyphs_ask(lxb_dom_element_t *style, BlockFlowRun run);
 
 /* One box fragment of an inline box: CSSOM View §6 "Extensions to the Element Interface"'s getClientRects()
  * step 3's "one for each box fragment", one per line box it spans. The four numbers are the fragment's border

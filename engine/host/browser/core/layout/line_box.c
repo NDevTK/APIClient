@@ -2211,6 +2211,14 @@ static LineBoxGlyph *lb_glyphs_room(LineBoxGlyph *v, size_t n, size_t *cap)
     return grown;
 }
 
+bool line_box_glyphs_ask(lxb_dom_element_t *style, BlockFlowRun run)
+{
+    LineBoxAvailableWidth avail = line_box_available_width_derived();
+
+    DCHECK(style != NULL, "CSS 2.1 §E.2's step 7.2.1 text was asked for with no establishing element");
+    return line_box_atomics_ask(style, run, avail) && line_box_extents_ask(style, run, avail);
+}
+
 size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph **out)
 {
     LayoutJobDrive d;
@@ -2232,15 +2240,10 @@ size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph 
        `line_box_inline_fragments`' two: this entry is handed the establishing container itself, so
        css-writing-modes-4 §7.3 "Orthogonal Flows" has no second element to compare here. */
     lb_require_horizontal_tb(style);
-    /* A paint answers synchronously, so this entry is a drive over the two asks, as
-       `line_box_inline_fragments` is over its own. */
-    {
-        LineBoxAvailableWidth avail = line_box_available_width_derived();
-
-        layout_job_drive_begin(&d);
-        while (!line_box_atomics_ask(style, run, avail) || !line_box_extents_ask(style, run, avail))
-            (void)block_flow_drive_deferred(&d);
-    }
+    /* A paint answers synchronously, so this entry is a drive over its ask, which finds both answers held when
+       the paint asked them first (core/paint/box_paint.c's box_paint_ready). */
+    layout_job_drive_begin(&d);
+    while (!line_box_glyphs_ask(style, run)) (void)block_flow_drive_deferred(&d);
     f = lb_layout(style, run, line_box_available_width_derived());
     facts = lb_fill_facts(f, style);
     for (i = 0; i < f->n; i++) {

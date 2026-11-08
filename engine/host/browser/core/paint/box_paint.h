@@ -226,10 +226,10 @@ BoxPaintWalk *box_paint_begin(JSContext *ctx, lxb_dom_element_t *context_el, Dis
 bool box_paint_step(BoxPaintWalk *w);
 bool box_paint_end(BoxPaintWalk *w);
 /* Whether the offer `step` paints next has its asks answered, under a resting drive this opens on the entered
-   job: CSSOM View §6's client rectangles of its element and, for CSS 2.1 §E.2's step 7.2, the inline formatting
-   context condition `bp_line_boxes` reads as served. The offer is held, so `step` paints the one asked. False
-   ("not yet") when the activation must rest; true when the sequence is complete. Asked before each `step`, with
-   no drive open; asserted as `step` is. */
+   job: CSSOM View §6's client rectangles of its element and, for CSS 2.1 §E.2's step 7.2, what `bp_line_boxes`
+   reads (the inline formatting context condition, the anonymous block boxes and each run's line boxes). The
+   offer is held, so `step` paints the one asked. False ("not yet") when the activation must rest; true when the
+   sequence is complete. Asked before each `step`, with no drive open; asserted as `step` is. */
 bool box_paint_ready(BoxPaintWalk *w);
 
 #endif

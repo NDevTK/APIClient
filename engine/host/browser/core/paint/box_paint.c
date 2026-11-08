@@ -1438,10 +1438,31 @@ static bool bp_hold_next(BoxPaintWalk *w)
     return w->held;
 }
 
+/* CSS 2.1 §E.2's step 7.2 over `el`'s line boxes, asked before `bp_line_boxes` reads them: which shape of
+   §9.4.2's context `el` holds and, for each of its runs, what line_box_glyphs reads. */
+static bool bp_line_boxes_ask(lxb_dom_element_t *el)
+{
+    BlockFlowAnonBox *v = NULL;
+    BlockFlowRun whole;
+    size_t n = 0, i;
+    bool establishes, ready = true;
+
+    if (!block_flow_establishes_inline_context_ask(el, &establishes)) return false;
+    if (establishes) {
+        whole.after = NULL;
+        whole.end = NULL;
+        return line_box_glyphs_ask(el, whole);
+    }
+    if (!block_flow_anonymous_boxes_ask(el, &v, &n)) return false;
+    for (i = 0; i < n && ready; i++) ready = line_box_glyphs_ask(el, v[i].run);
+    free(v);
+    return ready;
+}
+
 bool box_paint_ready(BoxPaintWalk *w)
 {
     LayoutJobDrive d;
-    bool ready, establishes;
+    bool ready;
 
     DCHECK(w != NULL && w->ok, "CSS 2.1 §E.2's next offer was asked of a painter that stopped");
     DCHECK(css_cascade_record_is_held(),
@@ -1450,8 +1471,7 @@ bool box_paint_ready(BoxPaintWalk *w)
     if (!bp_hold_next(w)) return true;
     rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
     layout_job_drive_begin_resting(&d);
-    ready = element_view_client_rects_ask(w->el, &d) &&
-            (w->step != PAINT_STEP_LINE_BOXES || block_flow_establishes_inline_context_ask(w->el, &establishes));
+    ready = element_view_client_rects_ask(w->el, &d) && (w->step != PAINT_STEP_LINE_BOXES || bp_line_boxes_ask(w->el));
     layout_job_drive_end(&d);
     rest_unit_end();
     return ready;
