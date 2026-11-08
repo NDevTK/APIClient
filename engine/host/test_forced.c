@@ -5814,6 +5814,64 @@ TF_UNIT void wasm_module_decoder_selftest(void)
  * every in-scope invalid row is refused with its message, and an out-of-scope one, if refused, is refused with
  * its message too. fixture/wasm_valid.h's rows are then validated alone and all at once, one step each in turn,
  * so a validation that kept state outside its WasmModuleValidator disagrees with itself. */
+/* A valid module's side table against a walk of its bodies with instruction.h's reader: each block, loop, if
+ * and try_table has one entry, in byte order, whose else and end offsets are its own 0x05 and 0x0B. Heights
+ * are not walked here; WASM_SIDE_TABLE_ROWS checks them. */
+static void wasm_side_table_walk(const char *src, const WasmModule *m, const uint8_t *bytes, const WasmSideTable *t)
+{
+    size_t c, *open = NULL, n_open = 0, cap_open = 0;
+
+    CHECKF(t->code_first[m->n_codes] == t->n_blocks, "the side table of %s holds %zu blocks past its bodies' %zu",
+           src, t->n_blocks, t->code_first[m->n_codes]);
+    for (c = 0; c < m->n_codes; c++) {
+        WasmDecoder r = { bytes, m->codes[c].body_offset + m->codes[c].body_size, m->codes[c].body_offset };
+        size_t next = t->code_first[c];
+
+        while (r.pos < r.len) {
+            WasmInstruction in;
+            uint32_t prefix, op, k, x;
+            size_t at = r.pos;
+            WasmValType vt;
+            WasmCatch cc;
+
+            if (bytes[at] == 0x05 || bytes[at] == 0x0B) {
+                CHECKF(n_open > 0, "%s: a 0x%02x at %zu closes no block", src, bytes[at], at);
+                if (bytes[at] == 0x05)
+                    CHECKF(t->blocks[open[n_open - 1]].else_at == at, "%s: the else at %zu is not its if's entry's",
+                           src, at);
+                else {
+                    n_open--;
+                    CHECKF(t->blocks[open[n_open]].end_at == at, "%s: the end at %zu is not its block's entry's",
+                           src, at);
+                }
+                r.pos++;
+                continue;
+            }
+            CHECKF(wasm_read_opcode(&r, &prefix, &op) == WASM_DECODE_DONE
+                   && wasm_read_immediates(&r, prefix, op, &in) == WASM_DECODE_DONE, "%s: no instruction at %zu", src,
+                   at);
+            if (prefix == 0 && (op == 0x02 || op == 0x03 || op == 0x04 || op == 0x1F)) {
+                CHECKF(next < t->code_first[c + 1] && t->blocks[next].at == at,
+                       "%s: the block at %zu is not code %zu's next side table entry", src, at, c);
+                if (n_open == cap_open) {
+                    cap_open = cap_open ? cap_open * 2 : 16;
+                    open = realloc(open, cap_open * sizeof *open);
+                    CHECK(open != NULL, "the side table walk's block stack could not grow");
+                }
+                open[n_open++] = next++;
+            }
+            for (k = 0; k < in.list_count + (in.shape == WASM_IMM_BR_TABLE); k++) {
+                if (in.shape == WASM_IMM_SELECT_T) CHECK(wasm_read_val_type(&r, &vt) == WASM_DECODE_DONE, "select");
+                else if (in.shape == WASM_IMM_TRY_TABLE) CHECK(wasm_read_catch(&r, &cc) == WASM_DECODE_DONE, "catch");
+                else CHECK(wasm_read_label(&r, &x) == WASM_DECODE_DONE, "label");
+            }
+        }
+        CHECKF(n_open == 0 && next == t->code_first[c + 1], "%s: code %zu's blocks and side table entries differ",
+               src, c);
+    }
+    free(open);
+}
+
 static void wasm_testsuite_validate(void)
 {
     char got[512];
@@ -5831,9 +5889,11 @@ static void wasm_testsuite_validate(void)
         wasm_module_validator_init(&v, wasm_module_decoder_module(&d), (const uint8_t *)row->bytes);
         st = wasm_module_validator_run(&v);
         wasm_module_validator_message(&v, st, got, sizeof got);
-        if (row->kind == WASM_ROW_MODULE)
+        if (row->kind == WASM_ROW_MODULE) {
             CHECKF(st == WASM_VALIDATE_DONE, "the valid testsuite module %s was refused with \"%s\"", row->src, got);
-        else if (row->in_scope || st != WASM_VALIDATE_DONE)
+            wasm_side_table_walk(row->src, wasm_module_decoder_module(&d), (const uint8_t *)row->bytes,
+                                 wasm_module_validator_side_table(&v));
+        } else if (row->in_scope || st != WASM_VALIDATE_DONE)
             CHECKF(st != WASM_VALIDATE_DONE && strncmp(got, row->expect, strlen(row->expect)) == 0,
                    "the invalid testsuite module %s was answered \"%s\"; it is \"%s\"", row->src,
                    st == WASM_VALIDATE_DONE ? "valid" : got, row->expect);
@@ -5852,6 +5912,29 @@ TF_UNIT void wasm_module_validator_selftest(void)
     size_t i, live;
 
     wasm_testsuite_validate();
+    for (i = 0; i < COUNTOF(WASM_SIDE_TABLE_ROWS); i++) {
+        const WasmSideTableRow *row = &WASM_SIDE_TABLE_ROWS[i];
+        const WasmSideTable *t;
+        WasmModuleDecoder d;
+        WasmModuleValidator v;
+        size_t k;
+
+        wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
+        CHECKF(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the side table row %s does not decode", row->src);
+        wasm_module_validator_init(&v, wasm_module_decoder_module(&d), (const uint8_t *)row->bytes);
+        CHECKF(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the side table row %s is refused", row->src);
+        t = wasm_module_validator_side_table(&v);
+        CHECKF(t->n_blocks == row->n, "the side table of %s has %zu blocks, not %zu", row->src, t->n_blocks, row->n);
+        for (k = 0; k < row->n; k++)
+            CHECKF(t->blocks[k].at == row->blocks[k].at && t->blocks[k].else_at == row->blocks[k].else_at
+                   && t->blocks[k].end_at == row->blocks[k].end_at && t->blocks[k].height == row->blocks[k].height,
+                   "%s: block %zu is (%zu, %zu, %zu, height %zu), not (%zu, %zu, %zu, height %zu)", row->src, k,
+                   t->blocks[k].at, t->blocks[k].else_at, t->blocks[k].end_at, t->blocks[k].height,
+                   row->blocks[k].at, row->blocks[k].else_at, row->blocks[k].end_at, row->blocks[k].height);
+        wasm_side_table_walk(row->src, wasm_module_decoder_module(&d), (const uint8_t *)row->bytes, t);
+        wasm_module_validator_free(&v);
+        wasm_module_decoder_free(&d);
+    }
     for (i = 0; i < NV; i++) {
         const WasmBinaryRow *row = &WASM_VALIDATE_ROWS[i];
         WasmDecodeStatus ds;

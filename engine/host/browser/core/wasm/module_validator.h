@@ -46,6 +46,7 @@ typedef struct {
     WasmContext ctx;            /* §3.1.6's context; its import arrays are owned here */
     size_t passed[5];           /* PH_IMPORTS: the imports of each kind passed so far */
     WasmCodeValidator code;     /* PH_CODE: the expr being validated, and the phase it returns to */
+    WasmSideTable side;         /* the bodies' block entries, owned */
     int code_return;
 } WasmModuleValidator;
 
@@ -55,7 +56,9 @@ WasmValidateStatus wasm_module_validator_step(WasmModuleValidator *v);
 WasmValidateStatus wasm_module_validator_run(WasmModuleValidator *v);
 /* valid.ml's message for the refusal `st`, written to `buf` (NUL terminated, at most `cap` bytes). */
 void wasm_module_validator_message(const WasmModuleValidator *v, WasmValidateStatus st, char *buf, size_t cap);
-/* Release the name set. Idempotent. */
+/* The bodies' side table (code_validator.h), complete once the validation answered DONE; owned by `v`. */
+const WasmSideTable *wasm_module_validator_side_table(const WasmModuleValidator *v);
+/* Release everything the validation owns, the side table among it. Idempotent. */
 void wasm_module_validator_free(WasmModuleValidator *v);
 
 #endif

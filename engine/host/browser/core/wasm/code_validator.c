@@ -26,11 +26,12 @@ enum { RUN_ONE = 0, RUN_POOL, RUN_FIELDS };
 #define WASM_TYPE_BOT 0
 #define WASM_HEAP_BOT 0xFF
 
-void wasm_code_validator_init(WasmCodeValidator *cv, const WasmContext *ctx)
+void wasm_code_validator_init(WasmCodeValidator *cv, const WasmContext *ctx, WasmSideTable *side)
 {
-    DCHECK(cv != NULL && ctx != NULL, "a WebAssembly code validator was begun without its context");
+    DCHECK(cv != NULL && ctx != NULL && side != NULL, "a WebAssembly code validator was begun without its context");
     memset(cv, 0, sizeof *cv);
     cv->ctx = ctx;
+    cv->side = side;
     cv->phase = CV_IDLE;
 }
 
@@ -207,7 +208,8 @@ static WasmValidateStatus push_val(WasmCodeValidator *cv, WasmValType t)
     return WASM_VALIDATE_DONE;
 }
 
-static WasmValidateStatus push_ctrl(WasmCodeValidator *cv, uint8_t kind, WasmTypeRun start, WasmTypeRun end)
+static WasmValidateStatus push_ctrl(WasmCodeValidator *cv, uint8_t kind, WasmTypeRun start, WasmTypeRun end,
+                                    size_t entry)
 {
     WasmCtrlFrame *f;
 
@@ -219,6 +221,25 @@ static WasmValidateStatus push_ctrl(WasmCodeValidator *cv, uint8_t kind, WasmTyp
     f->val_height = cv->n_vals;
     f->init_height = cv->n_inits;
     f->unreachable = false;
+    f->entry = entry;
+    if (entry != SIZE_MAX) {
+        DCHECK(entry < cv->side->n_blocks, "a WebAssembly frame names a side table entry not appended");
+        cv->side->blocks[entry].height = cv->n_vals;
+    }
+    return WASM_VALIDATE_DONE;
+}
+
+/* A side table entry for the structured instruction at cv->instr_at; its height is set when its frame is
+   pushed, its else and end offsets when they are reached. */
+static WasmValidateStatus new_block(WasmCodeValidator *cv, size_t *entry)
+{
+    WasmSideTable *s = cv->side;
+
+    DCHECK(!cv->constant, "a WebAssembly constant expression typed a block, which its constness pass refuses");
+    if (!grow((void **)&s->blocks, &s->cap_blocks, s->n_blocks, sizeof *s->blocks)) return WASM_VALIDATE_NO_ROOM;
+    memset(&s->blocks[s->n_blocks], 0, sizeof *s->blocks);
+    s->blocks[s->n_blocks].at = cv->instr_at;
+    *entry = s->n_blocks++;
     return WASM_VALIDATE_DONE;
 }
 
@@ -360,13 +381,14 @@ static void op_match(WasmCodeValidator *cv, WasmTypeRun a, WasmTypeRun b, WasmVa
     o->fail = fail;
 }
 
-static void op_frame(WasmCodeValidator *cv, uint8_t kind, WasmTypeRun start, WasmTypeRun end)
+static void op_frame(WasmCodeValidator *cv, uint8_t kind, WasmTypeRun start, WasmTypeRun end, size_t entry)
 {
     WasmStackOp *o = emit(cv, M_FRAME);
 
     o->aux = kind;
     o->run = start;
     o->run2 = end;
+    o->entry = entry;
 }
 
 /* §7.6.1's pop_ctrl: the frame's end types, the height, its locals' initialization, the frame. */
@@ -485,7 +507,7 @@ static WasmValidateStatus step_op(WasmCodeValidator *cv)
         element_done(cv);
         return WASM_VALIDATE_MORE;
     case M_FRAME:
-        st = push_ctrl(cv, o->aux, o->run, o->run2);
+        st = push_ctrl(cv, o->aux, o->run, o->run2, o->entry);
         if (st != WASM_VALIDATE_DONE) return st;
         break;
     case M_REFRAME:
@@ -707,6 +729,7 @@ static WasmValidateStatus type_one(WasmCodeValidator *cv, const WasmInstruction 
     WasmValType a, b, at;
     WasmValidateStatus st = WASM_VALIDATE_DONE;
     uint32_t type;
+    size_t entry;
     bool track, mut;
 
     switch (in->opcode) {
@@ -714,10 +737,11 @@ static WasmValidateStatus type_one(WasmCodeValidator *cv, const WasmInstruction 
     case 0x01: break;
     case 0x02: case 0x03: case 0x04:
         st = block_type(cv, in, &start, &end);
+        if (st == WASM_VALIDATE_DONE) st = new_block(cv, &entry);
         if (st != WASM_VALIDATE_DONE) return st;
         if (in->opcode == 0x04) op_pop1(cv, val(WASM_TYPE_I32));
         op_pop(cv, start);
-        op_frame(cv, in->opcode == 0x02 ? F_BLOCK : in->opcode == 0x03 ? F_LOOP : F_IF, start, end);
+        op_frame(cv, in->opcode == 0x02 ? F_BLOCK : in->opcode == 0x03 ? F_LOOP : F_IF, start, end, entry);
         op_push(cv, start);
         break;
     case 0x08:
@@ -803,6 +827,7 @@ static WasmValidateStatus type_one(WasmCodeValidator *cv, const WasmInstruction 
         break;
     case 0x1F:
         st = block_type(cv, in, &cv->block_start, &cv->block_end);
+        if (st == WASM_VALIDATE_DONE) st = new_block(cv, &cv->block_entry);
         if (st != WASM_VALIDATE_DONE) return st;
         op_pop(cv, cv->block_start);
         cv->list_left = in->list_count;
@@ -1183,7 +1208,10 @@ static void structure(WasmCodeValidator *cv, uint8_t op)
 {
     WasmCtrlFrame *f = top(cv);
 
-    DCHECK(cv->n_ctrls > 1, "a WebAssembly end or else inside an expr closes no block, which the decoder rules out");
+    DCHECK(cv->n_ctrls > 1 && f->entry < cv->side->n_blocks, "a WebAssembly end or else inside an expr closes no "
+                                                             "block, which the decoder rules out");
+    if (op == 0x05) cv->side->blocks[f->entry].else_at = cv->instr_at;
+    else cv->side->blocks[f->entry].end_at = cv->instr_at;
     if (op == 0x05) {
         DCHECK(f->kind == F_IF, "a WebAssembly else outside an if arm, which the decoder rules out");
         op_pop_ctrl(cv, f->end);
@@ -1208,6 +1236,7 @@ static WasmValidateStatus type_step(WasmCodeValidator *cv)
     uint8_t b;
 
     begin_program(cv);
+    cv->instr_at = cv->r.pos;
     if (cv->r.pos == cv->r.len) {
         DCHECK(cv->n_ctrls == 1, "a WebAssembly expr ended with a block open, which the decoder rules out");
         op_pop_ctrl(cv, top(cv)->end);
@@ -1278,7 +1307,7 @@ static WasmValidateStatus catch_step(WasmCodeValidator *cv)
 
     begin_program(cv);
     if (cv->list_left == 0) {
-        op_frame(cv, F_TRY, cv->block_start, cv->block_end);
+        op_frame(cv, F_TRY, cv->block_start, cv->block_end, cv->block_entry);
         op_push(cv, cv->block_start);
         cv->phase = CV_TYPE;
         return WASM_VALIDATE_MORE;
@@ -1291,7 +1320,7 @@ static WasmValidateStatus catch_step(WasmCodeValidator *cv)
     }
     st = label(cv, c.label, &l);
     if (st != WASM_VALIDATE_DONE) return st;
-    op_frame(cv, F_CATCH, run_none(), l);
+    op_frame(cv, F_CATCH, run_none(), l, SIZE_MAX);
     if (t != NULL) op_push(cv, run_pool(t->params, t->n_params));
     if (c.kind == WASM_CATCH_REF || c.kind == WASM_CATCH_ALL_REF) op_push1(cv, ref(false, WASM_HEAP_EXN, 0));
     op_pop_ctrl(cv, l);
@@ -1310,7 +1339,7 @@ static WasmValidateStatus locals_step(WasmCodeValidator *cv)
     WasmValidateStatus st;
 
     if (cv->item == c->n_locals) {
-        st = push_ctrl(cv, F_FUNC, run_none(), run_pool(ft->results, ft->n_results));
+        st = push_ctrl(cv, F_FUNC, run_none(), run_pool(ft->results, ft->n_results), SIZE_MAX);
         if (st != WASM_VALIDATE_DONE) return st;
         cv->phase = CV_TYPE;
         return WASM_VALIDATE_MORE;
@@ -1344,7 +1373,7 @@ static WasmValidateStatus const_step(WasmCodeValidator *cv)
 
     if (cv->r.pos == cv->r.len) {
         cv->r.pos = cv->start;
-        st = push_ctrl(cv, F_FUNC, run_none(), run_one(cv->expect));
+        st = push_ctrl(cv, F_FUNC, run_none(), run_one(cv->expect), SIZE_MAX);
         if (st != WASM_VALIDATE_DONE) return st;
         cv->phase = CV_TYPE;
         return WASM_VALIDATE_MORE;

@@ -60,4 +60,25 @@ static const WasmBinaryRow WASM_VALIDATE_ROWS[] = {
       "\001\137\000\120\000\137\001\143\002\000\120\001\003\137\001\143\000\000" },
 };
 
+/* Side table rows (code_validator.h's WasmSideTable): each body's blocks with their offsets into the module's
+ * bytes and their heights, worked by hand from §7.6.1's push_ctrl and checked valid with node 22's V8. The
+ * block holds two operands below it; the if inside it a third, its condition popped. */
+typedef struct {
+    const char *src;
+    size_t len;
+    const char *bytes;
+    size_t n;
+    struct {
+        size_t at, else_at, end_at, height;
+    } blocks[4];
+} WasmSideTableRow;
+
+static const WasmSideTableRow WASM_SIDE_TABLE_ROWS[] = {
+    { "a block over two operands, an if with an else inside it over three, then a valued block", 49,
+      "\000\141\163\155\001\000\000\000\001\004\001\140\000\000\003\002\001\000\012\035\001\033\000"
+      "\101\001\101\002\002\100\101\003\101\004\004\100\001\005\013\032\013\002\177\101\005\013\032\032"
+      "\032\013",
+      3, { { 27, 0, 39, 2 }, { 33, 36, 37, 3 }, { 40, 0, 44, 2 } } },
+};
+
 #endif

@@ -27,13 +27,31 @@ typedef struct {
     uint64_t n;
 } WasmTypeRun;
 
-/* §7.6.1's ctrl_frame. `kind` is code_validator.c's F_ frame kind. */
+/* §7.6.1's ctrl_frame. `kind` is code_validator.c's F_ frame kind; `entry` its side table entry, or SIZE_MAX
+   for the function's frame and a catch clause's. */
 typedef struct {
     uint8_t kind;
     WasmTypeRun start, end;
     size_t val_height, init_height;
     bool unreachable;
+    size_t entry;
 } WasmCtrlFrame;
+
+/* What execution reads in place of finding a block's end (design note §3a): one entry per block, loop, if and
+   try_table of a body, in byte order, so each code entry's are a run (`code_first[i]` to `code_first[i + 1]`)
+   searchable by `at`. Offsets are into the module's bytes; `else_at` is 0 for no else. `height` is the operand
+   stack height at the block's entry with its parameters popped (§7.6.1's push_ctrl), from the function's
+   frame, which a branch to the block cuts the stack back to before its label's values. */
+typedef struct {
+    size_t at, else_at, end_at;
+    size_t height;
+} WasmBlockEntry;
+
+typedef struct {
+    WasmBlockEntry *blocks;
+    size_t n_blocks, cap_blocks;
+    size_t *code_first;         /* per code entry, and one past the last */
+} WasmSideTable;
 
 /* One stack operation of an instruction's program (code_validator.c's M_ operations). */
 typedef struct {
@@ -42,6 +60,7 @@ typedef struct {
     WasmTypeRun run, run2;
     WasmValidateStatus fail;
     uint32_t index;
+    size_t entry;               /* M_FRAME: the frame's side table entry */
 } WasmStackOp;
 
 #define WASM_CODE_PROGRAM 12
@@ -77,13 +96,16 @@ typedef struct {
     size_t list_at;
     uint64_t arity;
     WasmTypeRun block_start, block_end;
+    size_t block_entry;         /* the try_table whose catch clauses are being read */
+    size_t instr_at;            /* the offset of the instruction being typed */
+    WasmSideTable *side;        /* borrowed; a body appends its blocks' entries */
     const char *space;          /* a refusal's index space, index, and the operand types it names */
     uint64_t index;
     WasmValType want, got;
     bool has_got;
 } WasmCodeValidator;
 
-void wasm_code_validator_init(WasmCodeValidator *cv, const WasmContext *ctx);
+void wasm_code_validator_init(WasmCodeValidator *cv, const WasmContext *ctx, WasmSideTable *side);
 /* Begin code entry `code` of the module, defined function `n_imported funcs + code`. */
 void wasm_code_validator_begin_body(WasmCodeValidator *cv, size_t code);
 /* Begin a constant expression of type `expect` that may read globals below `visible_globals`. */

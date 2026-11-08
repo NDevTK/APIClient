@@ -37,7 +37,7 @@ void wasm_module_validator_init(WasmModuleValidator *v, const WasmModule *m, con
     v->ctx.n_memories = v->ctx.n_imported[WASM_EXTERN_MEMORY] + m->n_memories;
     v->ctx.n_globals = v->ctx.n_imported[WASM_EXTERN_GLOBAL] + m->n_globals;
     v->ctx.n_tags = v->ctx.n_imported[WASM_EXTERN_TAG] + m->n_tags;
-    wasm_code_validator_init(&v->code, &v->ctx);
+    wasm_code_validator_init(&v->code, &v->ctx, &v->side);
     v->phase = PH_ALLOC;
 }
 
@@ -56,12 +56,14 @@ static WasmValidateStatus allocate(WasmModuleValidator *v)
         if (v->ctx.imports[k] == NULL) return WASM_VALIDATE_NO_ROOM;
     }
     v->ctx.declared = calloc(v->ctx.n_funcs / 8 + 1, 1);
+    v->side.code_first = calloc(v->module->n_codes + 1, sizeof *v->side.code_first);
     v->group_canon = calloc(n, sizeof *v->group_canon);
     v->canon_off = calloc(n, sizeof *v->canon_off);
     v->canon_len = calloc(n, sizeof *v->canon_len);
     v->canon_hash = calloc(n, sizeof *v->canon_hash);
     v->canon_table = calloc(cap, sizeof *v->canon_table);
-    if (!v->ctx.declared || !v->group_canon || !v->canon_off || !v->canon_len || !v->canon_hash || !v->canon_table)
+    if (!v->ctx.declared || !v->side.code_first || !v->group_canon || !v->canon_off || !v->canon_len
+        || !v->canon_hash || !v->canon_table)
         return WASM_VALIDATE_NO_ROOM;
     v->cap_canon_table = cap;
     v->ctx.types.group_canon = v->group_canon;
@@ -524,8 +526,9 @@ static WasmValidateStatus declare_export(WasmModuleValidator *v)
 /* §3.5.6: each function body, by the code validator. */
 static WasmValidateStatus check_code(WasmModuleValidator *v)
 {
-    if (list_done(v, v->module->n_codes, PH_START)) return WASM_VALIDATE_MORE;
     if (v->sub > 0) return next_item(v);
+    v->side.code_first[v->item] = v->side.n_blocks;
+    if (list_done(v, v->module->n_codes, PH_START)) return WASM_VALIDATE_MORE;
     wasm_code_validator_begin_body(&v->code, v->item);
     v->code_return = PH_CODES;
     v->phase = PH_CODE;
@@ -812,6 +815,12 @@ void wasm_module_validator_message(const WasmModuleValidator *v, WasmValidateSta
     CHECK_FAIL("a WebAssembly validation status this file does not define");
 }
 
+const WasmSideTable *wasm_module_validator_side_table(const WasmModuleValidator *v)
+{
+    DCHECK(v != NULL && v->phase == PH_FINISHED, "a WebAssembly side table was asked before validation answered");
+    return &v->side;
+}
+
 void wasm_module_validator_free(WasmModuleValidator *v)
 {
     size_t k;
@@ -826,6 +835,8 @@ void wasm_module_validator_free(WasmModuleValidator *v)
     free(v->canon_table);
     for (k = 0; k <= WASM_EXTERN_TAG; k++) free(v->ctx.imports[k]);
     free(v->ctx.declared);
+    free(v->side.blocks);
+    free(v->side.code_first);
     wasm_code_validator_free(&v->code);
     memset(v, 0, sizeof *v);
 }
