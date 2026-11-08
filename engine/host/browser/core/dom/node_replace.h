@@ -17,12 +17,15 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/dom/node_insert.h"
+#include "core/dom/node_adopt.h"
 #include "core/dom/node_remove.h"
 
 #define NODE_REPLACE_ALGO_STAGES(X, P, W) \
     NODE_REMOVE_ALGO_STAGES(X, P##_RM, W " → DOM §4.2.3 replace step 6 (DOM §4.5 adopt step 2), or step 7.2 " \
                                        "(remove child, with suppressObservers)") \
-    X(P##_ADOPT,  W " → DOM §4.2.3 replace steps 6-7 (adopt steps 1 and 3; removedNodes)") \
+    X(P##_ADOPT,  W " → DOM §4.2.3 replace step 6 (adopt step 1 and step 3's condition)") \
+    X(P##_ADOPT_WALK, W " → DOM §4.2.3 replace steps 6-7 (adopt step 3, one shadow-including inclusive " \
+                        "descendant per step; removedNodes)") \
     X(P##_INSERT, W " → DOM §4.2.3 replace steps 8-9 (insert node before referenceChild, with suppressObservers)") \
     NODE_INSERT_ALGO_STAGES(X, P##_IN, W " → DOM §4.2.3 replace step 9") \
     X(P##_RECORD, W " → DOM §4.2.3 replace step 10 (the tree mutation record)")
@@ -33,6 +36,7 @@ typedef struct NodeReplaceState {
     lxb_dom_node_t *node, *child, *parent;
     lxb_dom_node_t *ref, *prev;    /* steps 2-3's referenceChild; step 4's previousSibling */
     NodeRemoveState rm;
+    NodeAdoptState adopt;
     NodeInsertState in;
     JSValue removed;               /* step 7.1's removedNodes as wrappers while an observer exists; owned */
     int after;

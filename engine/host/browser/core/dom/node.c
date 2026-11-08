@@ -797,30 +797,11 @@ void node_add_moving_hook(NodeMovingHook fn)
  * `adoptedCallback`, its registry was never re-derived, and a `<template>` carried its contents into a
  * document that is not their owner. Nothing threw for any of it.
  *
- * THE WALK IS ITERATIVE OVER AN EXPLICIT STACK, and not because a rest point would be hard: `node_insert_at`
- * is reached from `appendChild`, from the ChildNode/ParentNode mixins and from §5.5's range machines, and
- * every one of those is a plain C body with no flow base under it, so there is nothing here that COULD
- * suspend. What a page's tree can still do is make the walk as deep as its markup, and C recursion over that
- * is the overflow this project has removed from every other tree algorithm (see `clone a node`'s level stack,
- * declarative_shadow.c's list, DOM §4.8's shadow-including walk). So the depth lives in a heap stack of FRAMES.
- * A frame is one INVOCATION of `adopt`: step 3.4's adopting steps for a `<template>` adopt its contents into a
- * DIFFERENT document, which is a nested adopt with its own `document` and its own `oldDocument`, and the frame
- * carries both. The outer frame's cursor is advanced BEFORE the nested frame is pushed, so the nested walk
- * runs exactly where step 3.4 puts it — between this descendant and the next one — rather than after the
- * outer subtree, which is the order every reaction the walk enqueues is delivered in.
- * WHEN THE CALLER CAN PARK, this becomes a stage block over the same frames and the stack becomes the state;
- * nothing about the algorithm changes. */
-typedef struct {
-    lxb_dom_node_t     *root;   /* this invocation's `node` — what bounds its shadow-including walk */
-    lxb_dom_node_t     *cur;    /* the next inclusive descendant step 3 has still to visit */
-    lxb_dom_document_t *doc;    /* this invocation's `document` */
-    lxb_dom_document_t *old;    /* step 1's `oldDocument`, read before step 3 wrote a single node document */
-} NodeAdoptFrame;
-
-typedef struct {
-    NodeAdoptFrame *f;
-    int sp, cap;
-} NodeAdoptStack;
+ * The walk is iterative over a heap stack of frames (core/dom/node_adopt.h), one descendant per node_adopt_step,
+ * so a step machine rests between descendants and a page's depth never reaches the C stack. A frame is one
+ * invocation of adopt: step 3.4's adopting steps for a `<template>` adopt its contents into a different document,
+ * a nested invocation with its own document and oldDocument. The outer frame's cursor advances before the nested
+ * frame is pushed, so the nested walk runs between this descendant and the next, the order step 3.4 states. */
 
 /* §4.4's NODE DOCUMENT as a Lexbor question: a Document IS its own, and lexbor says so through the same
    field, but reading it through one place is what keeps the assert below honest for both. */
@@ -875,7 +856,7 @@ static void node_set_node_document(lxb_dom_node_t *n, lxb_dom_document_t *doc)
            "with private arenas was not built by dom_document_create");
 }
 
-static void node_adopt_push(NodeAdoptStack *s, lxb_dom_node_t *root, lxb_dom_document_t *doc)
+static void node_adopt_push(JSContext *ctx, NodeAdoptState *s, lxb_dom_node_t *root, lxb_dom_document_t *doc)
 {
     NodeAdoptFrame *f;
 
@@ -884,7 +865,7 @@ static void node_adopt_push(NodeAdoptStack *s, lxb_dom_node_t *root, lxb_dom_doc
     if (node_document_of(root) == doc) return;
     if (s->sp == s->cap) {
         int want = s->cap ? s->cap * 2 : 4;
-        NodeAdoptFrame *n = lexbor_realloc(s->f, sizeof(NodeAdoptFrame) * (size_t)want);
+        NodeAdoptFrame *n = js_realloc(ctx, s->f, sizeof(NodeAdoptFrame) * (size_t)want);
         CHECK(n != NULL, "DOM §4.5 adopt could not grow its level stack");
         s->f = n;
         s->cap = want;
@@ -908,7 +889,7 @@ static void node_adopt_push(NodeAdoptStack *s, lxb_dom_node_t *root, lxb_dom_doc
    template nesting, which is the page's to choose; a `<template>` inside a `<template>` inside a `<template>`
    is ordinary markup. The push is also what makes the nested adopt run BETWEEN this walk's descendants rather
    than after all of them, which is the order step 3.4 is stated in. */
-static void node_adopting_steps(JSContext *ctx, NodeAdoptStack *s, lxb_dom_node_t *n, lxb_dom_document_t *doc)
+static void node_adopting_steps(JSContext *ctx, NodeAdoptState *s, lxb_dom_node_t *n, lxb_dom_document_t *doc)
 {
     lxb_html_template_element_t *t;
 
@@ -918,39 +899,46 @@ static void node_adopting_steps(JSContext *ctx, NodeAdoptStack *s, lxb_dom_node_
        element reaching here without one came from something that built a template interface by hand. */
     DCHECK(t->content != NULL, "a <template> element has no template contents at DOM §4.5 adopt step 3.4");
     if (!t->content) return;
-    node_adopt_push(s, &t->content->node,
+    node_adopt_push(ctx, s, &t->content->node,
                     lxb_dom_interface_document(document_template_contents_owner(ctx, doc)));
 }
 
 /* DOM §4.5 "ADOPT A NODE", given `node` and `document`. */
 void node_adopt(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *document)
 {
+    NodeAdoptState s;
+
     DCHECK(node != NULL && document != NULL, "DOM §4.5 adopt was asked of nothing");
     /* STEP 2. It is the capturing removal and not a raw detach because it IS a removal: the per-flow delta has
        to see it, and so do §4.2.3's removing steps and §6.1's pre-remove steps. */
     if (node->parent) dom_cow_remove_child(node);
-    node_adopt_steps(ctx, node, document);
+    memset(&s, 0, sizeof s);
+    node_adopt_start(ctx, &s, node, document);
+    while (node_adopt_step(ctx, &s)) {}
 }
 
-void node_adopt_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *document)
+void node_adopt_start(JSContext *ctx, NodeAdoptState *s, lxb_dom_node_t *node, lxb_dom_document_t *document)
 {
-    NodeAdoptStack s = { NULL, 0, 0 };
-
     DCHECK(node != NULL && document != NULL && node->parent == NULL,
            "DOM §4.5 adopt's steps 1 and 3 were asked of nothing, or of a node step 2 has not removed");
-    node_adopt_push(&s, node, document);           /* STEPS 1 and 3's condition */
+    DCHECK(s->sp == 0, "a second DOM §4.5 adopt was started while one was still walking");
+    node_adopt_push(ctx, s, node, document);       /* STEPS 1 and 3's condition */
     /* Step 3 mints wrappers and reads per-flow records off them, so it needs the realm — and only step 3 does,
        which is why an adopt into the document a node is already in is answerable without one. */
-    DCHECK(s.sp == 0 || ctx != NULL,
+    DCHECK(s->sp == 0 || ctx != NULL,
            "DOM §4.5 adopt's step 3 walk ran with no realm — every part of it (the shadow-including walk's "
            "element→shadow-root association, the registry arm, the adoptedCallback reaction) is a per-flow "
            "fact kept on a node's WRAPPER, and there is no realm to build one in");
-    while (s.sp > 0) {
-        NodeAdoptFrame *f = &s.f[s.sp - 1];
+}
+
+bool node_adopt_step(JSContext *ctx, NodeAdoptState *s)
+{
+    while (s->sp > 0) {
+        NodeAdoptFrame *f = &s->f[s->sp - 1];
         lxb_dom_node_t *d = f->cur;
         lxb_dom_document_t *doc = f->doc, *old = f->old;
 
-        if (!d) { s.sp--; continue; }
+        if (!d) { s->sp--; continue; }
         /* Advanced BEFORE the steps run, so step 3.4's nested invocation lands between this descendant and the
            next rather than after the whole subtree — and so this frame's pointer may be invalidated by the
            push below without the cursor being lost. */
@@ -964,9 +952,19 @@ void node_adopt_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *
                 node_set_node_document(&a->node, doc);
         }
         custom_elements_node_adopted(ctx, d, doc, old);       /* STEPS 3.2, 3.3.2 and 3.3.3 */
-        node_adopting_steps(ctx, &s, d, doc);                 /* STEP 3.4 */
+        node_adopting_steps(ctx, s, d, doc);                  /* STEP 3.4 */
+        thread_work_charge(THREAD_WORK_DOM_WALK, 1);
+        return true;
     }
-    free(s.f);
+    js_free(ctx, s->f);
+    s->f = NULL;
+    s->cap = 0;
+    return false;
+}
+
+void node_adopt_visit(JSContext *ctx, NodeAdoptState *s, JSStepVisit *v)
+{
+    v->buf(ctx, (void **)&s->f, sizeof(NodeAdoptFrame) * (size_t)s->cap);
 }
 
 /* §4.2.3 "insert" — A DocumentFragment IS NOT INSERTED; ITS CHILDREN ARE, in order, and the fragment is left

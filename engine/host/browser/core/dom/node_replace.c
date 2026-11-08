@@ -70,12 +70,13 @@ int node_replace_run(JSContext *ctx, JSStepHdr *hdr, NodeReplaceState *s, int ba
     if (phase >= NODE_REPLACE_PHASE_IN_TAKE && phase < NODE_REPLACE_PHASE_IN_TAKE + NODE_INSERT_PHASE_N)
         return node_insert_run(ctx, hdr, &s->in, base + NODE_REPLACE_PHASE_IN_TAKE);
     switch (phase) {
-    case NODE_REPLACE_PHASE_ADOPT:
-        /* Named residual. Not covered: adopt's step 3 walks node's shadow-including inclusive descendants inside
-           this one step when node comes from another document. Next: that walk one node per step, held in this
-           state, shared with the insert machine's step 7.1. Absence shows as a cross-document replaceChild of a
-           large subtree whose step overruns a quantum while no DOM-walk work is charged for it. */
-        node_adopt_steps(document_realm_of(s->parent), s->node, node_replace_document(s->parent));   /* STEP 6 */
+    case NODE_REPLACE_PHASE_ADOPT:                                             /* STEP 6 */
+        node_adopt_start(document_realm_of(s->parent), &s->adopt, s->node, node_replace_document(s->parent));
+        hdr->stage = base + NODE_REPLACE_PHASE_ADOPT_WALK;
+        return JS_STEP_YIELD;
+
+    case NODE_REPLACE_PHASE_ADOPT_WALK:
+        if (node_adopt_step(document_realm_of(s->parent), &s->adopt)) return JS_STEP_YIELD;
         if (s->child->parent) {                                                /* STEP 7 */
             if (s->observed) s->removed = node_replace_list1(ctx, s->child);  /* STEP 7.1 */
             node_remove_start(hdr, &s->rm, s->child, /*suppress_observers*/ true,
@@ -113,6 +114,7 @@ int node_replace_run(JSContext *ctx, JSStepHdr *hdr, NodeReplaceState *s, int ba
 void node_replace_visit(JSContext *ctx, NodeReplaceState *s, JSStepVisit *v)
 {
     v->val(ctx, &s->removed);
+    node_adopt_visit(ctx, &s->adopt, v);
     node_insert_visit(ctx, &s->in, v);
 }
 

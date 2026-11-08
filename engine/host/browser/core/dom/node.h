@@ -1,6 +1,7 @@
 /* THE NODE INTERFACE — DOM §4.4, the base every tree object shares. One JS object per Lexbor node. */
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_NODE_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_NODE_H
+#include "core/dom/node_adopt.h"
 #include "core/dom/node_remove.h"
 #include <lexbor/dom/dom.h>
 #include <stdbool.h>
@@ -239,12 +240,9 @@ JSValue node_pi_create_decided(JSContext *ctx, lxb_dom_document_t *document, con
    `ctx` is the realm of the DOCUMENT BEING ADOPTED INTO, because step 3's per-node state lives on wrappers and
    a wrapper's prototypes are its document's. It may be NULL only for an adopt that step 3's condition skips
    (`document` is already the node's node document), which is the ordinary same-document insert.
-   The walk is a heap frame stack, never C recursion: a page's tree is as deep as the page says, and every
-   caller of §4.2.3's insert is a plain C body that cannot suspend. See node.c. */
+   This form runs the walk to completion, for the synchronous callers; a step machine runs node_adopt.h's walk. */
 void node_adopt(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *document);
-/* The same adopt for a node that has no parent: its steps 1 and 3, for a caller that ran step 2's removal
-   itself (core/dom/node_insert.h's machine). Asserts node has no parent. */
-void node_adopt_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *document);
+
 /* §4.2.3's "insert", as this engine's ONE tree-write helper: a DocumentFragment contributes its CHILDREN, a
    node already in a tree is removed from it first, and `ref` naming `node` itself resolves to its next sibling.
    Exported because §5.5's content-moving members are all stated over pre-insert and append; a second copy of

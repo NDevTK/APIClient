@@ -16,6 +16,7 @@
 
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/dom/node_adopt.h"
 #include "core/dom/node_remove.h"
 
 #define NODE_INSERT_ALGO_STAGES(X, P, W) \
@@ -24,7 +25,9 @@
     NODE_REMOVE_ALGO_STAGES(X, P##_RM, W " → DOM §4.2.3 insert step 4.1, or step 7.1 → DOM §4.5 adopt step 2") \
     X(P##_RANGES,      W " → DOM §4.2.3 insert steps 5-6 (the live-range steps for child; previousSibling)") \
     X(P##_NODE,        W " → DOM §4.2.3 insert step 7 (the next node of nodes; step 7.1's adopt step 2)") \
-    X(P##_ADOPT,       W " → DOM §4.2.3 insert step 7.1 (DOM §4.5 adopt steps 1 and 3)") \
+    X(P##_ADOPT,       W " → DOM §4.2.3 insert step 7.1 (DOM §4.5 adopt step 1 and step 3's condition)") \
+    X(P##_ADOPT_WALK,  W " → DOM §4.2.3 insert step 7.1 (DOM §4.5 adopt step 3, one shadow-including inclusive " \
+                         "descendant per step)") \
     X(P##_LINK,        W " → DOM §4.2.3 insert steps 7.2-7.3 (node into parent's children)") \
     X(P##_INDEX,       W " → DOM §4.2.3 insert steps 7.2-7.3 (the name index's upkeep, one node of node's " \
                          "subtree per step)") \
@@ -48,7 +51,8 @@ typedef struct NodeInsertState {
     lxb_dom_node_t *cursor;                 /* the walk of the stage standing */
     lxb_dom_node_t *tree_root;              /* step 7.6's root, node's root */
     lxb_dom_document_t *index_doc;          /* the document whose tree node is in, or NULL */
-    NodeRemoveState rm;                     /* step 7.1's adopt step 2, when node has a parent */
+    NodeRemoveState rm;                     /* step 4.1, and step 7.1's adopt step 2 when node has a parent */
+    NodeAdoptState adopt;                   /* step 7.1's adopt steps 1 and 3 */
     int after;
     uint8_t connected;                      /* node is connected after steps 7.2-7.3 (step 7.7.2) */
     uint8_t realm_steps;                    /* ...in a document with a realm, so HTML's insertion steps run */

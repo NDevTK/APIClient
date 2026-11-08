@@ -1752,35 +1752,83 @@ JSValue document_create_element_ns(JSContext *ctx, JSValueConst doc, int argc, J
     return js_doc_create_element_ns(ctx, doc, argc, argv, 0);
 }
 
-/* §4.5's `[CEReactions] Node adoptNode(Node node)`: four steps over DOM §4.5's "adopt a node", which core/dom/node.c
- * owns (a shadow-including walk writing each node document through the per-flow chokepoint). The two refusals
- * are different exceptions a page's `catch (e) { e.name }` tells apart (a Document is a NotSupportedError, a
- * shadow root a HierarchyRequestError), and they are throws: `document.adoptNode(document)` is a spec question.
- * The realm is the receiver document's: adopt's step 3 mints wrappers and reads per-flow records (the shadow-root
- * association, registry re-derivation, adoptedCallback reaction) about the document adopted into, as node.c's
- * insert-adopt does. */
-static JSValue js_doc_adopt_node(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* §4.5's `[CEReactions] Node adoptNode(Node node)`: steps 1-2 refuse a Document (NotSupportedError) and a shadow
+ * root (HierarchyRequestError); step 3 adopts node into this, its step 2 removal through core/dom/node_remove.h's
+ * machine and its step 3 walk one node per step (core/dom/node_adopt.h); step 4 returns node. The realm is the
+ * receiver document's: adopt's step 3 mints wrappers and reads per-flow records about the document adopted into. */
+#define DOC_ADOPT_STAGES(X) \
+    X(DAN_CHECK,  "DOM §4.5 adoptNode steps 1-2 (a Document or a shadow root is refused)") \
+    NODE_REMOVE_ALGO_STAGES(X, DAN_RM, "DOM §4.5 adoptNode step 3 → adopt step 2") \
+    X(DAN_ADOPT,  "DOM §4.5 adoptNode step 3 → adopt step 1 and step 3's condition") \
+    X(DAN_WALK,   "DOM §4.5 adoptNode step 3 → adopt step 3 (one shadow-including inclusive descendant per step)") \
+    X(DAN_RETURN, "DOM §4.5 adoptNode step 4 (return node)")
+enum { IDL_STEP_STAGE_BASE(DOC_ADOPT_STAGES) DOC_ADOPT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DOC_ADOPT_STEPS[] = { DOC_ADOPT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    NodeRemoveState rm;
+    NodeAdoptState adopt;
+} DocAdoptState;
+
+static void doc_adopt_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    Document *d = doc_receiver(ctx, this_val);
+    node_adopt_visit(ctx, &((DocAdoptState *)st)->adopt, v);
+}
+
+static int js_doc_adopt_node(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    DocAdoptState *s = st;
+    Document *d = doc_receiver(ctx, hdr->this_val);
     lxb_dom_node_t *n;
 
-    (void)magic;
-    if (!d) return JS_EXCEPTION;
-    DCHECK(argc >= 1, "adoptNode ran with no argument — `Node node` is required, so the declaration's own "
-                      "arity check answers that before this body is entered");
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    if (!d) return JS_STEP_ABRUPT;
+    DCHECK(argc == 1, "adoptNode reached its body without its declared argument");
     n = node_of(argv[0]);
-    DCHECK(n != NULL, "adoptNode was handed something that is not a Node — the argument is an INTERFACE type "
-                      "and the declaration brands it, so a non-Node is a TypeError before this body runs");
-    /* Step 1. */
-    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT)
-        return JS_ThrowDOMException(ctx, "NotSupportedError", "a Document cannot be adopted");
-    /* Step 2, a HierarchyRequestError rather than step 1's refusal: a shadow root is a node the tree could hold
-       nowhere, a Document a node no document may own. */
-    if (shadow_root_is(n))
-        return JS_ThrowDOMException(ctx, "HierarchyRequestError", "a shadow root cannot be adopted");
-    node_adopt(d->realm, n, lxb_dom_interface_document(d->dom));           /* step 3: adopt node into this */
-    return JS_DupValue(ctx, argv[0]);                                      /* step 4 */
+    DCHECK(n != NULL, "adoptNode was handed something that is not a Node — the declaration brands it");
+    STEP_DISPATCH(DOC_ADOPT_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(DAN_CHECK);
+    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) {                               /* STEP 1 */
+        JS_ThrowDOMException(ctx, "NotSupportedError", "a Document cannot be adopted");
+        return JS_STEP_ABRUPT;
+    }
+    if (shadow_root_is(n)) {                                                    /* STEP 2 */
+        JS_ThrowDOMException(ctx, "HierarchyRequestError", "a shadow root cannot be adopted");
+        return JS_STEP_ABRUPT;
+    }
+    if (n->parent) {                                                            /* STEP 3: adopt step 2 */
+        node_remove_start(hdr, &s->rm, n, /*suppress_observers*/ false, DAN_RM_RANGES, DAN_ADOPT);
+        return JS_STEP_YIELD;
+    }
+    hdr->stage = DAN_ADOPT;
+    return JS_STEP_YIELD;
+
+    NODE_REMOVE_ALGO_STAGES(JS_STEP_STAGE_ARM, DAN_RM, "")
+    return node_remove_run(ctx, hdr, &s->rm, DAN_RM_RANGES);
+
+    STEP_ARM(DAN_ADOPT);
+    node_adopt_start(d->realm, &s->adopt, n, lxb_dom_interface_document(d->dom));
+    hdr->stage = DAN_WALK;
+    return JS_STEP_YIELD;
+
+    STEP_ARM(DAN_WALK);
+    if (node_adopt_step(d->realm, &s->adopt)) return JS_STEP_YIELD;
+    hdr->stage = DAN_RETURN;
+    return JS_STEP_YIELD;
+
+    STEP_ARM(DAN_RETURN);
+    *presult = JS_DupValue(ctx, argv[0]);                                      /* STEP 4 */
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl DOC_ADOPT_STEP = {
+    js_doc_adopt_node, sizeof(DocAdoptState), doc_adopt_visit, NULL,
+    "DOM §4.5 Document.adoptNode (over §4.5 adopt)", DOC_ADOPT_STEPS
+};
 
 /* §4.5's `[CEReactions, NewObject] Node importNode(Node node, optional (boolean or ImportNodeOptions) options =
  * false)`: seven steps over DOM §4.4's `clone a node`, distinguished from cloneNode by step 7: "Return the result of
@@ -3425,7 +3473,7 @@ static void document_declare_members(JSContext *ctx)
            TypeError before step 1; `[CEReactions]` is the machine's epilogue, which drains the adoptedCallback
            reactions adopt enqueued before the value returns. */
         static const IdlArgType ONE_NODE[1] = { IDL_INTERFACE };
-        g_id_adopt_node = idl_method_id(ctx, ONE_NODE, 1, js_doc_adopt_node, 0);
+        g_id_adopt_node = idl_method_id_step(ctx, ONE_NODE, 1, NULL, 0, &DOC_ADOPT_STEP, 0);
         idl_iface_brand(node_class_id());
     }
     /* §3.1.1's `[CEReactions] attribute DOMString title` and `[CEReactions] attribute DOMString dir`; the args

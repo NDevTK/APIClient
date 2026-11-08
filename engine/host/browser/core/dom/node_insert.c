@@ -82,6 +82,7 @@ void node_insert_visit(JSContext *ctx, NodeInsertState *s, JSStepVisit *v)
 {
     v->buf(ctx, (void **)&s->nodes, sizeof(*s->nodes) * s->cap);
     v->val(ctx, &s->nodes_js);
+    node_adopt_visit(ctx, &s->adopt, v);
 }
 
 /* Step 1's nodes for a fragment, appended as step 4.1 takes each child out. */
@@ -177,14 +178,15 @@ int node_insert_run(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, int base
         return JS_STEP_YIELD;
 
     case NODE_INSERT_PHASE_ADOPT:
-        /* Named residual. Not covered: adopt's step 3 walks node's shadow-including inclusive descendants inside
-           this one step when node comes from another document. Next: that walk one node per step over the
-           adopt frames, held in this state. Absence shows as a cross-document appendChild of a large subtree
-           whose step overruns a quantum while no DOM-walk work is charged for it. */
-        node_adopt_steps(document_realm_of(s->parent), s->node, node_insert_document(s->parent));
+        node_adopt_start(document_realm_of(s->parent), &s->adopt, s->node, node_insert_document(s->parent));
         DCHECK(s->child == NULL || s->child->parent == s->parent,
                "§4.2.3 insert's reference child left parent during step 7.1 — adopt removes node, and pre-insert "
                "made child node's next sibling when it was node");
+        hdr->stage = base + NODE_INSERT_PHASE_ADOPT_WALK;
+        return JS_STEP_YIELD;
+
+    case NODE_INSERT_PHASE_ADOPT_WALK:
+        if (node_adopt_step(document_realm_of(s->parent), &s->adopt)) return JS_STEP_YIELD;
         hdr->stage = base + NODE_INSERT_PHASE_LINK;
         return JS_STEP_YIELD;
 
