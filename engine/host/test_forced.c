@@ -6034,9 +6034,10 @@ TF_UNIT void wasm_module_validator_selftest(void)
  * `nan:arithmetic` one as a NaN whose payload's top bit is set (§4.3.3's canonical and arithmetic NaNs). */
 static void wasm_exec_check(const WasmExecRow *row, const WasmInterpreter *it, WasmExecStatus st)
 {
-    const char *msg = wasm_exec_status_message(st);
+    char msg[128];
     uint32_t k;
 
+    wasm_interpreter_message(it, st, msg, sizeof msg);
     if (row->action) {
         CHECKF(st == WASM_EXEC_DONE, "the WebAssembly action %s trapped with \"%s\"", row->src, msg);
         return;
@@ -6096,11 +6097,10 @@ TF_UNIT void wasm_interpreter_selftest(void)
                 && memcmp(bytes + d.module.exports[e].name_offset, row->export_name, strlen(row->export_name)) == 0)
                 func = d.module.exports[e].index;
         CHECKF(func != SIZE_MAX, "the invoke row %s has no export %s", row->src, row->export_name);
-        st = wasm_instance_begin(&inst, &d.module, bytes, wasm_module_validator_side_table(&v));
+        st = wasm_instance_begin(&inst, &d.module, bytes, wasm_module_validator_side_table(&v), &v.ctx.types);
         while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst);
         CHECKF(st == WASM_EXEC_DONE, "%s: the instantiation answered \"%s\"", row->src, wasm_exec_status_message(st));
-        st = wasm_interpreter_begin(&it, &d.module, bytes, wasm_module_validator_side_table(&v), inst.globals, func,
-                                    NULL, 0);
+        st = wasm_interpreter_begin(&it, &inst, func, NULL, 0);
         while (st == WASM_EXEC_MORE) st = wasm_interpreter_step(&it);
         CHECKF(st == WASM_EXEC_DONE && it.n_vals == 1 && it.vals[0].lo == row->result,
                "%s: answered %s with %zu values, the first %llu; V8 answers %u", row->src,
@@ -6133,7 +6133,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
         side = wasm_module_validator_side_table(&v);
         /* Three instances of the module: one runs the script's commands alone, two run them stepped in turn. */
         for (k = 0; k < 3; k++) {
-            WasmExecStatus st = wasm_instance_begin(&inst[k], m, bytes, side);
+            WasmExecStatus st = wasm_instance_begin(&inst[k], m, bytes, side, &v.ctx.types);
 
             while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst[k]);
             CHECKF(st == WASM_EXEC_DONE, "the instantiation for %s answered \"%s\"", WASM_EXEC_ROWS[i].src,
@@ -6155,7 +6155,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
             CHECKF(func != SIZE_MAX && args != NULL, "%s: no function export of its name", row->src);
             for (a = 0; a < row->n_args; a++) args[a].lo = WASM_EXEC_VALUES[row->args + a].bits;
             before = JS_FlowPeekRetiredWork();
-            st = wasm_interpreter_begin(&alone, m, bytes, side, inst[0].globals, func, args, row->n_args);
+            st = wasm_interpreter_begin(&alone, &inst[0], func, args, row->n_args);
             while (st == WASM_EXEC_MORE) st = wasm_interpreter_step(&alone);
             CHECKF(JS_FlowPeekRetiredWork() - before == alone.retired && alone.retired > 0,
                    "%s: the interpreter retired %llu units of work for %llu instructions", row->src,
@@ -6163,8 +6163,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
             wasm_exec_check(row, &alone, st);
             wasm_interpreter_free(&alone);
             for (k = 0; k < 2; k++)
-                sts[k] = wasm_interpreter_begin(&two[k], m, bytes, side, inst[1 + k].globals, func, args,
-                                                row->n_args);
+                sts[k] = wasm_interpreter_begin(&two[k], &inst[1 + k], func, args, row->n_args);
             while (sts[0] == WASM_EXEC_MORE || sts[1] == WASM_EXEC_MORE)
                 for (k = 0; k < 2; k++)
                     if (sts[k] == WASM_EXEC_MORE) sts[k] = wasm_interpreter_step(&two[k]);

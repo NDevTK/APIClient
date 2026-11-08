@@ -9,9 +9,9 @@
  * NaN is the positive canonical NaN, and bit operations (abs, neg, copysign, reinterpret) keep bits.
  * The page's bytes have been decoded and validated, so an instruction the validator accepted that this file
  * does not execute is this codebase's gap (CHECK_FAIL), never a refusal.
- * Named residual. Not covered: host calls (imported functions) and host globals, call_indirect and call_ref,
- * tables (§4.6.7), memory (§4.6.8), and the reference, vector, exception and aggregate instructions. Next diff
- * builds: tables with the instance record (instance.h). Absence shows as: invoking a function that reaches one
+ * Named residual. Not covered: host calls and host globals and tables (imports), memory (§4.6.8), and the
+ * vector, exception and aggregate instructions and the references other than functions'. Next diff builds:
+ * imports. Absence shows as: invoking a function that reaches one
  * of them stops the process at the CHECK_FAIL naming its opcode. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
@@ -23,7 +23,8 @@
 #include "core/wasm/code_validator.h"
 #include "core/wasm/wasm_module.h"
 
-/* A value's bits: a number in `lo` (an i32 or f32 zero-extended), a vector in both halves. */
+/* A value's bits: a number in `lo` (an i32 or f32 zero-extended), a vector in both halves, a function
+   reference in `lo` as its function index plus one, 0 the null reference. */
 typedef struct {
     uint64_t lo, hi;
 } WasmValue;
@@ -35,6 +36,12 @@ typedef enum {
     WASM_EXEC_TRAP_DIVIDE_BY_ZERO,    /* §4.3.2's idiv and irem of a zero divisor */
     WASM_EXEC_TRAP_OVERFLOW,          /* §4.3.2's idiv_s of the minimum by -1, §4.3.4's trunc out of range */
     WASM_EXEC_TRAP_CONVERSION,        /* §4.3.4's trunc of a NaN */
+    WASM_EXEC_TRAP_TABLE_BOUNDS,      /* §4.6.7: a table access, or an active segment, past the table's size */
+    WASM_EXEC_TRAP_UNDEFINED_ELEMENT, /* §4.6.5: call_indirect's index past the table's size */
+    WASM_EXEC_TRAP_UNINITIALIZED,     /* §4.6.5: call_indirect's element is the null reference */
+    WASM_EXEC_TRAP_INDIRECT_TYPE,     /* §4.6.5: call_indirect's function does not match the expected type */
+    WASM_EXEC_TRAP_NULL_FUNCTION,     /* §4.6.5: call_ref of the null reference */
+    WASM_EXEC_TRAP_NULL_REFERENCE,    /* §4.6.9: ref.as_non_null of the null reference */
     WASM_EXEC_NO_ROOM                 /* a stack or the locals could not be allocated (§7.2's resource exhaustion) */
 } WasmExecStatus;
 
@@ -61,12 +68,24 @@ typedef struct {
     uint32_t n_results;
 } WasmFrame;
 
+typedef struct WasmInstance WasmInstance;
+
+/* A bulk table instruction in progress, one element a step (§4.6.7's recursive table.fill, table.copy and
+   table.init): its opcode, its tables or segment, and its operands left. */
 typedef struct {
-    const WasmModule *module;    /* borrowed: the decoded module, its bytes and its validated side table */
+    uint32_t op;
+    size_t table, from;
+    uint64_t d, s, n;
+    WasmValue ref;
+} WasmBulk;
+
+typedef struct {
+    WasmInstance *inst;          /* borrowed, and the module, bytes and side table it holds */
+    const WasmModule *module;
     const uint8_t *bytes;
     const WasmSideTable *side;
-    WasmValue *globals;          /* borrowed: the instance's defined globals (instance.h), or NULL */
-    size_t imported_globals;
+    size_t imported_globals, imported_tables;
+    WasmBulk bulk;
     size_t pc;                   /* the current frame's next instruction */
     uint32_t n_results;          /* the invoked function's */
     WasmFrame *frames;           /* owned: one per call, the current last */
@@ -76,24 +95,25 @@ typedef struct {
     WasmLabel *labels;           /* owned: its labels, the function's at the bottom */
     size_t n_labels, cap_labels;
     uint64_t retired;            /* instructions retired, each charged one unit of work */
+    uint64_t trap_index;         /* the element index a call_indirect trap names */
 } WasmInterpreter;
 
 /* Begin §4.7.3's invocation of defined function `func` (an index of the function index space, past the imports)
-   of a module the validator answered DONE for, with `side` its side table and `globals` its instance's. `args`
-   are the function type's parameters, in order, whose count the caller has matched. NO_ROOM when the locals
-   cannot be allocated. */
-WasmExecStatus wasm_interpreter_begin(WasmInterpreter *it, const WasmModule *m, const uint8_t *bytes,
-                                      const WasmSideTable *side, WasmValue *globals, size_t func,
-                                      const WasmValue *args, size_t n_args);
-/* Begin evaluating constant expression `e` (§4.6.13), to one value, the way §4.7.2's instantiation does. */
-WasmExecStatus wasm_interpreter_begin_expr(WasmInterpreter *it, const WasmModule *m, const uint8_t *bytes,
-                                           const WasmSideTable *side, WasmValue *globals, WasmExpr e);
+   of instance `inst` (instance.h), which has answered DONE. `args` are the function type's parameters, in
+   order, whose count the caller has matched. NO_ROOM when the locals cannot be allocated. */
+WasmExecStatus wasm_interpreter_begin(WasmInterpreter *it, WasmInstance *inst, size_t func, const WasmValue *args,
+                                      size_t n_args);
+/* Begin evaluating constant expression `e` (§4.6.13) of `inst`'s module, to one value, the way §4.7.2's
+   instantiation does. */
+WasmExecStatus wasm_interpreter_begin_expr(WasmInterpreter *it, WasmInstance *inst, WasmExpr e);
 /* Retire one instruction. MORE, then DONE (the results are vals[0, n_results)) or a trap; stepping again is
    misuse (asserted). */
 WasmExecStatus wasm_interpreter_step(WasmInterpreter *it);
 /* The reference interpreter's message for a trap (interpreter/exec/eval.ml), which `assert_trap` matches by
    prefix; NULL for DONE and MORE. */
 const char *wasm_exec_status_message(WasmExecStatus st);
+/* eval.ml's message for the trap `it` answered, with the element index call_indirect's two element traps name. */
+void wasm_interpreter_message(const WasmInterpreter *it, WasmExecStatus st, char *buf, size_t cap);
 void wasm_interpreter_free(WasmInterpreter *it);
 
 #endif
