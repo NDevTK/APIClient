@@ -1620,6 +1620,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/timegate.h"
 #include "fixture/datenum.h"
 #include "fixture/rxcompile.h"
+#include "fixture/codegenrest.h"
 #include "fixture/b64coerce.h"
 #include "fixture/bigintunk.h"
 #include "fixture/dateparsecoerce.h"
@@ -2402,6 +2403,7 @@ TF_DOCS[] = {
     { "timegate", HTML_TIMEGATE },
     { "datenum", HTML_DATENUM },
     { "rxcompile", HTML_RXCOMPILE },
+    { "codegenrest", HTML_CODEGENREST },
     { "b64coerce", HTML_B64COERCE },
     { "bigintunk", HTML_BIGINTUNK },
     { "dateparsecoerce", HTML_DATEPARSECOERCE },
@@ -22674,6 +22676,36 @@ TF_UNIT void probes_timegate(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The row of the `codegenrest` document (fixture/codegenrest.h): the code generation after the parse is charged
+   the instructions its passes process as host work and rests between them, read from the census quickjs.c's
+   passes raise and from `sliceOverrunGapWork`, and both bodies still compute what they state. */
+TF_UNIT void probes_codegenrest(const char *js, Probe *tab, int *n) {
+    long input = kdw_census(js, "twScriptCodegenInput"), rests = kdw_census(js, "twScriptCodegenRests");
+    long gap = kdw_census(js, "sliceOverrunGapWork");
+    const char *why = NULL;
+    int tt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/cgr-done", "a", "20000") && param_value_is(js, "/api/cgr-done", "n", "3000"),
+             "NOT REACHED: no /api/cgr-done?a=20000&n=3000 record, so the program did not run both bodies to "
+             "what they state");
+    fold_row(&tt, &why, input >= 0 && rests >= 0,
+             "the result document carries no `twScriptCodegenInput`/`twScriptCodegenRests` row from "
+             "solver/metrics/cold.def");
+    fold_row(&tt, &why, input >= 60000,
+             "the code generation was not charged the 60000 instructions three passes over 20,000 statements "
+             "process at the least");
+    fold_row(&tt, &why, rests >= 2,
+             "a code generation several work quanta long took no rest, so it held the thread from its first "
+             "instruction to its last");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: a pass over a function's "
+             "instructions ran to completion");
+    const Probe rows[] = {
+        { "codegen-rests", tt, "/api/cgr-done", SESS_EXPLORE, why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `rxcompile` document (fixture/rxcompile.h): both compiled programs match, and the compiles
    were charged and rested, read from the census quickjs.c's lre_compile_poll and step_regexp_compile_run raise. */
 TF_UNIT void probes_rxcompile(const char *js, Probe *tab, int *n) {
@@ -30338,6 +30370,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_timegate(js, probes, &np);
     probes_datenum(js, probes, &np);
     probes_rxcompile(js, probes, &np);
+    probes_codegenrest(js, probes, &np);
     probes_b64coerce(js, probes, &np);
     probes_bigintunk(js, probes, &np);
     probes_dateparsecoerce(js, probes, &np);
