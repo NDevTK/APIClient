@@ -35723,6 +35723,7 @@ static void flow_park_write(JSContext *ctx, JSAsyncFunctionState *base, JSFlowPa
    it is still on the C stack. The runtime now owns ORDER (its FIFO) and the base owns the RECORD, so the
    contract — "resume the parked flows before starting new work" — holds at every count and every depth, and
    the solver's ranked frontier refines the order without changing the sentence. */
+static const char *flow_chain_answer(JSAsyncFunctionState *s, bool forbidden);
 static void flow_park(JSContext *ctx, JSAsyncFunctionState *base, JSFlowParkFn *fn,
                       JSFlowParkFreeFn *free_fn, JSFlowParkCloneFn *clone_fn, void *opaque) {
     JSRuntime *rt = ctx->rt;
@@ -35772,6 +35773,29 @@ static void flow_park(JSContext *ctx, JSAsyncFunctionState *base, JSFlowParkFn *
            "suspended flow rides the flow (do_step_park's park_exc); one that has finished propagating is "
            "reported at the boundary (JS_ResumeParkedFlow's `pres`). Route this one to whichever it is");
     flow_park_write(ctx, base, fn, free_fn, clone_fn, opaque);
+    /* NO SECOND PARK BESIDE AN ATOMIC ONE. A continuation standing inside an operation a step machine declares
+       unforkable (JSTrampStepDef.unforkable) is inside a synchronous algorithm, and nothing else of its agent
+       may run until it ends; the FIFO below would resume the other member in the middle of it, and a fork
+       rung could clone the atomic member beside it. No job is drained and no page code is entered while a
+       park exists, so no route reaches this today. */
+#if APICLIENT_DEV
+    if (!list_empty(&rt->parked_flows)) {
+        const char *mine = flow_chain_answer(base, false);
+        struct list_head *el;
+
+        list_for_each(el, &rt->parked_flows) {
+            JSAsyncFunctionState *other = list_entry(el, JSAsyncFunctionState, park_link);
+            const char *theirs = flow_chain_answer(other, false);
+
+            DCHECKF(mine == NULL && theirs == NULL,
+                    "a second continuation was parked beside an atomic one: base %p (%s) joined base %p (%s) on "
+                    "the pump's queue, and the FIFO would run one inside the other's synchronous algorithm. "
+                    "What to build is the pump-level hold: the atomic member is the one the pump resumes, and a "
+                    "re-park of it goes to the front", (void *)base, mine ? mine : "not atomic", (void *)other,
+                    theirs ? theirs : "not atomic");
+        }
+    }
+#endif
     list_add_tail(&base->park_link, &rt->parked_flows);   /* FIFO: park order IS resume order */
 }
 bool JS_HasParkedFlow(JSRuntime *rt) { return !list_empty(&rt->parked_flows); }
