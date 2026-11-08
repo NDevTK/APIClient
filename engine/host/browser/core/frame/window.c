@@ -924,7 +924,7 @@ static JSValue win_named_value_of(JSContext *ctx, const char *name, lxb_dom_node
    connected region of unknown markup could parse an element that does (each region forks in the step). */
 static bool win_named_absent(JSContext *ctx, JSAtom prop)
 {
-    lxb_dom_node_t *root = document_root_node(ctx);
+    lxb_dom_document_t *doc = document_associated(ctx);
     size_t n;
     const char *name = JS_AtomToCStringLen(ctx, &n, prop);
     JSValue nav;
@@ -932,7 +932,9 @@ static bool win_named_absent(JSContext *ctx, JSAtom prop)
 
     CHECK(name != NULL, "window: OOM reading a property name");
     nav = win_named_navigable(ctx, name);
-    absent = JS_IsUndefined(nav) && (root == NULL || !document_name_index_holds(root, name, n));
+    /* The index is the Document's tree's, a superset of the document element's subtree the step walks. */
+    absent = JS_IsUndefined(nav) &&
+             (doc == NULL || !document_name_index_holds(lxb_dom_interface_node(doc), name, n));
     JS_FreeValue(ctx, nav);
     JS_FreeCString(ctx, name);
     for (int r = 0; absent && r < unknown_markup_count(ctx); r++) {
