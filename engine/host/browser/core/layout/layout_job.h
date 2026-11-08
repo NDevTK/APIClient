@@ -25,12 +25,14 @@
  * flow's writes stay in that flow's delta. A host-time baseline write while a driven job is alive is
  * refused at solver/dom_cow.c for the same reason. */
 /* NAMED RESIDUAL, the drives that do not rest. Not covered: a reader that cannot pass "not yet" up drives its
- * ask to the answer on a drive that does not rest, inside the entered job: paint's line_box_glyphs and
- * block_flow_anonymous_boxes (core/paint/document_paint.c states that half), the flex baselines'
- * flex_cross_size_anonymous_lines, and the read twins (intrinsic_inline_run_sizes,
- * block_flow_establishes_inline_context) where no resting drive is innermost. Next: each such reader asked
- * under the caller's resting drive. How its absence shows: a flow's slice overrun inside a layout member with
- * `_layoutJobRests` flat. */
+ * ask to the answer on a drive that does not rest, inside the entered job: the read twins
+ * (flow_border_box_origin, block_flow_auto_height through used_value_px, block_flow_anonymous_boxes,
+ * line_box_glyphs, intrinsic_inline_run_sizes, block_flow_establishes_inline_context) and the flex baselines'
+ * flex_cross_size_anonymous_lines, where no resting drive is innermost. Update the rendering's paint step reads
+ * them after core/paint/box_paint.c's box_paint_ready asked them, so it is served; scrollIntoView's
+ * es_determine_position and scrolling_area_walk_viewport read them outside the step machine's resting drive.
+ * Next: those reads asked under the caller's resting drive, and each served read asserting it is served. How its
+ * absence shows: a flow's slice overrun inside a layout member with `_layoutJobRests` flat. */
 
 /* The resting drive. `scrollIntoView`'s step machine is the drive of its scrolling-area walk: a node's
  * border-box origin through CSS 2.1 §10.1's second case and through §9.4.2's line boxes (the establishing box,
