@@ -73,9 +73,9 @@ static WasmImmediate shape_of(uint32_t prefix, uint32_t opcode)
     case 0:
         DCHECKF(opcode < 0x100, "a one-byte WebAssembly opcode was read as %u", (unsigned)opcode);
         return (WasmImmediate)WASM_IMM_ONE[opcode];
-    case 0xFB: return opcode < sizeof WASM_IMM_FB ? (WasmImmediate)WASM_IMM_FB[opcode] : WASM_IMM_ILLEGAL;
-    case 0xFC: return opcode < sizeof WASM_IMM_FC ? (WasmImmediate)WASM_IMM_FC[opcode] : WASM_IMM_ILLEGAL;
-    case 0xFD: return opcode < sizeof WASM_IMM_FD ? (WasmImmediate)WASM_IMM_FD[opcode] : WASM_IMM_ILLEGAL;
+    case 0xFB: return opcode < COUNTOF(WASM_IMM_FB) ? (WasmImmediate)WASM_IMM_FB[opcode] : WASM_IMM_ILLEGAL;
+    case 0xFC: return opcode < COUNTOF(WASM_IMM_FC) ? (WasmImmediate)WASM_IMM_FC[opcode] : WASM_IMM_ILLEGAL;
+    case 0xFD: return opcode < COUNTOF(WASM_IMM_FD) ? (WasmImmediate)WASM_IMM_FD[opcode] : WASM_IMM_ILLEGAL;
     default: break;
     }
     CHECK_FAIL("a WebAssembly opcode under a prefix wasm_read_opcode does not read");

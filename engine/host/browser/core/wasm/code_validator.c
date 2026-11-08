@@ -679,9 +679,9 @@ static const WasmSignature *signature_of(uint32_t prefix, uint32_t op)
 {
     const WasmSignature *s = NULL;
 
-    if (prefix == 0 && op < sizeof WASM_SIG_ONE / sizeof *WASM_SIG_ONE) s = &WASM_SIG_ONE[op];
-    if (prefix == 0xFC && op < sizeof WASM_SIG_FC / sizeof *WASM_SIG_FC) s = &WASM_SIG_FC[op];
-    if (prefix == 0xFD && op < sizeof WASM_SIG_FD / sizeof *WASM_SIG_FD) s = &WASM_SIG_FD[op];
+    if (prefix == 0 && op < COUNTOF(WASM_SIG_ONE)) s = &WASM_SIG_ONE[op];
+    if (prefix == 0xFC && op < COUNTOF(WASM_SIG_FC)) s = &WASM_SIG_FC[op];
+    if (prefix == 0xFD && op < COUNTOF(WASM_SIG_FD)) s = &WASM_SIG_FD[op];
     return s != NULL && s->defined ? s : NULL;
 }
 
