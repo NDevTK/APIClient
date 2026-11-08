@@ -3422,15 +3422,16 @@ TF_UNIT void malloc_accounting_selftest(void)
  * Chrome applies — so the whole cascade below it would then resolve from a document no browser has. */
 /* @GRAPHRT: a parked flow's private graph written and rebuilt (JS_FlowGraphWrite/Read), on a runtime of its own.
    The graph is built through the C API at a generation above the floor, over one baseline object born at
-   generation 0: a root with every value kind the writer has a body for, a deleted slot, an integer key, a
-   non-writable property, two references to one non-extensible object, a self cycle, and an array naming both
-   the shared object and the baseline one. The rebuilt roots must be new objects that keep every identity
+   generation 0: a root with every value kind the writer has a body for, a symbol value and a symbol key, a
+   deleted slot, an integer key, a non-writable property, two references to one non-extensible object, a self
+   cycle, and an array naming both the shared object and the baseline one. The rebuilt roots must be new objects that keep every identity
    relation, resolve the baseline object to itself, and write the same bytes and anchors again. */
 TF_UNIT void flow_graph_selftest(void)
 {
     JSRuntime *rt = JS_NewRuntime();
     JSContext *ctx;
-    JSValue base, r, x, arr, roots[2], back[2], v, w;
+    JSValue base, sym, r, x, arr, roots[2], back[2], v, w;
+    JSAtom symkey;
     JSFlowGraph *g1, *g2;
     const uint8_t *b1, *b2;
     const JSValue *a1, *a2;
@@ -3443,6 +3444,8 @@ TF_UNIT void flow_graph_selftest(void)
     ctx = JS_NewContext(rt);
     CHECK(ctx != NULL, "the flow graph's witness could not make a context");
     base = JS_NewObject(ctx);   /* generation 0: an anchor */
+    sym = JS_NewSymbol(ctx, "graph", false);
+    symkey = JS_ValueToAtom(ctx, sym);
     JS_SetFlowGen(5);
     r = JS_NewObject(ctx);
     x = JS_NewObject(ctx);
@@ -3462,6 +3465,8 @@ TF_UNIT void flow_graph_selftest(void)
           JS_SetPropertyStr(ctx, r, "base", JS_DupValue(ctx, base)) >= 0 &&
           JS_DefinePropertyValueStr(ctx, r, "ro", JS_NewInt32(ctx, 9), JS_PROP_CONFIGURABLE) >= 0 &&
           JS_SetPropertyUint32(ctx, r, 5, JS_NewString(ctx, "five")) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "sym", JS_DupValue(ctx, sym)) >= 0 &&
+          JS_SetProperty(ctx, r, symkey, JS_NewInt32(ctx, 11)) >= 0 &&
           JS_SetPropertyUint32(ctx, arr, 0, JS_NewInt32(ctx, 1)) >= 0 &&
           JS_SetPropertyUint32(ctx, arr, 1, JS_NewString(ctx, "two")) >= 0 &&
           JS_SetPropertyUint32(ctx, arr, 2, JS_DupValue(ctx, x)) >= 0 &&
@@ -3505,11 +3510,17 @@ TF_UNIT void flow_graph_selftest(void)
     CHECK(JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(w), "a rebuilt object's prototype is not the original's");
     JS_FreeValue(ctx, v); JS_FreeValue(ctx, w);
     CHECK(JS_IsExtensible(ctx, back[1]) == 0, "a rebuilt object that was not extensible became extensible");
+    v = JS_GetPropertyStr(ctx, back[0], "sym");
+    w = JS_GetProperty(ctx, back[0], symkey);
+    CHECK(JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(sym) && JS_VALUE_GET_TAG(w) == JS_TAG_INT && JS_VALUE_GET_INT(w) == 11,
+          "a rebuilt graph lost a symbol: a symbol value is not the original symbol, or a symbol-keyed property is gone");
+    JS_FreeValue(ctx, v); JS_FreeValue(ctx, w);
     JS_FlowGraphFree(ctx, g1);
     JS_FlowGraphFree(ctx, g2);
     JS_SetFlowGen(0);
     JS_FreeValue(ctx, back[0]); JS_FreeValue(ctx, back[1]);
     JS_FreeValue(ctx, r); JS_FreeValue(ctx, x); JS_FreeValue(ctx, base);
+    JS_FreeAtom(ctx, symkey); JS_FreeValue(ctx, sym);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
 }

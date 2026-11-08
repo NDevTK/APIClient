@@ -56666,9 +56666,26 @@ static uint32_t fg_rope_copy(JSValueConst v, uint8_t *dst, uint32_t at, uint8_t 
     }
 }
 
+/* `v`'s index in the graph's anchors, taking the graph's counted reference the first time. */
+static uint32_t fg_anchor(FGWriter *w, JSValueConst v)
+{
+    JSFlowGraph *g = w->g;
+    uint32_t i;
+
+    if (fg_map_get(&w->anch, JS_VALUE_GET_PTR(v), &i)) return i;
+    i = g->n_anchors++;
+    g->anchors = fg_grow(g->anchors, sizeof *g->anchors * g->n_anchors);
+    g->anchors[i] = js_dup(v);
+    fg_map_put(&w->anch, JS_VALUE_GET_PTR(v), i);
+    return i;
+}
+
 static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
 {
     switch (JS_VALUE_GET_TAG(v)) {
+    /* A symbol carries no birth generation and its identity is what it means, so it is named by the live symbol
+       itself, the anchor's counted reference keeping it. */
+    case JS_TAG_SYMBOL: fg_u8(out, 'A'); fg_u32(out, fg_anchor(w, v)); return;
     case JS_TAG_INT: fg_u8(out, 'I'); fg_u32(out, (uint32_t)JS_VALUE_GET_INT(v)); return;
     case JS_TAG_BOOL: fg_u8(out, JS_VALUE_GET_BOOL(v) ? 'T' : 'F'); return;
     case JS_TAG_NULL: fg_u8(out, 'N'); return;
@@ -56688,17 +56705,7 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
     case JS_TAG_OBJECT: {
         JSObject *p = JS_VALUE_GET_OBJ(v);
         uint32_t i;
-        if (p->flow_gen <= w->floor) {
-            if (!fg_map_get(&w->anch, p, &i)) {
-                JSFlowGraph *g = w->g;
-                i = g->n_anchors++;
-                g->anchors = fg_grow(g->anchors, sizeof *g->anchors * g->n_anchors);
-                g->anchors[i] = js_dup(v);
-                fg_map_put(&w->anch, p, i);
-            }
-            fg_u8(out, 'A'); fg_u32(out, i);
-            return;
-        }
+        if (p->flow_gen <= w->floor) { fg_u8(out, 'A'); fg_u32(out, fg_anchor(w, v)); return; }
         if (!fg_map_get(&w->objs, p, &i)) {
             uint8_t kind = p->class_id == JS_CLASS_OBJECT ? FG_PLAIN : p->class_id == JS_CLASS_ARRAY ? FG_ARRAY : 0;
             if (kind == 0 && w->survey) { fg_gap(w, out, FG_GAP_CLASS, p->class_id); return; }
@@ -56727,12 +56734,21 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
     }
 }
 
-/* A key: an integer index as 'k' and its number, a string atom as 'K' and its string. */
+/* A key: an integer index as 'k' and its number, a string atom as 'K' and its string, a symbol as 'Y' and its
+   anchor. */
 static void fg_key(FGWriter *w, FGBuf *out, JSAtom atom)
 {
     JSAtomStruct *a;
     if (__JS_AtomIsTaggedInt(atom)) { fg_u8(out, 'k'); fg_u32(out, __JS_AtomToUInt32(atom)); return; }
     a = w->ctx->rt->atom_array[atom];
+    if (a->atom_type == JS_ATOM_TYPE_SYMBOL || a->atom_type == JS_ATOM_TYPE_GLOBAL_SYMBOL) {
+        JSValue sym = JS_AtomToValue(w->ctx, atom);
+        DCHECK(JS_VALUE_GET_TAG(sym) == JS_TAG_SYMBOL, "flow graph: a symbol atom did not answer a symbol");
+        fg_u8(out, 'Y');
+        fg_u32(out, fg_anchor(w, sym));
+        JS_FreeValue(w->ctx, sym);
+        return;
+    }
     if (a->atom_type != JS_ATOM_TYPE_STRING && w->survey) { fg_gap(w, out, FG_GAP_SYMBOL_KEY, a->atom_type); return; }
     if (a->atom_type != JS_ATOM_TYPE_STRING) {
         DCHECKF(false, "flow graph: a private object on a parked graph is keyed by a symbol (atom type %d), and a "
@@ -56937,6 +56953,12 @@ static JSAtom fg_rkey(FGReader *r)
     JSValue s;
     JSAtom a;
     if (t == 'k') return JS_NewAtomUInt32(r->ctx, fg_r32(r));
+    if (t == 'Y') {
+        uint32_t i = fg_r32(r);
+        CHECK(i < r->g->n_anchors && JS_VALUE_GET_TAG(r->g->anchors[i]) == JS_TAG_SYMBOL,
+              "flow graph: a symbol key names no symbol the graph's anchors hold");
+        return JS_ValueToAtom(r->ctx, r->g->anchors[i]);
+    }
     CHECK(t == 'K', "flow graph: a serialized key carries a tag this reader does not know");
     t = fg_r8(r);
     CHECK(t == 'S' || t == 's', "flow graph: a key's string carries a tag this reader does not know");
