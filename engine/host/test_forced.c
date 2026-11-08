@@ -1542,6 +1542,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/csstextderived.h"
 #include "fixture/translatepct.h"
 #include "fixture/transform2d.h"
+#include "fixture/svgtransformable.h"
 #include "fixture/fillwidth.h"
 #include "fixture/jsonlead.h"
 #include "fixture/owedsale.h"
@@ -2265,6 +2266,7 @@ TF_DOCS[] = {
     { "csstextderived", HTML_CSSTEXTDERIVED },
     { "translatepct", HTML_TRANSLATEPCT },
     { "transform2d", HTML_TRANSFORM2D },
+    { "svgtransformable", HTML_SVGTRANSFORMABLE },
     { "fillwidth", HTML_FILLWIDTH },
     { "jsonlead", HTML_JSONLEAD },
     { "startin", HTML_STARTIN },
@@ -21721,6 +21723,28 @@ TF_UNIT void probes_transform2d(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `svgtransformable` document (fixture/svgtransformable.h): css-transforms-1 §2 Terminology's
+   second category of transformable element and §4's used transform-origin. */
+TF_UNIT void probes_svgtransformable(const char *js, Probe *tab, int *n) {
+    const char *st_why = NULL; int st_tt = 1;
+#define ST_IS(k, v) param_value_is(js, "/api/svgtransformable", k, v)
+    fold_row(&st_tt, &st_why, !!strstr(js, "\"/api/svgtransformable\""),
+             "NOT REACHED: no /api/svgtransformable record, so the document aborted before its fetch");
+    fold_row(&st_tt, &st_why, ST_IS("r", "0px_0px") && ST_IS("g", "0px_0px") && ST_IS("lg", "0px_0px"),
+             "css-transforms-1 §4: an SVG renderable element or paint server's used transform-origin is not its UA "
+             "rule's `0 0`");
+    fold_row(&st_tt, &st_why, ST_IS("ts", "0px_0px") && ST_IS("d", "0px_0px"),
+             "css-transforms-1 §4: an SVG element outside both transformable categories does not report its "
+             "computed `0 0`");
+    fold_row(&st_tt, &st_why, ST_IS("s", "50px_50px") && ST_IS("b", "10px_5px"),
+             "css-transforms-1 §4: a CSS box's used transform-origin is not resolved against its border box");
+#undef ST_IS
+    const Probe rows[] = {
+        { "svg-transformable-origin", st_tt, "/api/svgtransformable", SESS_EXPLORE, st_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fillwidth` document (fixture/fillwidth.h): CSS 2.2 §9.4.2's line box width for a run that
    breaks, resolved over §10.1's containing block chain through a flex item's used main size. */
 TF_UNIT void probes_fillwidth(const char *js, Probe *tab, int *n) {
@@ -28029,6 +28053,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_csstextderived(js, probes, &np);
     probes_translatepct(js, probes, &np);
     probes_transform2d(js, probes, &np);
+    probes_svgtransformable(js, probes, &np);
     probes_fillwidth(js, probes, &np);
     probes_jsonlead(js, probes, &np);
     probes_owedsale(js, probes, &np);
