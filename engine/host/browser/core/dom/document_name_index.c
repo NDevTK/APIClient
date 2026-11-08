@@ -225,7 +225,7 @@ bool document_name_index_holds(lxb_dom_node_t *doc, const char *name, size_t n)
     m = lxb_dom_interface_document(doc)->name_index;
     DCHECK(m != NULL, "a document's name index was asked and the document has none: it was initialised before the "
                       "index was lexbor's tree observer");
-    if (n == 0) return false;
+    if (n == 0 || m->cap == 0) return false;   /* a map holds slots only once a value entered it */
     s = dni_find(m, name, n, dni_hash(name, n));
     return s->key != NULL && s->count > 0;
 }
