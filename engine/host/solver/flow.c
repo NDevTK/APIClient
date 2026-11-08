@@ -930,7 +930,7 @@ static void flow_agent_switch(JSContext *ctx, Flow *f, int i)
    parse's and the Document creation's parser state as step state a fork copies or re-derives, retiring their
    unforkable reasons and this hold with them. Absence shows as: a page-sized innerHTML or document load during
    which no other agent of its flow runs and every fork its flow owes waits for the end. */
-static const char *flow_agent_atomic(JSContext *ctx, const Flow *f)
+const char *flow_agent_atomic(JSContext *ctx, const Flow *f)
 {
     const FlowAgent *a = &f->agents[f->cur_agent];
     const char *why = a->frame ? JS_FlowUnforkable(ctx, (JSValue *)a->frame) : NULL;

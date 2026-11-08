@@ -789,6 +789,10 @@ FlowAgent *flow_agent_running(const Flow *f);
 void flow_select_agent(JSContext *ctx, Flow *f);
 /* The agent index flow_select_agent would select, as a read (0 is the window agent). */
 int  flow_agent_next(JSContext *ctx, const Flow *f);
+/* Why the selected agent of the switched-in `f` stands inside an operation the engine makes atomic, in its program
+   frame or in the runtime's parks, or NULL. Such an agent keeps the thread, and no fork clones it until the
+   operation ends; the definition says where each one ends. */
+const char *flow_agent_atomic(JSContext *ctx, const Flow *f);
 /* Selects a runnable agent other than the selected one, when the selected one has nothing to do this step;
    answers whether it switched. */
 int flow_select_other_agent(JSContext *ctx, Flow *f);

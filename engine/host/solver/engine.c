@@ -5678,6 +5678,22 @@ static int flow_answer_fork_at(const Flow *f) {
     return -1;
 }
 
+/* THE ONE CLONE OF THE SWITCHED-IN FLOW'S OWN SUSPENSION, for an arm: its selected agent's program frame when
+   `in_program`, the runtime's parks when `in_job`. Every fork site calls it, and none asks whether it may: the
+   ladder asks flow_agent_atomic once, before any fork rung (flow_next_unit_pass), and a flow standing inside an
+   atomic operation resumes instead, so this asserts that answer. The other agents' bases and parks are cloned by
+   flow_agents_fork, which asserts the same of each. `what` names the fork for the out-of-memory CHECK. */
+static void flow_suspension_clone(JSContext *ctx, const Flow *f, int in_program, int in_job, JSValue **pclone,
+                                  void **pparked, const char *what) {
+    DCHECKF(flow_agent_atomic(ctx, f) == NULL,
+            "%s cloned a suspension standing inside an atomic operation (%s) — flow_next_unit_pass takes no fork "
+            "rung while flow_agent_atomic answers", what, flow_agent_atomic(ctx, f));
+    *pclone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(f)) : NULL;
+    *pparked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
+    CHECKF((!in_program || *pclone != NULL) && (!in_job || *pparked != NULL),
+           "engine: %s could not clone the flow's suspension — the arm's timeline would be dropped", what);
+}
+
 static void flow_answer_fork(JSContext *ctx, Flow *f, int i) {
     {
         JSValue e = pending_entry(f->pending, i), av = JS_UNDEFINED, aw = JS_UNDEFINED, am = JS_UNDEFINED, se;
@@ -5718,15 +5734,8 @@ static void flow_answer_fork(JSContext *ctx, Flow *f, int i) {
         completion = pending_extra_pop(e, &av, &aw, &am);
         JS_FreeValue(ctx, e);
 
-        /* The arm is a clone of whichever home holds the suspension (the asserts above established exactly one).
-           Each is a CHECK: a clone this engine cannot build is a peer timeline dropped off the frontier. */
-        clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(f)) : NULL;
-        parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
-        CHECK(!in_program || clone != NULL,
-              "engine: a flow suspended on a cross-instance read could not be cloned — the peer's other "
-              "timeline has an answer and no arm to carry it");
-        CHECK(!in_job || parked != NULL,
-              "engine: a flow parked on a cross-instance read inside a job could not have its continuation cloned");
+        /* The arm is a clone of whichever home holds the suspension (the asserts above established exactly one). */
+        flow_suspension_clone(ctx, f, in_program, in_job, &clone, &parked, "a peer's second answer");
         sib = engine_sibling_assemble(ctx, f, clone,
                                       decide_fork_same_path("(a peer's answer arrived — no predicate was "
                                                             "asked)"),
@@ -5831,13 +5840,7 @@ static void flow_answer_standby(JSContext *ctx, Flow *f, int i) {
                "call site the answer is read at");
         w = JS_ToCString(ctx, wv);
         CHECK(w != NULL, "engine: OOM reading the peer timeline a standby's parent takes");
-        clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(f)) : NULL;
-        parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
-        CHECK(!in_program || clone != NULL,
-              "engine: a flow at a cross-instance read could not be cloned — a later peer timeline would have "
-              "no timeline to answer");
-        CHECK(!in_job || parked != NULL,
-              "engine: a flow parked on a cross-instance read inside a job could not have its continuation cloned");
+        flow_suspension_clone(ctx, f, in_program, in_job, &clone, &parked, "a peer answer's standby");
         sib = engine_sibling_assemble(ctx, f, clone,
                                       decide_fork_same_path("(a peer's answer is taken; its later timelines wait "
                                                             "— no predicate was asked)"),
@@ -5874,11 +5877,7 @@ static void flow_leave_source_cut(JSContext *ctx, Flow *f) {
     DCHECK(in_program != in_job,
            "a flow parked at a read for a cut is suspended in neither home or in both — the cut clones the one call "
            "site the read is at");
-    clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(f)) : NULL;
-    parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
-    CHECK(!in_program || clone != NULL, "engine: a flow parked at a source read could not be cloned for its cut");
-    CHECK(!in_job || parked != NULL,
-          "engine: a flow parked at a source read inside a job could not have its continuation cloned for its cut");
+    flow_suspension_clone(ctx, f, in_program, in_job, &clone, &parked, "a source read's cut");
     sib = engine_sibling_assemble(ctx, f, clone,
                                   decide_fork_same_path("(an attacker source is about to be read for the first time "
                                                         "on this path — no predicate was asked)"),
@@ -5964,12 +5963,7 @@ static int flow_success_arm(JSContext *ctx, Flow *f, int i, int in_program, int 
     if (arm == 1) {
         arm_flow = f;
     } else if (dblob != NULL) {
-        clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(f)) : NULL;
-        parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
-        CHECK(!in_program || clone != NULL,
-              "engine: a flow parked on a declined fetch could not be cloned for the arm that explores its success");
-        CHECK(!in_job || parked != NULL,
-              "engine: a flow parked on a declined fetch inside a job could not have its continuation cloned");
+        flow_suspension_clone(ctx, f, in_program, in_job, &clone, &parked, "a fetch's success arm");
         sib = engine_sibling_assemble(ctx, f, clone, dblob, concolic_pins_suspend(), flow_path_marks(f));
         DCHECK(sib->parked == NULL, "a freshly assembled arm already holds parked continuations");
         sib->parked = parked;
@@ -5992,15 +5986,13 @@ static int flow_success_arm(JSContext *ctx, Flow *f, int i, int in_program, int 
  * a declined request (flow_success_arm). Asked before the reply is delivered, so the arm clones the flow still
  * waiting on it; this flow keeps the observed reply unless its recorded path chose the success arm. A reply no
  * server sent is never asked again. One per step. */
-/* Whether a fork may clone this flow's suspension now: flow_decline_fork's three refusals (a parse parked mid-row,
-   and an operation the spec makes atomic in either home) plus, where `one_home` is set, both homes at once. A
-   read, asked of the switched-in flow. */
+/* Whether a fork may clone this flow's suspension now: not while a parse is parked mid-row, and, where `one_home`
+   is set, not with both homes held at once. An atomic operation is the ladder's to wait for (flow_agent_atomic).
+   A read, asked of the switched-in flow. */
 static int flow_fork_homes_open(JSContext *ctx, const Flow *f, int one_home) {
     int in_program = flow_frame(f) != NULL, in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
 
-    return f->compile == NULL && !(one_home && in_program && in_job) &&
-           !(in_program && JS_FlowUnforkable(ctx, (JSValue *)flow_frame(f))) &&
-           !(in_job && JS_ParkedFlowsUnforkable(ctx));
+    return f->compile == NULL && !(one_home && in_program && in_job);
 }
 
 /* The first reply whose success arm is owed (a `fetch()` answered, observed, not opaque, with a status that is not
@@ -6068,13 +6060,7 @@ static int flow_unaddressed_same_origin(JSContext *ctx, Flow *f, JSValueConst e,
     JS_FreeValue(ctx, cond);
     DCHECK(r >= 0, "the same-origin ask over an unknown found no running flow's decision state");
     if (SOLVER_FORKED(r)) {
-        clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(f)) : NULL;
-        parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
-        CHECK(!in_program || clone != NULL,
-              "engine: a flow parked on an unaddressed request could not be cloned for the other origin's arm");
-        CHECK(!in_job || parked != NULL,
-              "engine: a flow parked on an unaddressed request inside a job could not have its continuation "
-              "cloned");
+        flow_suspension_clone(ctx, f, in_program, in_job, &clone, &parked, "an unaddressed request's other origin");
         dec = g_fork_dec; g_fork_dec = NULL;
         pins = g_fork_pins; g_fork_pins = NULL;
         sib = engine_sibling_assemble(ctx, f, clone, dec, pins, g_fork_marks);
@@ -6162,13 +6148,11 @@ static void flow_decline_fork(JSContext *ctx, Flow *f, int i) {
         DCHECK(!(in_program && in_job),
                "a flow is suspended in both homes at once (a program frame and a parked continuation) — clone both "
                "onto the arm, in the order flow_step resumes them");
-        /* A step machine inside an operation the spec makes atomic (HTML §8.5.4's fragment parsing and
-           placement, §14.4's XML fragment parse) answers why it cannot be forked yet, and this fork waits for a
-           later pick. No page code runs inside such an operation, and this request's outcome reaches the page
-           only through a job or a parked call site that resumes after it, so forking at the operation's end
-           is the same pair of arms. A parse parked mid-row (`f->compile`) is the same case: a parse runs no page
-           code, and the parked parse is a third home of the suspension no arm could clone. The answer fork
-           cannot wait: its arm resumes the call site this one leaves. flow_decline_fork_at asked it. */
+        /* No fork rung is taken while the selected agent stands inside an atomic operation (flow_next_unit_pass
+           asks flow_agent_atomic), and no second continuation is ever parked beside an atomic one (asserted at
+           quickjs.c's flow_park), so the call site this request's outcome reaches resumes after the operation and
+           forking at its end is the same pair of arms. A parse parked mid-row (`f->compile`) is a third home of
+           the suspension no arm could clone; flow_decline_fork_at refuses it. */
         DCHECK(flow_fork_homes_open(ctx, f, 0),
                "a decline fork was performed while the suspension cannot be cloned — flow_decline_fork_at refuses "
                "that state");
@@ -6181,14 +6165,7 @@ static void flow_decline_fork(JSContext *ctx, Flow *f, int i) {
                               &dblob) == 1) {
             arm_flow = f;
         } else if (dblob != NULL) {
-            clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(f)) : NULL;
-            parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
-            CHECK(!in_program || clone != NULL,
-                  "engine: a flow parked on a declined request could not be cloned — the waiting arm is what makes "
-                  "a per-origin widening possible");
-            CHECK(!in_job || parked != NULL,
-                  "engine: a flow parked on a declined request inside a job could not have its continuation "
-                  "cloned");
+            flow_suspension_clone(ctx, f, in_program, in_job, &clone, &parked, "a declined request's waiting arm");
             sib = engine_sibling_assemble(ctx, f, clone, dblob, concolic_pins_suspend(), flow_path_marks(f));
             DCHECK(sib->parked == NULL,
                    "a freshly assembled arm already holds parked continuations — the assembly builds a flow that "
@@ -9551,7 +9528,13 @@ static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry
         return nu;
     }
     if (!task_done && flow_answer_exhausted(f)) { nu.arm = NEXT_RETIRE; return nu; }
-    if (source_cut_due(f)) nu.arm = NEXT_LEAVE_SOURCE_CUT;
+    /* NO FORK RUNG WHILE THE SELECTED AGENT STANDS INSIDE AN ATOMIC OPERATION: the flow resumes it, and each such
+       operation ends within its own work (flow_agent_atomic says where), after which the rung is due again. */
+    if (flow_agent_atomic(ctx, f)) {
+        if (JS_HasParkedFlow(JS_GetRuntime(ctx))) nu.arm = NEXT_RESUME_PARKED;
+        else nu.arm = NEXT_RESUME_PROGRAM;
+    }
+    else if (source_cut_due(f)) nu.arm = NEXT_LEAVE_SOURCE_CUT;
     else if ((nu.index = flow_answer_fork_at(f)) >= 0) nu.arm = NEXT_FORK_PEER_ANSWER;
     else if ((nu.index = flow_answer_standby_at(f)) >= 0) nu.arm = NEXT_LEAVE_STANDBY;
     else if ((nu.index = flow_decline_fork_at(ctx, f)) >= 0) nu.arm = NEXT_FORK_DECLINED;
@@ -12215,10 +12198,9 @@ Flow *engine_cut_arm(JSContext *ctx, Flow *standby, const void *path, const stru
     in_program = flow_frame(standby) != NULL;
     in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
     DCHECK(in_program != in_job, "a snapshot is suspended in neither home or in both");
-    clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(standby)) : NULL;
-    parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
-    CHECK(!in_program || clone != NULL, "engine: a snapshot's frame could not be cloned for an arm");
-    CHECK(!in_job || parked != NULL, "engine: a snapshot's parked continuation could not be cloned for an arm");
+    /* A standby is held at an attacker source's read, and no atomic operation runs page code, so a snapshot never
+       stands inside one; the clone asserts it. */
+    flow_suspension_clone(ctx, standby, in_program, in_job, &clone, &parked, "a candidate's arm off a snapshot");
     /* The arm continues the path a descendant of this instant froze, from where the snapshot stands. */
     sib = engine_sibling_assemble_as(ctx, standby, clone, decide_blob_on_path(path), concolic_pins_suspend(),
                                      flow_path_marks(standby), SIB_ARRIVES);

@@ -378,8 +378,9 @@ typedef struct JSTrampStepDef {
      * the page is doing.
      *
      * IT IS A PREDICATE AND NOT A FLAG because the answer is about the STATE, not the definition: a machine
-     * inside an atomic operation answers until it ends. Asked at the FORK only: a fork that may wait asks first
-     * (JS_FlowUnforkable) and forks at the end, and the clone aborts. It must NOT be asserted inside `visit` — see
+     * inside an atomic operation answers until it ends. Asked by the scheduler only: the host keeps an agent
+     * standing in one selected and takes no fork rung until it ends (its flow_agent_atomic), and a clone that
+     * reaches the answer aborts. It must NOT be asserted inside `visit` — see
      * JSStepVisit's accumulator note: a machine must never learn which consumer is visiting it, and a `visit`
      * that DCHECKs "I was forked" fires on the teardown and on the fingerprint too, reporting an ordinary
      * abandoned walk as a fork. That is not hypothetical; it is what both of these did.

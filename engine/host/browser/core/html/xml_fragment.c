@@ -404,7 +404,8 @@ const char *xml_fragment_unforkable(const XmlFragmentParse *s)
     if (s->parse != NULL)
         return "an XML fragment parse is mid-parse, inside HTML §8.5.4's one operation (§14.4 runs no page "
                "code and builds a private tree), and this machine holds a core/xml/xml_parse.h handle no "
-               "operation copies — a fork waits for the parse to end (the decline fork asks "
-               "JS_FlowUnforkable first); a clone that reached this answer is a fork site that did not ask";
+               "operation copies — a fork waits for the parse to end (the ladder asks flow_agent_atomic before "
+               "any fork rung); a clone that reached this answer is a clone that did not go through "
+               "flow_suspension_clone or flow_agents_fork";
     return NULL;
 }

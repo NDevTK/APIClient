@@ -142,9 +142,10 @@ const char *fragment_parse_unforkable(const void *st)
         return why;
     if (s->frag != NULL)
         return "a fragment parse is between its parse and its placement, inside HTML §8.5.4's one operation, "
-               "and this machine owns the tree the parse produced — a fork waits for FRAG_DONE (the decline "
-               "fork asks JS_FlowUnforkable first); a clone that reached this answer is a fork site that did not "
-               "ask, or page code that ran inside the operation, which nothing between the feed and the "
+               "and this machine owns the tree the parse produced — a fork waits for FRAG_DONE (the ladder asks "
+               "flow_agent_atomic before any fork rung); a clone that reached this answer is a clone that did "
+               "not go through flow_suspension_clone or flow_agents_fork, or page code that ran inside the "
+               "operation, which nothing between the feed and the "
                "member's [CEReactions] epilogue may do";
     return NULL;
 }
