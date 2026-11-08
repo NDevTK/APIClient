@@ -72444,46 +72444,23 @@ static int js_module_link_advance(JSContext *ctx, JSModuleLinkWalk *w, JSModuleD
     return MODLINK_MORE;
 }
 
-/* 16.2.1.6.1.2 Link ( ) step 4 — AND the abandon, which is the same operation and is why this is not written
-   inline at the one failure site it used to serve. A walk can now END three ways: it finished (the loop below
-   runs over an empty stack and does nothing), one of its modules threw, or the FLOW HOLDING IT WAS DROPPED —
-   a forked arm the scheduler released, a cold-tier tail, a runtime torn down while a link was parked. The
-   third one has no C stack to unwind through, so the reset has to belong to the RECORD; without it a dropped
-   flow leaves every module of its path at LINKING for ever, and 16.2.1.6.1.2.1 step 2 then treats each of them
-   as already done — a graph that silently links to nothing at all.
-   It does not free `frames`: the machine's `visit` declares that buffer, and the step teardown owns exactly
-   what `visit` names (see JSTrampStepDef.visit). */
-/* RESIDUAL — THE ABANDON IS THE FLOW'S RESET OF ITS OWN WRITES, SO IT IS CORRECT ONLY WHILE THOSE WRITES ARE LIVE,
-   AND THAT IS NOW A QUESTION WHERE IT USED TO BE A GIVEN. Before the link phase announced itself, a flow's
-   LINKING claims were baseline — on the heap whoever was running — so resetting them from a teardown was both
-   correct and necessary, which is what the three ways above are about. They are per-flow now, so the two LIVE
-   ways are unchanged (a walk that finished has an empty stack and this loop does nothing; a walk that THREW is
-   running, its delta applied, and every module it reaches was announced by js_module_linking_enter in this same
-   flow) and the DROPPED way is not: a released flow's delta is unapplied, so `stack_prev` reads BASELINE and the
-   chain this loop walks is not the chain the flow built, while `status` reads whatever world is on the heap.
-   WHAT IS NOT COVERED is therefore exactly that third way, and only its RELEASE arm: the reset becomes a write
-   to a status this flow does not own, so where another world's link is applied it unlinks a module that world
-   has linked. The capture below is correct in all three (it answers nothing when no flow is running, which is
-   the ordinary teardown) and does not reach the WRITE.
-   WHAT THE NEXT DIFF BUILDS is the abandon running only while this flow's own writes are on the heap. The fact
-   that decides it is not this file's: `cow.h`'s applied-state for the running flow's head is what distinguishes
-   a flow whose claims are live from one whose claims were never installed, and the engine can see neither. It
-   is NOT a status test at this line — `m1->status == LINKING` selects against the dropped case specifically, so
-   it is the fallback shape rather than the record's own precondition.
-   HOW ITS ABSENCE WOULD SHOW: the DCHECK in this loop firing during a teardown rather than during a throw — a
-   module on Link's own stack reading LINKED or UNLINKED where the walk that holds it set it LINKING — and in
-   release, a module that reads UNLINKED to a world that linked it, which that world's own
-   §16.2.1.6.1.3 Evaluate ( ) entry asserts against. */
-static void js_module_link_walk_end(JSContext *ctx, JSModuleLinkWalk *w)
+/* 16.2.1.6.1.2 Link ( ) step 4, run at the algorithm's own abrupt exit (step_module_link_run) and nowhere else.
+   A flow dropped while parked inside a link needs no reset: every LINKING claim is a write to that flow's own
+   delta (js_module_linking_enter announces it), so the claims die with the delta and a teardown writes into no
+   world. `root` is the module Link was called on. It does not free `frames`, which `visit` declares. */
+static void js_module_link_abrupt(JSContext *ctx, JSModuleLinkWalk *w, JSModuleDef *root)
 {
     while (w->stack_top != NULL) {
         JSModuleDef *m1 = w->stack_top;
         DCHECK(m1->status == JS_MODULE_STATUS_LINKING,
-               "16.2.1.6.1.2 step 4.a: a module on Link's own stack is not LINKING — step 8 appends only "
-               "modules it has just set to linking, so something else moved this one");
+               "16.2.1.6.1.2 step 4.a.i: a module on Link's own stack is not LINKING — step 8 appends only "
+               "modules it has just set to linking, and this runs on the flow whose delta holds those writes");
         js_module_set_status(ctx, m1, JS_MODULE_STATUS_UNLINKED);
         w->stack_top = m1->stack_prev;
     }
+    DCHECK(root->status == JS_MODULE_STATUS_UNLINKED,
+           "16.2.1.6.1.2 step 4.b: Link threw and its own module is not unlinked — js_module_link_init claimed "
+           "the root, and it leaves the stack only at the SCC pop that ends the walk");
     w->depth = 0;
     w->resume = MLW_DONE;
 }
@@ -72706,7 +72683,7 @@ static void step_module_evaluate_visit(JSContext *ctx, JSModuleEvalOp *op, JSSte
    park there is the flow's own park: the chain holds it, the pump resumes it, and this sub-sequence is
    re-entered at the module it left off at.
      0 = the graph is linked; JS_STEP_CALL / JS_STEP_YIELD = the caller must return that code and will be
-   re-entered here; -1 = threw, with 16.2.1.6.1.2 step 4's reset owed to the teardown. */
+   re-entered here; -1 = threw, after 16.2.1.6.1.2 step 4's reset. */
 typedef struct JSModuleLinkOp {
     JSModuleLinkWalk walk;
     JSValue cb[2];        /* the prologue CALL request's operands: [this = true, the module's body] */
@@ -72735,16 +72712,21 @@ static int step_module_link_run(JSContext *ctx, JSModuleLinkOp *op, JSModuleDef 
         if (js_create_module_function(ctx, m) < 0)
             return -1;
         if (js_module_link_init(ctx, &op->walk, m) < 0)
-            return -1;
+            goto abrupt;
     } else if (op->phase != 0) {
         /* the prologue this parked on has completed: END the request where it was made, whatever it completed
-           with. A throw inside it rejects its promise and is rethrown below, so the driver tears this machine
-           down and 16.2.1.6.1.2 step 4's reset runs from the teardown. */
+           with. A rejection inside it is rethrown below, and a CALL that failed to dispatch arrives as
+           JS_EXCEPTION (the machines running this sub-sequence declare catches_abrupt); both are the link's
+           throw and take step 4 here. */
         r = step_call_run(ctx, &op->phase, STEP_CB(op->cb), JS_UNDEFINED, JS_UNDEFINED, 0, NULL,
                           in, &op->res, out_cb, out_argc);
         DCHECK(r == 0,
                "a module prologue's CALL request resumed and did not end — step_call_run's second phase always "
                "completes, so a step code here is a cursor that names a request nobody issued");
+        if (JS_IsException(op->res)) {
+            op->res = JS_UNDEFINED;
+            goto abrupt;
+        }
         /* The body is an async function, so the prologue's completion is its promise: an abrupt one (an
            allocation inside InstantiateFunctionObject) is the link's throw. The prologue has no await, so the
            promise is settled when the CALL returns. */
@@ -72757,7 +72739,7 @@ static int step_module_link_run(JSContext *ctx, JSModuleLinkOp *op, JSModuleDef 
             JS_Throw(ctx, JS_PromiseResult(ctx, op->res));
             JS_FreeValue(ctx, op->res);
             op->res = JS_UNDEFINED;
-            return -1;
+            goto abrupt;
         }
         JS_FreeValue(ctx, op->res);
         op->res = JS_UNDEFINED;
@@ -72767,7 +72749,7 @@ static int step_module_link_run(JSContext *ctx, JSModuleLinkOp *op, JSModuleDef 
 
     r = js_module_link_advance(ctx, &op->walk, &pm);
     if (r < 0)
-        return -1;
+        goto abrupt;
     if (r == MODLINK_DONE)
         return 0;
     if (r == MODLINK_PROLOGUE) {
@@ -72789,6 +72771,9 @@ static int step_module_link_run(JSContext *ctx, JSModuleLinkOp *op, JSModuleDef 
     /* A REST WITH NOTHING TO RUN, and it is offered rather than skipped: the graph is the PAGE'S SIZE, so a
        walk that never yields runs to completion inside one opcode however flat its frames are. */
     return JS_STEP_YIELD;
+ abrupt:
+    js_module_link_abrupt(ctx, &op->walk, m);
+    return -1;
 }
 
 static void step_module_link_visit(JSContext *ctx, JSModuleLinkOp *op, JSStepVisit *v)
@@ -72800,21 +72785,11 @@ static void step_module_link_visit(JSContext *ctx, JSModuleLinkOp *op, JSStepVis
     v->buf(ctx, (void **)&op->walk.frames, (size_t)op->walk.cap * sizeof(*op->walk.frames));
 }
 
-/* WHY A HALF-FINISHED LINK MAY NOT BE FORKED (JSTrampStepDef.unforkable). Two arms resuming ONE walk would each
-   run 16.2.1.7.3.1 InitializeEnvironment over the same records — every import binding's var_ref counted twice,
-   every module of the component set to linked twice — and the second arm's frames would name a path the first
-   has already popped. It is not "no page code runs here": a park inside a prologue is exactly what this machine
-   exists to allow, and RAM pressure and a cold-tier resume never ask what the page is doing.
-   THE REFUSAL'S OLD REASON STOOD HERE AND IS RETIRED AT THE FUNCTION'S OWN SITE, WHICH IS THE ONE TO READ — it
-   is not restated here, because two copies of one argument is how the wrong half survives, and that is exactly
-   what happened: this banner went on saying a Module Record's [[Status]] and [[DFSAncestorIndex]] "belong to the
-   REALM" because "no COW delta captures" them, and prescribing "a cow_capture_host_record over the module
-   graph, and nothing else", for as long as the correction sat 25 lines below in js_module_loaded_unforkable.
-   JSModuleEvalState holds both fields; the remedy was never the right one; and what the refusal is about is the
-   WALK'S CURSOR being shared. A reader who meets a declaration scans declarations, so the stale copy was the
-   one with the traffic. */
-static const char *js_module_loaded_unforkable(const void *state);
-
+/* A fork may clone this machine at any rest of either walk. The clone copies each cursor (`visit` declares the
+   frame arrays), every record field the walks write is per-flow state the arm's delta carries
+   (JSModuleEvalState), and the import cells js_module_linking_bindings wires are shared cells it resolves
+   idempotently — so each arm finishes the link in its own world, exactly as a sibling forked before the link
+   links again. */
 typedef struct JSModuleLoaded {
     JSStepHdr hdr;          /* MUST be first. The closure's data is [resolve, reject, module]. */
     JSModuleLinkOp op;      /* 16.2.1.6.1.2 Link ( ) */
@@ -72826,30 +72801,6 @@ typedef struct JSModuleLoaded {
 } JSModuleLoaded;
 _Static_assert(offsetof(JSModuleLoaded, hdr) == 0, "JSStepHdr must be first in JSModuleLoaded");
 
-static const char *js_module_loaded_unforkable(const void *state)
-{
-    const JSModuleLoaded *s = state;
-    if (s->op.walk.depth == 0 && s->op.walk.stack_top == NULL)
-        return NULL;
-    /* THE REFUSAL STANDS AND BOTH HALVES OF ITS OLD REASON ARE RETIRED, which is recorded rather than
-       rewritten away because a reader who re-derives either will re-add it. It used to say the records'
-       [[Status]] and [[DFSAncestorIndex]] "belong to the REALM" because "no COW delta captures" them, and
-       prescribe "a cow_capture_host_record" over the module graph. The PREMISE went when JSModuleEvalState
-       started holding both of those fields, and js_module_set_status — landed under the narrower name
-       `js_module_link_set_status`, before the eval phase shared it — closed the half that was still true
-       of it — the link phase, which wrote them and announced nothing. The REMEDY was never the right one:
-       `cow_capture_host_record` is a byte copy plus one dup per JSValue at a named offset, and a module record
-       owns ATOMS and a counted array of JSVarRef* that no `val_off` can name.
-       WHAT THE REFUSAL IS ACTUALLY ABOUT survives untouched and is the var_ref double count: two arms resuming
-       ONE walk would each run 16.2.1.7.3.1 over the same graph, and that is a property of the WALK's cursor
-       being shared rather than of the records being baseline — so capturing the records does not make a
-       half-finished link forkable, and nothing here claims it does. */
-    return "a half-finished 16.2.1.6.1.2 Link ( ). Two arms resuming ONE walk would each run "
-           "16.2.1.7.3.1 InitializeEnvironment over the same graph — every import binding's var_ref counted "
-           "twice. The records' own [[Status]]/[[DFSAncestorIndex]] are per-flow (JSModuleEvalState); it is "
-           "the walk's CURSOR that is not, and splitting a cursor is what this refuses";
-}
-
 static void js_module_loaded_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSModuleLoaded *s = st;
@@ -72860,18 +72811,6 @@ static void js_module_loaded_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->settle_res);
     for (k = 0; k < 3; k++)
         v->val(ctx, &s->settle_cb[k]);
-}
-
-/* THE COMPLETION IS ALWAYS undefined — both continuations settle by REGISTERING on the evaluation promise, never
-   by returning a value — so all this states is 16.2.1.6.1.2 step 4, which now covers the ABANDON as well as the
-   throw: a flow dropped while parked inside a link would otherwise leave every module of its path at LINKING
-   for ever, and 16.2.1.6.1.2.1 step 2 reads that as "already done". */
-static JSValue js_module_loaded_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSModuleLoaded *s = st;
-    (void)take_result;
-    js_module_link_walk_end(ctx, &s->op.walk);
-    return JS_UNDEFINED;
 }
 
 /* 13.3.10.3 ContinueDynamicImport step 8's linkAndEvaluateClosure, run once the graph is LOADED (step 12's
@@ -72968,11 +72907,11 @@ static int js_module_loaded_import_step(JSContext *ctx, void *st, JSValue cb_res
 }
 
 static const JSTrampStepDef js_module_loaded_import_def = {
-    sizeof(JSModuleLoaded), js_module_loaded_import_step, js_module_loaded_fini, 0,
+    sizeof(JSModuleLoaded), js_module_loaded_import_step, NULL, 0,
+    .catches_abrupt = 1,   /* a CALL that fails to dispatch is the link's or the evaluation's throw */
     .visit = js_module_loaded_visit,
     .algorithm = "13.3.10.3 ContinueDynamicImport step 8 linkAndEvaluateClosure",
-    .steps = js_module_loaded_import_steps,
-    .unforkable = js_module_loaded_unforkable
+    .steps = js_module_loaded_import_steps
 };
 
 /* A MODULE SOURCE'S COMPILE, held across the rests its parse takes: the UTF-8 the parse borrows and the parked
@@ -73726,6 +73665,10 @@ static int js_module_loaded_run_step(JSContext *ctx, void *st, JSValue cb_result
             if (r)
                 return r < 0 ? JS_STEP_ABRUPT : r;
         }
+        if (JS_IsException(s->settle_res)) {   /* a throwing resolve is this machine's own throw */
+            s->settle_res = JS_UNDEFINED;
+            return JS_STEP_ABRUPT;
+        }
         JS_FreeValue(ctx, s->settle_res);
         s->settle_res = JS_UNDEFINED;
         JS_FreeValue(ctx, s->cap);
@@ -73745,11 +73688,11 @@ static int js_module_loaded_run_step(JSContext *ctx, void *st, JSValue cb_result
 }
 
 static const JSTrampStepDef js_module_loaded_run_def = {
-    sizeof(JSModuleLoaded), js_module_loaded_run_step, js_module_loaded_fini, 0,
+    sizeof(JSModuleLoaded), js_module_loaded_run_step, NULL, 0,
+    .catches_abrupt = 1,   /* a CALL that fails to dispatch is the link's, the settle's or the evaluation's throw */
     .visit = js_module_loaded_visit,
     .algorithm = "the embedder's run-a-module-script tail: 16.2.1.6.1.2 Link ( ) then 16.2.1.6.1.3 Evaluate ( )",
-    .steps = js_module_loaded_run_steps,
-    .unforkable = js_module_loaded_unforkable
+    .steps = js_module_loaded_run_steps
 };
 
 static void JS_LoadModuleInternal(JSContext *ctx, const char *basename,
@@ -74713,13 +74656,27 @@ static int step_module_evaluate_run(JSContext *ctx, JSModuleEvalOp *op, JSModule
             goto abrupt;
         }
     } else if (op->phase != 0) {
-        /* the body CALL has completed: ExecuteAsyncModule's PerformPromiseThen on its promise. A throw does not
-           come back here; this machine does not declare catches_abrupt. */
+        /* the body CALL has completed: ExecuteAsyncModule's PerformPromiseThen on its promise. A CALL that
+           failed to dispatch arrives as JS_EXCEPTION (both machines running this declare catches_abrupt). The
+           body is an async function, whose abrupt start rejects its promise (ECMAScript §15.8.4 Runtime
+           Semantics: EvaluateAsyncFunctionBody step 3), so the failure is registered as that rejection. */
         r = step_call_run(ctx, &op->phase, STEP_CB(op->cb), JS_UNDEFINED, JS_UNDEFINED, 0, NULL,
                           in, &op->res, out_cb, out_argc);
         DCHECK(r == 0,
                "a module body's CALL request resumed and did not end — step_call_run's second phase always "
                "completes, so a step code here is a cursor that names a request nobody issued");
+        if (JS_IsException(op->res)) {
+            JSValue funcs[2], err = JS_GetException(ctx);
+
+            op->res = JS_NewPromiseCapability(ctx, funcs);
+            CHECK(!JS_IsException(op->res),
+                  "a module body whose start failed could not have its rejection built — its ancestors would "
+                  "stay evaluating-async");
+            JS_FreeValue(ctx, js_promise_settle_native(ctx, funcs[1], vc(&err)));
+            JS_FreeValue(ctx, funcs[0]);
+            JS_FreeValue(ctx, funcs[1]);
+            JS_FreeValue(ctx, err);
+        }
         DCHECK(op->body != NULL && op->depth > 0 && op->frames[op->depth - 1].m == op->body,
                "a module body's CALL completed for a module that is not the walk's current frame");
         js_module_eval_register(ctx, op->body, op->res);

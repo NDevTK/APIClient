@@ -360,7 +360,7 @@ typedef struct JSTrampStepDef {
      * answered outright. A parse handle whose interior names nodes of a separately-declared tree, or arenas, or
      * a document, is NOT answered, and core/html/xml_fragment.c's reason prices itself against exactly that
      * test in its own words. A thing the REALM owns rather than the machine is not a host allocation at all and
-     * wants a `cow_capture_host_record`, which is what this file's own Link ( ) reason says of itself. And a
+     * wants per-flow capture of its own (a module record's link and evaluation fields are JSModuleEvalState). And a
      * structure that IS an owner — a Document — has no same-owner copy, which `clone`'s own contract above
      * states and which core/frame/navigable.c's reason quotes back at it.
      * THE DIRECTION IS WHY ANY OF THIS IS WORTH RECORDING: an undercount makes the trajectory below look nearly
