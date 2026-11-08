@@ -534,6 +534,10 @@ JS_EXTERN bool JS_FunctionIsStringSplit(JSValueConst f);
    dispatch is what stops the OTHER half, which is a stage having no body at all. */
 #define STEP_ARM(name) step_arm_##name: (void)(name)
 
+/* The arms of a sub-machine's stage block that share one body, generated from the block's own list:
+   `NODE_INSERT_ALGO_STAGES(JS_STEP_STAGE_ARM, PI, "") return node_insert_run(...);`. */
+#define JS_STEP_STAGE_ARM(name, label) STEP_ARM(name);
+
 /* THE SAME TRANSFER THE DISPATCH MAKES, MADE BY THE ALGORITHM ITSELF. An entry-stage dispatch picks one of
    several continuations (21.4.2.1 step 2's numberOfArgs picks three), and the stage list is in ALGORITHM order,
    so the arms it does not pick lie BETWEEN it and the one it does. Falling through them is wrong and a

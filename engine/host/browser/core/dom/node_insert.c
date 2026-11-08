@@ -1,5 +1,7 @@
-/* DOM §4.2.3 "Mutation algorithms"' insert of one node, in the standard's step order, resting at every node of
- * each walk.
+/* DOM §4.2.3 "Mutation algorithms"' insert, in the standard's step order, resting at every node of each walk.
+ *
+ * A DocumentFragment's children are taken into nodes one per step, each removed through the remove machine with
+ * suppressObservers (step 4.1), and step 7 then runs once per node of nodes.
  *
  * Steps 7.6 and 7.7 and the name index's upkeep of steps 7.2-7.3 are walks of the inserted subtree or its root,
  * which is the page's size, so each takes one node per entry and charges it as THREAD_WORK_DOM_WALK. The link
@@ -9,12 +11,15 @@
  * reactions, and steps 11-12 are the member's drain, over the batch step 8's stage records. */
 #include "core/dom/node_insert.h"
 
+#include <string.h>
+
 #include "check.h"
 #include "solver/dom_cow.h"
 #include "core/dom/document.h"
 #include "core/dom/document_name_index.h"
 #include "core/dom/element.h"
 #include "core/dom/mutation_observer.h"
+#include "core/dom/mutation_record.h"
 #include "core/dom/node.h"
 #include "core/dom/range.h"
 #include "core/dom/shadow_root.h"
@@ -27,20 +32,66 @@ void node_insert_start(JSStepHdr *hdr, NodeInsertState *s, lxb_dom_node_t *node,
                        lxb_dom_node_t *child, bool suppress_observers, int base, int after)
 {
     DCHECK(node != NULL && parent != NULL, "§4.2.3 insert was started with no node or no parent");
-    /* STEPS 1-4: nodes is « node » and count is 1, since node is not a DocumentFragment. */
-    DCHECK(!node_is_document_fragment(node),
-           "§4.2.3 insert was started on a DocumentFragment — its steps 1 and 4 take the fragment's children, "
-           "which this machine does not walk");
     DCHECK(child == NULL || (child->parent == parent && child != node),
            "§4.2.3 insert was started before a child of another parent, or before node itself — pre-insert's "
            "steps 2-3 are what make the reference child node's next sibling");
-    DCHECK(s->node == NULL, "a second §4.2.3 insert was started while one was still walking");
-    s->node = node;
+    DCHECK(s->parent == NULL || (hdr->stage == after && s->nodes == NULL),
+           "a second §4.2.3 insert was started while one was still walking");
+    memset(s, 0, sizeof *s);
+    s->nodes_js = JS_UNDEFINED;
     s->parent = parent;
     s->child = child;
     s->after = after;
     s->suppress_observers = suppress_observers;
+    s->observed = mutation_observer_any();
+    if (node_is_document_fragment(node)) {                                     /* STEP 1 */
+        s->frag = node;
+        hdr->stage = base + NODE_INSERT_PHASE_TAKE;
+        return;
+    }
+    s->node = node;
+    s->count = 1;                                                              /* STEP 2 */
     hdr->stage = base + NODE_INSERT_PHASE_RANGES;
+}
+
+void node_insert_visit(JSContext *ctx, NodeInsertState *s, JSStepVisit *v)
+{
+    v->buf(ctx, (void **)&s->nodes, sizeof(*s->nodes) * s->cap);
+    v->val(ctx, &s->nodes_js);
+}
+
+/* Step 1's nodes for a fragment, appended as step 4.1 takes each child out. */
+static void node_insert_take(JSContext *ctx, NodeInsertState *s, lxb_dom_node_t *c)
+{
+    if (s->count == s->cap) {
+        uint32_t want = s->cap ? s->cap * 2 : 8;
+        lxb_dom_node_t **n = js_realloc(ctx, s->nodes, sizeof(*n) * want);
+
+        CHECK(n != NULL, "§4.2.3 insert could not grow its list of a fragment's children");
+        s->nodes = n;
+        s->cap = want;
+    }
+    s->nodes[s->count] = c;
+    if (s->observed) {
+        if (JS_IsUndefined(s->nodes_js)) {
+            s->nodes_js = JS_NewArray(ctx);
+            CHECK(!JS_IsException(s->nodes_js), "§4.2.3 insert's node list could not be allocated");
+        }
+        JS_SetPropertyUint32(ctx, s->nodes_js, s->count, node_wrap(ctx, c));
+    }
+    s->count++;
+}
+
+/* The insert is over: what the state owns is released, and the member resumes at `after`. */
+static int node_insert_finish(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s)
+{
+    js_free(ctx, s->nodes);
+    s->nodes = NULL;
+    s->cap = 0;
+    JS_FreeValue(ctx, s->nodes_js);
+    s->nodes_js = JS_UNDEFINED;
+    hdr->stage = s->after;
+    return JS_STEP_YIELD;
 }
 
 /* Parent's node document: a Document is its own. */
@@ -55,17 +106,41 @@ int node_insert_run(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, int base
     int phase = hdr->stage - base;
     JSContext *realm;
 
-    DCHECK(s->node != NULL, "§4.2.3 insert was resumed before it was started");
+    DCHECK(s->parent != NULL, "§4.2.3 insert was resumed before it was started");
     if (phase >= NODE_INSERT_PHASE_RM_RANGES && phase < NODE_INSERT_PHASE_RM_RANGES + NODE_REMOVE_PHASE_N)
         return node_remove_run(ctx, hdr, &s->rm, base + NODE_INSERT_PHASE_RM_RANGES);
     switch (phase) {
+    case NODE_INSERT_PHASE_TAKE: {
+        lxb_dom_node_t *c = s->frag->first_child;
+
+        if (c) {                                                               /* STEP 4.1 */
+            node_insert_take(ctx, s, c);
+            thread_work_charge(THREAD_WORK_DOM_WALK, 1);
+            node_remove_start(hdr, &s->rm, c, /*suppress_observers*/ true, base + NODE_INSERT_PHASE_RM_RANGES,
+                              base + NODE_INSERT_PHASE_TAKE);
+            return JS_STEP_YIELD;
+        }
+        if (s->count == 0) return node_insert_finish(ctx, hdr, s);            /* STEP 3 */
+        if (s->observed)                                                       /* STEP 4.2 */
+            mutation_observer_queue_record(ctx, MR_TYPE_CHILD_LIST, s->frag, NULL, NULL, NULL, 0, JS_UNDEFINED,
+                                           s->nodes_js, NULL, NULL);
+        hdr->stage = base + NODE_INSERT_PHASE_RANGES;
+        return JS_STEP_YIELD;
+    }
+
     case NODE_INSERT_PHASE_RANGES:
-        if (s->child) range_insert_steps(ctx, s->parent, s->child, 1);         /* STEP 5 */
+        if (s->child) range_insert_steps(ctx, s->parent, s->child, s->count);  /* STEP 5 */
         /* Step 6 binds previousSibling before step 7.1's adopt removes node, so when node is child's previous
            sibling (parent's last child for a null child) step 8's record names node itself. Chrome 153 names
            the sibling left after the removal, the order the standard had while pre-insert adopted before
            insert; whatwg/dom#1488 restored that order for replace only (whatwg/dom#814). */
         s->prev = s->child ? s->child->prev : s->parent->last_child;           /* STEP 6 */
+        s->at = 0;
+        hdr->stage = base + NODE_INSERT_PHASE_NODE;
+        return JS_STEP_YIELD;
+
+    case NODE_INSERT_PHASE_NODE:                                               /* STEP 7 */
+        if (s->frag) s->node = s->nodes[s->at];
         if (s->node->parent) {                                                 /* STEP 7.1: adopt step 2 */
             node_remove_start(hdr, &s->rm, s->node, /*suppress_observers*/ false,
                               base + NODE_INSERT_PHASE_RM_RANGES, base + NODE_INSERT_PHASE_ADOPT);
@@ -146,22 +221,26 @@ int node_insert_run(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, int base
             s->cursor = shadow_root_next_in_shadow_including(realm ? realm : ctx, n, s->node);
             return JS_STEP_YIELD;
         }
-        hdr->stage = base + NODE_INSERT_PHASE_RECORD;
+        /* Steps 10-12 are the member's drain, which takes this node's entry at the step's end; the stages forbid
+           script, so it collects staticNodeList in nodes' order and runs step 12 once the member leaves them. */
+        element_tree_steps_record_insert(s->node);
+        hdr->stage = base + (++s->at < s->count ? NODE_INSERT_PHASE_NODE : NODE_INSERT_PHASE_RECORD);
         return JS_STEP_YIELD;
 
     case NODE_INSERT_PHASE_RECORD:
-        /* Steps 10-12 are the member's drain, which takes this record at the step's end; the stages forbid
-           script, so it collects staticNodeList now and runs step 12 once the member leaves them. */
-        element_tree_steps_record_insert(s->node);
-        if (!s->suppress_observers)                                             /* STEP 8 */
-            mutation_observer_insertion_record(ctx, s->node, s->parent, s->prev, s->child);
+        if (!s->suppress_observers) {                                           /* STEP 8 */
+            if (!s->frag)
+                mutation_observer_insertion_record(ctx, s->node, s->parent, s->prev, s->child);
+            else if (s->observed)
+                mutation_observer_queue_record(ctx, MR_TYPE_CHILD_LIST, s->parent, NULL, NULL, NULL, 0,
+                                               s->nodes_js, JS_UNDEFINED, s->prev, s->child);
+        }
         hdr->stage = base + NODE_INSERT_PHASE_CHANGED;
         return JS_STEP_YIELD;
 
     case NODE_INSERT_PHASE_CHANGED:
         node_children_changed(ctx, s->parent);                                  /* STEP 9 */
-        hdr->stage = s->after;
-        return JS_STEP_YIELD;
+        return node_insert_finish(ctx, hdr, s);
 
     default:
         DFAILF("§4.2.3 insert was resumed at phase %d, outside the block its caller declared for it", phase);

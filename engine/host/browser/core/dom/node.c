@@ -1387,11 +1387,7 @@ static bool node_move(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *new_
 /* §4.4 appendChild(node) and insertBefore(node, child): "return the result of appending node to this" and "of
    pre-inserting node into this before child", append being pre-insert before null. §4.2.3 pre-insert steps 1-3
    are the first stage, step 4's insert is core/dom/node_insert.h's machine, and step 5 returns node. magic 0 is
-   appendChild (one argument), 1 insertBefore (`Node? child` second); the declarations brand both positions.
-   Named residual. Not covered: a DocumentFragment node is inserted inside the first stage by node_insert_at,
-   whose per-child chokepoint runs every child's walks within that one step. Next: the machine walking `nodes`
-   with insert step 4's suppressed removals and one record for the fragment. Absence shows as an appendChild
-   of a fragment holding a large subtree whose step overruns a quantum. */
+   appendChild (one argument), 1 insertBefore (`Node? child` second); the declarations brand both positions. */
 #define NODE_PRE_INSERT_STAGES(X) \
     X(PI_CHECK,  "DOM §4.2.3 pre-insert steps 1-3 (ensure pre-insert validity; referenceChild)") \
     NODE_INSERT_ALGO_STAGES(X, PI, "DOM §4.2.3 pre-insert step 4") \
@@ -1401,13 +1397,13 @@ static const char *const NODE_PRE_INSERT_STEPS[] = { NODE_PRE_INSERT_STAGES(JS_S
 
 static void node_pre_insert_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    (void)ctx; (void)st; (void)v;   /* lexbor nodes, the documents'; the header holds this and the arguments */
+    node_insert_visit(ctx, st, v);   /* the header holds this and the arguments */
 }
 
 static const char *node_pre_insert_script_forbidden(int stage, const void *st)
 {
     (void)st;
-    return node_insert_script_forbidden(stage, PI_RANGES);
+    return node_insert_script_forbidden(stage, PI_TAKE);
 }
 
 static int js_node_pre_insert(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -1436,36 +1432,12 @@ static int js_node_pre_insert(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         }
         if (!node_ensure_pre_insert_valid(ctx, node, parent, child, NULL)) return JS_STEP_ABRUPT;   /* STEP 1 */
         if (child == node) child = node->next;                                                   /* STEPS 2-3 */
-        if (node_is_document_fragment(node)) {
-            node_insert_at(parent, node, child);
-            hdr->stage = PI_RETURN;
-            return JS_STEP_YIELD;
-        }
-        node_insert_start(hdr, s, node, parent, child, false, PI_RANGES, PI_RETURN);                   /* STEP 4 */
+        node_insert_start(hdr, s, node, parent, child, false, PI_TAKE, PI_RETURN);                   /* STEP 4 */
         return JS_STEP_YIELD;
     }
 
-    STEP_ARM(PI_RANGES);
-    STEP_ARM(PI_RM_RANGES);
-    STEP_ARM(PI_RM_ITERATORS);
-    STEP_ARM(PI_RM_DETACH);
-    STEP_ARM(PI_RM_ASSIGNED);
-    STEP_ARM(PI_RM_SLOT_FIND);
-    STEP_ARM(PI_RM_SLOT_PARENT_TREE);
-    STEP_ARM(PI_RM_SLOT_NODE_TREE);
-    STEP_ARM(PI_RM_ROOT);
-    STEP_ARM(PI_RM_DESCENDANTS);
-    STEP_ARM(PI_RM_RECORD);
-    STEP_ARM(PI_RM_CHANGED);
-    STEP_ARM(PI_ADOPT);
-    STEP_ARM(PI_LINK);
-    STEP_ARM(PI_INDEX);
-    STEP_ARM(PI_ASSIGNED);
-    STEP_ARM(PI_SLOT_TREE);
-    STEP_ARM(PI_DESCENDANTS);
-    STEP_ARM(PI_RECORD);
-    STEP_ARM(PI_CHANGED);
-    return node_insert_run(ctx, hdr, s, PI_RANGES);
+    NODE_INSERT_ALGO_STAGES(JS_STEP_STAGE_ARM, PI, "")
+    return node_insert_run(ctx, hdr, s, PI_TAKE);
 
     STEP_ARM(PI_RETURN);
     *presult = JS_DupValue(ctx, argv[0]);                                                       /* STEP 5 */
@@ -5414,6 +5386,7 @@ static void node_text_set_visit(JSContext *ctx, void *st, JSStepVisit *v)
     NodeTextSetState *s = st;
 
     v->val(ctx, &s->removed);
+    node_insert_visit(ctx, &s->in, v);
 }
 
 static const char *node_text_set_script_forbidden(int stage, const void *st)
@@ -5441,7 +5414,7 @@ static int node_text_set_next(JSContext *ctx, JSStepHdr *hdr, NodeTextSetState *
         return JS_STEP_YIELD;
     }
     if (s->text) {
-        node_insert_start(hdr, &s->in, s->text, s->parent, NULL, /*suppress_observers*/ true, TCS_IN_RANGES,
+        node_insert_start(hdr, &s->in, s->text, s->parent, NULL, /*suppress_observers*/ true, TCS_IN_TAKE,
                           TCS_RECORD);
         return JS_STEP_YIELD;
     }
@@ -5545,13 +5518,8 @@ static int js_node_set_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, in
     STEP_ARM(TCS_RM_ROOT); STEP_ARM(TCS_RM_DESCENDANTS); STEP_ARM(TCS_RM_RECORD); STEP_ARM(TCS_RM_CHANGED);
     return node_remove_run(ctx, hdr, &s->rm, TCS_RM_RANGES);
 
-    STEP_ARM(TCS_IN_RANGES); STEP_ARM(TCS_IN_RM_RANGES); STEP_ARM(TCS_IN_RM_ITERATORS); STEP_ARM(TCS_IN_RM_DETACH);
-    STEP_ARM(TCS_IN_RM_ASSIGNED); STEP_ARM(TCS_IN_RM_SLOT_FIND); STEP_ARM(TCS_IN_RM_SLOT_PARENT_TREE);
-    STEP_ARM(TCS_IN_RM_SLOT_NODE_TREE); STEP_ARM(TCS_IN_RM_ROOT); STEP_ARM(TCS_IN_RM_DESCENDANTS);
-    STEP_ARM(TCS_IN_RM_RECORD); STEP_ARM(TCS_IN_RM_CHANGED); STEP_ARM(TCS_IN_ADOPT); STEP_ARM(TCS_IN_LINK);
-    STEP_ARM(TCS_IN_INDEX); STEP_ARM(TCS_IN_ASSIGNED); STEP_ARM(TCS_IN_SLOT_TREE); STEP_ARM(TCS_IN_DESCENDANTS);
-    STEP_ARM(TCS_IN_RECORD); STEP_ARM(TCS_IN_CHANGED);
-    return node_insert_run(ctx, hdr, &s->in, TCS_IN_RANGES);
+    NODE_INSERT_ALGO_STAGES(JS_STEP_STAGE_ARM, TCS_IN, "")
+    return node_insert_run(ctx, hdr, &s->in, TCS_IN_TAKE);
 }
 
 static const IdlStepDecl NODE_TEXT_SET_STEP = {
