@@ -410,10 +410,14 @@ typedef struct JSTrampStepDef {
     /* Whether the algorithm is §22.1.3.23 String.prototype.split ( separator, substringLimit ), whose result over
        a String separator is the receiver's ranges in order. Read through JS_FunctionIsStringSplit. */
     uint8_t string_split;
-    /* Whether the algorithm is §22.1.3.22 String.prototype.slice ( start, end ), whose result is the empty String
-       wherever ToClampedIndex(start) reaches the receiver's length and `end` is undefined. Read through
-       JS_FunctionIsStringSlice. */
-    uint8_t string_slice;
+    /* Whether the algorithm takes an unknown receiver itself, reading it only through operations the engine
+       answers over an unknown (§23.1.3's [[Get]], [[HasProperty]] and LengthOfArrayLike, each a member read or a
+       per-position length fork): the unknown-callee [[Call]] machine then calls it with the receiver. */
+    uint8_t forwards_unknown_receiver;
+    /* The algorithm's own steps over an unknown receiver, from the facets the receiver and the arguments state:
+       its completion, or JS_UNINITIALIZED where the facets decide no step. Asked by the unknown-callee [[Call]]
+       machine before it runs the examples; NULL where the algorithm states none. */
+    JSValue (*over_unknown_receiver)(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 } JSTrampStepDef;
 
 enum { JS_SEARCH_RESULT_NONE = 0, JS_SEARCH_RESULT_FIRST = 1, JS_SEARCH_RESULT_LAST = 2 };
@@ -426,8 +430,6 @@ JS_EXTERN unsigned JS_FunctionResultTypes(JSValueConst f);
 JS_EXTERN int JS_FunctionSearchResult(JSValueConst f);
 /* Whether `f` is a built-in function object whose definition declares string_split. Reads no property. */
 JS_EXTERN bool JS_FunctionIsStringSplit(JSValueConst f);
-/* Whether `f` is a built-in function object whose definition declares string_slice. Reads no property. */
-JS_EXTERN bool JS_FunctionIsStringSlice(JSValueConst f);
 
 /* ONE DECLARATION OF A MACHINE'S STAGES — the enum and the labels, from one list, so neither can move without
    the other. A machine writes:

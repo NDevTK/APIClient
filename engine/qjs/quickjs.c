@@ -95334,16 +95334,16 @@ static void js_array_tostring_visit(JSContext *ctx, void *st, JSStepVisit *v);
    table would be a second list to keep in sync and a magic number that silently repoints when a row is inserted. */
 static const JSTrampStepDef js_array_find_def          = { sizeof(JSArrayFind), js_array_find_step, js_array_find_fini, ArrayFind , .visit = js_array_find_visit,
                                                         .algorithm = "23.1.3.9 Array.prototype.find",
-                                                        .steps = js_array_find_steps };
+                                                        .steps = js_array_find_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_findIndex_def     = { sizeof(JSArrayFind), js_array_find_step, js_array_find_fini, ArrayFindIndex , .visit = js_array_find_visit,
                                                         .algorithm = "23.1.3.10 Array.prototype.findIndex",
-                                                        .steps = js_array_findIndex_steps };
+                                                        .steps = js_array_findIndex_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_findLast_def      = { sizeof(JSArrayFind), js_array_find_step, js_array_find_fini, ArrayFindLast , .visit = js_array_find_visit,
                                                         .algorithm = "23.1.3.11 Array.prototype.findLast",
-                                                        .steps = js_array_findLast_steps };
+                                                        .steps = js_array_findLast_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_findLastIndex_def = { sizeof(JSArrayFind), js_array_find_step, js_array_find_fini, ArrayFindLastIndex , .visit = js_array_find_visit,
                                                         .algorithm = "23.1.3.12 Array.prototype.findLastIndex",
-                                                        .steps = js_array_findLastIndex_steps };
+                                                        .steps = js_array_findLastIndex_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_ta_find_def             = { sizeof(JSArrayFind), js_array_find_step, js_array_find_fini, ArrayFind | FIND_TA , .visit = js_array_find_visit,
                                                         .algorithm = "23.2.3.11 %TypedArray%.prototype.find",
                                                         .steps = js_ta_find_steps };
@@ -95432,19 +95432,19 @@ static const JSTrampStepDef js_str_replaceAll_def      = { sizeof(JSStrReplace),
                                                      .steps = js_str_replaceAll_steps };
 static const JSTrampStepDef js_array_every_def     = { sizeof(JSArrayEvery), js_array_every_vstep, js_array_every_vfini, special_every, .visit = js_array_every_visit,
                                                      .algorithm = "23.1.3.6 Array.prototype.every",
-                                                     .steps = js_array_every_steps };
+                                                     .steps = js_array_every_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_some_def      = { sizeof(JSArrayEvery), js_array_every_vstep, js_array_every_vfini, special_some, .visit = js_array_every_visit,
                                                      .algorithm = "23.1.3.29 Array.prototype.some",
-                                                     .steps = js_array_some_steps };
+                                                     .steps = js_array_some_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_forEach_def   = { sizeof(JSArrayEvery), js_array_every_vstep, js_array_every_vfini, special_forEach, .visit = js_array_every_visit,
                                                      .algorithm = "23.1.3.15 Array.prototype.forEach",
-                                                     .steps = js_array_forEach_steps };
+                                                     .steps = js_array_forEach_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_map_def       = { sizeof(JSArrayEvery), js_array_every_vstep, js_array_every_vfini, special_map, .visit = js_array_every_visit,
                                                      .algorithm = "23.1.3.21 Array.prototype.map",
-                                                     .steps = js_array_map_steps };
+                                                     .steps = js_array_map_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_filter_def    = { sizeof(JSArrayEvery), js_array_every_vstep, js_array_every_vfini, special_filter, .visit = js_array_every_visit,
                                                      .algorithm = "23.1.3.8 Array.prototype.filter",
-                                                     .steps = js_array_filter_steps };
+                                                     .steps = js_array_filter_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_ta_every_def        = { sizeof(JSArrayEvery), js_array_every_vstep, js_array_every_vfini, special_every | special_TA, .visit = js_array_every_visit,
                                                      .algorithm = "23.2.3.8 %TypedArray%.prototype.every",
                                                      .steps = js_ta_every_steps };
@@ -95474,11 +95474,11 @@ static const char *const js_array_toSorted_steps[];
 static const JSTrampStepDef js_array_sort_def    = { sizeof(JSArraySort), js_array_sort_vstep, js_array_sort_vfini, 0, .visit = js_array_sort_visit,
                                                     .algorithm = "23.1.3.30 Array.prototype.sort",
                                                     .steps = js_array_sort_steps,
-                                                   .answers_unknown = 1 };
+                                                   .answers_unknown = 1, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_toSorted_def = { sizeof(JSArraySort), js_array_sort_vstep, js_array_sort_vfini, 1, .visit = js_array_sort_visit,
                                                     .algorithm = "23.1.3.34 Array.prototype.toSorted",
                                                     .steps = js_array_toSorted_steps,
-                                                   .answers_unknown = 1 };
+                                                   .answers_unknown = 1, .forwards_unknown_receiver = 1 };
 /* Declared where the machine is; the definition names it here. */
 static const char *const js_json_parse_steps[];
 static const JSTrampStepDef js_json_parse_def    = { sizeof(JSJsonReviver), js_json_parse_vstep, js_json_parse_vfini, 0, .visit = js_json_reviver_visit,
@@ -96113,7 +96113,7 @@ static const char *const js_array_slice_steps[];
 static const char *const js_array_splice_steps[];
 static const JSTrampStepDef js_array_slice_def  =
     { sizeof(JSArraySlice), js_array_slice_step, js_array_slice_fini, 0, .visit = js_array_slice_visit,
-      .algorithm = "23.1.3.28 Array.prototype.slice", .steps = js_array_slice_steps };
+      .algorithm = "23.1.3.28 Array.prototype.slice", .steps = js_array_slice_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_splice_def =
     { sizeof(JSArraySlice), js_array_slice_step, js_array_slice_fini, 1, .visit = js_array_slice_visit,
       .algorithm = "23.1.3.31 Array.prototype.splice", .steps = js_array_splice_steps };
@@ -96122,7 +96122,7 @@ static void js_array_concat_visit(JSContext *ctx, void *st, JSStepVisit *v);
 static const char *const js_array_concat_steps[];
 static const JSTrampStepDef js_array_concat_def =
     { sizeof(JSArrayConcat), js_array_concat_step, js_array_concat_fini, 0, .visit = js_array_concat_visit,
-      .algorithm = "23.1.3.2 Array.prototype.concat", .steps = js_array_concat_steps };
+      .algorithm = "23.1.3.2 Array.prototype.concat", .steps = js_array_concat_steps, .forwards_unknown_receiver = 1 };
 static int js_iterator_ctor_precheck(JSContext *ctx, const JSStepHdr *h);
 static int js_weakref_ctor_precheck(JSContext *ctx, const JSStepHdr *h);
 static JSValue js_weakref_ctor_body(JSContext *ctx, JSValueConst obj_, int argc, JSValueConst *argv);
@@ -96210,11 +96210,11 @@ static const char *const js_array_indexOf_steps[];
 static const char *const js_array_lastIndexOf_steps[];
 static const char *const js_array_includes_steps[];
 static const JSTrampStepDef js_array_indexOf_def     = { sizeof(JSArraySearch), js_array_search_step, js_array_search_fini, SEARCH_INDEXOF, .visit = js_array_search_visit,
-                        .algorithm = "23.1.3.17 Array.prototype.indexOf", .steps = js_array_indexOf_steps };
+                        .algorithm = "23.1.3.17 Array.prototype.indexOf", .steps = js_array_indexOf_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_lastIndexOf_def = { sizeof(JSArraySearch), js_array_search_step, js_array_search_fini, SEARCH_LASTINDEXOF, .visit = js_array_search_visit,
-                        .algorithm = "23.1.3.20 Array.prototype.lastIndexOf", .steps = js_array_lastIndexOf_steps };
+                        .algorithm = "23.1.3.20 Array.prototype.lastIndexOf", .steps = js_array_lastIndexOf_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_includes_def    = { sizeof(JSArraySearch), js_array_search_step, js_array_search_fini, SEARCH_INCLUDES, .visit = js_array_search_visit,
-                        .algorithm = "23.1.3.16 Array.prototype.includes", .steps = js_array_includes_steps };
+                        .algorithm = "23.1.3.16 Array.prototype.includes", .steps = js_array_includes_steps, .forwards_unknown_receiver = 1 };
 static int js_string_raw_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
 static JSValue js_string_raw_fini(JSContext *ctx, void *st, bool take_result);
 static void js_string_raw_visit(JSContext *ctx, void *st, JSStepVisit *v);
@@ -96295,7 +96295,8 @@ static const JSTrampStepDef js_str_charAt_def     = { sizeof(JSStrRecv), js_str_
 static const JSTrampStepDef js_str_charCodeAt_def = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_CHARCODEAT, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.3 String.prototype.charCodeAt",
                                                     .steps = js_str_charCodeAt_steps };
-static const JSTrampStepDef js_str_slice_def      = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SLICE, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING, .string_slice = 1,
+static JSValue js_str_slice_over_unknown(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+static const JSTrampStepDef js_str_slice_def      = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SLICE, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING, .over_unknown_receiver = js_str_slice_over_unknown,
                                                     .algorithm = "22.1.3.22 String.prototype.slice",
                                                     .steps = js_str_slice_steps };
 static const JSTrampStepDef js_str_substr_def     = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SUBSTR, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
@@ -96455,7 +96456,7 @@ static const char *const js_array_tolocale_steps[];
 static const char *const js_ta_join_steps[];
 static const char *const js_ta_tolocale_steps[];
 static const JSTrampStepDef js_array_join_def     = { sizeof(JSArrayJoin), js_array_join_step, js_array_join_fini, JOIN_ARRAY, .visit = js_array_join_visit,
-                        .algorithm = "23.1.3.18 Array.prototype.join", .steps = js_array_join_steps };
+                        .algorithm = "23.1.3.18 Array.prototype.join", .steps = js_array_join_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_tolocale_def = { sizeof(JSArrayJoin), js_array_join_step, js_array_join_fini, JOIN_ARRAY_LOCALE, .visit = js_array_join_visit,
                         .algorithm = "23.1.3.32 Array.prototype.toLocaleString", .steps = js_array_tolocale_steps };
 static const JSTrampStepDef js_ta_join_def        = { sizeof(JSArrayJoin), js_array_join_step, js_array_join_fini, JOIN_TA, .visit = js_array_join_visit,
@@ -96515,7 +96516,7 @@ static const JSTrampStepDef js_array_flat_def      = { sizeof(JSArrayFlat), js_a
                                                      .steps = js_array_flat_steps };
 static const JSTrampStepDef js_array_flatMap_def   = { sizeof(JSArrayFlat), js_array_flat_step, js_array_flat_fini, ARRAYFLAT_FLATMAP, .visit = js_array_flat_visit,
                                                      .algorithm = "23.1.3.14 Array.prototype.flatMap",
-                                                     .steps = js_array_flatMap_steps };
+                                                     .steps = js_array_flatMap_steps, .forwards_unknown_receiver = 1 };
 static const char *const js_array_fromlike_steps[];
 static const JSTrampStepDef js_array_fromlike_def  = { sizeof(JSArrayFromLike), js_array_fromlike_step, js_array_fromlike_fini, 0, .visit = js_array_fromlike_visit,
                         .algorithm = "23.1.2.1 Array.from, over an array-like source", .steps = js_array_fromlike_steps };
@@ -96921,10 +96922,10 @@ static const JSTrampStepDef js_array_tostring_def = { sizeof(JSArrayToString), j
                         .algorithm = "23.1.3.36 Array.prototype.toString", .steps = js_array_tostring_steps };
 static const JSTrampStepDef js_array_reduce_def  = { sizeof(JSArrayReduce), js_array_reduce_vstep, js_array_reduce_vfini, special_reduce, .visit = js_array_reduce_visit,
                                                     .algorithm = "23.1.3.24 Array.prototype.reduce",
-                                                    .steps = js_array_reduce_steps };
+                                                    .steps = js_array_reduce_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_reduceR_def = { sizeof(JSArrayReduce), js_array_reduce_vstep, js_array_reduce_vfini, special_reduceRight, .visit = js_array_reduce_visit,
                                                     .algorithm = "23.1.3.25 Array.prototype.reduceRight",
-                                                    .steps = js_array_reduceR_steps };
+                                                    .steps = js_array_reduceR_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_ta_reduce_def     = { sizeof(JSArrayReduce), js_array_reduce_vstep, js_array_reduce_vfini, special_reduce | special_TA, .visit = js_array_reduce_visit,
                                                     .algorithm = "23.2.3.23 %TypedArray%.prototype.reduce",
                                                     .steps = js_ta_reduce_steps };
@@ -99128,10 +99129,10 @@ enum { CCALL_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_concolic_call_steps[] = { CCALL_STAGES(JS_STEP_STAGE_LABEL) NULL };
 enum { CCALL_NORMAL, CCALL_THROW };   /* the outcome fork's completions; the normal one is numbered first */
 
-/* Whether `fex` is an Array.prototype method the call forwards: these §23.1.3 algorithms read their receiver
-   only through [[Get]], [[HasProperty]] and LengthOfArrayLike, which over an unknown are the per-element member
-   reads (each an unknown derived from the receiver, carrying its example's element) and the per-position length
-   forks, so the builtin's own step machine runs on every element a world has. ArraySpeciesCreate (slice,
+/* Whether `fex`'s definition declares forwards_unknown_receiver. The §23.1.3 Array methods that do read their
+   receiver only through [[Get]], [[HasProperty]] and LengthOfArrayLike, which over an unknown are the per-element
+   member reads (each an unknown derived from the receiver, carrying its example's element) and the per-position
+   length forks, so the builtin's own step machine runs on every element a world has. ArraySpeciesCreate (slice,
    concat) takes IsArray false for an unknown (js_is_array tests the class) and creates an Array, which is what
    the constructor of a parsed reply's array, %Array%, creates too; concat's own IsArray is asked. */
 static bool js_concolic_call_forwards(JSValueConst fex)
@@ -99139,18 +99140,7 @@ static bool js_concolic_call_forwards(JSValueConst fex)
     JSObject *fp = JS_VALUE_GET_OBJ(fex);
 
     if (fp->u.cfunc.cproto != JS_CFUNC_step) return false;
-    switch (fp->u.cfunc.magic) {
-    case STEPDEF_ARRAY_EVERY: case STEPDEF_ARRAY_SOME: case STEPDEF_ARRAY_FOREACH: case STEPDEF_ARRAY_MAP:
-    case STEPDEF_ARRAY_FILTER: case STEPDEF_ARRAY_REDUCE: case STEPDEF_ARRAY_REDUCE_RIGHT:
-    case STEPDEF_ARRAY_FIND: case STEPDEF_ARRAY_FIND_INDEX: case STEPDEF_ARRAY_FIND_LAST:
-    case STEPDEF_ARRAY_FIND_LAST_INDEX: case STEPDEF_ARRAY_SORT: case STEPDEF_ARRAY_TOSORTED:
-    case STEPDEF_ARRAY_FLATMAP: case STEPDEF_ARRAY_SLICE: case STEPDEF_ARRAY_INDEXOF:
-    case STEPDEF_ARRAY_LASTINDEXOF: case STEPDEF_ARRAY_CONCAT: case STEPDEF_ARRAY_JOIN:
-    case STEPDEF_ARRAY_INCLUDES:
-        return true;
-    default:
-        return false;
-    }
+    return tramp_step_def_of(fex)->forwards_unknown_receiver != 0;
 }
 
 /* Whether the RegExp protocol over `v` runs only this realm's builtins, so a String method handed it passes the
@@ -99617,6 +99607,19 @@ static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JS
         s->ncb = n + 2;
         for (i = 0; i < n + 2; i++) s->cb[i] = JS_UNDEFINED;
         s->cb[1] = fex;
+        /* A builtin whose definition states its steps over an unknown receiver answers from the facets first. */
+        if (runs && g_concolic.is(s->hdr.this_val) &&
+            JS_VALUE_GET_OBJ(fex)->u.cfunc.cproto == JS_CFUNC_step &&
+            tramp_step_def_of(fex)->over_unknown_receiver) {
+            JSValue v = tramp_step_def_of(fex)->over_unknown_receiver(ctx, s->hdr.this_val, n,
+                                                                      (JSValueConst *)s->hdr.argv);
+
+            if (JS_IsException(v)) return -1;
+            if (!JS_IsUninitialized(v)) {
+                s->result = v;
+                return 0;
+            }
+        }
         /* An array callback method over an unknown receiver is the builtin's own call, receiver and all. */
         if (runs && g_concolic.is(s->hdr.this_val) && js_concolic_call_forwards(fex)) {
             s->cb[0] = js_dup(s->hdr.this_val);
@@ -99814,18 +99817,6 @@ int JS_FunctionSearchResult(JSValueConst f)
         (fp->u.cfunc.cproto != JS_CFUNC_step && fp->u.cfunc.cproto != JS_CFUNC_step_ctor))
         return JS_SEARCH_RESULT_NONE;
     return tramp_step_def_of(f)->search_result;
-}
-
-bool JS_FunctionIsStringSlice(JSValueConst f)
-{
-    JSObject *fp;
-
-    if (JS_VALUE_GET_TAG(f) != JS_TAG_OBJECT) return false;
-    fp = JS_VALUE_GET_OBJ(f);
-    if (fp->class_id != JS_CLASS_C_FUNCTION ||
-        (fp->u.cfunc.cproto != JS_CFUNC_step && fp->u.cfunc.cproto != JS_CFUNC_step_ctor))
-        return false;
-    return tramp_step_def_of(f)->string_slice != 0;
 }
 
 bool JS_FunctionIsStringSplit(JSValueConst f)
@@ -105906,6 +105897,20 @@ static int js_loc_canonicalize_locale_list_string(JSContext *ctx, JSValueConst l
     }
     js_free(ctx, buf);
     return 0;
+}
+
+/* §22.1.3.22 String.prototype.slice ( start, end ) over an unknown receiver, by its own steps: where the receiver
+   is a String in every world, step 3's ToString is the receiver; where `end` is undefined, step 6 takes `length`;
+   where start reaches the receiver's own length in every world (JSConcolicHooks.string_length_reached), step 5's
+   ToClampedIndex is `length`, so step 7's from ≥ to returns the empty String. JS_UNINITIALIZED otherwise. */
+static JSValue js_str_slice_over_unknown(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    DCHECK(g_concolic.string_length_reached != NULL, "a host installed the concolic hooks without the length one");
+    if (argc < 1 || (argc > 1 && !JS_IsUndefined(argv[1])))
+        return JS_UNINITIALIZED;
+    if (!g_concolic.string_length_reached(ctx, argv[0], this_val))
+        return JS_UNINITIALIZED;
+    return JS_AtomToString(ctx, JS_ATOM_empty_string);
 }
 
 static int js_str_recv_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)

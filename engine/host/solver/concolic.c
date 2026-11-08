@@ -2126,19 +2126,35 @@ static void string_length_attach(JSValueConst r, JSValueConst s)
     aff_attach(r, af);
 }
 
-/* Whether `start` is, in every world, at least the length of the unknown String `s`: its form is `1·length(s) +
-   c` with `c >= 0`. */
-static int string_length_reached(JSContext *ctx, JSValueConst start, JSValueConst s)
+static unsigned cty_of_operand(JSValueConst v);
+static uint32_t example_units(JSContext *ctx, JSValueConst ex);
+/* JSConcolicHooks.string_length_reached: `s` is a String in every world and `v`'s form is `1·length(s) + c` with
+   `c >= 0`. The examples, where both are held, agree. */
+int concolic_string_length_reached(JSContext *ctx, JSValueConst v, JSValueConst s)
 {
     AffOperand o;
     char *term;
     int r;
 
-    if (!aff_operand(ctx, start, &o) || !o.form || o.form->n != 1 || o.form->k[0] != 1.0 || o.form->c < 0.0)
+    if (!concolic_is(s) || cty_of_operand(s) != CTY_STRING) return 0;
+    if (!aff_operand(ctx, v, &o) || !o.form || o.form->n != 1 || o.form->k[0] != 1.0 || o.form->c < 0.0)
         return 0;
     term = string_length_term(s);
     r = term && !strcmp(term, o.form->term[0]);
     free(term);
+#if APICLIENT_DEV
+    if (r && concolic_example_present(s) && concolic_example_present(v)) {
+        JSValue se = concolic_example(ctx, s), ve = concolic_example(ctx, v);
+        double d = -1.0;
+
+        DCHECKF(!JS_IsString(se) || !JS_IsNumber(ve) ||
+                (JS_ToFloat64(ctx, &d, ve) == 0 && d >= (double)example_units(ctx, se)),
+                "a value whose form reaches a String's own length has the example %.17g, short of the String's "
+                "example's length", d);
+        JS_FreeValue(ctx, se);
+        JS_FreeValue(ctx, ve);
+    }
+#endif
     return r;
 }
 
@@ -6182,21 +6198,6 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
             return JS_ThrowTypeError(ctx, "%s is not a function", c->member);
         }
     }
-    /* §22.1.3.22 String.prototype.slice over an unknown String with no `end`: where ToClampedIndex(start, length)
-       reaches the String's own length in every world, from ≥ to and the result is the empty String. */
-    if (concolic_is(this_val) && cty_of_operand(this_val) == CTY_STRING && argc >= 1 &&
-        (argc < 2 || JS_IsUndefined(argv[1])) && string_length_reached(ctx, argv[0], this_val)) {
-        JSValue fex = concolic_example(ctx, func_obj);
-        int is_slice = JS_FunctionIsStringSlice(fex);
-
-        JS_FreeValue(ctx, fex);
-        if (is_slice) {
-            DCHECK(JS_IsUndefined(example) || (JS_IsString(example) && example_units(ctx, example) == 0),
-                   "a slice from the receiver's own length had a non-empty example");
-            JS_FreeValue(ctx, example);
-            return JS_NewStringLen(ctx, "", 0);
-        }
-    }
     /* A slice or substring of a string an unknown was concatenated into, over a range inside one piece, is that
        piece's own derivation: the bytes are its owner's whatever the other pieces hold. */
     int crossing = 0;
@@ -10187,6 +10188,7 @@ static JSConcolicHooks g_hooks = {
     .string_unit_map = concolic_string_unit_map,
     .string_domain = concolic_string_domain,
     .string_class = concolic_string_class,
+    .string_length_reached = concolic_string_length_reached,
     .string_keep_prefix = concolic_string_keep_prefix,
     .get_value_base = concolic_get_value_base_hook,
     .key_name = concolic_key_name_hook,

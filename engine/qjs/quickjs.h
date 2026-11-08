@@ -2950,6 +2950,9 @@ typedef struct JSConcolicHooks {
     /* `r`, minted by an algorithm every result of which lies in the `n` sorted inclusive code-unit pairs, is a
        String in every world holding only those units: states the type and the class on it. */
     void (*string_class)(JSContext *ctx, JSValueConst r, const uint32_t *pairs, int n);
+    /* Whether `s` is an unknown String in every world and `v` is, in every world, at least its length: `v`'s
+       affine form is the String's own length term plus a non-negative constant. */
+    int (*string_length_reached)(JSContext *ctx, JSValueConst v, JSValueConst s);
     /* THE NAME an unknown key denotes, as a REAL string — the concolic's own shape. A property key must be an
        atom, which a concolic cannot be, but the shape IS a string and it is stable per source: two writes
        through the same unknown source land in the SAME slot, two different sources in different ones, and a
