@@ -61,5 +61,6 @@
   // A catch that HAS a real job (a network error IS a Fetch §5.6 outcome, not a bug) opens with this line: an
   // invariant failure travels ON through it, everything else is handled as the catch intends. It is not a
   // second assertion mechanism — it is what keeps the ONE mechanism from being locally disabled.
-  g.RETHROW_FATAL = function (e) { if (e && e.apiclientFatal) throw e; };
+  g.IS_FATAL = function (e) { return !!(e && e.apiclientFatal); };
+  g.RETHROW_FATAL = function (e) { if (g.IS_FATAL(e)) throw e; };
 })(self);

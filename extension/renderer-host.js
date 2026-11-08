@@ -433,6 +433,14 @@
              "question reaching a renderer this file never finished forking");
       return r.conn.outstandingCalls();
     };
+    /* Why this renderer's connection ended (the child's abort, a bootstrap that did not start, or this file's
+       close, `renderer-unresponsive` among them), or null while it is live. */
+    r.endedReason = function () {
+      DCHECK(r.conn !== null,
+             "a renderer was asked whether it ended before its Connection existed — the frame is created and its " +
+             "invitation offered in one step, so this is a question reaching a renderer this file never forked");
+      return r.conn.dead ? r.conn.deadReason : null;
+    };
     /* A RENDERER THAT DID NOT BOOT IS STILL A FRAME IN THIS DOCUMENT, so the element and its port go first, or
        a caller that retried would accumulate dead renderers under a document that never reloads. The failure
        then TRAVELS ON: swallowing it would report a page as analysed by an instance that never existed.

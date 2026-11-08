@@ -6066,6 +6066,14 @@ function rootWhyLine(lines) {
   return "";
 }
 function engineCrash(eng, stage, e) {
+  /* A retired instance keeps its first cause. Every later rejection of its calls is the same renderer's end
+     (a connection that dies rejects every outstanding call), reported where it was first seen. */
+  if (eng._crashed) {
+    DCHECK(eng.r !== null && eng.r.endedReason() !== null,
+           "an instance retired by this zone was reported crashed at `" + stage + "` while its renderer is live — " +
+           "a call rejects only when the renderer's connection ends, so this is a rejection of another kind");
+    return;
+  }
   const m = String((e && e.message) || e);
   eng._crashed = true;
   const root = rootWhyLine(eng.lines);
@@ -6093,6 +6101,21 @@ function engineRefuse(eng, why) {
 /* `eng` is the reservation that failed, passed because a boot can die after `begin`: it may already have been
    handed a residue and told how many flows came back. A reservation that died earlier carries its declared
    `null`. */
+/* The pool's instances whose renderer ended (an engine abort, or renderer-host's `renderer-unresponsive`
+   close), each retired with its own renderer's reason; answers how many. The pool is asked rather than the
+   error, because a round's rejection can come from another instance's renderer (a cross-instance call), and a
+   renderer that ended with nothing outstanding rejects nothing. */
+function engineRetireEnded(stage) {
+  let n = 0;
+  for (const eng of _pool) {
+    if (eng._crashed || eng.r === null) continue;
+    const why = eng.r.endedReason();
+    if (why === null) continue;
+    engineCrash(eng, stage, why);
+    n++;
+  }
+  return n;
+}
 function crashRecord(stage, m, msg, eng) {
   /* No result document is expected: the instance aborted before it could answer. The record goes through
      linesToAnalysis's own no-document arm, so both crash producers share one shape. It owns no run row: each
@@ -6472,9 +6495,11 @@ async function hostSchedule(pool, ops) {
       target._readyP = ops.serviceFetch(target, st === 3).then(
         () => { target.state = "hot"; },
         (e) => {
-          /* A throw out of a service round is an invariant failure (every assert in the reply builders, the
+          /* A renderer that ended during the round retires its own instance, and the scheduler drives on. Any
+             other throw out of a service round is an invariant failure (every assert in the reply builders, the
              notice router and the request loop lands here): bannered, and rethrown in dev. */
           target.state = "hot";
+          if (!IS_FATAL(e) && engineRetireEnded("service") > 0) return;
           crashBanner("service", String((e && e.stack) || e));
           if (self.APICLIENT_DEV) throw e;
         });
@@ -7253,8 +7278,8 @@ const _hostOps = {
   },
 };
 /* The scheduler died, and a dead scheduler is not re-entered. Set by the rejection arm below and never cleared:
-   every rejection out of this loop is an invariant abort, so the state that killed it is still in `_pool` and
-   `_waiting` and the next round would die at the same line. `_hostKicksRefused` counts later kicks, so the pair
+   every rejection that reaches it is an invariant abort (a renderer's end retires its instances instead), so
+   the state that killed it is still in `_pool` and `_waiting` and the next round would die at the same line. `_hostKicksRefused` counts later kicks, so the pair
    reads "the scheduler is down, and N callers have asked for it since". */
 let _hostDead = null;
 let _hostKicksRefused = 0;
@@ -7288,8 +7313,11 @@ function _hostKick() {
        is answered by engineBootFailed and resolves, so one page failing to boot does not take the pool down).
        `_hostDriving` is cleared because no round is in flight; `_hostDead` is what refuses. */
     (e) => {
-      _hostDead = e;
       _hostDriving = false;
+      /* A call the loop awaits rejected because a renderer ended: its instances retire and the loop starts
+         again, as a completed run re-kicks. */
+      if (!IS_FATAL(e) && engineRetireEnded("host-wfq") > 0) { _hostKick(); return; }
+      _hostDead = e;
       crashBanner("host-wfq", String((e && e.stack) || e));
       if (self.APICLIENT_DEV) throw e;
     });
