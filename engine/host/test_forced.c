@@ -1472,6 +1472,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/removerest.h"
 #include "fixture/slotrest.h"
 #include "fixture/insertrest.h"
+#include "fixture/textrest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2214,6 +2215,7 @@ TF_DOCS[] = {
     { "removerest", HTML_REMOVEREST },
     { "slotrest", HTML_SLOTREST },
     { "insertrest", HTML_INSERTREST },
+    { "textrest", HTML_TEXTREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -17364,6 +17366,37 @@ TF_UNIT void probes_insertrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `textrest` document (fixture/textrest.h). textcontent-rests: the setting arm's textContent of a
+   div with 100,002 children rests inside the setter (`sliceOverrunGapWork` under one quantum), and the arm then
+   reads one Text child holding the string and both names absent. textcontent-sibling-tree: the sibling arm, which
+   can run while the first is parked mid-replace, reads the children in place and both names present. */
+TF_UNIT void probes_textrest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1, kt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/tr-done", "c", "1") && param_value_is(js, "/api/tr-done", "t", "1"),
+             "NOT REACHED: no /api/tr-done?c=1&t=1 record, so the setter did not finish with one Text child holding "
+             "the string");
+    fold_row(&tt, &why, param_value_is(js, "/api/tr-done", "n", "1") && param_value_is(js, "/api/tr-done", "w", "1"),
+             "the setting arm still found a removed element by name: the name index kept an entry replace all took "
+             "out of the document tree");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: a textContent of a div with 100,002 "
+             "children removed them inside the setter instead of resting per node");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/tr-kept", "c", "100002"),
+             "NOT REACHED: no /api/tr-kept?c=100002 record, so the sibling arm did not read the children in place");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/tr-kept", "n", "1") && param_value_is(js, "/api/tr-kept", "w", "1"),
+             "the sibling arm did not find the box's named elements: the setting arm's name-index upkeep reached a "
+             "flow whose tree still holds them");
+    const Probe rows[] = {
+        { "textcontent-rests", tt, "trBox", SESS_EXPLORE, why },
+        { "textcontent-sibling-tree", kt, "trBox", SESS_EXPLORE, kwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The row of the `keydomainwalk` document (fixture/keydomainwalk.h): 200 unknown-key reads of a Document and a
    WindowProxy over 2,000 unnamed elements charge no walk of them. */
 static long kdw_census(const char *js, const char *key);
@@ -29363,6 +29396,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_removerest(js, probes, &np);
     probes_slotrest(js, probes, &np);
     probes_insertrest(js, probes, &np);
+    probes_textrest(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
