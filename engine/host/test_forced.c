@@ -24017,13 +24017,16 @@ TF_UNIT void probes_blocklead(const char *js, Probe *tab, int *n) {
 /* The rows of the `scrollrest` document (fixture/scrollrest.h): CSSOM View §6.1's scroll a target into view for
    a target in a scroll container below 20,000 block boxes. scroll-into-view-rests: every turn offers a suspend
    point within one quantum of work, read from `sliceOverrunGapWork`, and the box and the window land where
-   Chrome puts them. scroll-events-element: §13.2's events at the box and the document, as Chrome fires them. */
+   Chrome puts them. scroll-events-element: §13.2's events at the box and the document, as Chrome fires them.
+   scroll-position-unobservable: a scrolled element, frozen or not, shows the page nothing of its position. */
 TF_UNIT void probes_scrollrest(const char *js, Probe *tab, int *n) {
     const char *why = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
     long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
     int tt = 1;
     const char *ev_why = NULL;
     int ev_tt = 1;
+    const char *lk_why = NULL;
+    int lk_tt = 1;
 
     fold_row(&tt, &why, !!strstr(js, "\"/api/scrollintorest\""),
              "NOT REACHED: no /api/scrollintorest record, so the document aborted before its fetch");
@@ -24043,9 +24046,20 @@ TF_UNIT void probes_scrollrest(const char *js, Probe *tab, int *n) {
     fold_row(&ev_tt, &ev_why, param_value_is(js, "/api/srscrolled", "d", "s10we10"),
              "CSSOM View §13.2: the document did not get a bubbling `scroll` (seen by window) then a bubbling "
              "`scrollend`, or the box's events reached it");
+    fold_row(&lk_tt, &lk_why, !!strstr(js, "\"/api/srleak\""),
+             "NOT REACHED: no /api/srleak record, so the document aborted before its reads");
+    fold_row(&lk_tt, &lk_why, param_value_is(js, "/api/srleak", "k", "0.0.0.0.0.DataCloneError.DataCloneError"),
+             "a scrolled element shows the page an own key, an own symbol (directly or through a Proxy), an own "
+             "for-in key, or clones: its scroll position is not held where the page cannot reach");
+    fold_row(&lk_tt, &lk_why, param_value_is(js, "/api/srleak", "f", "0.0.0.0.0.DataCloneError.DataCloneError"),
+             "a frozen scrolled element shows the page an own key, symbol or clone");
+    fold_row(&lk_tt, &lk_why, param_value_is(js, "/api/srleak", "s", "10"),
+             "CSSOM View §6: a frozen element's scrollTop setter did not scroll it to 10 — freezing the wrapper "
+             "is the page's act on its own object and does not reach the element's scroll position");
     const Probe rows[] = {
         { "scroll-into-view-rests", tt, "/api/scrollintorest", SESS_EXPLORE, why },
         { "scroll-events-element", ev_tt, "/api/srscrolled", SESS_EXPLORE, ev_why },
+        { "scroll-position-unobservable", lk_tt, "/api/srleak", SESS_EXPLORE, lk_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
