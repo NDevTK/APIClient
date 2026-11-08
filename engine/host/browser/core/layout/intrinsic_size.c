@@ -697,11 +697,9 @@ static bool is_label_width(lxb_dom_element_t *el, const lxb_char_t *text, size_t
         if (rests) layout_job_line_items_spend(1);
     }
     while (h->meas != NULL && !text_run_measure_finish_done(&h->meas->m)) {
-        size_t took;
-
         if (rests && !layout_job_line_items_left()) return false;
-        took = text_run_measure_finish_step(&h->meas->m);
-        if (rests) layout_job_line_items_spend(took);
+        text_run_measure_finish_step(&h->meas->m);
+        if (rests) layout_job_line_items_spend(1);
     }
     if (h->meas != NULL) {
         h->sizes.min_content = text_run_measure_min_content(&h->meas->m);
@@ -837,7 +835,8 @@ bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
     }
     while (!text_run_measure_finish_done(&k->m)) {
         if (!layout_job_line_items_left()) return false;
-        layout_job_line_items_spend(text_run_measure_finish_step(&k->m));
+        text_run_measure_finish_step(&k->m);
+        layout_job_line_items_spend(1);
     }
     h->sizes.min_content = css_px_max(text_run_measure_min_content(&k->m), k->floats.min);
     h->sizes.max_content = css_px_max(text_run_measure_max_content(&k->m), k->floats.rows);

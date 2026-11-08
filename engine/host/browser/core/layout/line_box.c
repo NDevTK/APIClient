@@ -1624,7 +1624,8 @@ static bool lb_fill_lines_pull(LbFill *f)
     if (f->phase == LB_FILL_WALK) {
         while (!text_run_measure_finish_done(&f->m)) {
             if (!lb_left()) return false;
-            layout_job_line_items_spend(text_run_measure_finish_step(&f->m));
+            text_run_measure_finish_step(&f->m);
+            layout_job_line_items_spend(1);
         }
         if (!lb_fill_bands_ask(f)) return false;
         if (!lb_fill_distribute_begin_ask(&f->dist, &f->m, f->style, f->avail)) return false;
@@ -1640,7 +1641,8 @@ static bool lb_fill_lines_pull(LbFill *f)
             if (f->bands && !lb_fill_band_pull(f)) return false;
             if (text_run_fill_done(&f->dist)) break;
             if (!lb_left()) return false;
-            layout_job_line_items_spend(text_run_fill_step(&f->dist, &f->m));
+            text_run_fill_step(&f->dist, &f->m);
+            layout_job_line_items_spend(1);
         }
         f->n = text_run_fill_end(&f->dist, &f->m, &f->lines);
         if (f->bands) {

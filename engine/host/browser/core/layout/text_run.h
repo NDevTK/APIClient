@@ -304,12 +304,12 @@ void text_run_measure_add_float(TextRunMeasure *m, lxb_dom_element_t *style, Css
 void text_run_measure_add_placeholder(TextRunMeasure *m, lxb_dom_element_t *style);
 
 /* Close the collection; nothing may be added afterwards. Each `step` then takes one item or position: the code
-   points copied out, [UAX14]'s pass, §5.5's tailoring, and css-sizing-3 §2.1's walk; it answers how many items
-   it took, and `done` says the two answers are readable. The pass is kept for the fill; each caller owes
+   points copied out, [UAX14]'s pass, §5.5's tailoring, and css-sizing-3 §2.1's walk, which sums one item toward
+   the next position or takes that position; `done` says the two answers are readable. The pass is kept for the fill; each caller owes
    `text_run_measure_release` exactly once, complete or not. */
 void text_run_measure_finish_begin(TextRunMeasure *m);
 bool text_run_measure_finish_done(const TextRunMeasure *m);
-size_t text_run_measure_finish_step(TextRunMeasure *m);
+void text_run_measure_finish_step(TextRunMeasure *m);
 
 /* End the measurement and free the collection and the [UAX14] pass. Nothing may be read afterwards; the
    accessors crash rather than answer from freed memory. */
@@ -342,12 +342,12 @@ typedef struct {
     bool complete;
 } TextRunFill;
 
-/* `begin` starts the walk; `step` takes one position and answers how many items it summed; `done` says every
-   position is taken. `end` answers the line count and hands the newly allocated array to `*lines`, which the
+/* `begin` starts the walk; `step` sums one item toward the next position or takes that position; `done` says
+   every position is taken. `end` answers the line count and hands the newly allocated array to `*lines`, which the
    caller owns and frees. A fill abandoned before its end is released with `text_run_fill_release`. */
 void text_run_fill_begin(TextRunFill *f, const TextRunMeasure *m, CssPx available);
 bool text_run_fill_done(const TextRunFill *f);
-size_t text_run_fill_step(TextRunFill *f, const TextRunMeasure *m);
+void text_run_fill_step(TextRunFill *f, const TextRunMeasure *m);
 size_t text_run_fill_end(TextRunFill *f, const TextRunMeasure *m, TextRunLine **lines);
 void text_run_fill_release(TextRunFill *f);
 /* Between steps: the lines emitted so far (`*lines`, borrowed until the next step or `end`), and the available
