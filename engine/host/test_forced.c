@@ -7458,19 +7458,25 @@ TF_UNIT void concat_keyed_selftest(JSContext *ctx)
 
 /* A [[Get]] of a name no element's `id` or `name` carries answers from the Document's name index (HTML §3.1.7's
    supported property names are a subset of those values) without visiting an element, so it costs no walk
-   whatever the document's size. A name the index holds but no named element carries (a `div`'s id) still walks,
-   and the miss walks on to the prototype (§10.1.8.1 OrdinaryGet step 2) from the keyed entry's step delivery,
+   whatever the document's size. A name the index holds but no named element carries (a `div`'s id beside 50
+   spans) visits only its carrier, and the miss walks on to the prototype (§10.1.8.1 OrdinaryGet step 2) from the keyed entry's step delivery,
    an offer the scheduler may take: the parked operation resumes at the prototype, so both schedules charge the
-   same elements. The second document is an inert one of the program's own, so the analysed one is not written. */
+   same elements, which are the name's carriers alone. The second document is an inert one of the program's own,
+   so the analysed one is not written. */
 static const char *TF_NAMED_ABSENT_SRC =
     "(function(){ return document.zqNoNamedElement === undefined ? 1 : -1; })()";
 /* The same for HTML §7.2.2.3's named access on the Window object, whose supported names are the same values plus
    the child navigables' target names: a miss reaches WindowProperties through Window.prototype. */
 static const char *TF_WINDOW_NAMED_ABSENT_SRC =
     "(function(){ return self.zqNoNamedWindowName === undefined ? 1 : -1; })()";
+/* The document is built by one program and read by the next, so the read's charge holds no tree write's upkeep. */
+static const char *TF_NAMED_WALKON_SETUP_SRC =
+    "(function(){ var x = document.implementation.createHTMLDocument(''), d = x.createElement('div'), i;"
+    " for (i = 0; i < 50; i++) x.body.appendChild(x.createElement('span'));"
+    " d.id = 'zqDivOnly'; x.body.appendChild(d); self.__tfNamedWalkOn = x; return 1; })()";
 static const char *TF_NAMED_WALKON_SRC =
-    "(function(){ var x = document.implementation.createHTMLDocument(''), d = x.createElement('div');"
-    " d.id = 'zqDivOnly'; x.body.appendChild(d); return x.zqDivOnly === undefined ? 1 : -1; })()";
+    "(function(){ var x = self.__tfNamedWalkOn; delete self.__tfNamedWalkOn;"
+    " return x.zqDivOnly === undefined ? 1 : -1; })()";
 
 TF_UNIT void named_walk_on_selftest(JSContext *ctx)
 {
@@ -7501,6 +7507,8 @@ TF_UNIT void named_walk_on_selftest(JSContext *ctx)
                "document's name index", (unsigned long long)(now.charged_input[THREAD_WORK_DOM_WALK] -
                                                              before.charged_input[THREAD_WORK_DOM_WALK]),
                k ? "forced" : "declined");
+        got = tf_step_diff_run(ctx, TF_NAMED_WALKON_SETUP_SRC, "named-walk-on-setup", SCHED[k], &susp, &mach);
+        CHECK(got == 1, "the walk-on fixture's inert document could not be built");
         thread_work_census(&before);
         got = tf_step_diff_run(ctx, TF_NAMED_WALKON_SRC, "named-walk-on", SCHED[k], &susp, &mach);
         thread_work_census(&now);
@@ -7508,10 +7516,11 @@ TF_UNIT void named_walk_on_selftest(JSContext *ctx)
         walked[k] = now.charged_input[THREAD_WORK_DOM_WALK] - before.charged_input[THREAD_WORK_DOM_WALK];
     }
     JS_SetFlowControlHooks(&TF_DIFF_NONE);
-    CHECKF(walked[0] > 0 && walked[1] == walked[0],
-           "a missed Document named-property [[Get]] over a name the index holds was charged %llu elements "
-           "declined and %llu forced: the walk did not run, or a resume re-ran the parked walk instead of "
-           "continuing at the prototype", (unsigned long long)walked[0], (unsigned long long)walked[1]);
+    CHECKF(walked[0] == 1 && walked[1] == walked[0],
+           "a missed Document named-property [[Get]] over a name one element of 55 carries was charged %llu "
+           "elements declined and %llu forced: the lookup visited elements that do not carry the name, or a "
+           "resume re-ran the parked walk instead of continuing at the prototype",
+           (unsigned long long)walked[0], (unsigned long long)walked[1]);
 }
 
 /* DOM §4.2.10's live collections rest per node: the same reads of 300 detached elements answer the same under a
