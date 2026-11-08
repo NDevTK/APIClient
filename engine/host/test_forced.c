@@ -1617,6 +1617,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/preserve3d.h"
 #include "fixture/fillwidth.h"
 #include "fixture/flatshadow.h"
+#include "fixture/longline.h"
 #include "fixture/jsonlead.h"
 #include "fixture/owedsale.h"
 #include "fixture/startin.h"
@@ -2374,6 +2375,7 @@ TF_DOCS[] = {
     { "preserve3d", HTML_PRESERVE3D },
     { "fillwidth", HTML_FILLWIDTH },
     { "flatshadow", HTML_FLATSHADOW },
+    { "longline", HTML_LONGLINE },
     { "jsonlead", HTML_JSONLEAD },
     { "startin", HTML_STARTIN },
     { "staticinline", HTML_STATICINLINE },
@@ -23192,6 +23194,23 @@ TF_UNIT void probes_flatshadow(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `longline` document (fixture/longline.h): CSS 2.2 §9.4.2's line box over 20,001 inline boxes
+   and an atomic inline, filled across rests inside getBoundingClientRect. */
+TF_UNIT void probes_longline(const char *js, Probe *tab, int *n) {
+    const char *ll_why = NULL; int ll_tt = 1;
+    fold_row(&ll_tt, &ll_why, !!strstr(js, "\"/api/longline\""),
+             "NOT REACHED: no /api/longline record, so the document aborted before its fetch");
+    fold_row(&ll_tt, &ll_why, param_value_is(js, "/api/longline", "x", "20") &&
+                              param_value_is(js, "/api/longline", "y", "30") &&
+                              param_value_is(js, "/api/longline", "h", "30"),
+             "CSS 2.2 §9.4.2: the last empty inline box of the long line is not the point (20, 30) on the 30px "
+             "image's baseline, in a 30px line box");
+    const Probe rows[] = {
+        { "long-line", ll_tt, "/api/longline", SESS_EXPLORE, ll_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `jsonlead` document (fixture/jsonlead.h): ECMAScript §25.5.2 JSON.parse over a JSON text
    derived from an attacker source. */
 TF_UNIT void probes_jsonlead(const char *js, Probe *tab, int *n) {
@@ -29546,6 +29565,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_preserve3d(js, probes, &np);
     probes_fillwidth(js, probes, &np);
     probes_flatshadow(js, probes, &np);
+    probes_longline(js, probes, &np);
     probes_jsonlead(js, probes, &np);
     probes_owedsale(js, probes, &np);
     probes_startin(js, probes, &np);
