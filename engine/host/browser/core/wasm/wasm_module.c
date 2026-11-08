@@ -18,5 +18,13 @@ void wasm_module_free(WasmModule *m)
     free(m->globals);
     free(m->codes);
     free(m->locals);
+    free(m->tables);
+    free(m->memories);
+    free(m->tags);
+    free(m->exports);
+    free(m->elems);
+    free(m->elem_funcs);
+    free(m->elem_exprs);
+    free(m->datas);
     memset(m, 0, sizeof *m);
 }

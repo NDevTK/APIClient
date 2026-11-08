@@ -103,6 +103,49 @@ typedef struct {
     size_t body_offset, body_size;
 } WasmCode;
 
+/* A §5.4.10 expr as a range of the decoded bytes, without its final 0x0B. */
+typedef struct {
+    size_t offset, size;
+} WasmExpr;
+
+/* §5.5.7's table: its §5.3.13 type and, for the 0x40 0x00 form, its initializer (`has_init`). */
+typedef struct {
+    WasmValType type;
+    WasmLimits limits;
+    bool has_init;
+    WasmExpr init;
+} WasmTable;
+
+/* §5.5.10's export: a name (a range of the decoded bytes) and a §5.5.1 external index. */
+typedef struct {
+    size_t name_offset, name_size;
+    WasmExternKind kind;
+    uint32_t index;
+} WasmExport;
+
+typedef enum { WASM_SEGMENT_ACTIVE = 0, WASM_SEGMENT_PASSIVE, WASM_SEGMENT_DECLARATIVE } WasmSegmentMode;
+
+/* §5.5.12's element segment: its mode (an active one's table and offset), its reference type, and its items:
+   function indices (`items` a range of `elem_funcs`) for forms 0 to 3, exprs (a range of `elem_exprs`) for
+   forms 4 to 7. */
+typedef struct {
+    WasmSegmentMode mode;
+    uint32_t table;
+    WasmExpr offset;
+    WasmValType type;
+    bool exprs;
+    size_t items, n_items;
+} WasmElem;
+
+/* §5.5.14's data segment: its mode (an active one's memory and offset) and its bytes, a range of the decoded
+   bytes. */
+typedef struct {
+    WasmSegmentMode mode;
+    uint32_t memory;
+    WasmExpr offset;
+    size_t bytes_offset, bytes_size;
+} WasmData;
+
 typedef struct {
     WasmSubType *types;
     size_t n_types, cap_types;
@@ -124,6 +167,24 @@ typedef struct {
     size_t n_locals, cap_locals;
     bool has_data_count;    /* §5.5.15: the data count section is present, and its count */
     uint32_t data_count;
+    WasmTable *tables;
+    size_t n_tables, cap_tables;
+    WasmLimits *memories;   /* §5.5.8: each memory's §5.3.12 type */
+    size_t n_memories, cap_memories;
+    uint32_t *tags;         /* §5.5.16: each tag's §5.3.10 type index */
+    size_t n_tags, cap_tags;
+    WasmExport *exports;
+    size_t n_exports, cap_exports;
+    bool has_start;         /* §5.5.11: the start section is present, and its function index */
+    uint32_t start;
+    WasmElem *elems;
+    size_t n_elems, cap_elems;
+    uint32_t *elem_funcs;
+    size_t n_elem_funcs, cap_elem_funcs;
+    WasmExpr *elem_exprs;
+    size_t n_elem_exprs, cap_elem_exprs;
+    WasmData *datas;
+    size_t n_datas, cap_datas;
 } WasmModule;
 
 /* Release every pool. Idempotent. */

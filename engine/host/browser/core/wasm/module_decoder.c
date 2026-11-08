@@ -30,6 +30,18 @@ enum {
     PH_FUNCTION,       /* §5.5.6: the next function's type index, or the section's end */
     PH_GLOBAL,         /* §5.5.9: the next global's type, or the section's end */
     PH_GLOBAL_END,     /* its initializer has been read */
+    PH_TABLE,          /* §5.5.7: the next table, or the section's end */
+    PH_TABLE_END,      /* its initializer has been read */
+    PH_MEMORY,         /* §5.5.8: the next memory's limits, or the section's end */
+    PH_TAG,            /* §5.5.16: the next tag type, or the section's end */
+    PH_EXPORT,         /* §5.5.10: the next export's name, or the section's end */
+    PH_EXPORT_DESC,    /* its external index */
+    PH_ELEM,           /* §5.5.12: the next element segment's form, or the section's end */
+    PH_ELEM_TYPE,      /* its offset has been read; its element type and items' count */
+    PH_ELEM_ITEM,      /* its next item */
+    PH_ELEM_EXPR_END,  /* an item expr has been read */
+    PH_DATA,           /* §5.5.14: the next data segment's form, or the section's end */
+    PH_DATA_BYTES,     /* its offset has been read; its bytes */
     PH_CODE,           /* §5.5.13: the next code entry's len and locals count, or the section's end */
     PH_LOCALS,         /* its next locals entry, then its body */
     PH_CODE_END,       /* its body has been read */
@@ -132,13 +144,25 @@ static WasmDecodeStatus read_s7_byte(WasmModuleDecoder *d, uint8_t *out)
     return (*out & 0x80) != 0 ? WASM_DECODE_INTEGER_TOO_LONG : WASM_DECODE_DONE;
 }
 
-/* §5.1.3's list length: a u32 no larger than the bytes left, since every element takes at least one. */
+/* A length (§5.1.3's list count, §5.5.2's and §5.5.13's len) as decode.ml's len32 bounds it: a u32 no larger
+   than the bytes left counted from the length's own first byte. */
 static WasmDecodeStatus read_list_length(WasmModuleDecoder *d, uint32_t *out)
 {
+    size_t at = d->pos;
     WasmDecodeStatus st = read_u32(d, out);
 
     if (st != WASM_DECODE_DONE) return st;
-    return *out > d->in_len - d->pos ? WASM_DECODE_LENGTH_OUT_OF_BOUNDS : WASM_DECODE_DONE;
+    return *out > d->in_len - at ? WASM_DECODE_LENGTH_OUT_OF_BOUNDS : WASM_DECODE_DONE;
+}
+
+/* §5.1.3's list(byte) (a name's or a data segment's bytes): its length as len32 bounds it, then the bytes
+   themselves, which decode.ml's get_string refuses as an unexpected end when they run past the input. */
+static WasmDecodeStatus read_byte_length(WasmModuleDecoder *d, uint32_t *out)
+{
+    WasmDecodeStatus st = read_list_length(d, out);
+
+    if (st != WASM_DECODE_DONE) return st;
+    return *out > d->in_len - d->pos ? WASM_DECODE_UNEXPECTED_END : WASM_DECODE_DONE;
 }
 
 /* §5.5.17's preamble: two four-byte words, each read whole before it is compared. */
@@ -200,7 +224,7 @@ static WasmDecodeStatus end_section(WasmModuleDecoder *d)
    the decode goes on at `next`. */
 static WasmDecodeStatus begin_name(WasmModuleDecoder *d, int next, size_t *offset, uint32_t *size)
 {
-    WasmDecodeStatus st = read_list_length(d, size);
+    WasmDecodeStatus st = read_byte_length(d, size);
 
     if (st != WASM_DECODE_DONE) return st;
     *offset = d->pos;
@@ -221,6 +245,8 @@ static WasmDecodeStatus read_section(WasmModuleDecoder *d)
     if (d->pos == d->in_len) {
         /* §5.5.17's side conditions over the whole module, in decode.ml's order. */
         if (d->module.n_func_types != d->module.n_codes) return WASM_DECODE_FUNC_CODE_LENGTHS;
+        if (d->module.has_data_count && d->module.data_count != d->module.n_datas)
+            return WASM_DECODE_DATA_COUNT_LENGTH;
         if (!d->module.has_data_count && d->code_names_data) return WASM_DECODE_DATA_COUNT_REQUIRED;
         return WASM_DECODE_DONE;
     }
@@ -231,9 +257,8 @@ static WasmDecodeStatus read_section(WasmModuleDecoder *d)
         d->last_rank = SECTION_RANK[id];
     }
     d->pos++;
-    st = read_u32(d, &size);
+    st = read_list_length(d, &size);
     if (st != WASM_DECODE_DONE) return st;
-    if (size > d->in_len - d->pos) return WASM_DECODE_LENGTH_OUT_OF_BOUNDS;
     st = push_section(d, (WasmSectionId)id, d->pos, size);
     if (st != WASM_DECODE_MORE) return st;
     d->section_end = d->pos + size;
@@ -243,13 +268,27 @@ static WasmDecodeStatus read_section(WasmModuleDecoder *d)
         d->phase = PH_TYPE;
         return WASM_DECODE_MORE;
     }
-    if (id == WASM_SECTION_IMPORT || id == WASM_SECTION_FUNCTION || id == WASM_SECTION_GLOBAL
-        || id == WASM_SECTION_CODE) {
+    if (id != WASM_SECTION_CUSTOM && id != WASM_SECTION_DATA_COUNT && id != WASM_SECTION_START) {
+        static const int LIST_PHASE[] = {
+            [WASM_SECTION_IMPORT] = PH_IMPORT,   [WASM_SECTION_FUNCTION] = PH_FUNCTION,
+            [WASM_SECTION_TABLE] = PH_TABLE,     [WASM_SECTION_MEMORY] = PH_MEMORY,
+            [WASM_SECTION_GLOBAL] = PH_GLOBAL,   [WASM_SECTION_EXPORT] = PH_EXPORT,
+            [WASM_SECTION_ELEMENT] = PH_ELEM,    [WASM_SECTION_CODE] = PH_CODE,
+            [WASM_SECTION_DATA] = PH_DATA,       [WASM_SECTION_TAG] = PH_TAG,
+        };
+
         st = read_list_length(d, &d->items_left);
         if (st != WASM_DECODE_DONE) return st;
-        d->phase = id == WASM_SECTION_IMPORT ? PH_IMPORT : id == WASM_SECTION_FUNCTION ? PH_FUNCTION
-                 : id == WASM_SECTION_GLOBAL ? PH_GLOBAL : PH_CODE;
+        d->phase = LIST_PHASE[id];
+        DCHECK(d->phase != 0, "a WebAssembly section id with a list has no phase to read it");
         return WASM_DECODE_MORE;
+    }
+    if (id == WASM_SECTION_START) {
+        /* §5.5.11's start: one funcidx. */
+        st = read_u32(d, &d->module.start);
+        if (st != WASM_DECODE_DONE) return st;
+        d->module.has_start = true;
+        return end_section(d);
     }
     if (id == WASM_SECTION_DATA_COUNT) {
         /* §5.5.15's datacnt: one u32. */
@@ -257,10 +296,6 @@ static WasmDecodeStatus read_section(WasmModuleDecoder *d)
         if (st != WASM_DECODE_DONE) return st;
         d->module.has_data_count = true;
         return end_section(d);
-    }
-    if (id != WASM_SECTION_CUSTOM) {
-        d->pos += size;
-        return WASM_DECODE_MORE;
     }
     /* §5.5.3's custom: a name, then bytes to the section's end. The name's length is bounded by the bytes, its
        encoding is read next, and only then is it held to the section, which is the reference order. */
@@ -271,7 +306,7 @@ static WasmDecodeStatus read_section(WasmModuleDecoder *d)
 
 static WasmDecodeStatus read_custom_rest(WasmModuleDecoder *d)
 {
-    if (d->name_end > d->section_end) return WASM_DECODE_UNEXPECTED_END;
+    if (d->name_end > d->section_end || d->section_end > d->in_len) return WASM_DECODE_UNEXPECTED_END;
     d->pos = d->section_end;
     d->phase = PH_SECTION;
     return WASM_DECODE_MORE;
@@ -981,6 +1016,258 @@ static WasmDecodeStatus read_global_end(WasmModuleDecoder *d)
     return WASM_DECODE_MORE;
 }
 
+/* §5.5.7's table: a §5.3.13 table type, or 0x40 0x00, a table type and an initializer. decode.ml tries the
+   second form first and on any failure in it reads the first from the same byte, where 0x40 is no reference
+   type: so every refusal inside the second form is "malformed reference type" (table_with_init). */
+static WasmDecodeStatus read_table(WasmModuleDecoder *d)
+{
+    WasmModule *m = &d->module;
+    WasmTable *t;
+    WasmDecodeStatus st;
+
+    if (d->items_left == 0) return end_section(d);
+    d->items_left--;
+    if (!POOL_ROOM(m->tables, m->n_tables, m->cap_tables)) return WASM_DECODE_NO_ROOM;
+    t = &m->tables[m->n_tables++];
+    memset(t, 0, sizeof *t);
+    if (d->pos < d->in_len && d->in[d->pos] == 0x40) {
+        d->pos++;
+        if (d->pos >= d->in_len || d->in[d->pos++] != 0x00) return WASM_DECODE_REF_TYPE;
+        st = read_ref_type(d, &t->type);
+        if (st == WASM_DECODE_DONE) st = read_limits(d, &t->limits);
+        if (st != WASM_DECODE_DONE) return WASM_DECODE_REF_TYPE;
+        t->has_init = true;
+        d->table_with_init = true;
+        begin_expr(d, PH_TABLE_END);
+        return WASM_DECODE_MORE;
+    }
+    st = read_ref_type(d, &t->type);
+    if (st == WASM_DECODE_DONE) st = read_limits(d, &t->limits);
+    return st == WASM_DECODE_DONE ? WASM_DECODE_MORE : st;
+}
+
+/* The end of an expr this file records as a range: the bytes since begin_expr, less the final 0x0B. */
+static WasmExpr expr_range(const WasmModuleDecoder *d)
+{
+    WasmExpr e;
+
+    DCHECK(d->pos > d->expr_offset && d->in[d->pos - 1] == 0x0B,
+           "a WebAssembly expr ended somewhere other than after its 0x0B");
+    e.offset = d->expr_offset;
+    e.size = d->pos - 1 - d->expr_offset;
+    return e;
+}
+
+static WasmDecodeStatus read_table_end(WasmModuleDecoder *d)
+{
+    d->module.tables[d->module.n_tables - 1].init = expr_range(d);
+    d->table_with_init = false;
+    d->phase = PH_TABLE;
+    return WASM_DECODE_MORE;
+}
+
+/* §5.5.8's mem: a §5.3.12 memory type, its limits. */
+static WasmDecodeStatus read_memory(WasmModuleDecoder *d)
+{
+    WasmModule *m = &d->module;
+    WasmDecodeStatus st;
+
+    if (d->items_left == 0) return end_section(d);
+    d->items_left--;
+    if (!POOL_ROOM(m->memories, m->n_memories, m->cap_memories)) return WASM_DECODE_NO_ROOM;
+    st = read_limits(d, &m->memories[m->n_memories++]);
+    return st == WASM_DECODE_DONE ? WASM_DECODE_MORE : st;
+}
+
+/* §5.5.16's tag: a §5.3.10 tag type, 0x00 and a type index. */
+static WasmDecodeStatus read_tag(WasmModuleDecoder *d)
+{
+    WasmModule *m = &d->module;
+    WasmDecodeStatus st;
+    uint32_t x;
+
+    if (d->items_left == 0) return end_section(d);
+    d->items_left--;
+    if (d->pos >= d->in_len) return WASM_DECODE_UNEXPECTED_END;
+    if (d->in[d->pos++] != 0x00) return WASM_DECODE_ZERO_BYTE;
+    st = read_u32(d, &x);
+    if (st != WASM_DECODE_DONE) return st;
+    if (!POOL_ROOM(m->tags, m->n_tags, m->cap_tags)) return WASM_DECODE_NO_ROOM;
+    m->tags[m->n_tags++] = x;
+    return WASM_DECODE_MORE;
+}
+
+/* §5.5.10's export: a §5.2.4 name, then a §5.5.1 externidx. */
+static WasmDecodeStatus read_export(WasmModuleDecoder *d)
+{
+    WasmModule *m = &d->module;
+    WasmExport *e;
+    uint32_t size;
+    WasmDecodeStatus st;
+
+    if (d->items_left == 0) return end_section(d);
+    d->items_left--;
+    if (!POOL_ROOM(m->exports, m->n_exports, m->cap_exports)) return WASM_DECODE_NO_ROOM;
+    e = &m->exports[m->n_exports++];
+    memset(e, 0, sizeof *e);
+    st = begin_name(d, PH_EXPORT_DESC, &e->name_offset, &size);
+    if (st == WASM_DECODE_MORE) e->name_size = size;
+    return st;
+}
+
+static WasmDecodeStatus read_export_desc(WasmModuleDecoder *d)
+{
+    WasmExport *e = &d->module.exports[d->module.n_exports - 1];
+    WasmDecodeStatus st;
+    uint8_t kind;
+
+    if (d->pos >= d->in_len) return WASM_DECODE_UNEXPECTED_END;
+    kind = d->in[d->pos++];
+    if (kind > WASM_EXTERN_TAG) return WASM_DECODE_EXPORT_KIND;
+    e->kind = (WasmExternKind)kind;
+    st = read_u32(d, &e->index);
+    if (st != WASM_DECODE_DONE) return st;
+    d->phase = PH_EXPORT;
+    return WASM_DECODE_MORE;
+}
+
+/* §5.5.12's elem, by its u32 form: bit 0 passive or declarative, bit 1 an explicit table index (active) or
+   declarative (otherwise), bit 2 a reference type and exprs instead of an elemkind and function indices. This
+   step reads the form, an active segment's table index, and begins its offset expr. */
+static WasmDecodeStatus read_elem(WasmModuleDecoder *d)
+{
+    WasmModule *m = &d->module;
+    WasmElem *e;
+    WasmDecodeStatus st;
+    uint32_t form;
+
+    if (d->items_left == 0) return end_section(d);
+    d->items_left--;
+    st = read_u32(d, &form);
+    if (st != WASM_DECODE_DONE) return st;
+    if (form > 7) return WASM_DECODE_ELEM_SEGMENT_KIND;
+    if (!POOL_ROOM(m->elems, m->n_elems, m->cap_elems)) return WASM_DECODE_NO_ROOM;
+    e = &m->elems[m->n_elems++];
+    memset(e, 0, sizeof *e);
+    d->elem_form = form;
+    e->exprs = (form & 4) != 0;
+    e->mode = (form & 1) == 0 ? WASM_SEGMENT_ACTIVE : (form & 2) != 0 ? WASM_SEGMENT_DECLARATIVE
+                                                                       : WASM_SEGMENT_PASSIVE;
+    if (e->mode == WASM_SEGMENT_ACTIVE && (form & 2) != 0) {
+        st = read_u32(d, &e->table);
+        if (st != WASM_DECODE_DONE) return st;
+    }
+    if (e->mode == WASM_SEGMENT_ACTIVE) begin_expr(d, PH_ELEM_TYPE);
+    else d->phase = PH_ELEM_TYPE;
+    return WASM_DECODE_MORE;
+}
+
+/* The segment's element type (forms 0 and 4 state none: ref func and ref null func), then its items' count. */
+static WasmDecodeStatus read_elem_type(WasmModuleDecoder *d)
+{
+    WasmModule *m = &d->module;
+    WasmElem *e = &m->elems[m->n_elems - 1];
+    WasmDecodeStatus st = WASM_DECODE_DONE;
+
+    if (e->mode == WASM_SEGMENT_ACTIVE) e->offset = expr_range(d);
+    e->type.code = WASM_TYPE_REF;
+    e->type.heap = WASM_HEAP_FUNC;
+    if (d->elem_form == 0 || d->elem_form == 4) {
+        e->type.nullable = d->elem_form == 4;
+    } else if (!e->exprs) {
+        /* §5.5.12's elemkind: 0x00, ref func. */
+        if (d->pos >= d->in_len) return WASM_DECODE_UNEXPECTED_END;
+        if (d->in[d->pos++] != 0x00) return WASM_DECODE_ELEM_KIND;
+    } else {
+        st = read_ref_type(d, &e->type);
+    }
+    if (st == WASM_DECODE_DONE) st = read_list_length(d, &d->elem_left);
+    if (st != WASM_DECODE_DONE) return st;
+    e->items = e->exprs ? m->n_elem_exprs : m->n_elem_funcs;
+    d->phase = PH_ELEM_ITEM;
+    return WASM_DECODE_MORE;
+}
+
+/* One item: a function index in one step, or an expr, which PH_ELEM_EXPR_END records. */
+static WasmDecodeStatus read_elem_item(WasmModuleDecoder *d)
+{
+    WasmModule *m = &d->module;
+    WasmElem *e = &m->elems[m->n_elems - 1];
+    WasmDecodeStatus st;
+    uint32_t x;
+
+    if (d->elem_left == 0) {
+        d->phase = PH_ELEM;
+        return WASM_DECODE_MORE;
+    }
+    d->elem_left--;
+    if (e->exprs) {
+        begin_expr(d, PH_ELEM_EXPR_END);
+        return WASM_DECODE_MORE;
+    }
+    st = read_u32(d, &x);
+    if (st != WASM_DECODE_DONE) return st;
+    if (!POOL_ROOM(m->elem_funcs, m->n_elem_funcs, m->cap_elem_funcs)) return WASM_DECODE_NO_ROOM;
+    m->elem_funcs[m->n_elem_funcs++] = x;
+    e->n_items++;
+    return WASM_DECODE_MORE;
+}
+
+static WasmDecodeStatus read_elem_expr_end(WasmModuleDecoder *d)
+{
+    WasmModule *m = &d->module;
+
+    if (!POOL_ROOM(m->elem_exprs, m->n_elem_exprs, m->cap_elem_exprs)) return WASM_DECODE_NO_ROOM;
+    m->elem_exprs[m->n_elem_exprs++] = expr_range(d);
+    m->elems[m->n_elems - 1].n_items++;
+    d->phase = PH_ELEM_ITEM;
+    return WASM_DECODE_MORE;
+}
+
+/* §5.5.14's data, by its u32 form: 0 active in memory 0, 1 passive, 2 active with a memory index. This step reads
+   the form and the index, and begins an active segment's offset expr. */
+static WasmDecodeStatus read_data(WasmModuleDecoder *d)
+{
+    WasmModule *m = &d->module;
+    WasmData *s;
+    WasmDecodeStatus st;
+    uint32_t form;
+
+    if (d->items_left == 0) return end_section(d);
+    d->items_left--;
+    st = read_u32(d, &form);
+    if (st != WASM_DECODE_DONE) return st;
+    if (form > 2) return WASM_DECODE_DATA_SEGMENT_KIND;
+    if (!POOL_ROOM(m->datas, m->n_datas, m->cap_datas)) return WASM_DECODE_NO_ROOM;
+    s = &m->datas[m->n_datas++];
+    memset(s, 0, sizeof *s);
+    s->mode = form == 1 ? WASM_SEGMENT_PASSIVE : WASM_SEGMENT_ACTIVE;
+    if (form == 2) {
+        st = read_u32(d, &s->memory);
+        if (st != WASM_DECODE_DONE) return st;
+    }
+    if (s->mode == WASM_SEGMENT_ACTIVE) begin_expr(d, PH_DATA_BYTES);
+    else d->phase = PH_DATA_BYTES;
+    return WASM_DECODE_MORE;
+}
+
+/* The segment's bytes: list(byte), held to the bytes left and kept as a range. */
+static WasmDecodeStatus read_data_bytes(WasmModuleDecoder *d)
+{
+    WasmData *s = &d->module.datas[d->module.n_datas - 1];
+    WasmDecodeStatus st;
+    uint32_t size;
+
+    if (s->mode == WASM_SEGMENT_ACTIVE) s->offset = expr_range(d);
+    st = read_byte_length(d, &size);
+    if (st != WASM_DECODE_DONE) return st;
+    s->bytes_offset = d->pos;
+    s->bytes_size = size;
+    d->pos += size;
+    d->phase = PH_DATA;
+    return WASM_DECODE_MORE;
+}
+
 WasmDecodeStatus wasm_module_decoder_step(WasmModuleDecoder *d)
 {
     WasmDecodeStatus st;
@@ -1007,6 +1294,18 @@ WasmDecodeStatus wasm_module_decoder_step(WasmModuleDecoder *d)
     case PH_FUNCTION: st = read_function(d); break;
     case PH_GLOBAL:   st = read_global(d); break;
     case PH_GLOBAL_END: st = read_global_end(d); break;
+    case PH_TABLE:    st = read_table(d); break;
+    case PH_TABLE_END: st = read_table_end(d); break;
+    case PH_MEMORY:   st = read_memory(d); break;
+    case PH_TAG:      st = read_tag(d); break;
+    case PH_EXPORT:   st = read_export(d); break;
+    case PH_EXPORT_DESC: st = read_export_desc(d); break;
+    case PH_ELEM:     st = read_elem(d); break;
+    case PH_ELEM_TYPE: st = read_elem_type(d); break;
+    case PH_ELEM_ITEM: st = read_elem_item(d); break;
+    case PH_ELEM_EXPR_END: st = read_elem_expr_end(d); break;
+    case PH_DATA:     st = read_data(d); break;
+    case PH_DATA_BYTES: st = read_data_bytes(d); break;
     case PH_CODE:     st = read_code(d); break;
     case PH_LOCALS:   st = read_locals(d); break;
     case PH_CODE_END: st = read_code_end(d); break;
@@ -1015,6 +1314,7 @@ WasmDecodeStatus wasm_module_decoder_step(WasmModuleDecoder *d)
     default:
         CHECK_FAIL("a WebAssembly decode stands in a phase this file does not define");
     }
+    if (d->table_with_init && st != WASM_DECODE_MORE && st != WASM_DECODE_NO_ROOM) st = WASM_DECODE_REF_TYPE;
     if (st != WASM_DECODE_MORE) d->phase = PH_FINISHED;
     return st;
 }
@@ -1103,6 +1403,11 @@ const char *wasm_decode_status_message(WasmDecodeStatus st)
     case WASM_DECODE_TOO_MANY_LOCALS:      return "too many locals";
     case WASM_DECODE_FUNC_CODE_LENGTHS:    return "function and code section have inconsistent lengths";
     case WASM_DECODE_DATA_COUNT_REQUIRED:  return "data count section required";
+    case WASM_DECODE_DATA_COUNT_LENGTH:    return "data count and data section have inconsistent lengths";
+    case WASM_DECODE_EXPORT_KIND:          return "malformed export kind";
+    case WASM_DECODE_ELEM_KIND:            return "malformed element kind";
+    case WASM_DECODE_ELEM_SEGMENT_KIND:    return "malformed elements segment kind";
+    case WASM_DECODE_DATA_SEGMENT_KIND:    return "malformed data segment kind";
     case WASM_DECODE_NO_ROOM:              return "out of memory";
     }
     CHECK_FAIL("a WebAssembly decode status this file does not define");

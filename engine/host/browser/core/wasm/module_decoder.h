@@ -2,15 +2,13 @@
  * sections, decoded as a step machine over a complete byte sequence.
  * One step reads one production instance: the §5.5.17 preamble, a §5.5.2 section header with a list's count, a
  * code point of a §5.2.4 name, an item of a section's list or of a type's (a §5.3.8 rectype or subtype head, a
- * supertype, a composite head, a value type, a field, an import's name length or external type, a function's
- * type index, a global's type, a code entry's len or locals entry), or one §5.4 instruction of an expr with its
- * immediates (an element of a list immediate is a step of its own). The caller owns how many steps a rest
- * covers; the whole state is the WasmModuleDecoder. The bytes are input: every malformed encoding is a
- * WasmDecodeStatus refusal carrying the reference interpreter's message, never an assert.
- * Named residual. Not covered: the table, memory, tag, export, start, element and data sections' contents
- * (§5.5.7, §5.5.8, §5.5.16, §5.5.10-§5.5.12, §5.5.14) and §5.5.17's data count agreement; such a section is
- * delimited and not decoded. Next diff builds: those sections, each a resting step over its bytes. Absence shows
- * as: a module whose malformed bytes lie only in one of those sections is answered WASM_DECODE_DONE. */
+ * supertype, a composite head, a value type, a field, an import's or export's name length or index, a function's
+ * type index, a table, memory, tag or global type, a segment's head or item, a code entry's len or locals
+ * entry), or one §5.4 instruction of an expr with its immediates (an element of a list immediate is a step of
+ * its own). The caller owns how many steps a rest covers; the whole state is the WasmModuleDecoder. The bytes are input: every malformed encoding is a
+ * WasmDecodeStatus refusal carrying the reference interpreter's message, never an assert. A DONE decode is
+ * §5's module_decode: every section and every side condition of §5.5.17 has been read; module_validate is
+ * not this file's. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_MODULE_DECODER_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_MODULE_DECODER_H
 
@@ -48,6 +46,11 @@ typedef enum {
     WASM_DECODE_TOO_MANY_LOCALS,      /* §5.5.13: a code entry's locals number 2^32 or more */
     WASM_DECODE_FUNC_CODE_LENGTHS,    /* §5.5.17: the function and code sections' lists differ in length */
     WASM_DECODE_DATA_COUNT_REQUIRED,  /* §5.5.17: a code entry names a data segment and no data count is given */
+    WASM_DECODE_DATA_COUNT_LENGTH,    /* §5.5.17: the data count differs from the data section's length */
+    WASM_DECODE_EXPORT_KIND,          /* §5.5.1: an external index's byte other than 0x00 to 0x04 */
+    WASM_DECODE_ELEM_KIND,            /* §5.5.12: an elemkind byte other than 0x00 */
+    WASM_DECODE_ELEM_SEGMENT_KIND,    /* §5.5.12: an element segment's u32 above 7 */
+    WASM_DECODE_DATA_SEGMENT_KIND,    /* §5.5.14: a data segment's u32 above 2 */
     WASM_DECODE_NO_ROOM               /* a list could not be allocated; its size is the input's */
 } WasmDecodeStatus;
 
@@ -92,6 +95,9 @@ typedef struct {
     uint64_t locals_total;  /* its locals so far */
     bool in_code;           /* the expr being read is a function body */
     bool code_names_data;   /* some function body holds a data index (§5.5.17's dataidx(func*)) */
+    bool table_with_init;   /* the expr being read is a 0x40 0x00 table's initializer */
+    uint32_t elem_form;     /* the element segment being read: its §5.5.12 form, and its items not yet read */
+    uint32_t elem_left;
     size_t rec_start;       /* the current rec group's first type index, and its size */
     uint32_t rec_size;
     WasmSection *sections;
