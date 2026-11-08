@@ -1003,8 +1003,7 @@ async function main() {
      may land the record a stalled instance's clock waits at. */
   const bodyChunk = (e, entry) => (chunk) => {
     if (e.owed.get(entry.key) !== entry) return;
-    entry.chunks.push(Buffer.from(chunk));
-    ZONE.replyStreamRead(entry, chunk.byteLength);
+    ZONE.replyStreamChunk(entry, Buffer.from(chunk));
     flush();
   };
   /* Whether every record of `x` due at `e`'s clock has landed: a streamed entry writes each of them in turn. */
@@ -1016,7 +1015,7 @@ async function main() {
      with that record's bytes (ZONE.replyStreamPiece), the last stating how the body ended. */
   const streamLines = (x) => {
     const last = ZONE.replyStreamLast(x), k = x.record;
-    const bytes = ZONE.replyStreamPiece(x, x.chunks);
+    const bytes = ZONE.replyStreamPiece(x);
     const piece = b64(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
     const endMeta = () => b64(x.end.state === 'end' ? x.end.computedType : x.end.reason);
     if (last && x.end === null)
@@ -1443,7 +1442,9 @@ async function main() {
                                         provenance, pinned, driven, credentials, useCorsPreflight: false,
                                         actor: 'page', signal: send.controller.signal,
                                         onBodyRead: streamed ? undefined : bodyRead(e, entry),
-                                        onHead: streamed ? (h) => { entry.head = h; } : undefined,
+                                        onHead: streamed
+                                          ? (h) => { entry.head = h; ZONE.replyStreamHead(entry, h.headers); }
+                                          : undefined,
                                         onChunk: streamed ? bodyChunk(e, entry) : undefined,
                                         doc, credentialed: false,
                                         identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, 'engine:' + e.docId, abs,

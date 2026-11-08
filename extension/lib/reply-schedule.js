@@ -21,12 +21,7 @@ var REPLY_LATENCY_WORK = 5000000;
 
 /* The body bytes one record carries. A heuristic: Chrome 155's fetch body reader, reading ten large resources of
    excalidraw.com, tldraw.com and regex101.com through this project's container proxy, yielded 75 chunks from 10
-   to 821890 bytes, of which 65536 was both the most frequent (18) and the median.
-   A named residual: a streamed body whose server sends pieces smaller than a record with silence between (an
-   event stream read through fetch()) reaches the page only once a record's worth or the end has arrived. The
-   next diff cuts a `text/event-stream` body's records at the blank lines that dispatch its events (HTML §9.2.6
-   "Interpreting an event stream"), which are the answer's own bytes. Its absence shows as a streamed fetch
-   still owed at its due point while its wire keeps answering reads. */
+   to 821890 bytes, of which 65536 was both the most frequent (18) and the median. */
 var REPLY_RECORD_BYTES = 65536;
 
 /* One instance's clock: its origin on the cluster's timeline, the work its last read stated (null before the
@@ -92,14 +87,14 @@ function replyClockStall(clock, dues) {
    k·REPLY_RECORD_BYTES), record 1 also the head, and the last record is the one the body ends in, so an answer of
    L bytes is max(1, ⌈L / REPLY_RECORD_BYTES⌉) records whatever reads the wire answered it in. Record k has landed
    once the body has run past it or the whole answer has arrived; it is the last when the answer arrived with no
-   byte past it.
+   byte past it. A streamed `text/event-stream` body is cut at its events instead (replyStreamHead).
    A streamed entry (the caller's `stream` token, for a `fetch()` whose engine resolves at the head) writes every
    record at its due point (replyStreamPiece), the last saying how the body ended (solver/reply_body.h). Any
    other entry is handed its answer whole: a record due that has landed and is not the last moves the entry's
    `due` a latency on and writes nothing, and the last is the whole answer, written at its due point.
-   The fields live on the caller's entry (`due`, `ordinal` and the caller's own beside them):
-   `bytes` (the body bytes the wire has delivered), `record` (the 1-based record now owed), `settled` and `next`
-   (the waiter of the next landing). */
+   The fields live on the caller's entry (`due`, `ordinal`, a streamed entry's `chunks` array and the caller's
+   own beside them): `bytes` (the body bytes the wire has delivered), `record` (the 1-based record now owed),
+   `settled`, `next` (the waiter of the next landing) and, once a streamed entry's head is stated, `events`. */
 function replyStreamOpen(entry) {
   DCHECK(entry.bytes === undefined, "a reply stream was opened twice on one entry");
   entry.bytes = 0;
@@ -115,24 +110,100 @@ function _replyStreamWake(entry) {
   if (w !== null) w.resolve();
 }
 
-/* The wire answered one more body read of `length` bytes for this send. */
+/* A streamed entry's head (safeFetch's `onHead`), stated before its body. A `text/event-stream` body (HTML
+   §9.2.5 "Parsing an event stream" names the MIME type) is cut where a blank line dispatches an event (§9.2.6
+   "Interpreting an event stream": lines end in CRLF, LF or CR, and an empty line dispatches), or
+   REPLY_RECORD_BYTES after its record starts, whichever comes first. A record ending at such a point lands as
+   soon as its bytes have, so an event reaches the page without waiting for the next; the body's end is then a
+   record of its own, the bytes after the last cut, which may be none. */
+function replyStreamHead(entry, headers) {
+  DCHECK(entry.bytes === 0 && entry.events === undefined && Array.isArray(entry.chunks),
+         "a streamed reply's head was stated after its body began, twice, or for an entry that keeps no chunks");
+  var ct = headers["content-type"];
+  entry.events = typeof ct === "string" && _mimeEssence(ct) === "text/event-stream"
+    ? { cuts: [], ci: 0, ends: [], lineEmpty: true, prevCR: false, crEmpty: false, bom: 0 } : null;
+}
+
+/* The wire answered one more body read of `length` bytes for a send whose answer is handed over whole. */
 function replyStreamRead(entry, length) {
   DCHECK(!entry.settled, "a body read was reported for a send whose answer was already produced: " + entry.bytes);
+  DCHECK(entry.events === undefined, "a streamed send's body read was counted without its bytes");
   DCHECK(Number.isSafeInteger(length) && length >= 0,
          "a body read was reported with the length " + length + " — safeFetch states each read's byte length");
   entry.bytes += length;
   _replyStreamWake(entry);
 }
 
-/* The send's whole answer is produced; its last record has landed. */
-function replyStreamSettle(entry) {
-  DCHECK(!entry.settled, "a send's answer was produced twice");
-  entry.settled = true;
+/* One read of a streamed send's body (safeFetch's `onChunk`), a byte view the caller owns, kept on the entry. */
+function replyStreamChunk(entry, chunk) {
+  DCHECK(!entry.settled && entry.events !== undefined && ArrayBuffer.isView(chunk),
+         "a streamed send's body read arrived after its answer, before its head, or not as bytes");
+  entry.chunks.push(chunk);
+  if (entry.events !== null) _replyEventScan(entry.events, chunk, entry.bytes);
+  entry.bytes += chunk.byteLength;
+  if (entry.events !== null) _replyEventEnds(entry);
   _replyStreamWake(entry);
 }
 
-/* Whether record k of `entry` has landed: the body ran past its end, or the answer arrived. */
+/* The send's whole answer is produced; its last record has landed. A CR that ended an empty line as the body's
+   last byte is a cut there. */
+function replyStreamSettle(entry) {
+  DCHECK(!entry.settled, "a send's answer was produced twice");
+  entry.settled = true;
+  var ev = entry.events;
+  if (ev !== undefined && ev !== null) {
+    if (ev.prevCR && ev.crEmpty) ev.cuts.push(entry.bytes);
+    ev.prevCR = false;
+    _replyEventEnds(entry);
+  }
+  _replyStreamWake(entry);
+}
+
+/* §9.2.6's line ends over the bytes of `chunk`, which starts at body offset `base`: each empty line's end is a
+   cut. A CR's pair is decided by the byte after it, and a leading UTF-8 BOM is no content (the stream is UTF-8
+   decoded first, which strips it). */
+var _REPLY_BOM = [0xEF, 0xBB, 0xBF];
+function _replyEventScan(ev, chunk, base) {
+  var bytes = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+  for (var i = 0; i < bytes.length; i++) {
+    var o = base + i, b = bytes[i];
+    if (ev.prevCR) {
+      ev.prevCR = false;
+      if (ev.crEmpty) ev.cuts.push(b === 0x0A ? o + 1 : o);
+      if (b === 0x0A) continue;
+    }
+    if (ev.bom === o && o < 3) {
+      if (b === _REPLY_BOM[o]) { ev.bom++; continue; }
+      if (o > 0) ev.lineEmpty = false;
+      ev.bom = -1;
+    }
+    if (b === 0x0D) { ev.prevCR = true; ev.crEmpty = ev.lineEmpty; ev.lineEmpty = true; }
+    else if (b === 0x0A) { if (ev.lineEmpty) ev.cuts.push(o + 1); ev.lineEmpty = true; }
+    else ev.lineEmpty = false;
+  }
+}
+
+/* Extends an event stream's record ends as far as the bytes decide them: the first cut within
+   REPLY_RECORD_BYTES of the record's start, else that cap once the body has reached it (no later byte can cut
+   before it then). */
+function _replyEventEnds(entry) {
+  var ev = entry.events;
+  for (;;) {
+    var s = ev.ends.length ? ev.ends[ev.ends.length - 1] : 0;
+    while (ev.ci < ev.cuts.length && ev.cuts[ev.ci] <= s) ev.ci++;
+    if (ev.ci < ev.cuts.length && ev.cuts[ev.ci] - s <= REPLY_RECORD_BYTES) { ev.ends.push(ev.cuts[ev.ci]); continue; }
+    if (entry.bytes >= s + REPLY_RECORD_BYTES) { ev.ends.push(s + REPLY_RECORD_BYTES); continue; }
+    return;
+  }
+}
+
+function _replyEvents(entry) {
+  return entry.events !== undefined && entry.events !== null;
+}
+
+/* Whether record k of `entry` has landed. */
 function _replyRecordLanded(entry, k) {
+  if (_replyEvents(entry)) return entry.settled || k <= entry.events.ends.length;
   return entry.settled || entry.bytes > k * REPLY_RECORD_BYTES;
 }
 
@@ -144,6 +215,7 @@ function replyStreamLanded(entry) {
 /* Whether the record now owed is the answer's last; asked only of a landed record. */
 function replyStreamLast(entry) {
   DCHECK(replyStreamLanded(entry), "a reply record was asked whether it is the last before it landed");
+  if (_replyEvents(entry)) return entry.settled && entry.record > entry.events.ends.length;
   return entry.settled && entry.bytes <= entry.record * REPLY_RECORD_BYTES;
 }
 
@@ -156,24 +228,32 @@ function replyStreamDueLanded(entry, now) {
   return _replyRecordLanded(entry, entry.record + Math.floor((now - entry.due) / REPLY_LATENCY_WORK));
 }
 
-/* The body bytes of the landed record now owed, copied out of `chunks` (the body's reads in order, byte views of
-   any realm, as the caller kept them). */
-function replyStreamPiece(entry, chunks) {
-  DCHECK(replyStreamLanded(entry), "a reply record's bytes were asked for before it landed");
-  var from = (entry.record - 1) * REPLY_RECORD_BYTES;
-  var to = Math.min(entry.record * REPLY_RECORD_BYTES, entry.bytes);
-  DCHECK(to >= from, "a reply's record " + entry.record + " ends at byte " + to + " before it starts at " + from +
+/* The body bytes of a streamed entry's landed record now owed, copied out of its kept chunks (byte views of any
+   realm). */
+function replyStreamPiece(entry) {
+  DCHECK(replyStreamLanded(entry) && Array.isArray(entry.chunks),
+         "a reply record's bytes were asked for before it landed, or of an entry that keeps no chunks");
+  var k = entry.record, from, to;
+  if (_replyEvents(entry)) {
+    var ends = entry.events.ends;
+    from = k > 1 ? ends[k - 2] : 0;
+    to = k <= ends.length ? ends[k - 1] : entry.bytes;
+  } else {
+    from = (k - 1) * REPLY_RECORD_BYTES;
+    to = Math.min(k * REPLY_RECORD_BYTES, entry.bytes);
+  }
+  DCHECK(to >= from, "a reply's record " + k + " ends at byte " + to + " before it starts at " + from +
          " — a body that ended before a record is landed through an earlier record, which was the last");
   var out = new Uint8Array(to - from), at = 0, i, c, lo, hi;
-  for (i = 0; i < chunks.length && at < to; i++) {
-    c = chunks[i];
+  for (i = 0; i < entry.chunks.length && at < to; i++) {
+    c = entry.chunks[i];
     lo = Math.max(from, at);
     hi = Math.min(to, at + c.byteLength);
     if (lo < hi) out.set(new Uint8Array(c.buffer, c.byteOffset + (lo - at), hi - lo), lo - from);
     at += c.byteLength;
   }
   DCHECK(at >= to, "a landed reply record's bytes were asked for while its kept chunks hold " + at + " of " +
-         entry.bytes + " bytes — every read the schedule counted is a chunk its caller kept");
+         entry.bytes + " bytes — every read the schedule counted is a chunk it kept");
   return out;
 }
 

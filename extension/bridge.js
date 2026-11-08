@@ -4530,8 +4530,8 @@ function engineIssue(eng, key, start, deliver, pair) {
      head is provided, so the test reads it off the record. */
   const live = () => eng._inflight.get(rec.key) === rec;
   const onBodyRead = (length) => { if (live()) replyStreamRead(rec, length); };
-  const onHead = (h) => { if (live()) rec.head = h; };
-  const onChunk = (c) => { if (live()) { rec.chunks.push(new Uint8Array(c)); replyStreamRead(rec, c.byteLength); } };
+  const onHead = (h) => { if (live()) { rec.head = h; replyStreamHead(rec, h.headers); } };
+  const onChunk = (c) => { if (live()) replyStreamChunk(rec, new Uint8Array(c)); };
   /* `work` never rejects; the error is carried and rethrown at delivery inside the round, so an invariant abort
      out of `eng.fetched` still reaches hostSchedule's failure arm and there is no unhandled rejection. */
   rec.work = start(rec.controller.signal, rec.stream === null ? onBodyRead : undefined,
@@ -4639,7 +4639,7 @@ function engineStreamEnd(value) {
    first record's bytes) and `ProvideBody` (every later record, and the end). The head is the chokepoint's (`onHead`):
    status, status message, header map, URL list and filtered-response type, every field asserted here. */
 async function engineDeliverStreamRecord(eng, rec, last) {
-  const k = rec.record, piece = replyStreamPiece(rec, rec.chunks);
+  const k = rec.record, piece = replyStreamPiece(rec);
   const end = last ? engineStreamEnd(rec.value) : null;
   if (k === 1) {
     const h = rec.head;
