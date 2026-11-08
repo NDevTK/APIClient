@@ -842,6 +842,9 @@ typedef struct JSVarRef {
        Cleared when the cell detaches; the reference is given back on detach and on free, and on exactly one of
        the two, because a detached cell no longer aliases anything. */
     uint8_t is_coro;
+    /* The fork generation the cell was born at (JSObject's flow_gen): at or below a graph's floor it is shared
+       baseline state a parked graph names, above it the creating flow's own. */
+    uint32_t flow_gen;
     JSValue *pvalue; /* pointer to the value, either on the stack or
                         to 'value' */
     union {
@@ -25428,6 +25431,7 @@ static JSVarRef *js_create_var_ref(JSContext *ctx, bool is_gc_object)
     JS_REF_COUNT(var_ref) = 1;
     var_ref->is_detached = true;
     var_ref->is_coro = false;   /* born detached: it aliases no frame, so there is no owner to root */
+    var_ref->flow_gen = g_flow_gen;
     var_ref->value = JS_UNDEFINED;
     var_ref->pvalue = &var_ref->value;
     if (is_gc_object)
@@ -25508,6 +25512,7 @@ static JSVarRef *get_captured_cell(JSContext *ctx, JSStackFrame *sf, JSValue *pv
     if (!vr)
         return NULL;
     JS_REF_COUNT(vr) = 1;                 /* the FRAME owns this ref */
+    vr->flow_gen = g_flow_gen;
     vr->is_detached = false;              /* OPEN: ALIASES the live frame slot (spec-correct closures/arguments) —
                                              its value IS the slot, so the owning frame's plain slot accesses and
                                              every capturing closure share ONE storage. close_var_refs snapshots it
@@ -25627,6 +25632,7 @@ static JSVarRef *get_var_ref(JSContext *ctx, JSStackFrame *sf, int var_idx,
         JS_REF_COUNT(var_ref) = 1;
         var_ref->is_detached = true;
         var_ref->is_coro = false;   /* a detached copy aliases no frame */
+        var_ref->flow_gen = g_flow_gen;
         var_ref->value = js_dup(*pvalue);
         var_ref->pvalue = &var_ref->value;
         add_gc_object(ctx->rt, &var_ref->header, JS_GC_OBJ_TYPE_VAR_REF);
@@ -56668,12 +56674,12 @@ void JS_FlowReachEnd(JSFlowReach *out)
 
 /* JS_FlowGraph* — see quickjs.h. Host memory throughout, spelled `(free)`/`(realloc)` for the reason the reach
    census gives: a write runs where a runtime allocation could ask for a sale. */
-enum { FG_PLAIN = 1, FG_ARRAY = 2, FG_ERROR = 3, FG_RECORD = 4 };
+enum { FG_PLAIN = 1, FG_ARRAY = 2, FG_ERROR = 3, FG_RECORD = 4, FG_CLOSURE = 5 };
 static const char *js_ab_codec_intern(JSRuntime *rt, const uint8_t *name, uint32_t len);
 /* A parked graph this writer cannot write whole would resume as a different heap, so the release build stops
    too; the dev build's DCHECK above each use names what to build. */
 #define FG_NO_WRITER() CHECK_FAIL("flow graph: a parked graph holds a value or object no writer can write")
-enum { FG_GAP_CLASS = 1, FG_GAP_TAG, FG_GAP_SYMBOL_KEY, FG_GAP_PROP_KIND, FG_GAP_WEAK };
+enum { FG_GAP_CLASS = 1, FG_GAP_TAG, FG_GAP_SYMBOL_KEY, FG_GAP_PROP_KIND, FG_GAP_WEAK, FG_GAP_OPEN_CELL };
 typedef struct { const void *k; uint32_t v; } FGSlot;
 typedef struct { FGSlot *s; size_t cap, n; } FGMap;
 typedef struct { uint8_t *b; size_t len, cap; } FGBuf;
@@ -56682,7 +56688,8 @@ typedef struct { int what, id; uint32_t n; } FGGap;
 struct JSFlowGraph {
     FGBuf bytes;
     JSValue *anchors;
-    uint32_t n_anchors, n_roots, n_objs;
+    JSVarRef **cells;   /* baseline closure cells the graph names, one counted reference each */
+    uint32_t n_anchors, n_roots, n_objs, n_cells;
     FGGap *gaps;
     uint32_t n_gaps;
 };
@@ -56763,7 +56770,8 @@ typedef struct {
     JSContext *ctx;
     uint32_t floor;
     JSFlowGraph *g;
-    FGMap objs, anch;
+    FGMap objs, anch, cells, cell_anch;
+    uint32_t n_priv_cells;
     FGStrMap strs;
     uint8_t **held;     /* host copies of flattened ropes the string table names, freed with the writer */
     uint32_t n_held;
@@ -56848,6 +56856,7 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
     /* A symbol carries no birth generation and its identity is what it means, so it is named by the live symbol
        itself, the anchor's counted reference keeping it. */
     case JS_TAG_SYMBOL: fg_u8(out, 'A'); fg_u32(out, fg_anchor(w, v)); return;
+    case JS_TAG_FUNCTION_BYTECODE: fg_u8(out, 'A'); fg_u32(out, fg_anchor(w, v)); return;   /* compiled once, shared */
     case JS_TAG_INT: fg_u8(out, 'I'); fg_u32(out, (uint32_t)JS_VALUE_GET_INT(v)); return;
     case JS_TAG_BOOL: fg_u8(out, JS_VALUE_GET_BOOL(v) ? 'T' : 'F'); return;
     case JS_TAG_NULL: fg_u8(out, 'N'); return;
@@ -56872,6 +56881,7 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
         if (!fg_map_get(&w->objs, p, &i)) {
             uint8_t kind = p->class_id == JS_CLASS_OBJECT ? FG_PLAIN : p->class_id == JS_CLASS_ARRAY ? FG_ARRAY
                          : p->class_id == JS_CLASS_ERROR ? FG_ERROR
+                         : js_class_has_bytecode(p->class_id) ? FG_CLOSURE
                          : w->ctx->rt->class_array[p->class_id].record ? FG_RECORD : 0;
             if (kind == 0 && w->survey) { fg_gap(w, out, FG_GAP_CLASS, p->class_id); return; }
             if (kind == 0) {
@@ -57007,6 +57017,60 @@ static void fg_record(FGWriter *w, FGBuf *out, const void *rec, const JSRecordLa
     }
 }
 
+/* A closure cell: `c` and its index for one written before, `B` and an anchor for a baseline cell, `C` for a
+   private closed cell with its two flags and its value. An open cell aliases a live frame's slot, which no graph
+   writes yet.
+   Named residual. Not covered: an open cell, a closure over a local of a frame still running or parked. Next
+   diff builds: the parked frame's slots written beside the graph, the cell naming its slot. Absence shows as:
+   `openCell` gaps in the sale census's graph survey. */
+static void fg_cell(FGWriter *w, FGBuf *out, JSVarRef *vr)
+{
+    JSFlowGraph *g = w->g;
+    uint32_t i;
+
+    if (!vr) { fg_u8(out, 'N'); return; }
+    if (fg_map_get(&w->cells, vr, &i)) { fg_u8(out, 'c'); fg_u32(out, i); return; }
+    if (vr->flow_gen <= w->floor) {
+        if (!fg_map_get(&w->cell_anch, vr, &i)) {
+            i = g->n_cells++;
+            g->cells = fg_grow(g->cells, sizeof *g->cells * g->n_cells);
+            g->cells[i] = vr;
+            JS_REF_COUNT(vr)++;
+            fg_map_put(&w->cell_anch, vr, i);
+        }
+        fg_u8(out, 'B'); fg_u32(out, i);
+        return;
+    }
+    if (!vr->is_detached && w->survey) { fg_gap(w, out, FG_GAP_OPEN_CELL, 0); return; }
+    if (!vr->is_detached) {
+        DCHECK(false, "flow graph: a private closure on a parked graph names an open cell, a slot of a live frame — "
+               "give the parked frame's slots a writer the cell can name");
+        FG_NO_WRITER();
+    }
+    fg_map_put(&w->cells, vr, w->n_priv_cells++);
+    fg_u8(out, 'C');
+    fg_u8(out, (uint8_t)(vr->is_lexical | (vr->is_const << 1)));
+    fg_value(w, out, vr->value);
+}
+
+/* A bytecode closure's own state: its body (an anchor), its home object, its creation ordinal and timeline, its
+   constructor bit, and its cells in closure-variable order. */
+static void fg_closure(FGWriter *w, FGBuf *out, JSObject *p)
+{
+    JSFunctionBytecode *b = p->u.func.function_bytecode;
+
+    DCHECK(b != NULL, "flow graph: a bytecode function object holds no body");
+    fg_value(w, out, JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, b));
+    if (p->u.func.home_object) fg_value(w, out, JS_MKPTR(JS_TAG_OBJECT, p->u.func.home_object));
+    else fg_u8(out, 'N');
+    fg_u32(out, p->u.func.creation_ord);
+    fg_u32(out, p->u.func.timeline);
+    fg_u8(out, p->is_constructor);
+    if (!p->u.func.var_refs) { fg_u8(out, 'N'); return; }
+    fg_u8(out, 'P');
+    for (int i = 0; i < b->closure_var_count; i++) fg_cell(w, out, p->u.func.var_refs[i]);
+}
+
 /* An object's body: its prototype, whether it is extensible, and its own data properties (fg_props). An array
    writes first whether its elements are dense ('F': stored apart, written as a count and the values) or ordinary
    properties ('S'), then its length's attributes and value, then the properties after the length slot. An Error
@@ -57042,6 +57106,7 @@ static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
         fg_props(w, out, p, 1);
         return;
     }
+    if (w->kinds[id] == FG_CLOSURE) fg_closure(w, out, p);
     if (w->kinds[id] == FG_RECORD) {
         DCHECK(p->u.opaque != NULL, "flow graph: an object of a class with a record layout holds no record");
         fg_record(w, out, p->u.opaque, w->ctx->rt->class_array[p->class_id].record);
@@ -57069,13 +57134,13 @@ static JSFlowGraph *fg_write(JSContext *ctx, const JSValueConst *roots, int n, u
     fg_u32(&g->bytes, w.n_order);
     if (w.n_order) fg_put(&g->bytes, w.kinds, w.n_order);
     for (uint32_t i = 0; i < w.n_order; i++)   /* a record object's class, which its shell is created with */
-        if (w.kinds[i] == FG_RECORD) fg_u32(&g->bytes, w.order[i]->class_id);
+        if (w.kinds[i] == FG_RECORD || w.kinds[i] == FG_CLOSURE) fg_u32(&g->bytes, w.order[i]->class_id);
     fg_u32(&g->bytes, (uint32_t)n);
     if (rbuf.len) fg_put(&g->bytes, rbuf.b, rbuf.len);
     if (bbuf.len) fg_put(&g->bytes, bbuf.b, bbuf.len);
     (free)(rbuf.b); (free)(bbuf.b); (free)(w.order); (free)(w.kinds);
     for (uint32_t i = 0; i < w.n_held; i++) (free)(w.held[i]);
-    (free)(w.held); (free)(w.objs.s); (free)(w.strs.s); (free)(w.anch.s);
+    (free)(w.held); (free)(w.objs.s); (free)(w.strs.s); (free)(w.anch.s); (free)(w.cells.s); (free)(w.cell_anch.s);
     return g;
 }
 
@@ -57113,6 +57178,7 @@ void JS_FlowGraphGapName(JSContext *ctx, int what, int id, char *buf, size_t cap
     case FG_GAP_TAG:          snprintf(buf, cap, "tag %d", id); return;
     case FG_GAP_SYMBOL_KEY:   snprintf(buf, cap, "symbolKey %d", id); return;
     case FG_GAP_PROP_KIND:    snprintf(buf, cap, "propKind %d", id >> 4); return;
+    case FG_GAP_OPEN_CELL:    snprintf(buf, cap, "openCell"); return;
     }
     DCHECKF(false, "flow graph: a gap of kind %d has no name", what);
     snprintf(buf, cap, "?");
@@ -57123,7 +57189,8 @@ typedef struct {
     const JSFlowGraph *g;
     const uint8_t *p, *end;
     JSValue *objs, *strs;
-    uint32_t n_objs, n_strs, cap_strs;
+    JSVarRef **cells;   /* the private cells rebuilt so far, in written order; each closure holds its own ref */
+    uint32_t n_objs, n_strs, cap_strs, n_cells, cap_cells;
 } FGReader;
 
 static const uint8_t *fg_take(FGReader *r, size_t n)
@@ -57235,6 +57302,53 @@ static void fg_rprops(FGReader *r, JSValueConst o, int extra)
 /* A record fg_record wrote, in the C allocator's storage: into `rec` for an inline array's element, freshly
    allocated otherwise. Each array is rebuilt at the count written, and the layout's own count is asserted against
    it once every field is back, since a count may read a field restored after it. */
+static JSVarRef *fg_rcell(FGReader *r)
+{
+    uint8_t t = fg_r8(r);
+    uint32_t i;
+    JSVarRef *vr;
+
+    if (t == 'N') return NULL;
+    if (t == 'c' || t == 'B') {
+        i = fg_r32(r);
+        CHECK(t == 'c' ? i < r->n_cells : i < r->g->n_cells,
+              "flow graph: a cell reference names no cell written before it or anchored by the graph");
+        vr = t == 'c' ? r->cells[i] : r->g->cells[i];
+        JS_REF_COUNT(vr)++;
+        return vr;
+    }
+    CHECK(t == 'C', "flow graph: a closure's cell carries a tag this reader does not know");
+    t = fg_r8(r);
+    vr = js_create_var_ref(r->ctx, true);
+    CHECK(vr != NULL, "flow graph: OOM rebuilding a closure cell");
+    vr->is_lexical = t & 1;
+    vr->is_const = (t >> 1) & 1;
+    if (r->n_cells == r->cap_cells) {
+        r->cap_cells = r->cap_cells ? r->cap_cells * 2 : 16;
+        r->cells = fg_grow(r->cells, sizeof *r->cells * r->cap_cells);
+    }
+    r->cells[r->n_cells++] = vr;   /* before its value, which may name a closure over this cell */
+    vr->value = fg_rvalue(r);
+    return vr;
+}
+static void fg_rclosure(FGReader *r, JSObject *p)
+{
+    JSValue bv = fg_rvalue(r), home = fg_rvalue(r);
+    JSFunctionBytecode *b;
+
+    CHECK(JS_VALUE_GET_TAG(bv) == JS_TAG_FUNCTION_BYTECODE, "flow graph: a closure's body is not a function body");
+    b = JS_VALUE_GET_PTR(bv);
+    p->u.func.function_bytecode = b;   /* the anchor's dup is the closure's reference */
+    CHECK(JS_IsNull(home) || JS_IsObject(home), "flow graph: a closure's home object is neither absent nor an object");
+    p->u.func.home_object = JS_IsObject(home) ? JS_VALUE_GET_OBJ(home) : NULL;
+    p->u.func.creation_ord = fg_r32(r);
+    p->u.func.timeline = fg_r32(r);
+    p->is_constructor = fg_r8(r) != 0;
+    if (fg_r8(r) == 'N') { p->u.func.var_refs = NULL; return; }
+    p->u.func.var_refs = js_mallocz(r->ctx, sizeof(JSVarRef *) * (b->closure_var_count ? b->closure_var_count : 1));
+    CHECK(p->u.func.var_refs != NULL, "flow graph: OOM rebuilding a closure's cells");
+    for (int i = 0; i < b->closure_var_count; i++) p->u.func.var_refs[i] = fg_rcell(r);
+}
 static char *fg_rcstr(FGReader *r)
 {
     uint8_t t = fg_r8(r);
@@ -57350,13 +57464,22 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
     for (uint32_t i = 0; i < r.n_objs; i++) {
         JSClassID cid = kinds[i] == FG_ERROR ? JS_CLASS_ERROR : JS_CLASS_OBJECT;
 
-        if (kinds[i] == FG_RECORD) {
+        if (kinds[i] == FG_RECORD || kinds[i] == FG_CLOSURE) {
             cid = fg_r32(&r);
-            CHECK(cid < ctx->rt->class_count && ctx->rt->class_array[cid].record,
-                  "flow graph: a record object names a class with no record layout in this runtime");
+            CHECK(cid < ctx->rt->class_count &&
+                      (kinds[i] == FG_RECORD ? ctx->rt->class_array[cid].record != NULL : js_class_has_bytecode(cid)),
+                  "flow graph: a record or closure object names a class of another kind in this runtime");
         }
         r.objs[i] = kinds[i] == FG_ARRAY ? JS_NewArray(ctx) : JS_NewObjectProtoClass(ctx, JS_NULL, cid);
-        CHECK(kinds[i] == FG_ARRAY || kinds[i] == FG_PLAIN || kinds[i] == FG_ERROR || kinds[i] == FG_RECORD,
+        if (kinds[i] == FG_CLOSURE && !JS_IsException(r.objs[i])) {
+            /* the allocation clears only the union's first word, and a collection may mark the shell before
+               its body is read: js_bytecode_function_mark reads the home object first */
+            JSObject *fp = JS_VALUE_GET_OBJ(r.objs[i]);
+            fp->u.func.home_object = NULL;
+            fp->u.func.var_refs = NULL;
+        }
+        CHECK(kinds[i] == FG_ARRAY || kinds[i] == FG_PLAIN || kinds[i] == FG_ERROR || kinds[i] == FG_RECORD ||
+                  kinds[i] == FG_CLOSURE,
               "flow graph: an object kind this reader does not know");
         CHECK(!JS_IsException(r.objs[i]), "flow graph: OOM rebuilding an object");
     }
@@ -57366,6 +57489,7 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
     for (uint32_t i = 0; i < r.n_objs; i++) {
         JSValue o = r.objs[i], proto = fg_rvalue(&r);
         uint8_t ext = fg_r8(&r);
+        if (kinds[i] == FG_CLOSURE) fg_rclosure(&r, JS_VALUE_GET_OBJ(o));
         if (kinds[i] == FG_RECORD) {   /* before anything asks the class's exotic methods, which read the record */
             JSObject *rp = JS_VALUE_GET_OBJ(o);
             rp->u.opaque = fg_rrecord(&r, ctx->rt->class_array[rp->class_id].record);
@@ -57407,7 +57531,7 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
     CHECK(r.p == r.end, "flow graph: a serialized graph has bytes past its last record");
     for (uint32_t i = 0; i < r.n_objs; i++) JS_FreeValue(ctx, r.objs[i]);
     for (uint32_t i = 0; i < r.n_strs; i++) JS_FreeValue(ctx, r.strs[i]);
-    (free)(r.objs); (free)(r.strs);
+    (free)(r.objs); (free)(r.strs); (free)(r.cells);
     return 0;
 }
 
@@ -57417,6 +57541,8 @@ uint32_t JS_FlowGraphAnchors(const JSFlowGraph *g, const JSValue **anchors) { *a
 void JS_FlowGraphFree(JSContext *ctx, JSFlowGraph *g)
 {
     for (uint32_t i = 0; i < g->n_anchors; i++) JS_FreeValue(ctx, g->anchors[i]);
+    for (uint32_t i = 0; i < g->n_cells; i++) free_var_ref(ctx->rt, g->cells[i]);
+    (free)(g->cells);
     (free)(g->gaps);
     (free)(g->anchors); (free)(g->bytes.b); (free)(g);
 }
@@ -72247,6 +72373,7 @@ static JSVarRef *js_create_module_var(JSContext *ctx, bool is_lexical)
     var_ref->pvalue = &var_ref->value;
     var_ref->is_detached = true;
     var_ref->is_coro = false;   /* a module binding aliases no frame, so there is no owner to root */
+    var_ref->flow_gen = g_flow_gen;
     add_gc_object(ctx->rt, &var_ref->header, JS_GC_OBJ_TYPE_VAR_REF);
     return var_ref;
 }
