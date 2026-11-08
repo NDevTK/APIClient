@@ -18,6 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "core/wasm/matching.h"
 #include "core/wasm/wasm_module.h"
 
 typedef enum {
@@ -59,7 +60,8 @@ typedef struct {
     size_t n_canon;
     size_t *canon_table;        /* open addressing over canonical ids plus one, keyed by hash */
     size_t cap_canon_table, probe, compare;   /* PH_CANON: the slot probed and the token compared */
-    size_t climb, climb_target; /* PH_CLIMB: §3.3.10's supertype walk, and where it continues */
+    WasmTypes types;            /* §3.3's matching over the module and group_canon */
+    WasmClimb climb;            /* PH_CLIMB: §3.3.10's supertype walk, and where it continues */
     int climb_return;
     WasmValidateStatus climb_fail;
     size_t *table_imports;      /* per imported table: its import's index, filled as PH_IMPORTS passes it */

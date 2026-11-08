@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/wasm/matching.h"
 
 /* The phases, in valid.ml's check_module order: each rec group's subtypes, then their supertype conditions;
    imports, tags, functions, memories, tables, globals, data, elements; the start function; exports, then the
@@ -60,6 +61,8 @@ static WasmValidateStatus allocate(WasmModuleValidator *v)
     if (!v->table_imports || !v->group_canon || !v->canon_off || !v->canon_len || !v->canon_hash || !v->canon_table)
         return WASM_VALIDATE_NO_ROOM;
     v->cap_canon_table = cap;
+    v->types.module = v->module;
+    v->types.group_canon = v->group_canon;
     v->phase = PH_TYPES;
     return WASM_VALIDATE_MORE;
 }
@@ -162,13 +165,6 @@ static size_t rec_start_of(const WasmModuleValidator *v, size_t x)
     return v->module->types[x].rec_start;
 }
 
-/* §3.3.10's closed defined types are equal: the same canonical group, the same index in it. */
-static bool same_type(const WasmModuleValidator *v, size_t x, size_t y)
-{
-    return v->group_canon[rec_start_of(v, x)] == v->group_canon[rec_start_of(v, y)]
-        && x - rec_start_of(v, x) == y - rec_start_of(v, y);
-}
-
 static bool token_ref(WasmModuleValidator *v, size_t x, size_t start, size_t size)
 {
     if (x >= start && x < start + size) return token(v, T_REC) && token(v, x - start);
@@ -181,85 +177,11 @@ static bool token_val(WasmModuleValidator *v, const WasmValType *t, size_t start
     return t->code != WASM_TYPE_REF || t->heap != 0 || token_ref(v, t->heap_index, start, size);
 }
 
-enum { LE_NO = 0, LE_YES, LE_CLIMB };
-
-/* §3.3.3 over two abstract heap types: none below every type of the any hierarchy, i31, struct and array below
-   eq, eq below any, and nofunc, noextern and noexn below func, extern and exn. */
-static bool abstract_le(uint8_t a, uint8_t b)
-{
-    if (a == b) return true;
-    switch (a) {
-    case WASM_HEAP_NONE:
-        return b == WASM_HEAP_I31 || b == WASM_HEAP_STRUCT || b == WASM_HEAP_ARRAY || b == WASM_HEAP_EQ
-            || b == WASM_HEAP_ANY;
-    case WASM_HEAP_I31: case WASM_HEAP_STRUCT: case WASM_HEAP_ARRAY:
-        return b == WASM_HEAP_EQ || b == WASM_HEAP_ANY;
-    case WASM_HEAP_EQ: return b == WASM_HEAP_ANY;
-    case WASM_HEAP_NOFUNC: return b == WASM_HEAP_FUNC;
-    case WASM_HEAP_NOEXTERN: return b == WASM_HEAP_EXTERN;
-    case WASM_HEAP_NOEXN: return b == WASM_HEAP_EXN;
-    }
-    return false;
-}
-
-/* The abstract heap type a defined type of kind `k` expands below: struct, array or func. */
-static uint8_t kind_heap(WasmCompKind k)
-{
-    return k == WASM_COMP_STRUCT ? WASM_HEAP_STRUCT : k == WASM_COMP_ARRAY ? WASM_HEAP_ARRAY : WASM_HEAP_FUNC;
-}
-
-/* §3.3.3's heap type matching. Two type indices that are not one identity match when §3.3.10's supertype walk
-   from the first reaches the second: LE_CLIMB starts that walk (PH_CLIMB, one supertype a step). */
-static int heap_le(WasmModuleValidator *v, const WasmValType *a, const WasmValType *b)
-{
-    const WasmModule *m = v->module;
-
-    if (a->heap != 0 && b->heap != 0) return abstract_le(a->heap, b->heap) ? LE_YES : LE_NO;
-    if (a->heap == 0 && b->heap != 0)
-        return abstract_le(kind_heap(m->types[a->heap_index].kind), b->heap) ? LE_YES : LE_NO;
-    if (a->heap != 0) {
-        uint8_t k = kind_heap(m->types[b->heap_index].kind);
-
-        if (a->heap == WASM_HEAP_NONE) return k != WASM_HEAP_FUNC ? LE_YES : LE_NO;
-        return a->heap == WASM_HEAP_NOFUNC && k == WASM_HEAP_FUNC ? LE_YES : LE_NO;
-    }
-    if (same_type(v, a->heap_index, b->heap_index)) return LE_YES;
-    if (m->types[a->heap_index].n_supers == 0) return LE_NO;
-    v->climb = m->type_indices[m->types[a->heap_index].supers];
-    v->climb_target = b->heap_index;
-    return LE_CLIMB;
-}
-
-/* §3.3.5's value types and §3.3.9's storage types: a number, vector or packed type matches only itself, a
-   reference type by nullability (§3.3.4) and heap type. */
-static int val_le(WasmModuleValidator *v, const WasmValType *a, const WasmValType *b)
-{
-    if (a->code != b->code) return LE_NO;
-    if (a->code != WASM_TYPE_REF) return LE_YES;
-    if (a->nullable && !b->nullable) return LE_NO;
-    return heap_le(v, a, b);
-}
-
-/* Matching both ways, which §3.3.9 asks of a mutable field: one type, or one identity. */
-static bool val_eq(const WasmModuleValidator *v, const WasmValType *a, const WasmValType *b)
-{
-    if (a->code != b->code || a->nullable != b->nullable || a->heap != b->heap) return false;
-    return a->code != WASM_TYPE_REF || a->heap != 0 || same_type(v, a->heap_index, b->heap_index);
-}
-
-/* §3.3.9: the same mutability, then a mutable field's storage both ways and an immutable one's covariantly. */
-static int field_le(WasmModuleValidator *v, const WasmFieldType *a, const WasmFieldType *b)
-{
-    if (a->mutable_ != b->mutable_) return LE_NO;
-    if (a->mutable_) return val_eq(v, &a->storage, &b->storage) ? LE_YES : LE_NO;
-    return val_le(v, &a->storage, &b->storage);
-}
-
 /* A match's answer as a step's: a match continues at the next item, a climb is PH_CLIMB's from `back`. */
-static WasmValidateStatus match_step(WasmModuleValidator *v, int le, int back, WasmValidateStatus fail)
+static WasmValidateStatus match_step(WasmModuleValidator *v, WasmMatch le, int back, WasmValidateStatus fail)
 {
-    if (le == LE_NO) return fail;
-    if (le == LE_CLIMB) {
+    if (le == WASM_MATCH_NO) return fail;
+    if (le == WASM_MATCH_CLIMB) {
         v->climb_return = back;
         v->climb_fail = fail;
         v->phase = PH_CLIMB;
@@ -272,15 +194,13 @@ static WasmValidateStatus match_step(WasmModuleValidator *v, int le, int back, W
 /* §3.3.10's walk: one supertype a step until the walk stands on the target's identity or runs out. */
 static WasmValidateStatus climb_step(WasmModuleValidator *v)
 {
-    const WasmModule *m = v->module;
+    WasmMatch le = wasm_climb(&v->types, &v->climb);
 
-    if (same_type(v, v->climb, v->climb_target)) {
+    if (le == WASM_MATCH_NO) return v->climb_fail;
+    if (le == WASM_MATCH_YES) {
         v->phase = v->climb_return;
         v->sub++;
-        return WASM_VALIDATE_MORE;
     }
-    if (m->types[v->climb].n_supers == 0) return v->climb_fail;
-    v->climb = m->type_indices[m->types[v->climb].supers];
     return WASM_VALIDATE_MORE;
 }
 
@@ -404,14 +324,14 @@ static WasmValidateStatus check_type_super(WasmModuleValidator *v)
     }
     k = v->sub - 1;
     if (t->kind != WASM_COMP_FUNC)
-        return match_step(v, field_le(v, &m->fields[t->fields + k], &m->fields[s->fields + k]), PH_TYPES_SUPER,
-                          WASM_VALIDATE_SUB_MISMATCH);
+        return match_step(v, wasm_field_le(&v->types, &m->fields[t->fields + k], &m->fields[s->fields + k], &v->climb),
+                          PH_TYPES_SUPER, WASM_VALIDATE_SUB_MISMATCH);
     if (k < t->n_params)   /* parameters are contravariant */
-        return match_step(v, val_le(v, &m->val_types[s->params + k], &m->val_types[t->params + k]), PH_TYPES_SUPER,
-                          WASM_VALIDATE_SUB_MISMATCH);
+        return match_step(v, wasm_val_le(&v->types, &m->val_types[s->params + k], &m->val_types[t->params + k],
+                                         &v->climb), PH_TYPES_SUPER, WASM_VALIDATE_SUB_MISMATCH);
     k -= t->n_params;
-    return match_step(v, val_le(v, &m->val_types[t->results + k], &m->val_types[s->results + k]), PH_TYPES_SUPER,
-                      WASM_VALIDATE_SUB_MISMATCH);
+    return match_step(v, wasm_val_le(&v->types, &m->val_types[t->results + k], &m->val_types[s->results + k],
+                                     &v->climb), PH_TYPES_SUPER, WASM_VALIDATE_SUB_MISMATCH);
 }
 
 /* §3.5.11: an import's external type is valid (§3.2.17). */
@@ -549,8 +469,8 @@ static WasmValidateStatus step_list(WasmModuleValidator *v)
             if (m->elems[i].mode == WASM_SEGMENT_ACTIVE) {
                 if (m->elems[i].table >= v->n_tables) return unknown(v, "table", m->elems[i].table);
                 v->index = i;
-                return match_step(v, val_le(v, &m->elems[i].type, table_type(v, m->elems[i].table)), PH_ELEMS,
-                                  WASM_VALIDATE_ELEM_MISMATCH);
+                return match_step(v, wasm_val_le(&v->types, &m->elems[i].type, table_type(v, m->elems[i].table),
+                                                 &v->climb), PH_ELEMS, WASM_VALIDATE_ELEM_MISMATCH);
             }
         }
         v->sub = 0;

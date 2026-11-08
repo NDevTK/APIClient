@@ -19,7 +19,9 @@
 typedef enum { WASM_BLOCK_EMPTY = 0, WASM_BLOCK_VALUE, WASM_BLOCK_INDEX } WasmBlockKind;
 
 /* §5.4.2's catch clause kinds, by their byte. */
-typedef enum { WASM_CATCH = 0x00, WASM_CATCH_REF = 0x01, WASM_CATCH_ALL = 0x02, WASM_CATCH_ALL_REF = 0x03 } WasmCatchKind;
+typedef enum {
+    WASM_CATCH = 0x00, WASM_CATCH_REF = 0x01, WASM_CATCH_ALL = 0x02, WASM_CATCH_ALL_REF = 0x03
+} WasmCatchKind;
 
 typedef struct {
     WasmCatchKind kind;
