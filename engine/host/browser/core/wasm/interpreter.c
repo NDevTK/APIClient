@@ -604,14 +604,14 @@ static WasmTableInstance *table_of(WasmInterpreter *it, uint64_t x)
 }
 
 /* §4.6.5's call_indirect and return_call_indirect (type, then table): the element at the operand's index must
-   exist, be a function, and match the expected type by §3.3.10's walk from its own (one supertype a unit of
-   work). */
+   exist, be a function, and match the expected type by §3.3.10's walk from its own, over its own instance's
+   module (one supertype a unit of work); the function may be another instance's. */
 static WasmExecStatus call_indirect(WasmInterpreter *it, const WasmInstruction *in)
 {
     WasmTableInstance *t = table_of(it, in->index[1]);
     uint64_t i = pop(it), f;
-    const WasmModule *m = IM(it);
     const WasmFuncInstance *fi;
+    const WasmInstance *callee;
     WasmClimb climb;
     WasmValType a = { 0 }, b = { 0 };
     WasmMatch le;
@@ -623,16 +623,15 @@ static WasmExecStatus call_indirect(WasmInterpreter *it, const WasmInstruction *
     fi = &it->store->funcs[f];
     CHECKF(!fi->is_host, "the WebAssembly call_indirect of host function %u is not built in interpreter.c",
            fi->host);
-    CHECKF(fi->inst == frame(it)->inst, "a WebAssembly call_indirect of another instance's function is not built "
-           "in interpreter.c (the store's cross-module type identity)");
+    callee = it->store->instances[fi->inst];
     a.code = b.code = WASM_TYPE_REF;
-    a.heap_index = m->func_types[fi->code];
+    a.heap_index = callee->module->func_types[fi->code];
     b.heap_index = in->index[0];
-    le = wasm_heap_le(INST(it)->types, &a, &b, &climb);
+    le = wasm_heap_le(callee->types, &a, INST(it)->types, &b, &climb);
     while (le == WASM_MATCH_CLIMB) {
         JS_FlowRetireWork(1);
         it->retired++;
-        le = wasm_climb(INST(it)->types, &climb);
+        le = wasm_climb(callee->types, &climb);
     }
     if (le != WASM_MATCH_YES) return WASM_EXEC_TRAP_INDIRECT_TYPE;
     return call(it, (size_t)f, in->opcode == 0x13);

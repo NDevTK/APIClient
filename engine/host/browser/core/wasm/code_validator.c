@@ -412,7 +412,7 @@ static WasmMatch match(WasmCodeValidator *cv, const WasmValType *a, const WasmVa
     if (a->code == WASM_TYPE_REF && a->heap == WASM_HEAP_BOT)
         return e->code == WASM_TYPE_REF && (e->nullable || !a->nullable) ? WASM_MATCH_YES : WASM_MATCH_NO;
     if (e->code == WASM_TYPE_REF && e->heap == WASM_HEAP_BOT) return WASM_MATCH_NO;
-    return wasm_val_le(&cv->ctx->types, a, e, &cv->climb);
+    return wasm_val_le(&cv->ctx->types, a, &cv->ctx->types, e, &cv->climb);
 }
 
 static void element_done(WasmCodeValidator *cv)

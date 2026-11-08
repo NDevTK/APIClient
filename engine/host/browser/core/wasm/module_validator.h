@@ -8,7 +8,8 @@
  * here. The order is interpreter/valid/valid.ml's check_module, so a refusal carries that validator's message.
  * Type identity is §3.3.10's closed defined type: a rec group's types are equal to another's when the groups are
  * token for token equal with references into the group relative and references out of it by identity, so each
- * group gets a canonical id and a type is (its group's id, its index in the group). */
+ * group gets a canonical id in the agent's registry (type_registry.h) and a type is (its group's id, its index
+ * in the group), comparable across every module validated against that registry. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_MODULE_VALIDATOR_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_MODULE_VALIDATOR_H
 
@@ -17,10 +18,11 @@
 
 #include "core/wasm/code_validator.h"
 #include "core/wasm/matching.h"
+#include "core/wasm/type_registry.h"
 #include "core/wasm/validation.h"
 #include "core/wasm/wasm_module.h"
 
-/* The validation's whole state. `module` and `bytes` are borrowed and outlive it. */
+/* The validation's whole state. `module`, `bytes` and `registry` are borrowed and outlive it. */
 typedef struct {
     const WasmModule *module;
     const uint8_t *bytes;
@@ -30,16 +32,12 @@ typedef struct {
     size_t cap_names;
     const char *space;          /* for WASM_VALIDATE_UNKNOWN_INDEX: the index space and the index */
     uint64_t index, index2;     /* the indices a refusal names */
+    WasmTypeRegistry *registry;
     size_t *group_canon;        /* per type index: the canonical id of the rec group starting there */
-    uint64_t *tokens;           /* the canonical groups' tokens, then the group being identified */
+    uint64_t *tokens;           /* the tokens of the group being identified */
     size_t n_tokens, cap_tokens;
-    size_t group_tokens;        /* where the current group's tokens begin */
     uint64_t group_hash;
-    size_t *canon_off, *canon_len;   /* per canonical id: its tokens */
-    uint64_t *canon_hash;
-    size_t n_canon;
-    size_t *canon_table;        /* open addressing over canonical ids plus one, keyed by hash */
-    size_t cap_canon_table, probe, compare;   /* PH_CANON: the slot probed and the token compared */
+    WasmTypeIntern intern;      /* PH_CANON: the group's interning in `registry` */
     WasmClimb climb;            /* PH_CLIMB: §3.3.10's supertype walk, and where it continues */
     int climb_return;
     WasmValidateStatus climb_fail;
@@ -50,7 +48,8 @@ typedef struct {
     int code_return;
 } WasmModuleValidator;
 
-void wasm_module_validator_init(WasmModuleValidator *v, const WasmModule *m, const uint8_t *bytes);
+void wasm_module_validator_init(WasmModuleValidator *v, const WasmModule *m, const uint8_t *bytes,
+                                WasmTypeRegistry *registry);
 /* Check one item. MORE while the validation continues, then DONE or a refusal; stepping again is misuse. */
 WasmValidateStatus wasm_module_validator_step(WasmModuleValidator *v);
 WasmValidateStatus wasm_module_validator_run(WasmModuleValidator *v);

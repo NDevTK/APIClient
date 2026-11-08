@@ -5924,6 +5924,20 @@ static void wasm_side_table_walk(const char *src, const WasmModule *m, const uin
     free(open);
 }
 
+/* The one agent of the wasm selftests: every module is validated against its type registry, so a type's identity
+   is comparable across all of them (core/wasm/type_registry.h), and interleaved validations share it. */
+static WasmTypeRegistry *wasm_agent_types(void)
+{
+    static WasmTypeRegistry r;
+    static bool ready;
+
+    if (!ready) {
+        wasm_type_registry_init(&r);
+        ready = true;
+    }
+    return &r;
+}
+
 static void wasm_testsuite_validate(void)
 {
     char got[512];
@@ -5938,7 +5952,8 @@ static void wasm_testsuite_validate(void)
         if (row->kind == WASM_ROW_MALFORMED) continue;
         wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
         CHECKF(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the testsuite module %s does not decode", row->src);
-        wasm_module_validator_init(&v, wasm_module_decoder_module(&d), (const uint8_t *)row->bytes);
+        wasm_module_validator_init(&v, wasm_module_decoder_module(&d), (const uint8_t *)row->bytes,
+                                   wasm_agent_types());
         st = wasm_module_validator_run(&v);
         wasm_module_validator_message(&v, st, got, sizeof got);
         if (row->kind == WASM_ROW_MODULE) {
@@ -5973,7 +5988,8 @@ TF_UNIT void wasm_module_validator_selftest(void)
 
         wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
         CHECKF(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the side table row %s does not decode", row->src);
-        wasm_module_validator_init(&v, wasm_module_decoder_module(&d), (const uint8_t *)row->bytes);
+        wasm_module_validator_init(&v, wasm_module_decoder_module(&d), (const uint8_t *)row->bytes,
+                                   wasm_agent_types());
         CHECKF(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the side table row %s is refused", row->src);
         t = wasm_module_validator_side_table(&v);
         CHECKF(t->n_blocks == row->n, "the side table of %s has %zu blocks, not %zu", row->src, t->n_blocks, row->n);
@@ -5995,7 +6011,8 @@ TF_UNIT void wasm_module_validator_selftest(void)
         ds = wasm_module_decoder_run(&dec[i]);
         CHECKF(ds == WASM_DECODE_DONE, "the WebAssembly validation row %s does not decode (%s)", row->src,
                wasm_decode_status_message(ds));
-        wasm_module_validator_init(&alone[i], wasm_module_decoder_module(&dec[i]), (const uint8_t *)row->bytes);
+        wasm_module_validator_init(&alone[i], wasm_module_decoder_module(&dec[i]), (const uint8_t *)row->bytes,
+                                   wasm_agent_types());
         st_alone[i] = wasm_module_validator_run(&alone[i]);
         wasm_module_validator_message(&alone[i], st_alone[i], got, sizeof got);
         CHECKF(st_alone[i] != WASM_VALIDATE_MORE, "the validation of %s returned MORE from its run", row->src);
@@ -6006,7 +6023,8 @@ TF_UNIT void wasm_module_validator_selftest(void)
             CHECKF(st_alone[i] != WASM_VALIDATE_DONE && strncmp(got, row->expect, strlen(row->expect)) == 0,
                    "the invalid WebAssembly module %s was answered \"%s\"; valid.ml answers \"%s\"", row->src,
                    st_alone[i] == WASM_VALIDATE_DONE ? "valid" : got, row->expect);
-        wasm_module_validator_init(&together[i], wasm_module_decoder_module(&dec[i]), (const uint8_t *)row->bytes);
+        wasm_module_validator_init(&together[i], wasm_module_decoder_module(&dec[i]), (const uint8_t *)row->bytes,
+                                   wasm_agent_types());
         st_together[i] = WASM_VALIDATE_MORE;
     }
     do {
@@ -6068,16 +6086,85 @@ static void wasm_exec_check(const WasmExecRow *row, const WasmInterpreter *it, W
     }
 }
 
+/* The index of the export `name` of kind `kind`, which the module must have. */
+static size_t wasm_export_index(const WasmModule *m, const uint8_t *bytes, WasmExternKind kind, const char *name)
+{
+    size_t e;
+
+    for (e = 0; e < m->n_exports; e++)
+        if (m->exports[e].kind == kind && m->exports[e].name_size == strlen(name)
+            && memcmp(bytes + m->exports[e].name_offset, name, strlen(name)) == 0)
+            return m->exports[e].index;
+    CHECK_FAIL("a WebAssembly selftest module lacks an export its row names");
+}
+
+/* WASM_CROSS_INSTANCE_ROWS: a call_indirect in one instance of a function of another module's instance, its type
+ * checked across the two modules by their registry's identities. */
+static void wasm_cross_instance_selftest(void)
+{
+    const uint8_t *bytes[2] = { (const uint8_t *)WASM_XMOD_EXPORTER, (const uint8_t *)WASM_XMOD_CALLER };
+    const size_t len[2] = { WASM_XMOD_EXPORTER_LEN, WASM_XMOD_CALLER_LEN };
+    WasmModuleDecoder d[2];
+    WasmModuleValidator v[2];
+    WasmInstance inst[2];
+    WasmStore store;
+    size_t k, i;
+
+    wasm_store_init(&store);
+    for (k = 0; k < 2; k++) {
+        WasmExecStatus st;
+
+        wasm_module_decoder_init(&d[k], bytes[k], len[k]);
+        CHECKF(wasm_module_decoder_run(&d[k]) == WASM_DECODE_DONE, "cross-instance module %zu does not decode", k);
+        wasm_module_validator_init(&v[k], wasm_module_decoder_module(&d[k]), bytes[k], wasm_agent_types());
+        CHECKF(wasm_module_validator_run(&v[k]) == WASM_VALIDATE_DONE, "cross-instance module %zu is invalid", k);
+        st = wasm_instance_begin(&inst[k], &store, wasm_module_decoder_module(&d[k]), bytes[k],
+                                 wasm_module_validator_side_table(&v[k]), &v[k].ctx.types);
+        while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst[k]);
+        CHECKF(st == WASM_EXEC_DONE, "cross-instance module %zu's instantiation answered \"%s\"", k,
+               wasm_exec_status_message(st));
+    }
+    for (i = 0; i < COUNTOF(WASM_CROSS_INSTANCE_ROWS); i++) {
+        const WasmCrossInstanceRow *row = &WASM_CROSS_INSTANCE_ROWS[i];
+        size_t f = inst[0].funcs[wasm_export_index(&d[0].module, bytes[0], WASM_EXTERN_FUNC, row->put)];
+        size_t t = inst[1].tables[wasm_export_index(&d[1].module, bytes[1], WASM_EXTERN_TABLE, "tab")];
+        WasmInterpreter it;
+        WasmExecStatus st;
+
+        store.tables[t].elems[0].lo = (uint64_t)f + 1;
+        st = wasm_interpreter_begin(&it, &inst[1], wasm_export_index(&d[1].module, bytes[1], WASM_EXTERN_FUNC,
+                                                                      row->call), NULL, 0);
+        while (st == WASM_EXEC_MORE) st = wasm_interpreter_step(&it);
+        if (row->trap)
+            CHECKF(st == WASM_EXEC_TRAP_INDIRECT_TYPE, "%s: answered %s, not the indirect call's type trap",
+                   row->src, wasm_exec_status_message(st));
+        else
+            CHECKF(st == WASM_EXEC_DONE && it.n_vals == 1 && it.vals[0].lo == row->result,
+                   "%s: answered %s with %zu values, the first %llu; the row expects %u", row->src,
+                   wasm_exec_status_message(st), it.n_vals, it.n_vals ? (unsigned long long)it.vals[0].lo : 0ull,
+                   row->result);
+        wasm_interpreter_free(&it);
+    }
+    for (k = 0; k < 2; k++) {
+        wasm_instance_free(&inst[k]);
+        wasm_module_validator_free(&v[k]);
+        wasm_module_decoder_free(&d[k]);
+    }
+    wasm_store_free(&store);
+}
+
 /* WebAssembly Core §4.6's interpreter core (core/wasm/interpreter.h) against the testsuite's rows over its
  * subset (fixture/wasm_exec.h). Each row's module is decoded and validated (the side table is validation's), the
  * export found by name; each instance's commands run in order on an instance of their own, each retiring one
  * unit of work per step it counts, and again on two more instances, one step of each in turn, which must answer
  * as the first did. A grow's choice runs its example arm, the success the testsuite asserts.
- * fixture/wasm_valid.h's WASM_INVOKE_ROWS come first: what the testsuite's rows in scope do not reach. */
+ * fixture/wasm_valid.h's WASM_INVOKE_ROWS and WASM_CROSS_INSTANCE_ROWS come first: what the testsuite's rows in
+ * scope do not reach. */
 TF_UNIT void wasm_interpreter_selftest(void)
 {
     size_t i = 0;
 
+    wasm_cross_instance_selftest();
     for (i = 0; i < COUNTOF(WASM_INVOKE_ROWS); i++) {
         const WasmInvokeRow *row = &WASM_INVOKE_ROWS[i];
         const uint8_t *bytes = (const uint8_t *)row->bytes;
@@ -6091,7 +6178,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
 
         wasm_module_decoder_init(&d, bytes, row->len);
         CHECKF(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the invoke row %s does not decode", row->src);
-        wasm_module_validator_init(&v, wasm_module_decoder_module(&d), bytes);
+        wasm_module_validator_init(&v, wasm_module_decoder_module(&d), bytes, wasm_agent_types());
         CHECKF(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the invoke row %s is invalid", row->src);
         for (e = 0; e < d.module.n_exports; e++)
             if (d.module.exports[e].name_size == strlen(row->export_name)
@@ -6133,7 +6220,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
         CHECKF(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the module of %s does not decode",
                WASM_EXEC_ROWS[i].src);
         m = wasm_module_decoder_module(&d);
-        wasm_module_validator_init(&v, m, bytes);
+        wasm_module_validator_init(&v, m, bytes, wasm_agent_types());
         CHECKF(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the module of %s is invalid",
                WASM_EXEC_ROWS[i].src);
         side = wasm_module_validator_side_table(&v);

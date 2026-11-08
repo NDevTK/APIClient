@@ -116,4 +116,45 @@ static const WasmInvokeRow WASM_INVOKE_ROWS[] = {
       "g", 0xFFFFFFFFu, true },
 };
 
+/* Cross-instance rows: two modules validated against one type registry, each instantiated in one store; the host
+ * (as the JS API's Table.prototype.set would) puts the exporter's function `put` in the caller's table "tab" at 0,
+ * then invokes the caller's `call`, whose call_indirect's expected type is the caller's own. Converted from
+ * text (WebAssembly/spec f3268fa9's reference interpreter, `-d -o`); types in index order:
+ *   exporter: (sub (func (result i32))) $t, (sub $t (func (result i32))) $u, (func (result (ref null $t))) $r,
+ *     f42: $t, sub7: $u, wrong: (func (param i32) (result i32)), final: (func (result i32)), rnull: $r.
+ *   caller: (func (param f64)), (sub (func (result i32))) $t, (func (result (ref null $t))) $r2, a table "tab"
+ *     of one funcref, call0: call_indirect $t of element 0, callr: ref.is_null of call_indirect $r2.
+ * Node 22's V8 answers each row as written. */
+#define WASM_XMOD_EXPORTER_LEN 150
+static const char WASM_XMOD_EXPORTER[] =
+      "\000\141\163\155\001\000\000\000\001\234\200\200\200\000\005\120\000\140\000\001\177\120\001\000"
+      "\140\000\001\177\140\000\001\143\000\140\001\177\001\177\140\000\001\177\003\206\200\200\200\000"
+      "\005\000\001\003\004\002\007\246\200\200\200\000\005\003\146\064\062\000\000\004\163\165\142\067"
+      "\000\001\005\167\162\157\156\147\000\002\005\146\151\156\141\154\000\003\005\162\156\165\154\154"
+      "\000\004\012\256\200\200\200\000\005\204\200\200\200\000\000\101\052\013\204\200\200\200\000\000"
+      "\101\007\013\204\200\200\200\000\000\040\000\013\204\200\200\200\000\000\101\011\013\204\200\200"
+      "\200\000\000\320\000\013";
+#define WASM_XMOD_CALLER_LEN 114
+static const char WASM_XMOD_CALLER[] =
+      "\000\141\163\155\001\000\000\000\001\224\200\200\200\000\004\140\001\174\000\120\000\140\000\001"
+      "\177\140\000\001\143\001\140\000\001\177\003\203\200\200\200\000\002\003\003\004\204\200\200\200"
+      "\000\001\160\000\001\007\227\200\200\200\000\003\003\164\141\142\001\000\005\143\141\154\154\060"
+      "\000\000\005\143\141\154\154\162\000\001\012\232\200\200\200\000\002\207\200\200\200\000\000\101"
+      "\000\021\001\000\013\210\200\200\200\000\000\101\000\021\002\000\321\013";
+
+typedef struct {
+    const char *src;
+    const char *put, *call;
+    bool trap;          /* the call_indirect's type check traps */
+    uint32_t result;
+} WasmCrossInstanceRow;
+
+static const WasmCrossInstanceRow WASM_CROSS_INSTANCE_ROWS[] = {
+    { "one closed type at different indices of two modules", "f42", "call0", false, 42 },
+    { "a subtype of it, climbed in the exporter's module", "sub7", "call0", false, 7 },
+    { "a type with other parameters", "wrong", "call0", true, 0 },
+    { "a final type is not the open one", "final", "call0", true, 0 },
+    { "a type naming another rec group, by that group's identity", "rnull", "callr", false, 1 },
+};
+
 #endif

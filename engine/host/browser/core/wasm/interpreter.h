@@ -9,9 +9,9 @@
  * NaN is the positive canonical NaN, and bit operations (abs, neg, copysign, reinterpret) keep bits.
  * The page's bytes have been decoded and validated, so an instruction the validator accepted that this file
  * does not execute is this codebase's gap (CHECK_FAIL), never a refusal.
- * Named residual. Not covered: host calls and host globals and tables (imports), a call_indirect of another
- * instance's function (the store's cross-module type identity), memory (§4.6.8), and the vector, exception and
- * aggregate instructions and the references other than functions'. Next diff builds: imports. Absence shows
+ * Named residual. Not covered: host calls and host globals and tables (imports), memory (§4.6.8), and the
+ * vector, exception and aggregate instructions and the references other than functions'. Next diff builds:
+ * import resolution. Absence shows
  * as: invoking a function that reaches one of them stops the process at the CHECK_FAIL naming its opcode. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H

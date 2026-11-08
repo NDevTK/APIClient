@@ -17,20 +17,24 @@ enum {
     PH_GLOBALS, PH_DATAS, PH_ELEMS, PH_DECLARED, PH_CODES, PH_CODE, PH_START, PH_EXPORTS, PH_NAMES, PH_FINISHED
 };
 
-void wasm_module_validator_init(WasmModuleValidator *v, const WasmModule *m, const uint8_t *bytes)
+void wasm_module_validator_init(WasmModuleValidator *v, const WasmModule *m, const uint8_t *bytes,
+                                WasmTypeRegistry *registry)
 {
     size_t i;
 
-    DCHECK(v != NULL && m != NULL && bytes != NULL, "a WebAssembly validation was begun without its module");
+    DCHECK(v != NULL && m != NULL && bytes != NULL && registry != NULL,
+           "a WebAssembly validation was begun without its module or the agent's type registry");
     memset(v, 0, sizeof *v);
     v->module = m;
     v->bytes = bytes;
+    v->registry = registry;
     for (i = 0; i < m->n_imports; i++) {
         CHECK(m->imports[i].kind <= WASM_EXTERN_TAG, "a decoded WebAssembly import has a kind module_decoder.h "
                                                      "does not produce");
         v->ctx.n_imported[m->imports[i].kind]++;
     }
     v->ctx.types.module = m;
+    v->ctx.types.registry = registry;
     v->ctx.bytes = bytes;
     v->ctx.n_funcs = v->ctx.n_imported[WASM_EXTERN_FUNC] + m->n_func_types;
     v->ctx.n_tables = v->ctx.n_imported[WASM_EXTERN_TABLE] + m->n_tables;
@@ -41,16 +45,12 @@ void wasm_module_validator_init(WasmModuleValidator *v, const WasmModule *m, con
     v->phase = PH_ALLOC;
 }
 
-/* The tables sized by the module: a canonical id per type (at most one group per type), and a hash table over
-   those ids at most half full. Their size is the input's, so a failed allocation is the NO_ROOM refusal. */
+/* The tables sized by the module, among them a canonical id per type (at most one group per type). Their size is
+   the input's, so a failed allocation is the NO_ROOM refusal. */
 static WasmValidateStatus allocate(WasmModuleValidator *v)
 {
-    size_t n = v->module->n_types ? v->module->n_types : 1, cap = 8, k;
+    size_t n = v->module->n_types ? v->module->n_types : 1, k;
 
-    while (cap < 2 * n) {
-        if (cap > SIZE_MAX / 4 / sizeof(size_t)) return WASM_VALIDATE_NO_ROOM;
-        cap *= 2;
-    }
     for (k = 0; k <= WASM_EXTERN_TAG; k++) {
         v->ctx.imports[k] = calloc(v->ctx.n_imported[k] + 1, sizeof *v->ctx.imports[k]);
         if (v->ctx.imports[k] == NULL) return WASM_VALIDATE_NO_ROOM;
@@ -58,14 +58,7 @@ static WasmValidateStatus allocate(WasmModuleValidator *v)
     v->ctx.declared = calloc(v->ctx.n_funcs / 8 + 1, 1);
     v->side.code_first = calloc(v->module->n_codes + 1, sizeof *v->side.code_first);
     v->group_canon = calloc(n, sizeof *v->group_canon);
-    v->canon_off = calloc(n, sizeof *v->canon_off);
-    v->canon_len = calloc(n, sizeof *v->canon_len);
-    v->canon_hash = calloc(n, sizeof *v->canon_hash);
-    v->canon_table = calloc(cap, sizeof *v->canon_table);
-    if (!v->ctx.declared || !v->side.code_first || !v->group_canon || !v->canon_off || !v->canon_len
-        || !v->canon_hash || !v->canon_table)
-        return WASM_VALIDATE_NO_ROOM;
-    v->cap_canon_table = cap;
+    if (!v->ctx.declared || !v->side.code_first || !v->group_canon) return WASM_VALIDATE_NO_ROOM;
     v->ctx.types.group_canon = v->group_canon;
     v->phase = PH_TYPES;
     return WASM_VALIDATE_MORE;
@@ -160,7 +153,7 @@ static bool token(WasmModuleValidator *v, uint64_t t)
         v->cap_tokens = cap;
     }
     v->tokens[v->n_tokens++] = t;
-    v->group_hash = (v->group_hash ^ t) * 1099511628211u;
+    v->group_hash = wasm_type_hash_add(v->group_hash, t);
     return true;
 }
 
@@ -208,38 +201,18 @@ static WasmValidateStatus climb_step(WasmModuleValidator *v)
     return WASM_VALIDATE_MORE;
 }
 
-/* §3.2.11's identity of the rec group just checked: probe the canonical groups by hash, comparing one token a step;
-   an equal group's id is taken and the new tokens dropped, otherwise the group becomes a canonical id itself. */
+/* §3.2.11's identity of the rec group just checked, one interning step a step: its canonical id is an equal
+   group's, or a new one. */
 static WasmValidateStatus canon_step(WasmModuleValidator *v)
 {
-    size_t len = v->n_tokens - v->group_tokens, slot = v->canon_table[v->probe], g;
+    WasmInternStatus st = wasm_type_intern_step(v->registry, &v->intern);
 
-    if (slot != 0) {
-        g = slot - 1;
-        if (v->canon_hash[g] == v->group_hash && v->canon_len[g] == len) {
-            if (v->compare < len) {
-                if (v->tokens[v->canon_off[g] + v->compare] == v->tokens[v->group_tokens + v->compare]) {
-                    v->compare++;
-                    return WASM_VALIDATE_MORE;
-                }
-            } else {
-                v->n_tokens = v->group_tokens;
-                v->group_canon[v->item] = g;
-                v->phase = PH_TYPES_SUPER;
-                return WASM_VALIDATE_MORE;
-            }
-        }
-        v->probe = (v->probe + 1) & (v->cap_canon_table - 1);
-        v->compare = 0;
-        return WASM_VALIDATE_MORE;
+    if (st == WASM_INTERN_NO_ROOM) return WASM_VALIDATE_NO_ROOM;
+    if (st == WASM_INTERN_DONE) {
+        v->group_canon[v->item] = v->intern.id;
+        v->n_tokens = 0;
+        v->phase = PH_TYPES_SUPER;
     }
-    g = v->n_canon++;
-    v->canon_off[g] = v->group_tokens;
-    v->canon_len[g] = len;
-    v->canon_hash[g] = v->group_hash;
-    v->canon_table[v->probe] = g + 1;
-    v->group_canon[v->item] = g;
-    v->phase = PH_TYPES_SUPER;
     return WASM_VALIDATE_MORE;
 }
 
@@ -258,8 +231,8 @@ static WasmValidateStatus check_type_item(WasmModuleValidator *v)
     if (k == 0) {
         if (t->n_supers > 1) return WASM_VALIDATE_MULTIPLE_SUPERS;
         if (v->item == t->rec_start) {
-            v->group_tokens = v->n_tokens;
-            v->group_hash = 1469598103934665603u;
+            DCHECK(v->n_tokens == 0, "a WebAssembly rec group began before the previous one was interned");
+            v->group_hash = wasm_type_hash_start();
             ok = token(v, T_GROUP) && token(v, t->rec_size);
         }
         ok = ok && token(v, T_TYPE) && token(v, t->final) && token(v, t->n_supers) && token(v, t->kind)
@@ -271,8 +244,7 @@ static WasmValidateStatus check_type_item(WasmModuleValidator *v)
         v->item++;
         if (v->item == limit) {
             v->item = t->rec_start;
-            v->probe = (size_t)(v->group_hash & (v->cap_canon_table - 1));
-            v->compare = 0;
+            wasm_type_intern_begin(&v->intern, v->tokens, v->n_tokens, v->group_hash);
             v->phase = PH_CANON;
         }
         return WASM_VALIDATE_MORE;
@@ -328,14 +300,14 @@ static WasmValidateStatus check_type_super(WasmModuleValidator *v)
     }
     k = v->sub - 1;
     if (t->kind != WASM_COMP_FUNC)
-        return match_step(v, wasm_field_le(&v->ctx.types, &m->fields[t->fields + k], &m->fields[s->fields + k],
-                                           &v->climb), PH_TYPES_SUPER, WASM_VALIDATE_SUB_MISMATCH);
+        return match_step(v, wasm_field_le(&v->ctx.types, &m->fields[t->fields + k], &v->ctx.types,
+                                           &m->fields[s->fields + k], &v->climb), PH_TYPES_SUPER, WASM_VALIDATE_SUB_MISMATCH);
     if (k < t->n_params)   /* parameters are contravariant */
-        return match_step(v, wasm_val_le(&v->ctx.types, &m->val_types[s->params + k], &m->val_types[t->params + k],
-                                         &v->climb), PH_TYPES_SUPER, WASM_VALIDATE_SUB_MISMATCH);
+        return match_step(v, wasm_val_le(&v->ctx.types, &m->val_types[s->params + k], &v->ctx.types,
+                                         &m->val_types[t->params + k], &v->climb), PH_TYPES_SUPER, WASM_VALIDATE_SUB_MISMATCH);
     k -= t->n_params;
-    return match_step(v, wasm_val_le(&v->ctx.types, &m->val_types[t->results + k], &m->val_types[s->results + k],
-                                     &v->climb), PH_TYPES_SUPER, WASM_VALIDATE_SUB_MISMATCH);
+    return match_step(v, wasm_val_le(&v->ctx.types, &m->val_types[t->results + k], &v->ctx.types,
+                                     &m->val_types[s->results + k], &v->climb), PH_TYPES_SUPER, WASM_VALIDATE_SUB_MISMATCH);
 }
 
 /* §3.5.11: an import's external type is valid (§3.2.17). */
@@ -493,14 +465,15 @@ static WasmValidateStatus check_elem(WasmModuleValidator *v)
         f.code = WASM_TYPE_REF;
         f.heap_index = wasm_context_func(&v->ctx, x);
         mismatch(v, &e->type, &f);
-        return match_step(v, wasm_val_le(&v->ctx.types, &f, &e->type, &v->climb), PH_ELEMS,
+        return match_step(v, wasm_val_le(&v->ctx.types, &f, &v->ctx.types, &e->type, &v->climb), PH_ELEMS,
                           WASM_VALIDATE_TYPE_MISMATCH);
     }
     if (e->mode != WASM_SEGMENT_ACTIVE || k == e->n_items + 2) return next_item(v);
     if (k == e->n_items) {
         if (e->table >= v->ctx.n_tables) return unknown(v, "table", e->table);
         v->index = v->item;
-        return match_step(v, wasm_val_le(&v->ctx.types, &e->type, table_type(v, e->table), &v->climb), PH_ELEMS,
+        return match_step(v, wasm_val_le(&v->ctx.types, &e->type, &v->ctx.types, table_type(v, e->table),
+                                                &v->climb), PH_ELEMS,
                           WASM_VALIDATE_ELEM_MISMATCH);
     }
     {
@@ -829,10 +802,6 @@ void wasm_module_validator_free(WasmModuleValidator *v)
     free(v->names);
     free(v->group_canon);
     free(v->tokens);
-    free(v->canon_off);
-    free(v->canon_len);
-    free(v->canon_hash);
-    free(v->canon_table);
     for (k = 0; k <= WASM_EXTERN_TAG; k++) free(v->ctx.imports[k]);
     free(v->ctx.declared);
     free(v->side.blocks);

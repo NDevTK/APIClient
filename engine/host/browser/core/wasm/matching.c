@@ -10,10 +10,11 @@ static size_t rec_start(const WasmTypes *t, size_t x)
 }
 
 /* §3.3.10's closed defined types are equal: the same canonical group, the same index in it. */
-bool wasm_same_type(const WasmTypes *t, size_t x, size_t y)
+bool wasm_same_type(const WasmTypes *ta, size_t x, const WasmTypes *tb, size_t y)
 {
-    return t->group_canon[rec_start(t, x)] == t->group_canon[rec_start(t, y)]
-        && x - rec_start(t, x) == y - rec_start(t, y);
+    DCHECK(ta->registry == tb->registry, "a WebAssembly type identity was asked across two type registries");
+    return ta->group_canon[rec_start(ta, x)] == tb->group_canon[rec_start(tb, y)]
+        && x - rec_start(ta, x) == y - rec_start(tb, y);
 }
 
 /* None below every type of the any hierarchy, i31, struct and array below eq, eq below any, and nofunc,
@@ -40,54 +41,61 @@ uint8_t wasm_kind_heap(WasmCompKind k)
     return k == WASM_COMP_STRUCT ? WASM_HEAP_STRUCT : k == WASM_COMP_ARRAY ? WASM_HEAP_ARRAY : WASM_HEAP_FUNC;
 }
 
-WasmMatch wasm_heap_le(const WasmTypes *t, const WasmValType *a, const WasmValType *b, WasmClimb *climb)
+WasmMatch wasm_heap_le(const WasmTypes *ta, const WasmValType *a, const WasmTypes *tb, const WasmValType *b,
+                       WasmClimb *climb)
 {
-    const WasmModule *m = t->module;
+    const WasmModule *ma = ta->module, *mb = tb->module;
 
     if (a->heap != 0 && b->heap != 0) return wasm_abstract_le(a->heap, b->heap) ? WASM_MATCH_YES : WASM_MATCH_NO;
     if (a->heap == 0 && b->heap != 0)
-        return wasm_abstract_le(wasm_kind_heap(m->types[a->heap_index].kind), b->heap) ? WASM_MATCH_YES : WASM_MATCH_NO;
+        return wasm_abstract_le(wasm_kind_heap(ma->types[a->heap_index].kind), b->heap) ? WASM_MATCH_YES
+                                                                                        : WASM_MATCH_NO;
     if (a->heap != 0) {
-        uint8_t k = wasm_kind_heap(m->types[b->heap_index].kind);
+        uint8_t k = wasm_kind_heap(mb->types[b->heap_index].kind);
 
         if (a->heap == WASM_HEAP_NONE) return k != WASM_HEAP_FUNC ? WASM_MATCH_YES : WASM_MATCH_NO;
         return a->heap == WASM_HEAP_NOFUNC && k == WASM_HEAP_FUNC ? WASM_MATCH_YES : WASM_MATCH_NO;
     }
-    if (wasm_same_type(t, a->heap_index, b->heap_index)) return WASM_MATCH_YES;
-    if (m->types[a->heap_index].n_supers == 0) return WASM_MATCH_NO;
-    climb->at = m->type_indices[m->types[a->heap_index].supers];
-    climb->target = b->heap_index;
+    if (wasm_same_type(ta, a->heap_index, tb, b->heap_index)) return WASM_MATCH_YES;
+    if (ma->types[a->heap_index].n_supers == 0) return WASM_MATCH_NO;
+    climb->at = ma->type_indices[ma->types[a->heap_index].supers];
+    climb->target_group = tb->group_canon[rec_start(tb, b->heap_index)];
+    climb->target_pos = b->heap_index - rec_start(tb, b->heap_index);
     return WASM_MATCH_CLIMB;
 }
 
 /* A number, vector or packed type matches only itself, a reference type by nullability (§3.3.4) and heap type. */
-WasmMatch wasm_val_le(const WasmTypes *t, const WasmValType *a, const WasmValType *b, WasmClimb *climb)
+WasmMatch wasm_val_le(const WasmTypes *ta, const WasmValType *a, const WasmTypes *tb, const WasmValType *b,
+                      WasmClimb *climb)
 {
     if (a->code != b->code) return WASM_MATCH_NO;
     if (a->code != WASM_TYPE_REF) return WASM_MATCH_YES;
     if (a->nullable && !b->nullable) return WASM_MATCH_NO;
-    return wasm_heap_le(t, a, b, climb);
+    return wasm_heap_le(ta, a, tb, b, climb);
 }
 
-bool wasm_val_eq(const WasmTypes *t, const WasmValType *a, const WasmValType *b)
+bool wasm_val_eq(const WasmTypes *ta, const WasmValType *a, const WasmTypes *tb, const WasmValType *b)
 {
     if (a->code != b->code || a->nullable != b->nullable || a->heap != b->heap) return false;
-    return a->code != WASM_TYPE_REF || a->heap != 0 || wasm_same_type(t, a->heap_index, b->heap_index);
+    return a->code != WASM_TYPE_REF || a->heap != 0 || wasm_same_type(ta, a->heap_index, tb, b->heap_index);
 }
 
 /* The same mutability, then a mutable field's storage both ways and an immutable one's covariantly. */
-WasmMatch wasm_field_le(const WasmTypes *t, const WasmFieldType *a, const WasmFieldType *b, WasmClimb *climb)
+WasmMatch wasm_field_le(const WasmTypes *ta, const WasmFieldType *a, const WasmTypes *tb, const WasmFieldType *b,
+                        WasmClimb *climb)
 {
     if (a->mutable_ != b->mutable_) return WASM_MATCH_NO;
-    if (a->mutable_) return wasm_val_eq(t, &a->storage, &b->storage) ? WASM_MATCH_YES : WASM_MATCH_NO;
-    return wasm_val_le(t, &a->storage, &b->storage, climb);
+    if (a->mutable_) return wasm_val_eq(ta, &a->storage, tb, &b->storage) ? WASM_MATCH_YES : WASM_MATCH_NO;
+    return wasm_val_le(ta, &a->storage, tb, &b->storage, climb);
 }
 
 WasmMatch wasm_climb(const WasmTypes *t, WasmClimb *climb)
 {
     const WasmModule *m = t->module;
 
-    if (wasm_same_type(t, climb->at, climb->target)) return WASM_MATCH_YES;
+    if (t->group_canon[rec_start(t, climb->at)] == climb->target_group
+        && climb->at - rec_start(t, climb->at) == climb->target_pos)
+        return WASM_MATCH_YES;
     if (m->types[climb->at].n_supers == 0) return WASM_MATCH_NO;
     climb->at = m->type_indices[m->types[climb->at].supers];
     return WASM_MATCH_CLIMB;
