@@ -356,8 +356,9 @@ StackingLayer stacking_layer_of(lxb_dom_element_t *el)
        except that auto is treated as 0 since a new stacking context is always created" — and `auto` already
        reads 0 through `so_z_index`, so the arm above is that sentence with nothing left to add. Before,
        because §2 states the layer over every element the transform applies to and says nothing about `float`:
-       a floated transformed box is painted at level 0 like any other, and the float test would otherwise
-       claim it for layer 4. */
+       a floated transformed box is painted at level 0, not in layer 4. The predicate's other contexts
+       (perspective, preserve-3d, will-change) get no layer from css-transforms-2 or css-position-4 §4 "Painting
+       Order and Stacking Contexts"; Chrome 153.0.8010.12 paints each static one above a later in-flow sibling. */
     if (css_transform_creates_context(el)) return STACKING_LAYER_LEVEL_ZERO;
     /* Layer 6 for a non-positioned containment box: it is one of "the child stacking contexts with stack level
        0", since `z-index` applies to positioned boxes alone and leaves its stack level at §9.9.1's 0. Asked
