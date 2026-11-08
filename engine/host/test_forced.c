@@ -8147,6 +8147,77 @@ TF_UNIT void flow_graph_concolic_selftest(JSContext *ctx)
     JS_SetFlowGen(0);   /* the host's own time is baseline, as engine_sched_slice leaves it */
 }
 
+/* A program run to completion as a flow, which is how page code runs here (JS_FlowNew); its completion value. */
+static JSValue tf_graph_program(JSContext *ctx, const char *src)
+{
+    JSValue *flow = JS_FlowNew(ctx, src, strlen(src), "closure-graph", 0);
+    JSValue res = JS_UNDEFINED;
+
+    CHECK(flow != NULL, "the closure graph witness could not create a flow");
+    for (int r; (r = JS_FlowResume(ctx, flow, &res)) != 0;)
+        CHECK(r != JS_FLOW_DETACHED, "the closure graph witness's flow detached — it holds no top-level await");
+    CHECK(!JS_IsException(res), "the closure graph witness's program threw");
+    JS_FlowFree(ctx, flow);
+    return res;
+}
+
+/* @GRAPHRT over closures, on a runtime of its own: a factory built at generation 0 closes over a baseline cell
+   (an enclosing call's local, closed when that call returned), and a call above the floor mints two closures
+   sharing one private cell. The pair is written, rebuilt and written again; the bytes must agree, and the rebuilt
+   pair must share one new cell holding the original's value while naming the baseline cell itself: incrementing
+   through the first rebuilt closure is read by the second, and not by the originals. Arrows, so neither closure
+   holds a lazily built `prototype`. */
+TF_UNIT void flow_graph_closure_selftest(void)
+{
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx;
+    JSValue g, pair, back[1], v;
+    JSFlowGraph *g1, *g2;
+    const uint8_t *b1, *b2;
+    size_t n1, n2;
+    int32_t got;
+    int same;
+
+    CHECK(rt != NULL, "the closure graph witness could not make a runtime");
+    JS_SetGCThreshold(rt, (size_t)-1);
+    ctx = JS_NewContext(rt);
+    CHECK(ctx != NULL, "the closure graph witness could not make a context");
+    JS_SetFlowGen(0);
+    JS_FreeValue(ctx, tf_graph_program(ctx,
+        "globalThis.mk = (function () { var base = 10;"
+        "  return function () { var c = 1; return [() => { c++; return c + base; }, () => c]; }; })();"));
+    JS_SetFlowGen(5);
+    pair = tf_graph_program(ctx, "mk()");
+    CHECK(JS_IsArray(pair), "the closure graph witness's factory did not return its pair");
+    g1 = JS_FlowGraphWrite(ctx, &pair, 1, 2);
+    JS_SetFlowGen(9);
+    CHECK(JS_FlowGraphRead(ctx, g1, back) == 0, "the closure graph witness could not rebuild its graph");
+    g2 = JS_FlowGraphWrite(ctx, back, 1, 2);
+    n1 = JS_FlowGraphBytes(g1, &b1); n2 = JS_FlowGraphBytes(g2, &b2);
+    same = n1 == n2 && !memcmp(b1, b2, n1);
+    printf("@GRAPHRT {\"closureBytes\":%zu,\"identical\":%d}\n", n1, same);
+    CHECK(same, "a rebuilt graph holding two closures over one cell did not write the same bytes as its original");
+    g = JS_GetGlobalObject(ctx);
+    CHECK(JS_SetPropertyStr(ctx, g, "rebuilt", JS_DupValue(ctx, back[0])) >= 0 &&
+          JS_SetPropertyStr(ctx, g, "original", JS_DupValue(ctx, pair)) >= 0,
+          "the closure graph witness could not name its pairs");
+    v = tf_graph_program(ctx, "rebuilt[0]() * 10000 + rebuilt[1]() * 100 + original[1]()");
+    JS_ToInt32(ctx, &got, v);
+    JS_FreeValue(ctx, v);
+    CHECKF(got == 120201,
+           "the rebuilt closures and the original's second answered %d, not 12, 2 and 1 (120201): the rebuilt "
+           "pair does not share one cell holding the original's value over the baseline cell, or it shares the "
+           "original's", (int)got);
+    JS_FlowGraphFree(ctx, g1);
+    JS_FlowGraphFree(ctx, g2);
+    JS_FreeValue(ctx, back[0]);
+    JS_FreeValue(ctx, pair);
+    JS_FreeValue(ctx, g);
+    JS_SetFlowGen(0);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+}
+
 TF_UNIT void concat_keyed_selftest(JSContext *ctx)
 {
     int susp_off = 0, mach_off = 0, susp_on = 0, mach_on = 0;
@@ -44104,6 +44175,7 @@ int main(int argc, char **argv) {
     hmac_selftest();
     gc_cycle_step_selftest();
     flow_graph_selftest();
+    flow_graph_closure_selftest();
     malloc_accounting_selftest();
     concolic_bound_selftest();
     /* AFTER the two digest primitives and for their reason: this one stands on FIPS 197's cipher
