@@ -154,13 +154,28 @@ bool css_transform_is_transformed(lxb_dom_element_t *el)
     return out;
 }
 
+/* css-will-change-1 §2 "Hinting at Future Behavior: the will-change property": "If any non-initial value of a
+   property would create a stacking context on the element, specifying that property in will-change must create
+   a stacking context on the element", and the same for both containing blocks. Each of these properties has
+   such a value on a transformable element of the first category. */
+static bool css_tr_will_change(lxb_dom_element_t *el)
+{
+    static const char *const NAMES[] = { "transform", "translate", "rotate", "scale", "perspective",
+                                         "transform-style" };
+    size_t i;
+
+    for (i = 0; i < COUNTOF(NAMES); i++)
+        if (css_computed_will_change_names(el, NAMES[i])) return true;
+    return false;
+}
+
 bool css_transform_creates_context(lxb_dom_element_t *el)
 {
     CssPx d;
 
     return css_transform_is_css_box_transformable(el) &&
            (css_transform_is_transformed(el) || css_computed_perspective(el, &d) ||
-            css_computed_transform_style_is_preserve_3d(el));
+            css_computed_transform_style_is_preserve_3d(el) || css_tr_will_change(el));
 }
 
 /* §7.1's list, whose properties this engine derives no computed value for, each with its value that groups
