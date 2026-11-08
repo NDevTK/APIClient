@@ -31449,7 +31449,9 @@ CONT_RECORD_DEFINE(JSAcquireGet, js_acquire_get, JS_ACQUIRE_GET_FIELDS)
                                    "the result must be an Object" check and hands it to the shared deliver, so all
                                    three acquire shapes (inline C-function call, generator create, bytecode call)
                                    arrive at the consumer identically. */
-typedef struct JSConsumeGetIter { void *consumer; uint8_t consumer_kind; } JSConsumeGetIter;
+#define JS_CONSUME_GETITER_FIELDS(F)                                                                           \
+    F(OUTER, void *, consumer)
+CONT_RECORD_DEFINE(JSConsumeGetIter, js_consume_getiter, JS_CONSUME_GETITER_FIELDS)
 /* Abandon a machine AND every machine waiting on it. `arr.map(String)` is an outer waiting on an inner; a
    coercion requested by that inner adds a third. Six sites had this loop written out and each one was a chance
    to stop at the first link — which is exactly how the ToPrimitive unwind leaked the realm. */
@@ -55377,6 +55379,7 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_ARRAY_LEN, JSArrayLen, js_array_len, LINK)                                                          \
     X(CONT_ARRAY_LEN_YIELD, JSArrayLen, js_array_len, ANCHOR)                                                  \
     X(CONT_ACQUIRE_GET, JSAcquireGet, js_acquire_get, LINK)                                                    \
+    X(CONT_CONSUME_GETITER, JSConsumeGetIter, js_consume_getiter, LINK)                                        \
     X(CONT_WITH_HAS, JSWithHas, js_with_has, LINK)                                                             \
     X(CONT_OWNKEYS_CHK, JSOwnKeysChk, js_ownkeys_chk, LINK)                                                    \
     X(CONT_GETPROP, JSGetProp, js_getprop, LINK)                                                               \
@@ -55500,7 +55503,7 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
         break;
     /* No arm yet: a kind that has never been asked for its requester by a fork. */
     case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
-    case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
+    case CONT_IMPORT: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
     case CONT_ITER_NEXT_OP: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
@@ -55539,7 +55542,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         break;
     /* No arm yet, as in cont_outer_get. */
     case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
-    case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
+    case CONT_IMPORT: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
     case CONT_ITER_NEXT_OP: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
@@ -55574,7 +55577,7 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
        cloned by clone_deep_flow's arm for it; any other has not yet been asked to copy a link. */
     case CONT_NONE: case CONT_AGEN_CREATE: case CONT_SETTER:
     case CONT_ITER_HELPER: case CONT_ITER_FROM:
-    case CONT_PROMISE_TRY: case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
+    case CONT_PROMISE_TRY: case CONT_IMPORT: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE:
     case CONT_ITER_CLOSE_CALL: case CONT_ITER_NEXT_OP: case CONT_FOROF_ACQUIRE:
     case CONT_FOROF_GET: case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP:
@@ -57329,7 +57332,7 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
     /* No arm yet: a record no released flow has yet held. A kind whose state is NULL never reaches the switch.
        CONT_IMPORT is reached as the TOPRIM arm's parked capability, which that arm releases itself. */
     case CONT_IMPORT: case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
-    case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
+    case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
     case CONT_ITER_NEXT_OP: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
@@ -57396,7 +57399,7 @@ static void tramp_cont_mark_one(JSContext *ctx, void *st, uint8_t kind, ContLink
     case CONT_NONE:
         break;
     case CONT_IMPORT: case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
-    case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
+    case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
     case CONT_ITER_NEXT_OP: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
