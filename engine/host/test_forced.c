@@ -1409,6 +1409,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/storearm.h"
 #include "fixture/pagewrite.h"
 #include "fixture/keydomain.h"
+#include "fixture/keydomainwalk.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2123,6 +2124,7 @@ TF_DOCS[] = {
     { "storearm", HTML_STOREARM },
     { "pagewrite", HTML_PAGEWRITE },
     { "keydomain", HTML_KEYDOMAIN },
+    { "keydomainwalk", HTML_KEYDOMAINWALK },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -16640,6 +16642,35 @@ TF_UNIT void probes_pagewrite(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The row of the `keydomainwalk` document (fixture/keydomainwalk.h): 200 unknown-key reads of a Document and a
+   WindowProxy over 2,000 unnamed elements charge no walk of them. */
+static long kdw_census(const char *js, const char *key);
+TF_UNIT void probes_keydomainwalk(const char *js, Probe *tab, int *n) {
+    const char *why = NULL;
+    int tt = 1;
+    long walked = kdw_census(js, "twDomWalkInput");
+
+    fold_row(&tt, &why, emitted_record_has(js, "/api/kdw-done", "\"door\":\"fetch\""),
+             "NOT REACHED: no /api/kdw-done record, so the reads did not finish");
+    fold_row(&tt, &why, walked >= 0, "the result document carries no `twDomWalkInput` row");
+    fold_row(&tt, &why, walked >= 0 && walked < 100000,
+             "the run charged 100,000 or more DOM-walk elements: an unknown-key read of a Document or a WindowProxy "
+             "walked the 2,000 unnamed elements instead of asking the name index's values");
+    const Probe rows[] = {
+        { "keydomain-walk", tt, "kdwKey", SESS_EXPLORE, why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+static long kdw_census(const char *js, const char *key) {
+    char pat[64];
+    const char *p;
+    int k = snprintf(pat, sizeof pat, "\"%s\":", key);
+
+    CHECK(k > 0 && (size_t)k < sizeof pat, "a census key did not fit its pattern buffer");
+    p = strstr(js, pat);
+    return p ? strtol(p + k, NULL, 10) : -1;
+}
+
 /* The rows of the `keydomain` document: an unknown String key whose domain no key of the object's chain lies in
    reads as OrdinaryGet's miss (quickjs.c's GP_KEYDOMAIN, Document and WindowProperties answering by a resting
    walk), and one whose domain a chain key or a supported name lies in keeps both arms. */
@@ -28352,6 +28383,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_storearm(js, probes, &np);
     probes_pagewrite(js, probes, &np);
     probes_keydomain(js, probes, &np);
+    probes_keydomainwalk(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
