@@ -18,13 +18,15 @@ typedef struct {
     CssPx     z;
 } CssTransformOrigin;
 
-/* §4's grammar over one specified value, with its lengths absolutized against `realm` and `font` as
-   core/css/css_length.h's `css_length_parse` states them. False writes nothing: the value is outside the
-   grammar, which is page input and CSS Syntax §2.2 "Error Handling"'s dropped declaration. */
+/* css-transforms-1 §4 "The transform-origin Property"'s grammar over one specified value, with its lengths
+   absolutized against `realm` and `font` as core/css/css_length.h's `css_length_parse` states them. False
+   writes nothing: the value is outside the grammar, which is page input and CSS Syntax §2.2 "Error
+   Handling"'s dropped declaration. */
 bool css_transform_origin_parse(JSContext *realm, const CssFontMetrics *font, const char *value,
                                 CssTransformOrigin *out);
 
-/* §4's `Initial:` value, `50% 50%`, with the Z offset §4 assumes ("the third value is assumed to be 0px"). */
+/* css-transforms-1 §4's `Initial:` line, `50% 50%`, with the Z offset that section assumes: "If one or two
+   values are specified, the third value is assumed to be 0px." */
 CssTransformOrigin css_transform_origin_initial(void);
 
 /* The computed value as CSSOM §6.7.2 "Serializing CSS Values" writes it, horizontal first. The Z offset is

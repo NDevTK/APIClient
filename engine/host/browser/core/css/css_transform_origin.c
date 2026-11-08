@@ -43,7 +43,7 @@ static bool to_word_is(const char *w, size_t n, const char *kw)
     return kw[n] == '\0';
 }
 
-/* One component, classified and computed: §4's keyword table ("left Computes to 0% for the horizontal
+/* One component, classified and computed: css-transforms-1 §4's keyword table ("left Computes to 0% for the horizontal
    position", "right … 100%", "top … 0% for the vertical position", "bottom … 100%", "center Computes to 50%"),
    or a `<length-percentage>` absolutized by core/css/css_length.h. */
 static ToComponent to_component(JSContext *realm, const CssFontMetrics *font, const char *w, size_t n)

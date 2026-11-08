@@ -80,9 +80,10 @@ static bool css_tm_reference_size_ask(lxb_dom_element_t *el, bool vertical)
 
 /* One `<length-percentage>` of `el`'s transform or transform-origin against the reference box size `ref` on
    its axis: css-transforms-1 §7 "The Transform Functions" ("A percentage for horizontal translations is
-   relative to the width of the reference box") and §4 ("A percentage for the horizontal offset is relative to
-   the width of the reference box"). The percentage is a used value, since css-values-4 §10.11 "Computed Value"
-   leaves it unresolved at computed-value time. `ref` is NULL on the pass that reads only the linear part. */
+   relative to the width of the reference box") and css-transforms-1 §4 ("A percentage for the horizontal
+   offset is relative to the width of the reference box"). The percentage is a used value, since
+   css-values-4 §10.11 "Computed Value" leaves it unresolved at computed-value time. `ref` is NULL on the
+   pass that reads only the linear part. */
 static CssPx css_tm_length_px(const CssLength *len, const CssPx *ref)
 {
     DCHECK(len->kind != CSS_LENGTH_KEYWORD,
@@ -165,7 +166,7 @@ static bool css_tm_of_function(const CssTransformFunction *fn, const CssPx *ref,
         out->a = n[0]; out->b = n[1]; out->c = n[2]; out->d = n[3];
         out->e = css_px(n[4]); out->f = css_px(n[5]);
         return true;
-    /* §7.1: "If <ty> is not provided, ty has zero as a value". */
+    /* css-transforms-1 §7.1: "If <ty> is not provided, ty has zero as a value". */
     case CSS_TF_TRANSLATE:
         out->e = css_tm_length_px(&fn->length[0], w);
         if (fn->argc > 1) out->f = css_tm_length_px(&fn->length[1], h);
@@ -176,7 +177,7 @@ static bool css_tm_of_function(const CssTransformFunction *fn, const CssPx *ref,
     case CSS_TF_TRANSLATE_Y:
         out->f = css_tm_length_px(&fn->length[0], h);
         return true;
-    /* §7.1: "If the second parameter is not provided, it takes a value equal to the first." */
+    /* css-transforms-1 §7.1: "If the second parameter is not provided, it takes a value equal to the first." */
     case CSS_TF_SCALE:
         out->a = n[0];
         out->d = fn->argc > 1 ? n[1] : n[0];
@@ -193,8 +194,8 @@ static bool css_tm_of_function(const CssTransformFunction *fn, const CssPx *ref,
     case CSS_TF_ROTATE_Z:
         *out = css_tm_rotation(css_tm_angle_deg(fn, 0));
         return true;
-    /* §12's skew: m21 = tan(alpha) and m12 = tan(beta); §7.1: "If the second parameter is not provided, it
-       has a zero value." */
+    /* §12's skew: m21 = tan(alpha) and m12 = tan(beta); css-transforms-1 §7.1: "If the second parameter is
+       not provided, it has a zero value." */
     case CSS_TF_SKEW:
         out->c = css_tm_tan(css_tm_angle_deg(fn, 0));
         if (fn->argc > 1) out->b = css_tm_tan(css_tm_angle_deg(fn, 1));
@@ -205,7 +206,7 @@ static bool css_tm_of_function(const CssTransformFunction *fn, const CssPx *ref,
     case CSS_TF_SKEW_Y:
         out->b = css_tm_tan(css_tm_angle_deg(fn, 0));
         return true;
-    /* "16 values in column-major order": m11, m12, m13, m14, m21, …, m44. */
+    /* css-transforms-2 §12.2: "16 values in column-major order": m11, m12, m13, m14, m21, …, m44. */
     case CSS_TF_MATRIX3D:
         if (n[2] == 0.0 && n[3] == 0.0 && n[6] == 0.0 && n[7] == 0.0 && n[8] == 0.0 && n[9] == 0.0 &&
             n[10] == 1.0 && n[11] == 0.0 && n[14] == 0.0 && n[15] == 1.0) {
@@ -234,9 +235,9 @@ static bool css_tm_of_function(const CssTransformFunction *fn, const CssPx *ref,
     case CSS_TF_SCALE_Z:
         if (n[0] == 1.0) return true;
         break;
-    /* §16's rotation over the normalized [x, y, z]: about [0, 0, ±1] it is the Z rotation by ±alpha, and "A
-       direction vector that cannot be normalized, such as [0,0,0], will cause the rotation to not be
-       applied." */
+    /* css-transforms-2 §16's rotation over the normalized [x, y, z] is, about [0, 0, ±1], the Z rotation by
+       ±alpha; css-transforms-2 §12.2 "3D Transform Functions": "A direction vector that cannot be normalized,
+       such as [0,0,0], will cause the rotation to not be applied." */
     case CSS_TF_ROTATE3D:
         if (n[0] == 0.0 && n[1] == 0.0) {
             z = n[2];
@@ -253,8 +254,8 @@ static bool css_tm_of_function(const CssTransformFunction *fn, const CssPx *ref,
         if (s == 0.0 && c == 1.0) return true;
         break;
     }
-    /* "If the parameter d is none it is treated as infinity (and the resulting matrix is the identity
-       matrix)." */
+    /* css-transforms-2 §16: "If the parameter d is none it is treated as infinity (and the resulting matrix
+       is the identity matrix)." */
     case CSS_TF_PERSPECTIVE:
         if (fn->perspective_none) return true;
         break;
