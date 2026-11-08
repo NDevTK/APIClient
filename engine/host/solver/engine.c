@@ -1070,6 +1070,9 @@ static long g_host_answered;
 static long g_host_answers_extra;
 /* Standbys left before a peer answer was taken, and those the peer's exhaustion retired. */
 static long g_answer_standbys, g_answer_standbys_retired;
+/* Candidates retired because their delivery contradicted an arm of their recorded path (Flow.delivery_contradicted),
+   a departure arm of its own beside the standbys the FLOW_STEP_RETIRED arm also ends. */
+static long g_cands_contradicted;
 /* Held snapshots released by engine_shed_standby: the fifth cause of a departure. */
 static long g_cuts_shed;
 /* Exhaustions this instance sent as the answering side, and those it was delivered as the asking side. */
@@ -8671,6 +8674,10 @@ static int preempt_hook(int kind) {
     /* (0) Blocked beats both rankings: a flow holding an unanswered synchronous host request cannot progress, and
        the answer cannot arrive while it holds the thread (the host is asked only between steps). */
     if (cur && flow_blocked(cur)) return 1;
+    /* A candidate whose delivery contradicted its recorded path (decide.c's dec_replay) is a timeline that does
+       not exist from the branch it met it at: it parks at the arm's first dispatch, before the arm acts, and its
+       next step retires it. */
+    if (cur && cur->delivery_contradicted) return 1;
     /* A read parked for a snapshot standing before it (solver/source_cut.h): the ladder's first rung takes the
        snapshot at the flow's next step, before the frame resumes into the read. */
     if (cur && source_cut_due(cur)) return 1;
@@ -9595,7 +9602,7 @@ static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry
         nu.due = HOOK_UNDECIDED;
         return nu;
     }
-    if (!task_done && flow_answer_exhausted(f)) { nu.arm = NEXT_RETIRE; return nu; }
+    if (!task_done && (f->delivery_contradicted || flow_answer_exhausted(f))) { nu.arm = NEXT_RETIRE; return nu; }
     /* NO FORK RUNG WHILE THE SELECTED AGENT STANDS INSIDE AN ATOMIC OPERATION: the flow resumes it, and each such
        operation ends within its own work (flow_agent_atomic says where), after which the rung is due again. */
     if (flow_agent_atomic(ctx, f)) {
@@ -9744,7 +9751,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
            deliveries whose `turn_continues()` answered no. `turn_task_done` is that settled-name predicate: its
            writers are the reply-delivery arm and §13.2.7 step 3's arm, meaning this step performed its task. */
         if (nu.arm == NEXT_RETIRE) {
-            g_step_unit = STEP_UNIT_RETIRE_EXHAUSTED_ASK;
+            g_step_unit = f->delivery_contradicted ? STEP_UNIT_RETIRE_CONTRADICTED_DELIVERY
+                                                   : STEP_UNIT_RETIRE_EXHAUSTED_ASK;
             return FLOW_STEP_RETIRED;
         }
         if (!turn_task_done) g_step_unit = STEP_UNIT_LEAVE_SOURCE_CUT;
@@ -13634,9 +13642,10 @@ static int engine_sched_slice(int resume) {
                 flow_withdraw_async_sends(ctx, cur);
                 flow_switch_out(ctx, cur);
                 cur->retired = 1;
+                if (cur->delivery_contradicted) g_cands_contradicted++;
+                else                            g_answer_standbys_retired++;
                 flow_release(ctx, cur);
                 cur = NULL;
-                g_answer_standbys_retired++;
             }
             else if (r == FLOW_STEP_OWED) {
                 /* This flow can make no progress until the host answers, and the scheduler records that on the
@@ -14098,6 +14107,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->host_answers_extra = g_host_answers_extra;
     out->answer_standbys    = g_answer_standbys;
     out->answer_standbys_retired = g_answer_standbys_retired;
+    out->cands_contradicted = g_cands_contradicted;
     out->cuts_shed = g_cuts_shed;
     out->perform_exhausted = g_perform_exhausted;
     out->host_exhausted = g_host_exhausted;
@@ -14149,18 +14159,18 @@ void engine_frontier_census(EngineFrontierCensus *out)
        "this engine retires nothing" is a subtraction across them. Exact by construction: solver/flow.c's
        `flow_remove` is the one line a member leaves the frontier on, `flow_release` its one caller, and that has
        five callers on a live instance: flow_finish (raising `g_finished`), engine_reclaim_tail (raising
-       `g_flows_sold`), the FLOW_STEP_RETIRED arm (raising `g_answer_standbys_retired`), engine_shed_standby
+       `g_flows_sold`), the FLOW_STEP_RETIRED arm (raising `g_answer_standbys_retired` or `g_cands_contradicted`), engine_shed_standby
        (raising `g_cuts_shed`) and flow_registry_free's drain (raising the last arm). None is reset by a session
        boundary (the sale totals carry at engine_sched_begin, and flow_registry_init does not reset arrivals and
        departures). The last term reads 0 at every census hosts take today, since the drain runs after the report,
        but keeps the identity true at every instant. It catches a departure path added later without an arm, which
        any reclamation gated on something other than completion would be. */
-    DCHECKF(out->finished + out->sold + out->answer_standbys_retired + out->cuts_shed +
+    DCHECKF(out->finished + out->sold + out->answer_standbys_retired + out->cands_contradicted + out->cuts_shed +
                 (long)flow_departures_teardown() == (long)flow_departures(),
             "the frontier's departure causes do not partition its departures (%ld finished + %ld sold + %ld retired "
-            "+ %ld shed + %lld with the registry against %lld) — flow_release is flow_remove's one caller, so a sixth "
-            "exit moved the total",
-            out->finished, out->sold, out->answer_standbys_retired, out->cuts_shed,
+            "+ %ld contradicted + %ld shed + %lld with the registry against %lld) — flow_release is flow_remove's "
+            "one caller, so another exit moved the total",
+            out->finished, out->sold, out->answer_standbys_retired, out->cands_contradicted, out->cuts_shed,
             (long long)flow_departures_teardown(), (long long)flow_departures());
     /* And the seed table's partition, about a table built once per session: `held` is a row whose source text this
        instance has, `awaited` one whose bytes the reply door still owes, `refused` one whose `src` did not

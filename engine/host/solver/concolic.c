@@ -2554,6 +2554,8 @@ void concolic_note_assumed_outcome(const char *key, const char *op, const char *
    g_cand_payload are the search's identity and breakout as the running flow carries them; concolic_set_candidate
    derives the other two from the search's root. */
 static char *g_cand_src = NULL, *g_cand_payload = NULL, *g_cand_at = NULL, *g_cand_bytes = NULL;
+/* The search's delivery root as installed, read only by concolic_root_sig_delivered's conservative half. */
+static char *g_cand_root = NULL;
 
 /* Whether this source is the one a candidate re-fire substitutes. One spelling, because it is asked at every
    mint a source can be reached through, including a source installed as a plain property value (see
@@ -3706,9 +3708,13 @@ char *concolic_url_head(const char *root)
 void concolic_set_candidate(const char *src, const char *root, const char *payload, const char *head, int lead) {
     int row;
 
-    free(g_cand_src); free(g_cand_payload); free(g_cand_at); free(g_cand_bytes);
-    g_cand_src = g_cand_payload = g_cand_at = g_cand_bytes = NULL;
+    free(g_cand_src); free(g_cand_payload); free(g_cand_at); free(g_cand_bytes); free(g_cand_root);
+    g_cand_src = g_cand_payload = g_cand_at = g_cand_bytes = g_cand_root = NULL;
     DCHECK(!!src == !!payload, "an @S substitution was installed with an identity and no payload, or the reverse");
+    if (src && root) {
+        g_cand_root = reclaim_strdup(root);
+        CHECK(g_cand_root != NULL, "concolic: OOM installing an @S candidate's root");
+    }
     if (src) {
         g_cand_src = reclaim_strdup(src);
         g_cand_payload = reclaim_strdup(payload);
@@ -4034,6 +4040,95 @@ int concolic_candidate_at_root(const char *root) {
     while (row >= 0 && g_srcs[row].parent) row = src_row(g_srcs[row].parent, strlen(g_srcs[row].parent));
     if (row < 0 || !g_cand_at) return 0;
     return !strcmp(g_cand_at, g_srcs[row].src) && g_cand_delivered;
+}
+
+/* A source name's 31-bit FNV-1a, the unit both halves of a root signature are built from. */
+static uint32_t root_name_hash(const char *p, size_t n) {
+    uint32_t h = 2166136261u;
+
+    while (n--) {
+        h ^= (unsigned char)*p++;
+        h *= 16777619u;
+    }
+    return h & ~CONCOLIC_ROOT_SIG_WHOLE;
+}
+
+/* The declared base row a member's bytes ride, its parent chain walked as concolic_candidate_at_root walks it,
+   or -1 for a member no component declares. */
+static int member_base_row(const char *p, size_t n) {
+    int row = src_row(p, n);
+
+    while (row >= 0 && g_srcs[row].parent) row = src_row(g_srcs[row].parent, strlen(g_srcs[row].parent));
+    return row;
+}
+
+/* See concolic.h. Each member is named by its declared base, or by its own text when undeclared. */
+uint32_t concolic_root_sig(JSValueConst v) {
+    const char *root = concolic_root_c(v), *p;
+    size_t n;
+    uint32_t bloom = 0;
+    int base = -1, whole = 1;
+
+    for (int i = 0; root_member(root, i, &p, &n); i++) {
+        int row = member_base_row(p, n);
+        const char *name = row >= 0 ? g_srcs[row].src : p;
+        size_t len = row >= 0 ? strlen(name) : n;
+
+        bloom |= 1u << (root_name_hash(name, len) % 31u);
+        if (row < 0 || (base >= 0 && strcmp(g_srcs[base].src, g_srcs[row].src))) whole = 0;
+        if (row >= 0) base = row;
+    }
+    DCHECK(!root || bloom != 0, "a value's root walked to no member — root_member answers member 0 of every "
+                                "non-NULL root, so its signature would read as no root at all");
+    if (root && whole && base >= 0)
+        return CONCOLIC_ROOT_SIG_WHOLE | root_name_hash(g_srcs[base].src, strlen(g_srcs[base].src));
+    return bloom;
+}
+
+/* Whether a declared base other than `name` hashes to `h`: the registry alone can make the whole half's
+   equality ambiguous, so an ambiguous match is answered as uncertain rather than as a consumption. */
+static int root_hash_shared(uint32_t h, const char *name) {
+    for (int i = 0; i < g_srcs_n; i++) {
+        int row = member_base_row(g_srcs[i].src, strlen(g_srcs[i].src));
+
+        if (row >= 0 && strcmp(g_srcs[row].src, name) &&
+            root_name_hash(g_srcs[row].src, strlen(g_srcs[row].src)) == h)
+            return 1;
+    }
+    return 0;
+}
+
+/* One delivered source's verdict against `sig`, by its declared base's name (its own text when undeclared). */
+static int root_sig_against(uint32_t sig, const char *src) {
+    int row = member_base_row(src, strlen(src));
+    const char *name = row >= 0 ? g_srcs[row].src : src;
+    uint32_t h = root_name_hash(name, strlen(name));
+
+    if (sig & CONCOLIC_ROOT_SIG_WHOLE) {
+        if (row < 0 || (sig & ~CONCOLIC_ROOT_SIG_WHOLE) != h) return CONCOLIC_ROOT_SIG_NONE;
+        return root_hash_shared(h, name) ? CONCOLIC_ROOT_SIG_TOUCHES : CONCOLIC_ROOT_SIG_DELIVERED;
+    }
+    return (sig & (1u << (h % 31u))) ? CONCOLIC_ROOT_SIG_TOUCHES : CONCOLIC_ROOT_SIG_NONE;
+}
+
+/* See concolic.h. The delivered sources are src_delivered's own population: the candidate's read, the gate
+   bases and the further deliveries. The candidate's root members join the partial half only, so a slot over an
+   undeclared root the candidate substitutes beneath is never read as untouched. */
+int concolic_root_sig_delivered(uint32_t sig) {
+    const char *p;
+    size_t n;
+    int best = CONCOLIC_ROOT_SIG_NONE, v;
+
+    if (!sig) return CONCOLIC_ROOT_SIG_NONE;
+#define ROOT_SIG_TAKE(x) do { if ((x) && src_delivered(x) && (v = root_sig_against(sig, (x))) > best) best = v; } while (0)
+    ROOT_SIG_TAKE(g_cand_at);
+    for (int i = 0; i < g_gbase_n; i++) ROOT_SIG_TAKE(g_gbase_src[i]);
+    for (int i = 0; i < g_dl_n; i++) ROOT_SIG_TAKE(g_dl_src[i]);
+#undef ROOT_SIG_TAKE
+    if (best == CONCOLIC_ROOT_SIG_NONE && !(sig & CONCOLIC_ROOT_SIG_WHOLE) && g_cand_at && src_delivered(g_cand_at))
+        for (int i = 0; root_member(g_cand_root, i, &p, &n); i++)
+            if (sig & (1u << (root_name_hash(p, n) % 31u))) return CONCOLIC_ROOT_SIG_TOUCHES;
+    return best;
 }
 
 /* The constraint key under which a flow records that one of its branches was decided over a declared
@@ -8731,7 +8826,8 @@ void concolic_free(void)
     free(g_cand_payload);
     free(g_cand_at);
     free(g_cand_bytes);
-    g_cand_src = g_cand_payload = g_cand_at = g_cand_bytes = NULL;
+    free(g_cand_root);
+    g_cand_src = g_cand_payload = g_cand_at = g_cand_bytes = g_cand_root = NULL;
     gates_clear();
     cosources_clear();
     /* The delivery fact goes with the pair it is about: concolic_candidate_delivered asserts a 1 never stands

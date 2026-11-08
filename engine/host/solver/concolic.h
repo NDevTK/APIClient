@@ -619,6 +619,20 @@ void        concolic_principal_tokens_each(const char *src, void (*cb)(void *ud,
 /* Whether the installed candidate is delivered at `root`'s declared source read (its parent's, for a keyed root)
    and its bytes have entered the program: the one delivery a fired PoC over a declared root may have. */
 int         concolic_candidate_at_root(const char *root);
+/* Whose value a decision was over, as one 32-bit column a decision slot carries (solver/decide.c): which sources
+   the value's root members ride, never what was computed from them. With CONCOLIC_ROOT_SIG_WHOLE set, every
+   member rides one declared base and the low 31 bits are a hash of its name; clear, the bits are a Bloom set of
+   every member's base (or undeclared) name. 0 is no root. */
+#define CONCOLIC_ROOT_SIG_WHOLE 0x80000000u
+uint32_t    concolic_root_sig(JSValueConst v);
+/* What the running flow's deliveries say about a slot with signature `sig`: DELIVERED when the slot was over one
+   declared base whose every read this flow answers with delivered bytes, so the decision was answered by running
+   the real predicate on them and asked nothing; TOUCHES when a delivered base may be among its members (a joint
+   root, a Bloom hit, a hash two declared bases share); NONE when no delivered source is among them. */
+#define CONCOLIC_ROOT_SIG_NONE      0
+#define CONCOLIC_ROOT_SIG_TOUCHES   1
+#define CONCOLIC_ROOT_SIG_DELIVERED 2
+int         concolic_root_sig_delivered(uint32_t sig);
 
 /* …AND WHETHER THAT SUBSTITUTION HAS ACTUALLY HAPPENED YET IN THE RUNNING FLOW. Installing a substitution says
    what a source read WILL return; this says whether one has been reached. They are different facts and only

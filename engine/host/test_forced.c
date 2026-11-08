@@ -2578,6 +2578,9 @@ TF_DOCS[] = {
     { "rxtest", HTML_RXTEST },
     { "uriclass", HTML_URICLASS },
     { "candslot", HTML_CANDSLOT },
+    { "candcontra", HTML_CANDCONTRA },
+    { "candweak", HTML_CANDWEAK },
+    { "candarrive", HTML_CANDARRIVE },
     { "slicelen", HTML_SLICELEN },
     { "strsearch", HTML_STRSEARCH },
     { "rxsearch", HTML_RXSEARCH },
@@ -21295,31 +21298,60 @@ TF_UNIT void probes_uriclass(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `candslot` document (fixture/candslot.h): the innerHTML search over the fragment fires, and its
-   candidate, seeded on a path holding a decision over the fragment's own length, replays that path without leaving
-   it — a recorded slot over a candidate's source is answered by the delivered value. In this document no session
+/* The rows of the `candslot` documents (fixture/candslot.h). In each, the innerHTML search over the fragment
+   seeds candidates on a path holding a decision over the fragment itself. A candidate reads delivered bytes there,
+   so that decision asks nothing, and its slot is consumed by the delivery (decide.h's decide_delivery_stats).
+   `candslot`'s delivery agrees with the recorded arm, so the candidate keeps its path and fires. `candcontra`'s
+   contradicts it and the next question differs, so the candidate is pruned and retired (`candsContradicted`).
+   `candweak`'s contradicts it with no question after it, so the slot is never met by a question: nothing consumes
+   or prunes it, and the candidate takes the arm its bytes take rather than the recorded one, so it never arrives
+   at the sink. `candarrive`'s path holds a declined request's arrival between the slot over the fragment and the
+   program's next question, and its candidate passes both without leaving it. No session in these documents
    resumes, so a left path is a candidate's or a sibling's replay. */
+static void cs_ledger(char *buf, size_t cap, long consumed, long contradicted, long retired, long left,
+                      long left_arms, long hits) {
+    snprintf(buf, cap, "%ld slot(s) consumed by a delivery, %ld contradiction(s), %ld candidate(s) retired as "
+             "contradicted, %ld replay(s) left their path (%ld arm(s)), %ld slot(s) replayed", consumed,
+             contradicted, retired, left, left_arms, hits);
+}
+
 TF_UNIT void probes_candslot(const char *js, Probe *tab, int *n) {
     char src[1024] = "";
-    int has = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, src, sizeof src);
-    long hits = 0, left = 0, left_arms = 0;
-    const char *f_why = NULL, *l_why = NULL;
-    int f_tt = 1, l_tt = 1;
-    static char l_buf[256];
+    long hits = 0, left = 0, left_arms = 0, consumed = 0, contradicted = 0;
+    long retired = kdw_census(js, "candsContradicted");
+    static char buf[320];
+    const char *f_why = NULL, *l_why = NULL, *c_why = NULL, *cs_why = NULL, *cc_why = NULL, *ws_why = NULL,
+               *w_why = NULL, *af_why = NULL, *ak_why = NULL;
+    int f_tt = 1, l_tt = 1, c_tt = 1, cs_tt = 1, cc_tt = 1, ws_tt = 1, w_tt = 1, af_tt = 1, ak_tt = 1, st;
 
     decide_replay_stats(&hits, &left, &left_arms);
-    int fired = has && s_stage(js, "innerHTML", src) == S_FIRED;
-
-    fold_row(&f_tt, &f_why, fired,
+    decide_delivery_stats(&consumed, &contradicted);
+    st = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, src, sizeof src) ? s_stage(js, "innerHTML", src)
+                                                                              : S_UNSEEN;
+    fold_row(&f_tt, &f_why, st == S_FIRED,
              "the innerHTML <- location.hash search did not fire a PoC, so no candidate replayed the length test's "
              "arm to the sink");
-    snprintf(l_buf, sizeof l_buf, "%ld replay(s) left their recorded path (%ld arm(s) abandoned, %ld slot(s) "
-             "replayed): a candidate asked nothing at the decision over its own source and diverged at the next "
-             "question", left, left_arms, hits);
-    fold_row(&l_tt, &l_why, fired && left == 0, l_buf);
+    cs_ledger(buf, sizeof buf, consumed, contradicted, retired, left, left_arms, hits);
+    fold_row(&l_tt, &l_why, st == S_FIRED && left == 0, buf);
+    fold_row(&c_tt, &c_why, consumed >= 1 && contradicted == 0, buf);
+    fold_row(&cs_tt, &cs_why, st >= S_RAN, "the innerHTML <- location.hash search ran no candidate");
+    fold_row(&cc_tt, &cc_why, consumed >= 1 && contradicted >= 1 && retired >= 1 && left == 0, buf);
+    fold_row(&ws_tt, &ws_why, st >= S_RAN, "the innerHTML <- location.hash search ran no candidate");
+    fold_row(&w_tt, &w_why, st >= S_RAN && st < S_ARRIVED && contradicted == 0 && retired == 0 && left == 0, buf);
+    fold_row(&af_tt, &af_why, st == S_FIRED && emitted_record_has(js, "/api/decl/ca", "\"door\":\"fetch\""),
+             "the innerHTML <- location.hash search did not fire past the declined request, or no /api/decl/ca "
+             "record states that request");
+    fold_row(&ak_tt, &ak_why, st == S_FIRED && consumed >= 1 && contradicted == 0 && retired == 0 && left == 0, buf);
     const Probe rows[] = {
+        { "ca-fired", af_tt, "caRun", SESS_EXPLORE, af_why },
+        { "ca-kept-path", ak_tt, "caRun", SESS_EXPLORE, ak_why, .gate = "ca-fired" },
         { "cs-fired", f_tt, "csRun", SESS_EXPLORE, f_why },
         { "cs-kept-path", l_tt, "csRun", SESS_EXPLORE, l_why, .gate = "cs-fired" },
+        { "cs-consumed", c_tt, "csRun", SESS_EXPLORE, c_why, .gate = "cs-fired" },
+        { "cc-ran", cs_tt, "ccRun", SESS_EXPLORE, cs_why },
+        { "cc-pruned", cc_tt, "ccRun", SESS_EXPLORE, cc_why, .gate = "cc-ran" },
+        { "cw-ran", ws_tt, "cwRun", SESS_EXPLORE, ws_why },
+        { "cw-no-inherit", w_tt, "cwRun", SESS_EXPLORE, w_why, .gate = "cw-ran" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

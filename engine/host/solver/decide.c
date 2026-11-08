@@ -11,9 +11,12 @@
 #include <stdio.h>
 #include <stdint.h>
 
-static void *decide_fork_blob(int cursor, int arm, uint32_t asked);   /* the sibling's hot state (below) */
+static void *decide_fork_blob(int cursor, int arm, uint32_t asked, uint32_t roots);   /* the sibling's (below) */
 static int dec_replay(uint32_t asked);       /* the recorded arm at the cursor (below) */
 static int dec_owed_take(uint32_t asked);   /* an owed arrival consumed where it lands (below) */
+/* dec_replay's answer when a candidate passed slots over its own delivery and the next recorded program question
+   still disagrees: the delivered bytes took an arm the recorded path did not. Below -1, the plain divergence. */
+#define DEC_REPLAY_CONTRADICTED (-2)
 /* Nothing the run observed says which arm is the real one: decide_real_arm's answer for an example-free value,
    which dec_fork_here and decide_note_forced_arm read as "make no claim". Named once because three functions
    spell it, and decide_arm already answers -1 for "not concolic" and decide_value_arm for "not decided". */
@@ -38,17 +41,20 @@ static int dec_owed_take(uint32_t asked);   /* an owed arrival consumed where it
    same output as a clean resume. `k` makes the two distinguishable. It is a content hash of the constraint key,
    as JSStepHdr::fork_ask_key is, because the key string is freed after each ask, a rebuilt segment has no
    address, and the park document carries text; a hash can fail to catch a mismatch but never invent one.
-   One allocation holds both columns, `k` first (so malloc's alignment is the uint32 array's) and `e` after it,
-   so a fork costs one allocation; `e` is never freed separately, and dec_seg_unref frees `s->k`. */
+   `r` is whose value each question was over (concolic_root_sig): a replaying candidate consumes, without asking,
+   a slot over a source it delivers, because running the real predicate on the delivered bytes asked nothing.
+   One allocation holds the three columns, `k` first (so malloc's alignment is the uint32 arrays'), `r`, then `e`,
+   so a fork costs one allocation; neither is freed separately, and dec_seg_unref frees `s->k`. */
 typedef struct DecSeg {
-    uint32_t *k;        /* the asked question per slot; owns the block, with `e` inside it */
-    signed char *e;     /* the arms — points into `k`'s allocation at offset n*sizeof(uint32_t) */
+    uint32_t *k;        /* the asked question per slot; owns the block, with `r` and `e` inside it */
+    uint32_t *r;        /* the root signature of each question's subject — points into `k`'s allocation */
+    signed char *e;     /* the arms — points into `k`'s allocation at offset 2*n*sizeof(uint32_t) */
     int n, below; struct DecSeg *base; int refcount; long park_id;
 } DecSeg;
 
 /* What one slot costs in the frozen chain and in the head, stated once so the census subtracts exactly what the
    allocation added. */
-#define DEC_SLOT_BYTES (sizeof(uint32_t) + 1u)
+#define DEC_SLOT_BYTES (2u * sizeof(uint32_t) + 1u)
 
 static DecSeg *g_dec_base = NULL;   /* the frozen prefix the running flow stands on (NULL = it has none) */
 static int g_dec_below = 0;         /* slots in that chain — the head's index origin */
@@ -57,6 +63,7 @@ static int g_dec_below = 0;         /* slots in that chain — the head's index 
    on every growth. */
 static signed char *g_dec = NULL; static int g_dec_n = 0, g_dec_cap = 0;   /* the head: this flow's own */
 static uint32_t *g_dec_k = NULL;   /* …and which question each of its slots answers */
+static uint32_t *g_dec_r = NULL;   /* …and whose value each question was over (concolic_root_sig) */
 static int g_c = 0;
 /* The names this timeline has minted at its current history (decide_history_name): `g_mints` of them, counted
    since the history was `g_mint_h`. Per flow, so it rides every blob a flow's decision state does. */
@@ -136,6 +143,11 @@ static long g_fork_unobserved;    /* EVENTS: branch forks no observation of this
 static long g_replay_hits;        /* ARMS consumed on a matching question (dec_replay)                  */
 static long g_replay_left;        /* EVENTS: divergences (dec_leave_path)                               */
 static long g_replay_left_arms;   /* ARMS abandoned by those divergences, summed                        */
+/* The delivery half of the ledger (decide_delivery_stats): slots a candidate consumed without asking, because
+   each was over a source it delivers (dec_replay), and the replays whose next question still disagreed after
+   such a consumption, each of which pruned its candidate. Lifetime counts, released in decide_free. */
+static long g_replay_delivered;   /* ARMS consumed by a delivery                                         */
+static long g_replay_contradicted; /* EVENTS: candidates whose delivery contradicted their recorded path */
 
 /* The third of decide_arm's three answers. A decision over a spellable question is refined from this flow's own
    constraint (no slot, no member, no cost), replayed from a recorded slot (g_replay_hits), or new (a fork,
@@ -156,6 +168,8 @@ static void dec_ensure(int n) {
     g_dec_k = reclaim_realloc(g_dec_k, (size_t)nc * sizeof *g_dec_k);
     CHECK(g_dec_k, "decide: OOM growing the decision vector's question keys — an arm whose question is not "
                    "recorded is an arm a replay cannot check itself against");
+    g_dec_r = reclaim_realloc(g_dec_r, (size_t)nc * sizeof *g_dec_r);
+    CHECK(g_dec_r, "decide: OOM growing the decision vector's root signatures");
     g_dec_cap = nc;
 }
 
@@ -241,8 +255,8 @@ static void dec_clear(void) {
 
 static int dec_total(void) { return g_dec_below + g_dec_n; }
 
-/* The arm recorded at whole-vector index `k`, with the question that produced it through `asked`, in one walk so
-   the two columns cannot land on different slots. The head is read first, because a sibling resumes with its
+/* The arm recorded at whole-vector index `k`, with the question that produced it through `asked` and its
+   subject's root signature through `roots`, in one walk so the columns cannot land on different slots. The head is read first, because a sibling resumes with its
    cursor at the branch it was forked over and replays the topmost slot. A cold-resumed flow starts at cursor 0
    and descends the whole chain for each read, O(depth^2) for a path of depth D: nothing is dropped, and the root
    fix is to index the chain once at decide_resume for the one running flow, never per parked flow.
@@ -254,27 +268,30 @@ static int dec_total(void) { return g_dec_below + g_dec_n; }
    holds: the bottom segment has `below == 0` (dec_seg_arm with a NULL base, or the first dec_freeze off a cleared
    head) and dec_leave_path's replacement keeps `ns->below = s->below`, so reaching it means the chain's offsets
    and the head's origin disagree. */
-static int dec_at(int k, uint32_t *asked) {
+static int dec_at(int k, uint32_t *asked, uint32_t *roots) {
     const DecSeg *s;
     CHECK(k >= 0 && k < dec_total(),
           "engine: a decision was read outside the vector — a branch would take an arm this flow never "
           "recorded. The subscript below is in every build, so this index is dereferenced in release too, and "
           "on wasm an out-of-range load returns a value instead of trapping: the replay would then either "
           "truncate the flow's real recorded arms as a divergence or step over an arm nothing chose");
-    if (k >= g_dec_below) { *asked = g_dec_k[k - g_dec_below]; return g_dec[k - g_dec_below]; }
+    if (k >= g_dec_below) {
+        *asked = g_dec_k[k - g_dec_below]; *roots = g_dec_r[k - g_dec_below];
+        return g_dec[k - g_dec_below];
+    }
     for (s = g_dec_base; s; s = s->base)
-        if (k >= s->below) { *asked = s->k[k - s->below]; return s->e[k - s->below]; }
+        if (k >= s->below) { *asked = s->k[k - s->below]; *roots = s->r[k - s->below]; return s->e[k - s->below]; }
     CHECK_FAIL("engine: a decision index below the head was not in any frozen segment — the chain's `below` "
                "offsets and the head's origin disagree, so the vector has a hole in it. Returning from here "
                "leaves the caller's `asked` UNWRITTEN, so the replay would compare the branch's question "
                "against an uninitialised automatic and take whichever arm that comparison fell out on");
 }
 
-/* Append one decision to the head with the question it answers, written together so no slot has an arm without
-   a question. Every slot is a boolean arm: an operation with N feasible completions is asked as N-1 two-armed
+/* Append one decision to the head with the question it answers and its subject's root signature (0 for a
+   mechanism's slot, which is over no value), written together so no slot has an arm without a question. Every slot is a boolean arm: an operation with N feasible completions is asked as N-1 two-armed
    questions (solver_outcome), and dec_replay normalises what it reads with `? 1 : 0`, so a wider value would come
    back as a real arm nothing chose. */
-static void dec_append(int arm, uint32_t asked) {
+static void dec_append(int arm, uint32_t asked, uint32_t roots) {
     DCHECK(arm == 0 || arm == 1,
            "a decision vector slot was written with something that is not an arm — every slot is one branch "
            "taken or not taken, and a wider value is silently narrowed by the replay's own read");
@@ -286,6 +303,7 @@ static void dec_append(int arm, uint32_t asked) {
            "branch's arm, counted as a replay hit with dec_leave_path never reached");
     dec_ensure(g_dec_n + 1);
     g_dec_k[g_dec_n] = asked;
+    g_dec_r[g_dec_n] = roots;
     g_dec[g_dec_n++] = (signed char)arm;
 }
 
@@ -302,9 +320,10 @@ static DecSeg *dec_seg_alloc(int n) {
     CHECK(s, "decide: OOM allocating a decision segment");
     s->k = reclaim_malloc((size_t)n * DEC_SLOT_BYTES);
     CHECK(s->k, "decide: OOM allocating a decision segment's slots");
-    /* `e` lives inside `k`'s block, after the uint32 column, so `k` carries malloc's alignment; dec_seg_unref
-       frees `s->k` only. */
-    s->e = (signed char *)(s->k + n);
+    /* `r` and `e` live inside `k`'s block, after the uint32 column, so `k` carries malloc's alignment;
+       dec_seg_unref frees `s->k` only. */
+    s->r = s->k + n;
+    s->e = (signed char *)(s->r + n);
     s->n = n;
     s->park_id = -1;   /* unnamed: no park document has written this segment (see the struct) */
     g_dec_seg_live++; g_dec_seg_entries_live += n;
@@ -313,8 +332,8 @@ static DecSeg *dec_seg_alloc(int n) {
 }
 
 /* This flow has left the path its vector describes, so the vector ends at the cursor. A replay against current
- * code and replies may diverge (and an @S candidate re-injected on a path recorded with a concolic source asks
- * fewer questions once its source is concrete); this stops it consuming arms that answer questions it did not ask.
+ * code and replies may diverge (a candidate's questions over its own delivery are consumed in dec_replay and never
+ * reach here); this stops it consuming arms that answer questions it did not ask.
  * Nothing is dropped or pruned: the caller forks at this branch next, so both arms run from here.
  *
  * It freezes the surviving prefix as a new segment rather than lowering `g_dec_below`, because decide_resume
@@ -362,6 +381,7 @@ static void dec_cut_at_cursor(void) {
     ns = dec_seg_alloc(n);
     memcpy(ns->e, s->e, (size_t)n);
     memcpy(ns->k, s->k, (size_t)n * sizeof *ns->k);
+    memcpy(ns->r, s->r, (size_t)n * sizeof *ns->r);
     ns->below = s->below;
     ns->base = s->base;
     ns->refcount = 1;                    /* the running flow's, and nobody else's: this prefix is new */
@@ -386,6 +406,7 @@ static DecSeg *dec_freeze(void) {
     s = dec_seg_alloc(g_dec_n);
     memcpy(s->e, g_dec, (size_t)g_dec_n);
     memcpy(s->k, g_dec_k, (size_t)g_dec_n * sizeof *g_dec_k);
+    memcpy(s->r, g_dec_r, (size_t)g_dec_n * sizeof *g_dec_r);
     s->below = g_dec_below; s->base = g_dec_base; s->refcount = 2;   /* running flow + caller */
     g_dec_base = s; g_dec_below = s->below + s->n; g_dec_n = 0;
     return s;
@@ -394,7 +415,7 @@ static DecSeg *dec_freeze(void) {
 /* One more decision over `base`, as its own segment: the sibling's arm at the branch. It takes the caller's
    reference on `base` (the fork's freeze produced exactly one). `asked` is the parent's own question, since a fork
    is two arms of one branch; the sibling re-executes that branch and must compute the key recorded here. */
-static DecSeg *dec_seg_arm(DecSeg *base, int arm, uint32_t asked) {
+static DecSeg *dec_seg_arm(DecSeg *base, int arm, uint32_t asked, uint32_t roots) {
     DecSeg *s = dec_seg_alloc(1);
     DCHECK(arm == 0 || arm == 1,
            "a sibling's one recorded slot was written with something that is not an arm — see dec_append: the "
@@ -404,6 +425,7 @@ static DecSeg *dec_seg_arm(DecSeg *base, int arm, uint32_t asked) {
            "vector: the sibling re-asks this branch and could not check the slot against what it asks");
     s->e[0] = (signed char)arm;
     s->k[0] = asked;
+    s->r[0] = roots;
     s->below = base ? base->below + base->n : 0;
     s->base = base; s->refcount = 1;   /* the fork blob's, and nobody else's until the sibling resumes */
     return s;
@@ -443,7 +465,8 @@ void decide_free(void) {
     free(g_owed); g_owed = NULL; g_owed_n = g_owed_cap = 0;
     free(g_dec); g_dec = NULL;
     free(g_dec_k); g_dec_k = NULL;
-    g_dec_cap = 0;   /* one capacity for both head buffers: dec_ensure grows them together */
+    free(g_dec_r); g_dec_r = NULL;
+    g_dec_cap = 0;   /* one capacity for the head buffers: dec_ensure grows them together */
     for (i = 0; i < DECIDE_FORK_KEYS; i++) {
         free(g_fork_keys[i].key);
         g_fork_keys[i].key = NULL; g_fork_keys[i].n = g_fork_keys[i].err = 0;
@@ -460,6 +483,7 @@ void decide_free(void) {
     g_fork_observed = g_fork_unobserved = 0;
     /* The ledger goes with the session: it is read beside `resumed`, which describes this session's rebuild. */
     g_replay_hits = g_replay_left = g_replay_left_arms = 0;
+    g_replay_delivered = g_replay_contradicted = 0;
     g_fork_over_pinned = 0;
     /* The refinement pair goes with it, for the same reason: it is read beside `replayHits` and `resumed`. */
     g_branch_asked = g_branch_refined = 0;
@@ -928,6 +952,11 @@ void decide_replay_stats(long *hits, long *left, long *left_arms) {
     if (left_arms) *left_arms = g_replay_left_arms;
 }
 
+void decide_delivery_stats(long *consumed, long *contradicted) {
+    if (consumed) *consumed = g_replay_delivered;
+    if (contradicted) *contradicted = g_replay_contradicted;
+}
+
 /* See decide.h. Both in one call, for decide_replay_stats' reason: `refined <= asked` holds of one moment. */
 void decide_refine_stats(long *asked, long *refined) {
     if (asked) *asked = g_branch_asked;
@@ -1021,7 +1050,14 @@ const uint32_t *decide_seg_keys(const void *seg) {
     return s->k;
 }
 
-void *decide_seg_new(void *base, const signed char *arms, const uint32_t *keys, int n) {
+const uint32_t *decide_seg_roots(const void *seg) {
+    const DecSeg *s = seg;
+    DCHECK(s != NULL, "the cold tier asked whose values a segment's questions were over, for a segment that does "
+                      "not exist");
+    return s->r;
+}
+
+void *decide_seg_new(void *base, const signed char *arms, const uint32_t *keys, const uint32_t *roots, int n) {
     DecSeg *b = base, *s;
 
     DCHECK(n > 0, "a decision segment was rebuilt with no arms — every flow standing on it would replay its "
@@ -1031,9 +1067,12 @@ void *decide_seg_new(void *base, const signed char *arms, const uint32_t *keys, 
            "answer — a replay over it could not tell that it had left the recorded path, which is the whole "
            "reason the column crosses the park boundary. The document predates the key column; it is residue "
            "from a writer that could not have written one, not a document to read arms out of");
+    DCHECK(roots != NULL, "a decision segment was rebuilt with no root signatures — the park writes the column "
+                          "beside the keys, so a reader without it dropped a field it read");
     s = dec_seg_alloc(n);
     memcpy(s->e, arms, (size_t)n);
     memcpy(s->k, keys, (size_t)n * sizeof *keys);
+    memcpy(s->r, roots, (size_t)n * sizeof *roots);
     s->below = b ? b->below + b->n : 0;
     s->base = b;
     /* One reference for the base link, as a freeze transfers one, and one for the rebuilder, which holds every
@@ -1212,17 +1251,20 @@ void decide_history_name(uint64_t *identity, int *ordinal) {
 
 /* See decide.h. */
 int decide_completion_recorded_later(const char *why) {
-    uint32_t asked = dec_arrival_hash(why, NULL, 0), k;
-    int i;
+    uint32_t asked = dec_arrival_hash(why, NULL, 0), k, r;
+    int i, between = 0;
 
     DCHECK(g_running, "a completion's recorded slot was asked while no flow's decision state was loaded");
     for (i = 0; i < g_owed_n; i++) {
-        (void)dec_at(g_owed[i], &k);
+        (void)dec_at(g_owed[i], &k, &r);
         if (k == asked) return 0;
     }
+    /* A slot over a source the running candidate delivers is never reached by a question (dec_replay), so it does
+       not stand between the cursor and the completion. */
     for (i = g_c; i < dec_total(); i++) {
-        (void)dec_at(i, &k);
-        if (k == asked) return i > g_c;
+        (void)dec_at(i, &k, &r);
+        if (k == asked) return between > 0;
+        if (concolic_root_sig_delivered(r) != CONCOLIC_ROOT_SIG_DELIVERED) between++;
     }
     return 0;
 }
@@ -1235,7 +1277,7 @@ void decide_live_stats(long *entries, long *bytes) {
 /* The sibling's hot decision state at a fork: the parent's path so far, then `arm` at this branch. c = cursor, so
    on resume the sibling re-executes the OP_if and replays exactly this arm, never re-forking or re-running the
    prefix. `asked` is the branch's own question, which both arms answer. */
-static void *decide_fork_blob(int cursor, int arm, uint32_t asked) {
+static void *decide_fork_blob(int cursor, int arm, uint32_t asked, uint32_t roots) {
     DecideBlob *b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM fork blob");
     /* A fork is always at the end: decide_arm reaches the forking branch only when the cursor has caught up with
        the vector (a replay consumes a recorded slot; a constraint answer records none), so the frozen head ends
@@ -1243,7 +1285,7 @@ static void *decide_fork_blob(int cursor, int arm, uint32_t asked) {
     DCHECK(cursor == dec_total(),
            "a fork was prepared at a cursor that is not the end of the decision vector — the sibling would "
            "inherit decisions taken after the branch it is being forked at");
-    b->seg = dec_seg_arm(dec_freeze(), arm, asked);   /* the sibling's arm over the shared prefix; O(1) */
+    b->seg = dec_seg_arm(dec_freeze(), arm, asked, roots);   /* the sibling's arm over the shared prefix; O(1) */
     b->c = cursor;
     dec_blob_take_mints(b);
     return b;
@@ -1295,16 +1337,16 @@ static int dec_arrival_fork(const char *why, uint32_t asked, void **sib_blob) {
     if (g_c < dec_total()) {
         arm = dec_replay(asked);
         if (arm >= 0) return arm;
-        dec_leave_path();
+        if (g_c < dec_total()) dec_leave_path();
     }
     b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM forking a flow's decision state at a completion");
     /* The sibling stands past its own slot: it is assembled already holding its completion and never re-asks
        this question, unlike a branch's sibling, which resumes at the branch and replays its slot there. */
-    b->seg = dec_seg_arm(dec_freeze(), 1, asked);
+    b->seg = dec_seg_arm(dec_freeze(), 1, asked, 0);
     b->c = g_c + 1;
     dec_blob_take_mints(b);
     fork_key_count(why, FORK_ROW_SYNTHETIC);
-    dec_append(0, asked); g_c++;
+    dec_append(0, asked, 0); g_c++;
     *sib_blob = b;
     return 0;
 }
@@ -1319,20 +1361,21 @@ int decide_fork_arrival(const char *why, uint64_t what, void **sib_blob) {
     return dec_arrival_fork(why, dec_arrival_hash(why, &what, sizeof what), sib_blob);
 }
 
-/* See decide.h. The arrivals owed behind the cursor first, then dec_pass_arrivals' scan of the run at it. */
+/* See decide.h. The arrivals owed behind the cursor first, then dec_replay's scan of the run at it: arrivals
+   that have not landed and slots over a source the running candidate delivers, which no question re-asks. */
 int decide_arrival_recorded(const char *why, uint64_t what) {
-    uint32_t asked = dec_arrival_hash(why, &what, sizeof what), k;
+    uint32_t asked = dec_arrival_hash(why, &what, sizeof what), k, r;
     int i, e;
 
     DCHECK(g_running, "an arrival's recorded arm was asked while no flow's decision state was loaded");
     for (i = 0; i < g_owed_n; i++) {
-        e = dec_at(g_owed[i], &k);
+        e = dec_at(g_owed[i], &k, &r);
         if (k == asked) return e ? 1 : 0;
     }
     for (i = g_c; i < dec_total(); i++) {
-        e = dec_at(i, &k);
+        e = dec_at(i, &k, &r);
         if (k == asked) return e ? 1 : 0;
-        if (!dec_key_is_arrival(k)) return -1;
+        if (!dec_key_is_arrival(k) && concolic_root_sig_delivered(r) != CONCOLIC_ROOT_SIG_DELIVERED) return -1;
     }
     return -1;
 }
@@ -1356,7 +1399,7 @@ void decide_arrival_taken(const char *why, uint64_t what) {
         if (arm == 1) return;
         dec_leave_path();
     }
-    dec_append(1, asked); g_c++;
+    dec_append(1, asked, 0); g_c++;
 }
 
 /* See decide.h. The freeze and reference are the fork's; the census entry is not, because no frontier member is
@@ -1410,41 +1453,24 @@ int decide_value_arm(JSValueConst cond)
     return arm < 0 ? arm : (arm ^ concolic_branch_neg(cond));
 }
 
-/* An arrival takes its recorded slot whenever it lands. When the slot at the cursor is an arrival that has not
-   landed and `asked` is recorded just past a run of such arrivals, the cursor passes over the run to the asked
-   slot, and the run is owed in place, in recorded order, so the record keeps every slot where it was recorded.
-   Returns 0, changing nothing, when a question of the program's own stands between (that is a divergence). */
-static int dec_pass_arrivals(uint32_t asked) {
-    int total = dec_total(), i, j;
-
-    for (i = g_c; i < total; i++) {
-        uint32_t ki;
-
-        (void)dec_at(i, &ki);
-        if (ki == asked) break;
-        if (!dec_key_is_arrival(ki)) return 0;
+/* The arrival slot `slot`, which a replay is passing over before it has landed, is owed in place: the record keeps
+   it where it was recorded, and it is consumed where it lands (dec_owed_take). */
+static void dec_owe_arrival(int slot) {
+    if (g_owed_n == g_owed_cap) {
+        g_owed_cap = g_owed_cap ? g_owed_cap * 2 : 8;
+        g_owed = reclaim_realloc(g_owed, (size_t)g_owed_cap * sizeof *g_owed);
+        CHECK(g_owed, "decide: OOM growing a flow's owed arrivals");
     }
-    if (i == total) return 0;
-    DCHECK(i > g_c, "an arrival pass was asked with the asked slot at the cursor");
-    for (j = g_c; j < i; j++) {
-        if (g_owed_n == g_owed_cap) {
-            g_owed_cap = g_owed_cap ? g_owed_cap * 2 : 8;
-            g_owed = reclaim_realloc(g_owed, (size_t)g_owed_cap * sizeof *g_owed);
-            CHECK(g_owed, "decide: OOM growing a flow's owed arrivals");
-        }
-        g_owed[g_owed_n++] = j;
-    }
-    g_c = i;
-    return 1;
+    g_owed[g_owed_n++] = slot;
 }
 
 /* The owed arrival slot recorded for `asked`, consumed where it lands: its arm, or -1 when none is owed. */
 static int dec_owed_take(uint32_t asked) {
     int j, arm;
-    uint32_t k;
+    uint32_t k, r;
 
     for (j = 0; j < g_owed_n; j++) {
-        arm = dec_at(g_owed[j], &k) ? 1 : 0;
+        arm = dec_at(g_owed[j], &k, &r) ? 1 : 0;
         if (k != asked) continue;
         memmove(&g_owed[j], &g_owed[j + 1], (size_t)(g_owed_n - j - 1) * sizeof *g_owed);
         g_owed_n--;
@@ -1454,20 +1480,65 @@ static int dec_owed_take(uint32_t asked) {
     return -1;
 }
 
-/* The recorded arm at the cursor, or -1 when the slot there answers a different question, in one descent of the
-   chain. The cursor moves only on a match, so a caller that gets -1 stands at the divergence and dec_leave_path
-   can end the vector there. */
+/* The recorded arm for `asked`, or -1 when the record does not answer it at the cursor (a divergence, which
+ * dec_leave_path ends the vector at unless the cursor reached the end).
+ *
+ * The scan passes two kinds of slot standing before the asked one, in recorded order. An arrival that has not
+ * landed is owed in place (dec_owe_arrival). A slot over a source the running candidate delivers was answered
+ * without asking, since a branch over delivered bytes runs the real predicate, so it is consumed with no arm.
+ *
+ * Any other slot there is a program question this run did not ask. With one of the delivery's slots passed
+ * before it, over no delivered source, and a program question asked (an arrival lands when it lands), the
+ * delivered bytes took an arm the recorded path did not: DEC_REPLAY_CONTRADICTED, and the caller prunes the
+ * candidate. A slot that touches a delivered source is a plain divergence, since its question is spelled from
+ * the delivered bytes and may change its key with no arm contradicted. On a divergence the delivery's slots at
+ * the cursor are consumed as far as the first arrival. */
 static int dec_replay(uint32_t asked) {
-    uint32_t recorded;
+    uint32_t recorded, roots;
     int arm;
 
     DCHECK(g_c < dec_total(), "the recorded arm was asked for from past the end of the vector — there is no "
                               "slot there to answer with");
-    arm = dec_at(g_c, &recorded) ? 1 : 0;
+    arm = dec_at(g_c, &recorded, &roots) ? 1 : 0;
     if (recorded != asked) {
-        if (!dec_key_is_arrival(recorded) || !dec_pass_arrivals(asked)) return -1;
-        arm = dec_at(g_c, &recorded) ? 1 : 0;
-        DCHECK(recorded == asked, "an arrival pass put the cursor at a slot that does not answer the question asked");
+        int total = dec_total(), at, own = 0, blocked = CONCOLIC_ROOT_SIG_NONE;
+        Flow *f = flow_running();
+
+        for (at = g_c; at < total; at++) {
+            (void)dec_at(at, &recorded, &roots);
+            if (recorded == asked) break;
+            if (dec_key_is_arrival(recorded)) continue;
+            if ((blocked = concolic_root_sig_delivered(roots)) != CONCOLIC_ROOT_SIG_DELIVERED) break;
+            own++;
+        }
+        DCHECK(!own || (f && f->cand_payload),
+               "a flow with no candidate payload delivers a source — concolic_set_candidate installs the delivery "
+               "from the running flow's payload, so the two name different flows");
+        if (at == total || recorded != asked) {
+            /* The asked question is not recorded past the run. A program question standing there with a
+               delivery consumed before it, and over no delivered source, is the contradiction. Otherwise the
+               delivery's slots at the cursor are consumed as far as the first arrival, and the rest diverges. */
+            if (at < total && own && blocked == CONCOLIC_ROOT_SIG_NONE && !dec_key_is_arrival(asked))
+                return DEC_REPLAY_CONTRADICTED;
+            while (g_c < total) {
+                (void)dec_at(g_c, &recorded, &roots);
+                if (dec_key_is_arrival(recorded) ||
+                    concolic_root_sig_delivered(roots) != CONCOLIC_ROOT_SIG_DELIVERED)
+                    break;
+                g_c++; g_replay_delivered++;
+                flow_observe_replay(f, g_c, total);
+            }
+            return -1;
+        }
+        /* The asked slot stands past the run: each arrival in it is owed in place, each of the delivery's slots
+           is consumed. */
+        for (; g_c < at; g_c++) {
+            (void)dec_at(g_c, &recorded, &roots);
+            if (dec_key_is_arrival(recorded)) dec_owe_arrival(g_c);
+            else { g_replay_delivered++; flow_observe_replay(f, g_c + 1, total); }
+        }
+        arm = dec_at(g_c, &recorded, &roots) ? 1 : 0;
+        DCHECK(recorded == asked, "a pass put the cursor at a slot that does not answer the question asked");
     }
     g_c++;
     /* Counted here, past the key comparison, because an arm consumed is exactly an arm whose recorded question the
@@ -1573,7 +1644,7 @@ static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, 
            "and a predicate's slot could be matched by a code site, or a site's by a predicate");
     if (real_arm == REAL_ARM_UNOBSERVED) g_fork_unobserved++;
     else                                 g_fork_observed++;
-    dblob = decide_fork_blob(g_c, !take, asked);
+    dblob = decide_fork_blob(g_c, !take, asked, concolic_root_sig(subject));
     if (key) fork_key_count(key, FORK_ROW_PREDICATE);
     else     fork_key_count(fork_site_name(subject), FORK_ROW_SITE);
     pblob = concolic_pins_suspend();
@@ -1585,7 +1656,7 @@ static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, 
        occurrences, which a site key cannot tell apart. Next diff builds: a predicate identity for a keyless
        subject from the identity layer. How its absence would show: a resumed flow's emissions after that cursor
        differ from what its family emitted before the park, with `replayLeft` silent. */
-    dec_append(take, asked);
+    dec_append(take, asked, concolic_root_sig(subject));
     g_c++;
     return take;
 }
@@ -1600,7 +1671,7 @@ static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, 
  * cannot answer would delete a program at random; the fix is the caller that put an undecidable operand there.
  * It is a CHECK because the value is appended to the decision vector, which the cold tier writes and a later
  * session replays, so a release build would record a byte that is not an arm. */
-static int dec_answer_here(const char *key, uint32_t asked, int nonforking) {
+static int dec_answer_here(const char *key, JSValueConst subject, uint32_t asked, int nonforking) {
     if (nonforking != 0 && nonforking != 1) {
         /* The key's field separators are control bytes (concolic_ident_compose), so the predicate's name is
            copied printable-only for the reader looking for an identifier, as engine.c's C-body fork does. */
@@ -1617,7 +1688,7 @@ static int dec_answer_here(const char *key, uint32_t asked, int nonforking) {
                     key ? name : "(no source identity)");
     }
     /* Recorded under the question decide_arm computed, a predicate's or a code site's, as in dec_fork_here. */
-    dec_append(nonforking, asked);
+    dec_append(nonforking, asked, concolic_root_sig(subject));
     g_c++;
     return nonforking;
 }
@@ -1636,8 +1707,12 @@ static int dec_answer_here(const char *key, uint32_t asked, int nonforking) {
 static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, const char *op, int completion,
                       int restartable, int nonforking, int real_arm, int refined, int *forked, const char *site) {
     uint32_t asked = key ? dec_key_hash(key) : dec_site_hash(ctx, subject, op, completion, site);
-    int arm;
+    int arm = -1;
     *forked = 0;
+    DCHECK(!flow_running() || !flow_running()->delivery_contradicted,
+           "a candidate whose delivery contradicted its recorded path asked another decision before it parked — "
+           "the contradiction raises the yield request and the preempt policy parks it at the next dispatch, so "
+           "a second ask means C code ran on between the two");
     /* The ask, counted above all three arms so a zero `branchRefined` beside a zero `branchAsked` says no
        spellable question was reached. */
     if (key) g_branch_asked++;
@@ -1658,6 +1733,20 @@ static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, con
         if (key) g_branch_refined++;
     } else if (g_c < dec_total() && (arm = dec_replay(asked)) >= 0) {   /* REPLAY: a recorded decision */
         /* the cursor moved inside dec_replay, and only because the slot answered this question */
+    } else if (arm == DEC_REPLAY_CONTRADICTED) {
+        /* The delivery took an arm the recorded path did not, so this candidate's timeline does not exist from
+           here: no slot, no fork, and the flow parks at this arm's first dispatch (engine.c's preempt policy) to
+           be retired at its next step. The arm returned is the observed one, and none of it runs. */
+        Flow *f = flow_running();
+
+        DCHECK(op == NULL,
+               "a candidate's delivery contradicted its recorded path at a C machine's outcome ask — the machine "
+               "runs its arm on to its next re-entry before any dispatch could park it, so the contradicted "
+               "timeline would act; build the outcome's park before its arm");
+        g_replay_contradicted++;
+        f->delivery_contradicted = 1;
+        JS_RequestFlowYield();
+        arm = real_arm < 0 ? 1 : real_arm;
     } else {
         /* A new decision, or one this flow's vector no longer describes; after dec_leave_path those are the same
            state, so there is one fork. A slot answering another question is a divergence, not an abort: the
@@ -1667,7 +1756,7 @@ static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, con
            a session that explores mints the sibling, and one that does not takes the arm the site declared. */
         arm = engine_session_forks() ? dec_fork_here(ctx, key, subject, asked, restartable, real_arm, forked,
                                                      site)
-                                     : dec_answer_here(key, asked, nonforking);
+                                     : dec_answer_here(key, subject, asked, nonforking);
     }
     /* One place for all three arms: a replayed or refined arm narrows this flow exactly as a forked one does.
        `*forked` says only whether the caller owes a snapshot. It is applied after the fork's freeze, so the

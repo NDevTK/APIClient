@@ -441,6 +441,10 @@ typedef struct Flow {
        answer (engine.c's FLOW_STEP_RETIRED arm sets it)? Its work items belong to no timeline, so flow_release
        frees them as it frees a paged flow's. */
     int retired;
+    /* Has this candidate's delivery contradicted an arm its recorded path took (decide.c's dec_replay)? Its
+       timeline does not exist from that branch on: the preempt policy parks it at the arm's first dispatch and
+       its next step retires it by the FLOW_STEP_RETIRED arm. Never copied to a sibling, since it forks no more. */
+    int delivery_contradicted;
 
     /* Has this flow told the scheduler it can make no progress? A flow answers FLOW_STEP_OWED when all it has
        left belongs to the host (an unanswered fetch, a document script whose text has not arrived, an

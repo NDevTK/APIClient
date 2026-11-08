@@ -20,6 +20,10 @@
 #include <string.h>
 #include "solver/reclaim.h"
 
+/* A decision slot in a park document: an arm character, eight hex digits of its question, eight of its root
+   signature. The generation record states it, so a document written at another width is refused whole. */
+#define PARK_DEC_SLOT_CHARS 17
+
 /* THE WALK IS OVER THE FRONTIER, not over an allocator. Every row below is asked of the component that owns
    that part of a snapshot, because that is the only place the size is known without restating a private
    `sizeof` — and a restated one drifts silently the next time an entry kind is added, which is exactly the
@@ -466,7 +470,9 @@ static void park_gen_rec(void)
        that folds names otherwise refuses the document whole (cold_resume) rather than meeting names no body has. */
     /* And the session start the current time's example is built on (hr_time_wall_now), so a resumed flow
        replays the example its first session computed rather than one from this session's clock. */
-    snprintf(rec, sizeof rec, "g%u,%d,%.0f", world_session(), JS_ORPHAN_LOCATOR_SPELLING, hr_time_session_start());
+    /* And the decision slot's width, so a document whose slots carry fewer columns is refused whole too. */
+    snprintf(rec, sizeof rec, "g%u,%d,%.0f,%d", world_session(), JS_ORPHAN_LOCATOR_SPELLING, hr_time_session_start(),
+             PARK_DEC_SLOT_CHARS);
     park_rec(rec);
     /* THE FLAG GOES UP AFTER THE WRITE, SO IT IS A COUNT AND NOT AN INTENTION. park_doc_agrees reads it as the
        number of 'g' records in this document, and one raised BEFORE park_rec would make that identity false
@@ -892,7 +898,7 @@ static long park_emit_chain(const void *seg)
         const void *cur = g_walk[--g_walk_n];
         const void *base = decide_seg_base(cur);
         const signed char *arms;
-        const uint32_t *keys = decide_seg_keys(cur);
+        const uint32_t *keys = decide_seg_keys(cur), *roots = decide_seg_roots(cur);
         int n = decide_seg_arms(cur, &arms), k;
         long bid = base ? decide_seg_park_id(base) : -1;
         char head[64];
@@ -906,23 +912,24 @@ static long park_emit_chain(const void *seg)
         if (bid < 0) park_str("-");
         else { char b[32]; snprintf(b, sizeof b, "%ld", bid); park_str(b); }
         park_str(",");
-        /* A SLOT IS NINE CHARACTERS: the arm, then the eight lower-case hex digits of the question it answers.
-           SELF-DELIMITING AND SEPARATOR-FREE, which is what keeps the field one field — the arms already ran to
-           the end of the record with no count in front of them, and a fixed-width slot preserves that (the
-           reader divides). The key is decide.c's 32-bit FNV-1a of the constraint key, and it is the reason the
-           column crosses at all: the divergence it catches is a resumed flow asking a different question here
-           than the run that recorded this arm, which is a comparison no session can make against the other
-           session's heap. Lower case because park_hexval refuses anything else, deliberately — see park_hex. */
+        /* A SLOT IS PARK_DEC_SLOT_CHARS CHARACTERS: the arm, the eight lower-case hex digits of the question it
+           answers, then eight of its subject's root signature (decide.h's decide_seg_roots). Fixed-width and
+           separator-free, so the field stays one field and the reader divides. The key is decide.c's 32-bit
+           FNV-1a of the constraint key: the divergence it catches is a resumed flow asking a different question
+           here than the run that recorded this arm, a comparison no session can make against the other
+           session's heap. Lower case because park_hexval refuses anything else (see park_hex). */
         for (k = 0; k < n; k++) {
             static const char H[] = "0123456789abcdef";
-            char slot[9];
+            char slot[PARK_DEC_SLOT_CHARS];
             int d;
             DCHECK(arms[k] == 0 || arms[k] == 1,
                    "a decision slot holds something that is not an arm — the vector records 0 or 1 per branch, "
                    "and anything else resumes a flow onto a path it never took");
             slot[0] = (char)('0' + arms[k]);
-            for (d = 0; d < 8; d++)
+            for (d = 0; d < 8; d++) {
                 slot[1 + d] = H[(keys[k] >> (28 - 4 * d)) & 15u];
+                slot[9 + d] = H[(roots[k] >> (28 - 4 * d)) & 15u];
+            }
             park_raw(slot, sizeof slot);
         }
         decide_seg_set_park_id(cur, g_park_segs++);
@@ -952,7 +959,7 @@ static ParkKind park_kind_of(const Flow *f)
 #if APICLIENT_DEV
 /* A chain's whole decision vector, oldest slot first: its arms and the questions they answer. Returns the slot
    count; `*arms` and `*keys` are malloc'd and the caller's (NULL for an empty chain). */
-static int park_path_flatten(const void *seg, signed char **arms, uint32_t **keys)
+static int park_path_flatten(const void *seg, signed char **arms, uint32_t **keys, uint32_t **roots)
 {
     const void *s;
     int n = 0, at;
@@ -963,7 +970,8 @@ static int park_path_flatten(const void *seg, signed char **arms, uint32_t **key
     }
     *arms = n ? malloc((size_t)n) : NULL;
     *keys = n ? malloc((size_t)n * sizeof **keys) : NULL;
-    CHECK(!n || (*arms && *keys), "the cold tier could not copy a decision vector to compare two recipes");
+    *roots = n ? malloc((size_t)n * sizeof **roots) : NULL;
+    CHECK(!n || (*arms && *keys && *roots), "the cold tier could not copy a decision vector to compare two recipes");
     for (s = seg, at = n; s; s = decide_seg_base(s)) {
         const signed char *e;
         int k = decide_seg_arms(s, &e);
@@ -971,6 +979,7 @@ static int park_path_flatten(const void *seg, signed char **arms, uint32_t **key
         at -= k;
         memcpy(*arms + at, e, (size_t)k);
         memcpy(*keys + at, decide_seg_keys(s), (size_t)k * sizeof **keys);
+        memcpy(*roots + at, decide_seg_roots(s), (size_t)k * sizeof **roots);
     }
     return n;
 }
@@ -980,13 +989,14 @@ static int park_path_flatten(const void *seg, signed char **arms, uint32_t **key
 static int park_path_equal(const Flow *a, const Flow *b)
 {
     signed char *ea, *eb;
-    uint32_t *ka, *kb;
-    int na = park_path_flatten(a->dec_blob ? decide_blob_seg(a->dec_blob) : NULL, &ea, &ka);
-    int nb = park_path_flatten(b->dec_blob ? decide_blob_seg(b->dec_blob) : NULL, &eb, &kb);
+    uint32_t *ka, *kb, *ra, *rb;
+    int na = park_path_flatten(a->dec_blob ? decide_blob_seg(a->dec_blob) : NULL, &ea, &ka, &ra);
+    int nb = park_path_flatten(b->dec_blob ? decide_blob_seg(b->dec_blob) : NULL, &eb, &kb, &rb);
     int eq = na == nb &&
-             (!na || (memcmp(ea, eb, (size_t)na) == 0 && memcmp(ka, kb, (size_t)na * sizeof *ka) == 0));
+             (!na || (memcmp(ea, eb, (size_t)na) == 0 && memcmp(ka, kb, (size_t)na * sizeof *ka) == 0 &&
+                      memcmp(ra, rb, (size_t)na * sizeof *ra) == 0));
 
-    free(ea); free(eb); free(ka); free(kb);
+    free(ea); free(eb); free(ka); free(kb); free(ra); free(rb);
     return eq;
 }
 
@@ -1974,8 +1984,8 @@ void cold_resumed(ColdResumed *out)
     *out = g_resumed;
 }
 
-/* Whether `recipes` opens with a generation record stating this build's name spelling and its session's start:
-   `g<digits>,<spelling>,<start ms>`. */
+/* Whether `recipes` opens with a generation record stating this build's name spelling, its session's start and
+   this build's decision slot width: `g<digits>,<spelling>,<start ms>,<slot chars>`. */
 static int park_doc_spelling_current(const char *recipes)
 {
     const char *q = recipes;
@@ -1991,7 +2001,10 @@ static int park_doc_spelling_current(const char *recipes)
     if (*q == '-') q++;
     if (*q < '0' || *q > '9') return 0;
     while (*q >= '0' && *q <= '9') q++;
-    return *q == ';' || *q == '\0';
+    if (*q++ != ',') return 0;
+    sp = strtol(q, &ep, 10);
+    if (ep == q || sp != PARK_DEC_SLOT_CHARS) return 0;
+    return *ep == ';' || *ep == '\0';
 }
 
 /* The records of one park document after its generation record, rebuilt as flows appended to the frontier and
@@ -2064,7 +2077,7 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
         } else if (kind == 's') {
             long id, bid;
             signed char *arms;
-            uint32_t *keys;
+            uint32_t *keys, *roots;
             int n, span;
 
             id = park_ordinal(q, &ep); q = ep;
@@ -2072,7 +2085,7 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
             bid = park_ordinal(q, &ep); q = ep;
             q = park_comma(q);
             span = (int)(end - q);
-            n = span / 9;                       /* one arm char + eight hex digits per slot — see the writer */
+            n = span / PARK_DEC_SLOT_CHARS;     /* an arm char + two eight-hex-digit columns per slot — see the writer */
             DCHECK(id == seg_n,
                    "a park document names its segments out of order — the ordinals are dense and ascending in "
                    "emission order, and a gap means a segment nothing wrote is about to be stood on");
@@ -2090,18 +2103,13 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
                   "and on wasm an out-of-range load returns a value rather than trapping: the segment would be "
                   "built over whatever that address held and every flow standing above it would replay arms "
                   "read out of it");
-            /* THE WIDTH IS THE VERSION CHECK, AND IT IS ASKED BEFORE THE COUNT, because a document written
-               before the question-key column has a SHORT field rather than an empty one — two arms are two
-               characters, which divides to zero slots, and asking the count first would report that residue as
-               a segment with no arms and send the reader hunting an empty freeze that never happened. A slot is
-               nine characters and nothing else this grammar writes is, so this is the whole version check and
-               the reason there is no version field. Such a residue's arms are real and its questions are
-               unrecoverable, which is not a document to read arms out of. */
-            DCHECK(span % 9 == 0,
-                   "a park document's decision segment is not a whole number of slots — each slot is an arm "
-                   "character followed by eight hex digits naming the question it answers, so a field that "
-                   "does not divide is residue from a session that recorded arms with no questions. Those arms "
-                   "cannot be checked against a replay and must not be stood on");
+            /* The width is asked before the count: the generation record's slot width admitted this document
+               (park_doc_spelling_current), so a field that does not divide is one this build's writer did not
+               write. */
+            DCHECK(span % PARK_DEC_SLOT_CHARS == 0,
+                   "a park document's decision segment is not a whole number of slots — its generation record "
+                   "states this build's slot width, and each slot is an arm character and two eight-hex-digit "
+                   "columns, so the record and its segments came from different writers");
             DCHECK(n > 0,
                    "a park document holds a decision segment with no arms — the chain never freezes an empty "
                    "head, so every flow standing on this one would replay its path one decision short");
@@ -2109,9 +2117,11 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
             CHECK(arms, "the cold tier could not rebuild a parked decision segment's arms");
             keys = reclaim_malloc((size_t)n * sizeof *keys);
             CHECK(keys, "the cold tier could not rebuild the questions a parked decision segment's arms answer");
+            roots = reclaim_malloc((size_t)n * sizeof *roots);
+            CHECK(roots, "the cold tier could not rebuild whose values a parked decision segment's questions were over");
             for (k = 0; k < n; k++) {
-                const char *slot = q + (size_t)k * 9;
-                uint32_t kh = 0;
+                const char *slot = q + (size_t)k * PARK_DEC_SLOT_CHARS;
+                uint32_t kh = 0, rh = 0;
                 int d;
                 DCHECK(slot[0] == '0' || slot[0] == '1',
                        "a park document holds something that is not an arm — a decision is 0 or 1, and "
@@ -2125,16 +2135,24 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
                            "engine's park and the arm beside it names a path this engine cannot verify");
                     kh = (kh << 4) | (uint32_t)hv;
                 }
+                for (d = 9; d < PARK_DEC_SLOT_CHARS; d++) {
+                    int hv = park_hexval(slot[d]);
+                    DCHECK(hv >= 0, "a park document holds a decision slot whose root signature is not lower-case "
+                                    "hex — this file wrote it and nothing else may");
+                    rh = (rh << 4) | (uint32_t)hv;
+                }
                 keys[k] = kh;
+                roots[k] = rh;
             }
             if (seg_n >= seg_cap) {
                 seg_cap = seg_cap ? seg_cap * 2 : 64;
                 seg = realloc(seg, (size_t)seg_cap * sizeof *seg);
                 CHECK(seg, "the cold tier could not grow its rebuilt-segment table");
             }
-            seg[seg_n++] = decide_seg_new(bid >= 0 ? seg[bid] : NULL, arms, keys, n);
+            seg[seg_n++] = decide_seg_new(bid >= 0 ? seg[bid] : NULL, arms, keys, roots, n);
             free(arms);
             free(keys);
+            free(roots);
         } else if (kind == 'f') {
             long sid;
             double val;
@@ -2669,7 +2687,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
            "a generation record carries no name spelling and session start after its number — "
            "park_doc_spelling_current admitted this document, so the two readers of one record disagree");
     world_session_resume(gen);
-    hr_time_session_start_adopt(strtod(ep + 1, NULL));
+    hr_time_session_start_adopt(strtod(ep + 1, NULL));   /* the slot width after it was admitted above */
     flows = park_rebuild(ctx, (*end == ';') ? end + 1 : end, &g_resumed);
     /* THE ONE OBSERVABLE THAT THE RESUME RAN, and it had a READER and no WRITER. `extension/bridge.js` parses
        `@RESUMED <n>` and reports it in the per-run engine log beside the park count, so that "the full

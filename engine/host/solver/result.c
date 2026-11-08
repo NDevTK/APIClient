@@ -1259,7 +1259,7 @@ char *result_cold_json(void) {
     EngineStepUnitRuns r;
     int ran;
     /* The replay ledger, taken in one call (decide.h) so the identity below is about one moment. */
-    long rp_hits, rp_left, rp_left_arms;
+    long rp_hits, rp_left, rp_left_arms, rp_delivered, rp_contradicted;
     /* The refinement pair, in one call (decide.h): decide_arm's third arm, beside `replayHits` and `_forkAt`. */
     long rf_asked, rf_refined;
     long fk_total, fk_pinned;
@@ -1421,6 +1421,7 @@ char *result_cold_json(void) {
            "ever be asked for, and `rowsAwaitingBytes` is about to be published as a debt the reply door does "
            "not hold");
     decide_replay_stats(&rp_hits, &rp_left, &rp_left_arms);
+    decide_delivery_stats(&rp_delivered, &rp_contradicted);
     decide_refine_stats(&rf_asked, &rf_refined);
     /* The fork pair's containment, at the one moment both are in one hand (solver/decide.h); decide.c raises
        them at two lines. `fk_total` is read only for this assert. */
@@ -1620,6 +1621,8 @@ char *result_cold_json(void) {
     METRIC_SET(replay_hits, rp_hits);
     METRIC_SET(replay_left, rp_left);
     METRIC_SET(replay_left_arms, rp_left_arms);
+    METRIC_SET(replay_delivered, rp_delivered);
+    METRIC_SET(replay_contradicted, rp_contradicted);
     METRIC_SET(branch_asked, rf_asked);
     METRIC_SET(branch_refined, rf_refined);
     METRIC_SET(fork_over_pinned, fk_pinned);
@@ -1636,6 +1639,7 @@ char *result_cold_json(void) {
     METRIC_SET(host_answers_extra, e.host_answers_extra);
     METRIC_SET(answer_standbys, e.answer_standbys);
     METRIC_SET(answer_standbys_retired, e.answer_standbys_retired);
+    METRIC_SET(cands_contradicted, e.cands_contradicted);
     METRIC_SET(perform_exhausted, e.perform_exhausted);
     METRIC_SET(host_exhausted, e.host_exhausted);
     METRIC_SET(host_answers_late, e.host_answers_late);

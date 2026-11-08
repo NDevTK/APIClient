@@ -355,6 +355,12 @@ long  decide_fork_total(void);
  * peer's answer having moved — a correct and expected divergence — read as the cold tier having lost a path,
  * or the same numbers read the other way and a real loss excused as a moved peer. */
 void decide_replay_stats(long *hits, long *left, long *left_arms);
+/* The delivery half of the replay ledger, lifetime counts: `consumed` is ARMS a candidate consumed without asking
+   because each slot was over a source it delivers, `contradicted` is EVENTS where the next recorded question still
+   disagreed after such a consumption, each pruning its candidate (engine.h's `cands_contradicted` counts the
+   retirements that follow). Neither moves `left`: a consumption is not a divergence and a prune leaves nothing
+   exploring. */
+void decide_delivery_stats(long *consumed, long *contradicted);
 
 /* FORKS TAKEN OVER A SUBJECT THIS FLOW HAD ALREADY DETERMINED, beside the total they are a part of — an
  * OBSERVATION landed before the refusal it is the precondition for, because §Testing requires a prediction to
@@ -514,7 +520,8 @@ void *decide_freeze_path(void);
 void  decide_history_name(uint64_t *identity, int *ordinal);
 /* Whether the running flow's recorded path, from its cursor on, takes the completion `why` (decide_completion's
    key) first at a slot past the cursor: an arrival the replay reaches before its record took it. One owed behind
-   the cursor (passed over for a later question) is due, not later. */
+   the cursor (passed over for a later question) is due, not later, and so is one with only slots over a source
+   the running candidate delivers between the cursor and it, which no question reaches. */
 int   decide_completion_recorded_later(const char *why);
 void *decide_suspend(void);
 void  decide_resume(void *blob, JSValueConst fn);
@@ -552,6 +559,9 @@ int         decide_seg_arms(const void *seg, const signed char **arms);   /* its
    replayed slot and nothing else — and nothing else would check the case the column is for. See decide.c's
    DecSeg for the width and for what a hash can and cannot promise. */
 const uint32_t *decide_seg_keys(const void *seg);
+/* …and whose value each question was over (concolic_root_sig), the same count in the same order. It crosses the
+   park so a cold candidate consumes a slot over its own delivery as a hot one does. */
+const uint32_t *decide_seg_roots(const void *seg);
 /* Rebuild one frozen segment over `base`, holding ONE reference on it exactly as a freeze does. The returned
    segment carries the REBUILDER's reference; release it with decide_seg_release once every flow that stands on
    the park's chain has taken its own, so a segment nothing references is freed rather than leaked.
@@ -559,7 +569,7 @@ const uint32_t *decide_seg_keys(const void *seg);
    arms whose questions are unknown, and the replay check would have nothing to compare against — the exact
    §Offensive-programming shape where a consumer's default turns "the producer does not produce this" into a
    plausible datum. A document that cannot supply it is residue from a writer that predates the column. */
-void       *decide_seg_new(void *base, const signed char *arms, const uint32_t *keys, int n);
+void       *decide_seg_new(void *base, const signed char *arms, const uint32_t *keys, const uint32_t *roots, int n);
 void        decide_seg_release(void *seg);
 /* THE SEGMENT'S NAME IN THE PARK DOCUMENT BEING WRITTEN — -1 until the pager assigns one, and the ordinal
    thereafter. It lives on the SEGMENT rather than in a table the pager keys by address because a park now runs

@@ -76,6 +76,7 @@
     X(FORK_PEER_ANSWER,   "fork-over-a-peer-answer", ABOVE)                       \
     X(LEAVE_ANSWER_STANDBY, "leave-a-standby-for-later-peer-answers", ABOVE)      \
     X(RETIRE_EXHAUSTED_ASK, "retire-a-request-no-peer-timeline-answers", ABOVE)   \
+    X(RETIRE_CONTRADICTED_DELIVERY, "retire-a-candidate-its-delivery-contradicted", ABOVE) \
     X(FORK_DECLINED_REQ,  "fork-over-a-declined-request", ABOVE)                  \
     X(FORK_REPLY_SUCCESS, "fork-the-success-of-a-reply-that-was-not-ok", ABOVE)   \
     X(RESUME_PARKED,      "resume-parked-continuation", ABOVE)                    \

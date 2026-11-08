@@ -119,6 +119,11 @@ METRIC(resumed_refused, "resumedRefused", CONSTANT, "rebuild", AGENT, "solver/co
 METRIC(replay_hits, "replayHits", LIFETIME, "decision", AGENT, "solver/decide.c", INT)
 METRIC(replay_left, "replayLeft", LIFETIME, "divergence", AGENT, "solver/decide.c", INT)
 METRIC(replay_left_arms, "replayLeftArms", LIFETIME, "arm", AGENT, "solver/decide.c", INT)
+/* The delivery half (decide.h's decide_delivery_stats): arms a candidate consumed without asking, each over a
+   source it delivers, and the replays whose next question still disagreed after one, each pruning its candidate.
+   Neither is part of `replayLeft`. */
+METRIC(replay_delivered, "replayDelivered", LIFETIME, "arm", AGENT, "solver/decide.c", INT)
+METRIC(replay_contradicted, "replayContradicted", LIFETIME, "divergence", AGENT, "solver/decide.c", INT)
 /* The third of decide_arm's three arms. A spellable decision is refined (no slot, no member),
    replayed (`replayHits`) or new (`_forkAt`'s predicate rows). The unit is decisions, not
    `replayHits`' arms, so the two ledgers may not be summed. `branchAsked` is the reachability
@@ -175,6 +180,9 @@ METRIC(host_answers_foreclosed, "hostAnswersForeclosed", LIFETIME, "holder", PRO
    retired count is the flows the peer's exhaustion ended. Left minus retired is the standbys still waiting. */
 METRIC(answer_standbys, "answerStandbys", LIFETIME, "flow", PROCESS, "solver/engine.c", INT)
 METRIC(answer_standbys_retired, "answerStandbysRetired", LIFETIME, "flow", PROCESS, "solver/engine.c", INT)
+/* @S candidates the same arm retired because their delivery contradicted an arm their recorded path took
+   (solver/decide.c's dec_replay): a pruned timeline, never a leave that keeps exploring. */
+METRIC(cands_contradicted, "candsContradicted", LIFETIME, "flow", PROCESS, "solver/engine.c", INT)
 /* The exhaustion's two ends: sent by the answering instance when its last holder lets a rendezvous go, and
    delivered to the asking one. A standby left and never retired beside a zero here is an exhaustion not sent. */
 METRIC(perform_exhausted, "performExhausted", LIFETIME, "rendezvous", PROCESS, "solver/engine.c", INT)
