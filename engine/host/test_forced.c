@@ -7005,6 +7005,10 @@ TF_UNIT void concat_keyed_selftest(JSContext *ctx)
    same elements. The second document is an inert one of the program's own, so the analysed one is not written. */
 static const char *TF_NAMED_ABSENT_SRC =
     "(function(){ return document.zqNoNamedElement === undefined ? 1 : -1; })()";
+/* The same for HTML §7.2.2.3's named access on the Window object, whose supported names are the same values plus
+   the child navigables' target names: a miss reaches WindowProperties through Window.prototype. */
+static const char *TF_WINDOW_NAMED_ABSENT_SRC =
+    "(function(){ return self.zqNoNamedWindowName === undefined ? 1 : -1; })()";
 static const char *TF_NAMED_WALKON_SRC =
     "(function(){ var x = document.implementation.createHTMLDocument(''), d = x.createElement('div');"
     " d.id = 'zqDivOnly'; x.body.appendChild(d); return x.zqDivOnly === undefined ? 1 : -1; })()";
@@ -7028,6 +7032,16 @@ TF_UNIT void named_walk_on_selftest(JSContext *ctx)
                "(schedule %s): the read walked the tree instead of answering from the document's name index",
                (unsigned long long)(now.charged_input[THREAD_WORK_DOM_WALK] -
                                     before.charged_input[THREAD_WORK_DOM_WALK]), k ? "forced" : "declined");
+        thread_work_census(&before);
+        got = tf_step_diff_run(ctx, TF_WINDOW_NAMED_ABSENT_SRC, "window-named-absent", SCHED[k], &susp, &mach);
+        thread_work_census(&now);
+        CHECK(got == 1, "a Window read of a name nothing carries did not answer undefined");
+        CHECKF(now.charged_input[THREAD_WORK_DOM_WALK] == before.charged_input[THREAD_WORK_DOM_WALK],
+               "a Window named-property [[Get]] of a name no element's id or name and no child navigable carries "
+               "visited %llu elements (schedule %s): the read walked the tree instead of answering from the "
+               "document's name index", (unsigned long long)(now.charged_input[THREAD_WORK_DOM_WALK] -
+                                                             before.charged_input[THREAD_WORK_DOM_WALK]),
+               k ? "forced" : "declined");
         thread_work_census(&before);
         got = tf_step_diff_run(ctx, TF_NAMED_WALKON_SRC, "named-walk-on", SCHED[k], &susp, &mach);
         thread_work_census(&now);
