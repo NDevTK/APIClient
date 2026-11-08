@@ -56556,7 +56556,7 @@ enum { FG_PLAIN = 1, FG_ARRAY = 2 };
 /* A parked graph this writer cannot write whole would resume as a different heap, so the release build stops
    too; the dev build's DCHECK above each use names what to build. */
 #define FG_NO_WRITER() CHECK_FAIL("flow graph: a parked graph holds a value or object no writer can write")
-enum { FG_GAP_CLASS = 1, FG_GAP_TAG, FG_GAP_SYMBOL_KEY, FG_GAP_PROP_KIND, FG_GAP_SPARSE_ARRAY, FG_GAP_WEAK };
+enum { FG_GAP_CLASS = 1, FG_GAP_TAG, FG_GAP_SYMBOL_KEY, FG_GAP_PROP_KIND, FG_GAP_WEAK };
 typedef struct { const void *k; uint32_t v; } FGSlot;
 typedef struct { FGSlot *s; size_t cap, n; } FGMap;
 typedef struct { uint8_t *b; size_t len, cap; } FGBuf;
@@ -56804,9 +56804,38 @@ static void fg_key(FGWriter *w, FGBuf *out, JSAtom atom)
     fg_string(w, out, a);
 }
 
-/* An object's body: its prototype, whether it is extensible, and its own data properties in shape order (an
-   array: its length and dense elements). A weak key or target, an accessor, a variable reference or a lazily
-   initialized property has no writer yet. */
+/* The own data properties of `p` from shape slot `from` on, in shape order: the live count, then each key, its
+   three attributes and its value. An accessor, a variable reference or a lazily initialized property has no
+   writer yet. */
+static void fg_props(FGWriter *w, FGBuf *out, JSObject *p, int from)
+{
+    JSShape *sh = p->shape;
+    JSShapeProperty *prs = get_shape_prop(sh) + from;
+    uint32_t live = 0;
+
+    for (int i = from; i < sh->prop_count; i++) live += get_shape_prop(sh)[i].atom != JS_ATOM_NULL;
+    fg_u32(out, live);   /* a deleted slot is not written: the rebuilt shape holds the live ones in order */
+    for (int i = from; i < sh->prop_count; i++, prs++) {
+        if (prs->atom == JS_ATOM_NULL) continue;
+        if ((prs->flags & JS_PROP_TMASK) && w->survey) {
+            fg_gap(w, out, FG_GAP_PROP_KIND, (int)(prs->flags & JS_PROP_TMASK));
+            continue;
+        }
+        if (prs->flags & JS_PROP_TMASK) {
+            DCHECKF(false, "flow graph: a private object on a parked graph holds a property of kind %d (an accessor, a "
+                   "variable reference or a lazy initializer), which has no writer yet", (int)(prs->flags & JS_PROP_TMASK));
+            FG_NO_WRITER();
+        }
+        fg_key(w, out, prs->atom);
+        fg_u8(out, (uint8_t)(prs->flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE | JS_PROP_ENUMERABLE)));
+        fg_value(w, out, p->prop[i].u.value);
+    }
+}
+
+/* An object's body: its prototype, whether it is extensible, and its own data properties (fg_props). An array
+   writes first whether its elements are dense ('F': stored apart, written as a count and the values) or ordinary
+   properties ('S'), then its length's attributes and value, then the properties after the length slot. A weak
+   key or target has no writer yet. */
 static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
 {
     JSObject *p = w->order[id];
@@ -56823,37 +56852,20 @@ static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
     if (sh->proto) fg_value(w, out, JS_MKPTR(JS_TAG_OBJECT, sh->proto)); else fg_u8(out, 'N');
     fg_u8(out, p->extensible);
     if (w->kinds[id] == FG_ARRAY) {
-        if ((!p->fast_array || sh->prop_count != 1) && w->survey) { fg_gap(w, out, FG_GAP_SPARSE_ARRAY, 0); return; }
-        if (!p->fast_array || sh->prop_count != 1) {
-            DCHECK(false, "flow graph: a private array on a parked graph is sparse or has own properties beside its "
-                   "length, which have no writer yet");
-            FG_NO_WRITER();
+        DCHECK(sh->prop_count >= 1 && prs[0].atom == JS_ATOM_length && (prs[0].flags & JS_PROP_LENGTH),
+               "flow graph: an Array's first shape slot is not its length — JS_NewArray creates the length first "
+               "and nothing removes it");
+        fg_u8(out, p->fast_array ? 'F' : 'S');
+        fg_u8(out, (uint8_t)(prs[0].flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE | JS_PROP_ENUMERABLE)));
+        fg_value(w, out, p->prop[0].u.value);
+        if (p->fast_array) {
+            fg_u32(out, p->u.array.count);
+            for (uint32_t k = 0; k < p->u.array.count; k++) fg_value(w, out, p->u.array.u.values[k]);
         }
-        fg_value(w, out, p->prop[0].u.value);   /* length */
-        fg_u32(out, p->u.array.count);
-        for (uint32_t k = 0; k < p->u.array.count; k++) fg_value(w, out, p->u.array.u.values[k]);
+        fg_props(w, out, p, 1);
         return;
     }
-    {
-        uint32_t live = 0;
-        for (int i = 0; i < sh->prop_count; i++) live += prs[i].atom != JS_ATOM_NULL;
-        fg_u32(out, live);   /* a deleted slot is not written: the rebuilt shape holds the live ones in order */
-    }
-    for (int i = 0; i < sh->prop_count; i++, prs++) {
-        if (prs->atom == JS_ATOM_NULL) continue;
-        if ((prs->flags & JS_PROP_TMASK) && w->survey) {
-            fg_gap(w, out, FG_GAP_PROP_KIND, (int)(prs->flags & JS_PROP_TMASK));
-            continue;
-        }
-        if (prs->flags & JS_PROP_TMASK) {
-            DCHECKF(false, "flow graph: a private object on a parked graph holds a property of kind %d (an accessor, a "
-                   "variable reference or a lazy initializer), which has no writer yet", (int)(prs->flags & JS_PROP_TMASK));
-            FG_NO_WRITER();
-        }
-        fg_key(w, out, prs->atom);
-        fg_u8(out, (uint8_t)(prs->flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE | JS_PROP_ENUMERABLE)));
-        fg_value(w, out, p->prop[i].u.value);
-    }
+    fg_props(w, out, p, 0);
 }
 
 static JSFlowGraph *fg_write(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor, bool survey)
@@ -56911,7 +56923,6 @@ void JS_FlowGraphGapName(JSContext *ctx, int what, int id, char *buf, size_t cap
     case FG_GAP_TAG:          snprintf(buf, cap, "tag %d", id); return;
     case FG_GAP_SYMBOL_KEY:   snprintf(buf, cap, "symbolKey %d", id); return;
     case FG_GAP_PROP_KIND:    snprintf(buf, cap, "propKind %d", id >> 4); return;
-    case FG_GAP_SPARSE_ARRAY: snprintf(buf, cap, "sparseArray"); return;
     }
     DCHECKF(false, "flow graph: a gap of kind %d has no name", what);
     snprintf(buf, cap, "?");
@@ -57014,6 +57025,21 @@ static JSAtom fg_rkey(FGReader *r)
     return a;
 }
 
+/* fg_props' record: the live count, then each key, its attributes and its value, defined on `o` in order. */
+static void fg_rprops(FGReader *r, JSValueConst o)
+{
+    uint32_t np = fg_r32(r);
+
+    for (uint32_t k = 0; k < np; k++) {
+        JSAtom key = fg_rkey(r);
+        uint8_t fl = fg_r8(r);
+
+        CHECK(JS_DefinePropertyValue(r->ctx, o, key, fg_rvalue(r), fl) >= 0,
+              "flow graph: a rebuilt object refused a property");
+        JS_FreeAtom(r->ctx, key);
+    }
+}
+
 int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
 {
     FGReader r = { 0 };
@@ -57042,22 +57068,27 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
         CHECK(JS_SetPrototypeInternal(ctx, o, proto, false) >= 0, "flow graph: a rebuilt object refused its prototype");
         JS_FreeValue(ctx, proto);
         if (kinds[i] == FG_ARRAY) {
+            uint8_t mode = fg_r8(&r), lfl = fg_r8(&r);
             JSValue len = fg_rvalue(&r);
-            uint32_t count = fg_r32(&r);
-            for (uint32_t k = 0; k < count; k++)
-                CHECK(JS_DefinePropertyValueUint32(ctx, o, k, fg_rvalue(&r), JS_PROP_C_W_E) >= 0,
-                      "flow graph: a rebuilt array refused an element");
-            CHECK(JS_SetPropertyStr(ctx, o, "length", len) >= 0, "flow graph: a rebuilt array refused its length");
-        } else {
-            uint32_t np = fg_r32(&r);
-            for (uint32_t k = 0; k < np; k++) {
-                JSAtom key = fg_rkey(&r);
-                uint8_t fl;
-                fl = fg_r8(&r);
-                CHECK(JS_DefinePropertyValue(ctx, o, key, fg_rvalue(&r), fl) >= 0,
-                      "flow graph: a rebuilt object refused a property");
-                JS_FreeAtom(ctx, key);
+
+            CHECK(mode == 'F' || mode == 'S', "flow graph: an array's element storage is neither dense nor sparse");
+            /* The writer read the storage the original stood in, so the rebuild stands in it too: a sparse
+               array's elements are ordinary properties from the first one on, in the order written. */
+            if (mode == 'S')
+                CHECK(convert_fast_array_to_array(ctx, JS_VALUE_GET_OBJ(o)) == 0,
+                      "flow graph: OOM rebuilding a sparse array's storage");
+            if (mode == 'F') {
+                uint32_t count = fg_r32(&r);
+                for (uint32_t k = 0; k < count; k++)
+                    CHECK(JS_DefinePropertyValueUint32(ctx, o, k, fg_rvalue(&r), JS_PROP_C_W_E) >= 0,
+                          "flow graph: a rebuilt array refused an element");
             }
+            fg_rprops(&r, o);
+            /* last, so no element defined above moves it, and with its own attributes (a frozen length) */
+            CHECK(JS_DefinePropertyValue(ctx, o, JS_ATOM_length, len, lfl) >= 0,
+                  "flow graph: a rebuilt array refused its length");
+        } else {
+            fg_rprops(&r, o);
         }
         if (!ext) CHECK(JS_PreventExtensions(ctx, o) >= 0, "flow graph: a rebuilt object refused to stop extending");
     }
