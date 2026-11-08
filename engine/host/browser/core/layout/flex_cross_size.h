@@ -79,6 +79,11 @@ size_t flex_cross_size_lines(lxb_dom_element_t *container, CssPx **sizes);
 bool flex_cross_size_lines_ask(lxb_dom_element_t *container);
 
 CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_element_t *item);
+/* The operands `flex_cross_size_used_item_cross` reads beyond the container's own, asked so a caller under a
+   resting drive can then read it: a multi-line container's lines for a stretched item, and for an item sized
+   by step 7 on an inline cross axis its css-sizing-3 §5.1 intrinsic sizes. False ("not yet") with the deferred
+   questions suspended on the current job. */
+bool flex_cross_size_used_item_cross_ask(lxb_dom_element_t *container, lxb_dom_element_t *item);
 
 /* css-align-3 §6.2 "Block-Axis (or Cross-Axis) Self-Alignment: the align-self property"' resolved alignment of
    `item` in `container`: the item's computed `align-self`, or the container's `align-items` where that is

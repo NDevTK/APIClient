@@ -5050,12 +5050,13 @@ static bool uv_operands_ask(lxb_dom_element_t *el, bool vertical)
         if (!used_value_width_ask(x)) return false;
     /* A flex item's length on its container's cross axis is its line's where it stretches (css-flexbox-1 §9.4
        step 11): the container's inner cross size for a single line, and for several, step 8's measurement of
-       every member of every line (`flex_cross_size_used_item_cross`). */
+       every member of every line; otherwise step 7's hypothetical cross size, whose inline arm reads the item's
+       intrinsic sizes (`flex_cross_size_used_item_cross_ask`). */
     if (uv_flex_item_cross_axis(el, uv_box_kind(el), vertical)) {
         lxb_dom_element_t *flex = uv_flex_item_container(el, UV_BOX_ITEM);
 
         if (!uv_operands_ask(flex, vertical)) return false;
-        if (flex_container_is_multi_line(flex) && !flex_cross_size_lines_ask(flex)) return false;
+        if (!flex_cross_size_used_item_cross_ask(flex, el)) return false;
     }
     /* A flex item's length on its container's main axis is its line's css-flexbox-1 §9.7 used main size
        (`uv_flex_item_main_size`), whose operands are its siblings'; `used_value_width_ask` asks it for a `row`

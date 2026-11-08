@@ -608,6 +608,15 @@ size_t flex_cross_size_lines(lxb_dom_element_t *container, CssPx **sizes)
     return lines;
 }
 
+bool flex_cross_size_used_item_cross_ask(lxb_dom_element_t *container, lxb_dom_element_t *item)
+{
+    bool vertical = flex_container_axis_is_vertical(container, FLEX_AXIS_CROSS);
+
+    if (fx_is_stretched(container, item, vertical))
+        return !flex_container_is_multi_line(container) || flex_cross_size_lines_ask(container);
+    return vertical || intrinsic_inline_sizes_ask(item);
+}
+
 CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_element_t *item)
 {
     bool vertical;
