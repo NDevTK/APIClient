@@ -1,5 +1,5 @@
-/* css-shadow-1 §4.1 "Flattening the DOM into an Element Tree": the flat tree, "which CSS uses for all purposes
- * after Selectors (including inheritance and box construction)". The same nodes as the DOM, with three
+/* css-shadow-1 §4.1 "Flattening the DOM into an Element Tree": "the rest of CSS needs a single unified tree
+ * structure to work with", the flat tree, after Selectors. The same nodes as the DOM, with three
  * differences: a shadow host's children are its shadow root's children, a slot's children are its assigned
  * nodes (its own children when nothing is assigned), and a host's light child that no slot was assigned is in no
  * flat tree at all. Every layout and style walk over parents or children uses these accessors, so the walks

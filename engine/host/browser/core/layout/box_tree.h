@@ -1,9 +1,7 @@
 /* css-display-3 §1 "Introduction"'s box tree on its child axis: the members whose boxes are the children of
- * one box. It is a sequence over css-shadow-1 §4.1 "Flattening the DOM into an Element Tree"'s flat tree
- * (core/dom/flat_tree.h), which "CSS uses for all purposes after Selectors (including inheritance and box
- * construction)", and differs from the box's flat-tree child list in two ways; every layout and paint walk over
- * a box's children reads this sequence so that the walks agree (core/layout/intrinsic_size.c and
- * core/paint/box_paint.c assert two such agreements).
+ * one box, over css-shadow-1 §4.1 "Flattening the DOM into an Element Tree"'s flat tree (core/dom/flat_tree.h).
+ * It differs from the box's flat-tree child list in two ways, and every layout and paint walk over a box's
+ * children reads it so the walks agree (core/layout/intrinsic_size.c and core/paint/box_paint.c assert two).
  *
  * css-display-3 §2.5 "Box Generation: the none and contents keywords" splices a `contents` element: "the
  * element must be treated as if it had been replaced in the element tree by its contents". The sequence pierces
