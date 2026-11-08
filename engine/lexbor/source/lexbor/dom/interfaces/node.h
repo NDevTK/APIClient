@@ -138,14 +138,16 @@ lxb_dom_node_name(lxb_dom_node_t *node, size_t *len);
  * write passes through (the four link primitives below, an element's attribute list and an attribute's value),
  * so a structure derived from the tree stays its function across any write, the parser's included. `inserted`
  * runs after `node` is linked, `removing` before it is unlinked; `attr_added` after an attribute is on its
- * element or holds its new value, `attr_removing` before it leaves or loses its old one; `document_destroying`
- * before a document's arenas go. NULL until the embedder sets one.
+ * element or holds its new value, `attr_removing` before it leaves or loses its old one; `document_created` when
+ * a document is initialised and `document_destroying` before its arenas go (a clean is both). NULL until the
+ * embedder sets one.
  */
 typedef struct {
     void (*inserted)(lxb_dom_node_t *node);
     void (*removing)(lxb_dom_node_t *node);
     void (*attr_added)(lxb_dom_element_t *element, lxb_dom_attr_t *attr);
     void (*attr_removing)(lxb_dom_element_t *element, lxb_dom_attr_t *attr);
+    void (*document_created)(lxb_dom_document_t *document);
     void (*document_destroying)(lxb_dom_document_t *document);
 }
 lxb_dom_tree_observer_t;

@@ -1,5 +1,6 @@
 /* The dispatch loop — see engine.h. */
 #include "core/fetch/fetch.h"
+#include "core/dom/document_name_index.h"   /* the name index recounted at a session's close */
 #include "core/events/listener_act.h"   /* the user act a driven listener is reached by, stated by a PoC */
 #include "core/html/input_value.h"      /* the person typing into a text control, a drive's typing act */
 #include "core/clipboard/data_transfer.h"   /* a drop act's drag data store */
@@ -11668,6 +11669,8 @@ static void engine_session_close(void) {
        g_sess_cur NULL). Otherwise flow_registry_free would be handed a flow with its delta applied, leaving its
        writes in the shared baseline with nothing able to unapply them; flow_release asserts it. */
     if (g_sess_cur) { flow_switch_out(g_sess_ctx, g_sess_cur); g_sess_cur = NULL; }
+    /* At rest the visible tree is the baseline, and every document's name index must be its function. */
+    document_name_index_verify_all();
     JS_FreeValue(g_sess_ctx, g_sess_proxy);
     g_sess_proxy = JS_UNDEFINED;
 #if APICLIENT_DEV

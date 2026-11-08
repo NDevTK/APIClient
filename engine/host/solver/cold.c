@@ -12,6 +12,7 @@
 #include "solver/dyn_body.h"  /* …and the program text, which is SHARED and so is counted once, not per flow */
 #include "solver/engine.h"    /* the one entry a rebuilt routed delivery goes back through — see the 'm' arm */
 #include "core/timing/hr_time.h"   /* the session start the current time's example is built on — the 'g' record */
+#include "core/dom/document_name_index.h"   /* the name index recounted after a resume */
 #include "check.h"
 
 #include <stdio.h>
@@ -2687,6 +2688,8 @@ int cold_resume(JSContext *ctx, const char *recipes)
        @RESUMED and no @COLD. */
     printf("@RESUMED %ld\n", flows);
     fflush(stdout);
+    /* The rebuilt frontier is parked, so the visible tree is the baseline its documents' name indexes follow. */
+    document_name_index_verify_all();
     return 1;
 }
 

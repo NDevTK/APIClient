@@ -14,4 +14,10 @@ void document_name_index_install(void);
    among these values, so false answers "not a supported property name" with no walk. */
 bool document_name_index_holds(lxb_dom_node_t *doc, const char *name, size_t n);
 
+/* Dev builds: recount every live document's id and name values from its tree and assert each equals its
+   index, naming the first value that differs and the caller's site. The index's correctness rests on every
+   tree write passing an observed primitive; this states it at rest points (a session's close, a cold resume). */
+void document_name_index_verify_all_at(const char *file, int line);
+#define document_name_index_verify_all() document_name_index_verify_all_at(__FILE__, __LINE__)
+
 #endif

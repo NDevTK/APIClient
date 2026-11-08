@@ -67,6 +67,10 @@ lxb_dom_document_interface_clone(lxb_dom_document_t *document,
 lxb_dom_document_t *
 lxb_dom_document_interface_destroy(lxb_dom_document_t *document)
 {
+    if (lxb_dom_tree_observer() != NULL) {
+        lxb_dom_tree_observer()->document_destroying(document);
+    }
+
     (void) lxb_dom_node_interface_destroy(lxb_dom_interface_node(document));
 
     return NULL;
@@ -94,6 +98,10 @@ lxb_dom_document_init(lxb_dom_document_t *document, lxb_dom_document_t *owner,
 
     if (document == NULL) {
         return LXB_STATUS_ERROR_OBJECT_IS_NULL;
+    }
+
+    if (lxb_dom_tree_observer() != NULL) {
+        lxb_dom_tree_observer()->document_created(document);
     }
 
     document->type = type;
@@ -199,6 +207,7 @@ lxb_dom_document_clean(lxb_dom_document_t *document)
 {
     if (lxb_dom_tree_observer() != NULL) {
         lxb_dom_tree_observer()->document_destroying(document);
+        lxb_dom_tree_observer()->document_created(document);
     }
 
     if (lxb_dom_interface_node(document)->owner_document == document) {
