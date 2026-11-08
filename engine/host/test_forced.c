@@ -6309,6 +6309,14 @@ static void wasm_link_selftest(void)
         WasmInterpreter it;
         size_t *externs;
 
+        if (row->before != NULL) {
+            st = wasm_interpreter_begin(&it, &e, wasm_export_index(e.module, e.bytes, WASM_EXTERN_FUNC, row->before),
+                                        NULL, 0);
+            while (wasm_running(st)) st = wasm_next(&it, st, true);
+            CHECKF(st == WASM_EXEC_DONE, "the link row %s: %s answered %s", row->src, row->before,
+                   wasm_exec_status_message(st));
+            wasm_interpreter_free(&it);
+        }
         wasm_module_decoder_init(&d, bytes, row->len);
         CHECKF(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the link row %s does not decode", row->src);
         wasm_module_validator_init(&v, &d.module, bytes, wasm_agent_types());
