@@ -502,6 +502,9 @@ void *decide_freeze_path(void);
    recorded branch name their creations apart; two that share their consumed decisions (a replay, or siblings of a
    fork over a value that arrived) name the same creation alike. Requires a running flow. */
 void  decide_history_name(uint64_t *identity, int *ordinal);
+/* Whether the running flow's recorded path, from its cursor on, takes the completion `why` (decide_completion's
+   key) first at a slot past the cursor: an arrival the replay reaches before its record took it. */
+int   decide_completion_recorded_later(const char *why);
 void *decide_suspend(void);
 void  decide_resume(void *blob, JSValueConst fn);
 void  decide_blob_free(void *blob);

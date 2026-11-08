@@ -1156,6 +1156,19 @@ void decide_history_name(uint64_t *identity, int *ordinal) {
                        "minted");
 }
 
+/* See decide.h. */
+int decide_completion_recorded_later(const char *why) {
+    uint32_t asked = dec_key_hash(why), k;
+    int i;
+
+    DCHECK(g_running, "a completion's recorded slot was asked while no flow's decision state was loaded");
+    for (i = g_c; i < dec_total(); i++) {
+        (void)dec_at(i, &k);
+        if (k == asked) return i > g_c;
+    }
+    return 0;
+}
+
 void decide_live_stats(long *entries, long *bytes) {
     if (entries) *entries = dec_total();
     if (bytes) *bytes = (long)((size_t)g_dec_cap * DEC_SLOT_BYTES);   /* both head buffers; one capacity governs them */

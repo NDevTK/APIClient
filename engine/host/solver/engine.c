@@ -6087,10 +6087,17 @@ static int flow_unaddressed_same_origin(JSContext *ctx, Flow *f, JSValueConst e,
  * outcome beyond the synchronous kind's completion below. */
 /* The first declined request whose fork is owed, or -1 when there is none or the suspension cannot be cloned now
    (flow_fork_homes_open, which says why such a fork waits). A read. */
+/* The waiting arm's completion key (decide_completion). */
+static const char DECLINE_WAITS[] = "(the trusted zone declined this request — the arm waits for the real reply)";
+
+/* A refusal is due once the flow can fork, and a replay takes it at the slot its record took it: a refusal that
+   reaches a replaying flow before that slot (the trusted zone answered sooner than in the recording session)
+   waits for it, since taking it early leaves the recorded path at the cursor and re-explores what it recorded. */
 static int flow_decline_fork_at(JSContext *ctx, const Flow *f) {
     int n = pending_count(f->pending), i;
 
     if (!flow_fork_homes_open(ctx, f, 0)) return -1;
+    if (decide_completion_recorded_later(DECLINE_WAITS)) return -1;
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(f->pending, i);
         int owed = pending_entry_declined(e) && !pending_get_int(e, PEND_DECLINE_TAKEN);
@@ -6161,8 +6168,7 @@ static void flow_decline_fork(JSContext *ctx, Flow *f, int i) {
               : !flow_unaddressed_same_origin(ctx, f, e, in_program, in_job);
         /* The waiting arm is completion 1 of a recorded choice, asked first; a flow whose recorded path chose
            it is that arm, and only a new choice mints it as a sibling. */
-        if (decide_completion("(the trusted zone declined this request — the arm waits for the real reply)",
-                              &dblob) == 1) {
+        if (decide_completion(DECLINE_WAITS, &dblob) == 1) {
             arm_flow = f;
         } else if (dblob != NULL) {
             flow_suspension_clone(ctx, f, in_program, in_job, &clone, &parked, "a declined request's waiting arm");
