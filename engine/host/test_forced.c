@@ -6072,7 +6072,7 @@ static void wasm_exec_check(const WasmExecRow *row, const WasmInterpreter *it, W
  * subset (fixture/wasm_exec.h). Each row's module is decoded and validated (the side table is validation's), the
  * export found by name; each instance's commands run in order on an instance of their own, each retiring one
  * unit of work per step it counts, and again on two more instances, one step of each in turn, which must answer
- * as the first did.
+ * as the first did. A grow's choice runs its example arm, the success the testsuite asserts.
  * fixture/wasm_valid.h's WASM_INVOKE_ROWS come first: what the testsuite's rows in scope do not reach. */
 TF_UNIT void wasm_interpreter_selftest(void)
 {
@@ -6101,9 +6101,10 @@ TF_UNIT void wasm_interpreter_selftest(void)
         while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst);
         CHECKF(st == WASM_EXEC_DONE, "%s: the instantiation answered \"%s\"", row->src, wasm_exec_status_message(st));
         st = wasm_interpreter_begin(&it, &inst, func, NULL, 0);
-        while (st == WASM_EXEC_MORE) st = wasm_interpreter_step(&it);
+        while (st == WASM_EXEC_MORE || st == WASM_EXEC_FORK)
+            st = st == WASM_EXEC_FORK ? wasm_interpreter_choose(&it, !row->assume) : wasm_interpreter_step(&it);
         CHECKF(st == WASM_EXEC_DONE && it.n_vals == 1 && it.vals[0].lo == row->result,
-               "%s: answered %s with %zu values, the first %llu; V8 answers %u", row->src,
+               "%s: answered %s with %zu values, the first %llu; the row expects %u", row->src,
                st == WASM_EXEC_DONE ? "a return" : wasm_exec_status_message(st), it.n_vals,
                it.n_vals ? (unsigned long long)it.vals[0].lo : 0ull, row->result);
         wasm_interpreter_free(&it);
@@ -6156,7 +6157,8 @@ TF_UNIT void wasm_interpreter_selftest(void)
             for (a = 0; a < row->n_args; a++) args[a].lo = WASM_EXEC_VALUES[row->args + a].bits;
             before = JS_FlowPeekRetiredWork();
             st = wasm_interpreter_begin(&alone, &inst[0], func, args, row->n_args);
-            while (st == WASM_EXEC_MORE) st = wasm_interpreter_step(&alone);
+            while (st == WASM_EXEC_MORE || st == WASM_EXEC_FORK)
+                st = st == WASM_EXEC_FORK ? wasm_interpreter_choose(&alone, true) : wasm_interpreter_step(&alone);
             CHECKF(JS_FlowPeekRetiredWork() - before == alone.retired && alone.retired > 0,
                    "%s: the interpreter retired %llu units of work for %llu instructions", row->src,
                    (unsigned long long)(JS_FlowPeekRetiredWork() - before), (unsigned long long)alone.retired);
@@ -6164,9 +6166,12 @@ TF_UNIT void wasm_interpreter_selftest(void)
             wasm_interpreter_free(&alone);
             for (k = 0; k < 2; k++)
                 sts[k] = wasm_interpreter_begin(&two[k], &inst[1 + k], func, args, row->n_args);
-            while (sts[0] == WASM_EXEC_MORE || sts[1] == WASM_EXEC_MORE)
-                for (k = 0; k < 2; k++)
-                    if (sts[k] == WASM_EXEC_MORE) sts[k] = wasm_interpreter_step(&two[k]);
+            while (sts[0] == WASM_EXEC_MORE || sts[1] == WASM_EXEC_MORE || sts[0] == WASM_EXEC_FORK
+                   || sts[1] == WASM_EXEC_FORK)
+                for (k = 0; k < 2; k++) {
+                    if (sts[k] == WASM_EXEC_FORK) sts[k] = wasm_interpreter_choose(&two[k], true);
+                    else if (sts[k] == WASM_EXEC_MORE) sts[k] = wasm_interpreter_step(&two[k]);
+                }
             for (k = 0; k < 2; k++) {
                 wasm_exec_check(row, &two[k], sts[k]);
                 wasm_interpreter_free(&two[k]);

@@ -651,31 +651,21 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
         return WASM_EXEC_MORE;
     case 16:
         return push(it, table_of(it, in->index[0])->size) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
-    case 15: {
-        WasmValue *grown;
-
+    case 15:
+        /* §4.7.1's growtable either succeeds or fails at the implementation's choice, which is an unknown of
+           the environment: the step answers FORK with the success arm as the example (wasm_interpreter_choose).
+           Past the maximum, past the address type, or past what a size_t can count, only failure exists. */
         t = table_of(it, in->index[0]);
         n = pop(it);
         b->ref.lo = pop(it);
         bound = t->type.addr64 ? UINT64_MAX : UINT32_MAX;
         if (n > bound - t->size || (t->type.has_max && t->size + n > t->type.max)
             || t->size + n > SIZE_MAX / sizeof *t->elems)
-            return push(it, t->type.addr64 ? UINT64_MAX : UINT32_MAX) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
-        if (t->size + n > t->cap) {
-            grown = realloc(t->elems, (size_t)(t->size + n ? t->size + n : 1) * sizeof *t->elems);
-            if (grown == NULL)
-                return push(it, t->type.addr64 ? UINT64_MAX : UINT32_MAX) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
-            t->elems = grown;
-            t->cap = t->size + n;
-        }
-        if (!push(it, t->size)) return WASM_EXEC_NO_ROOM;
-        b->op = 15;
-        b->table = in->index[0];
-        b->d = t->size;
-        b->n = n;
-        t->size += n;
-        return WASM_EXEC_MORE;
-    }
+            return push(it, bound) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
+        it->choice.kind = WASM_CHOICE_TABLE_GROW;
+        it->choice.table = in->index[0];
+        it->choice.n = n;
+        return WASM_EXEC_FORK;
     case 17:
         t = table_of(it, in->index[0]);
         n = pop(it);
@@ -719,6 +709,32 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
     default: break;
     }
     CHECK_FAIL("a 0xFC table opcode interpreter.c does not define");
+}
+
+WasmExecStatus wasm_interpreter_choose(WasmInterpreter *it, bool example)
+{
+    WasmChoice c = it->choice;
+    WasmTableInstance *t;
+    WasmBulk *b = &it->bulk;
+    WasmValue *grown;
+
+    DCHECK(c.kind == WASM_CHOICE_TABLE_GROW, "a WebAssembly choice was made with none pending");
+    it->choice.kind = 0;
+    t = table_of(it, (uint32_t)c.table);
+    if (!example) return push(it, t->type.addr64 ? UINT64_MAX : UINT32_MAX) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
+    if (t->size + c.n > t->cap) {
+        grown = realloc(t->elems, (size_t)(t->size + c.n ? t->size + c.n : 1) * sizeof *t->elems);
+        CHECK(grown != NULL, "a WebAssembly table could not grow: out of memory");
+        t->elems = grown;
+        t->cap = t->size + c.n;
+    }
+    if (!push(it, t->size)) return WASM_EXEC_NO_ROOM;
+    b->op = 15;
+    b->table = c.table;
+    b->d = t->size;
+    b->n = c.n;
+    t->size += c.n;
+    return WASM_EXEC_MORE;
 }
 
 /* One element of the bulk table instruction in progress. table.copy moves backward when the destination lies
@@ -842,10 +858,10 @@ static WasmExecStatus execute(WasmInterpreter *it, const WasmInstruction *in, si
     return unop(it, in->opcode);
 }
 
-/* A trap ends the invocation as a return does: no frame is left to step. */
+/* A trap ends the invocation as a return does: no frame is left to step. A FORK leaves it standing. */
 static WasmExecStatus finish(WasmInterpreter *it, WasmExecStatus st)
 {
-    if (st != WASM_EXEC_MORE)
+    if (st != WASM_EXEC_MORE && st != WASM_EXEC_FORK)
         while (it->n_frames > 0) free(it->frames[--it->n_frames].locals);
     return st;
 }
@@ -859,6 +875,7 @@ WasmExecStatus wasm_interpreter_step(WasmInterpreter *it)
     WasmDecoder r;
 
     DCHECK(it != NULL && it->n_frames > 0, "a WebAssembly invocation was stepped after it answered");
+    DCHECK(it->choice.kind == 0, "a WebAssembly invocation was stepped with a choice pending");
     JS_FlowRetireWork(1);
     it->retired++;
     if (it->bulk.n > 0) return bulk_step(it);
@@ -894,7 +911,8 @@ const char *wasm_exec_status_message(WasmExecStatus st)
 {
     switch (st) {
     case WASM_EXEC_DONE:
-    case WASM_EXEC_MORE:                return NULL;
+    case WASM_EXEC_MORE:
+    case WASM_EXEC_FORK:                return NULL;
     case WASM_EXEC_TRAP_UNREACHABLE:    return "unreachable executed";
     case WASM_EXEC_TRAP_DIVIDE_BY_ZERO: return "integer divide by zero";
     case WASM_EXEC_TRAP_OVERFLOW:       return "integer overflow";

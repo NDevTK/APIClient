@@ -82,14 +82,17 @@ static const WasmSideTableRow WASM_SIDE_TABLE_ROWS[] = {
 };
 
 /* Invocation rows the testsuite's subset does not reach, run by node 22's V8 to the same i32: a return_call
- * inside a callee, which returns to its caller's caller (f calls g, g tail-calls h, f adds 1 to h's 6), and
- * two global initializers, the second reading the first (40 + 2, then that times 3). */
+ * inside a callee, which returns to its caller's caller (f calls g, g tail-calls h, f adds 1 to h's 6), two
+ * global initializers, the second reading the first (40 + 2, then that times 3), and a table.grow by one, on
+ * its example arm (the old size, 0, as V8 answers) and on its assumption arm (-1). `assume` runs every choice
+ * the interpreter forks (interpreter.h's WasmChoice) on the assumption arm. */
 typedef struct {
     const char *src;
     size_t len;
     const char *bytes;
     const char *export_name;
     uint32_t result;
+    bool assume;
 } WasmInvokeRow;
 
 static const WasmInvokeRow WASM_INVOKE_ROWS[] = {
@@ -103,6 +106,14 @@ static const WasmInvokeRow WASM_INVOKE_ROWS[] = {
       "\101\050\101\002\152\013\177\000\043\000\101\003\154\013\007\005\001\001\147\000\000\012\006\001"
       "\004\000\043\001\013",
       "g", 126 },
+    { "a table.grow on its example arm", 45,
+      "\000\141\163\155\001\000\000\000\001\005\001\140\000\001\177\003\002\001\000\004\004\001\160\000"
+      "\000\007\005\001\001\147\000\000\012\013\001\011\000\320\160\101\001\374\017\000\013",
+      "g", 0 },
+    { "a table.grow on its assumption arm", 45,
+      "\000\141\163\155\001\000\000\000\001\005\001\140\000\001\177\003\002\001\000\004\004\001\160\000"
+      "\000\007\005\001\001\147\000\000\012\013\001\011\000\320\160\101\001\374\017\000\013",
+      "g", 0xFFFFFFFFu, true },
 };
 
 #endif

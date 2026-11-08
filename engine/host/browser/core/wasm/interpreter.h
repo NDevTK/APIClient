@@ -32,6 +32,7 @@ typedef struct {
 typedef enum {
     WASM_EXEC_DONE = 0,               /* the function returned; its results are the stack */
     WASM_EXEC_MORE,                   /* a step ended; step again */
+    WASM_EXEC_FORK,                   /* the environment chooses (see WasmChoice); choose before stepping */
     WASM_EXEC_TRAP_UNREACHABLE,       /* §4.6.2's unreachable */
     WASM_EXEC_TRAP_DIVIDE_BY_ZERO,    /* §4.3.2's idiv and irem of a zero divisor */
     WASM_EXEC_TRAP_OVERFLOW,          /* §4.3.2's idiv_s of the minimum by -1, §4.3.4's trunc out of range */
@@ -79,6 +80,16 @@ typedef struct {
     WasmValue ref;
 } WasmBulk;
 
+/* An outcome the spec leaves to the implementation, which is an unknown of the environment (§4.7.1's growtable
+   may fail): the step answers FORK, the caller runs the example arm or forks the assumption against it, and
+   wasm_interpreter_choose resumes with that arm. `kind` is 0 when none is pending. */
+enum { WASM_CHOICE_TABLE_GROW = 1 };
+typedef struct {
+    uint8_t kind;
+    size_t table;
+    uint64_t n;
+} WasmChoice;
+
 typedef struct {
     WasmInstance *inst;          /* borrowed, and the module, bytes and side table it holds */
     const WasmModule *module;
@@ -86,6 +97,7 @@ typedef struct {
     const WasmSideTable *side;
     size_t imported_globals, imported_tables;
     WasmBulk bulk;
+    WasmChoice choice;
     size_t pc;                   /* the current frame's next instruction */
     uint32_t n_results;          /* the invoked function's */
     WasmFrame *frames;           /* owned: one per call, the current last */
@@ -109,6 +121,9 @@ WasmExecStatus wasm_interpreter_begin_expr(WasmInterpreter *it, WasmInstance *in
 /* Retire one instruction. MORE, then DONE (the results are vals[0, n_results)) or a trap; stepping again is
    misuse (asserted). */
 WasmExecStatus wasm_interpreter_step(WasmInterpreter *it);
+/* Resume after FORK with the example arm (the grow succeeds; its storage is a CHECK where it cannot be had) or
+   the assumption against it (the grow answers -1). */
+WasmExecStatus wasm_interpreter_choose(WasmInterpreter *it, bool example);
 /* The reference interpreter's message for a trap (interpreter/exec/eval.ml), which `assert_trap` matches by
    prefix; NULL for DONE and MORE. */
 const char *wasm_exec_status_message(WasmExecStatus st);
