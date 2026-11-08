@@ -19,6 +19,8 @@
 #include "core/image/png_decode.h" /* PNG §5.3's chunks through PNG §9.2's filters to RGBA — @PNGDEC */
 #include "core/wasm/module_decoder.h" /* WebAssembly Core §5.5's preamble and sections */
 #include "fixture/wasm_binary.h"    /* the spec testsuite's binary rows that decoder answers */
+#include "core/wasm/module_validator.h" /* WebAssembly Core §3.5's module validation */
+#include "fixture/wasm_valid.h"     /* the rows that validator answers */
 #include "core/image/image_header.h" /* css-images-3 §4.1's natural dimensions — cross-checked by @PNGDEC */
 #include "core/xml/xml_char.h"   /* XML §2.2/§2.3[3]/§2.11 — the layer every XML production reads through */
 #include "core/xml/xml_ref.h"    /* XML §4.1's [66]/[68] and §4.6's five predefined entities */
@@ -5785,6 +5787,61 @@ TF_UNIT void wasm_module_decoder_selftest(void)
                    s->name_offset, s->name_size, e->id, e->offset, e->size, e->name_offset, e->name_size);
         }
         wasm_module_decoder_free(&d);
+    }
+}
+
+/* WebAssembly Core §3.5 "Modules"' validation (core/wasm/module_validator.h) over fixture/wasm_valid.h's rows:
+ * each decodes, and its validation answers the row's verdict with valid.ml's message. Every row is validated
+ * alone and then all at once, one step each in turn, so a validation that kept state outside its
+ * WasmModuleValidator disagrees with itself. */
+TF_UNIT void wasm_module_validator_selftest(void)
+{
+    enum { NV = sizeof WASM_VALIDATE_ROWS / sizeof WASM_VALIDATE_ROWS[0] };
+    static WasmModuleDecoder dec[NV];
+    static WasmModuleValidator alone[NV], together[NV];
+    WasmValidateStatus st_alone[NV], st_together[NV];
+    char got[512], other[512];
+    size_t i, live;
+
+    for (i = 0; i < NV; i++) {
+        const WasmBinaryRow *row = &WASM_VALIDATE_ROWS[i];
+        WasmDecodeStatus ds;
+
+        wasm_module_decoder_init(&dec[i], (const uint8_t *)row->bytes, row->len);
+        ds = wasm_module_decoder_run(&dec[i]);
+        CHECKF(ds == WASM_DECODE_DONE, "the WebAssembly validation row %s does not decode (%s)", row->src,
+               wasm_decode_status_message(ds));
+        wasm_module_validator_init(&alone[i], wasm_module_decoder_module(&dec[i]), (const uint8_t *)row->bytes);
+        st_alone[i] = wasm_module_validator_run(&alone[i]);
+        wasm_module_validator_message(&alone[i], st_alone[i], got, sizeof got);
+        CHECKF(st_alone[i] != WASM_VALIDATE_MORE, "the validation of %s returned MORE from its run", row->src);
+        if (row->expect == NULL)
+            CHECKF(st_alone[i] == WASM_VALIDATE_DONE, "the valid WebAssembly module %s was refused with \"%s\"",
+                   row->src, got);
+        else
+            CHECKF(st_alone[i] != WASM_VALIDATE_DONE && strncmp(got, row->expect, strlen(row->expect)) == 0,
+                   "the invalid WebAssembly module %s was answered \"%s\"; valid.ml answers \"%s\"", row->src,
+                   st_alone[i] == WASM_VALIDATE_DONE ? "valid" : got, row->expect);
+        wasm_module_validator_init(&together[i], wasm_module_decoder_module(&dec[i]), (const uint8_t *)row->bytes);
+        st_together[i] = WASM_VALIDATE_MORE;
+    }
+    do {
+        live = 0;
+        for (i = 0; i < NV; i++) {
+            if (st_together[i] != WASM_VALIDATE_MORE) continue;
+            st_together[i] = wasm_module_validator_step(&together[i]);
+            live++;
+        }
+    } while (live > 0);
+    for (i = 0; i < NV; i++) {
+        wasm_module_validator_message(&alone[i], st_alone[i], got, sizeof got);
+        wasm_module_validator_message(&together[i], st_together[i], other, sizeof other);
+        CHECKF(st_alone[i] == st_together[i] && strcmp(got, other) == 0,
+               "the validation of %s answered differently stepped among the others than alone",
+               WASM_VALIDATE_ROWS[i].src);
+        wasm_module_validator_free(&alone[i]);
+        wasm_module_validator_free(&together[i]);
+        wasm_module_decoder_free(&dec[i]);
     }
 }
 
@@ -41315,6 +41372,7 @@ int main(int argc, char **argv) {
        image through it, and a decompressor that were broken would fail at its own row first. */
     png_decode_selftest();
     wasm_module_decoder_selftest();   /* WebAssembly Core §5.5's framing, a primitive with no in-flow caller yet */
+    wasm_module_validator_selftest(); /* §3.5's module validation over that decoder's output, after it */
     /* @IMGMARK — the IMAGE mark that turns that decoder's output into ink, AFTER it and for the reason its
        own banner gives: this row's operand is png_decode's output. */
     display_image_mark_selftest();
