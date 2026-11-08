@@ -225,13 +225,11 @@ BoxPaintWalk *box_paint_begin(JSContext *ctx, lxb_dom_element_t *context_el, Dis
                               BoxPaintCensus *census);
 bool box_paint_step(BoxPaintWalk *w);
 bool box_paint_end(BoxPaintWalk *w);
-/* The element of the offer `step` paints next, held so the offer is the same one when `step` runs, for a caller
-   that asks the element's layout before painting it; false when the sequence is complete. Asserted as `step`
-   is: the walk has not stopped and a cascade record is held. */
-bool box_paint_next_element(BoxPaintWalk *w, lxb_dom_element_t **el);
-/* The held offer's producers that are asks, asked under the caller's resting drive: for CSS 2.1 §E.2's step 7.2,
-   the inline formatting context condition `bp_line_boxes` reads as served. False ("not yet") when one stopped;
-   true when the sequence is complete. */
-bool box_paint_next_ask(BoxPaintWalk *w);
+/* Whether the offer `step` paints next has its asks answered, under a resting drive this opens on the entered
+   job: CSSOM View §6's client rectangles of its element and, for CSS 2.1 §E.2's step 7.2, the inline formatting
+   context condition `bp_line_boxes` reads as served. The offer is held, so `step` paints the one asked. False
+   ("not yet") when the activation must rest; true when the sequence is complete. Asked before each `step`, with
+   no drive open; asserted as `step` is. */
+bool box_paint_ready(BoxPaintWalk *w);
 
 #endif

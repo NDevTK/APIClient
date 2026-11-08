@@ -14,8 +14,6 @@
 #include "core/frame/viewport.h"
 #include "core/graphics/raster_surface.h"
 #include "core/layout/layout_job.h"
-#include "core/dom/element_view.h"   /* CSSOM View §6's client rectangles, asked before an offer reads them */
-#include "solver/rest_unit.h"
 #include "core/paint/box_paint.h"
 #include "core/paint/display_list.h"
 #include "core/paint/display_list_raster.h"
@@ -149,18 +147,8 @@ bool document_paint_step(DocumentPaintFrame *f)
 
 bool document_paint_ready(DocumentPaintFrame *f)
 {
-    lxb_dom_element_t *el;
-    LayoutJobDrive d;
-    bool ready;
-
     DCHECK(f != NULL, "a paint's next offer was asked about through nothing");
-    if (f->walk == NULL || !box_paint_next_element(f->walk, &el)) return true;
-    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
-    layout_job_drive_begin_resting(&d);
-    ready = element_view_client_rects_ask(el, &d) && box_paint_next_ask(f->walk);
-    layout_job_drive_end(&d);
-    rest_unit_end();
-    return ready;
+    return f->walk == NULL || box_paint_ready(f->walk);
 }
 
 void document_paint_finish(DocumentPaintFrame *f)

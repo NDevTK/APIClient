@@ -84,11 +84,10 @@ typedef struct DocumentPaintFrame DocumentPaintFrame;
    every computed value is held in that job's cascade record; the job outlives the walk. */
 DocumentPaintFrame *document_paint_begin(JSContext *ctx, lxb_dom_document_t *doc);
 bool document_paint_step(DocumentPaintFrame *f);
-/* Whether the next offer's geometry is answered: CSSOM View §6's client rectangles of its element and the offer's
-   own asks (core/paint/box_paint.h's box_paint_next_ask), asked under a resting drive this opens on the entered
-   job, so the offer reads them from the job's memo. False ("not yet")
-   when the activation must rest, its questions suspended on the job; true when no offer is left. Asked before
-   each `step`, with no drive open. */
+/* Whether the next offer's geometry is answered (core/paint/box_paint.h's box_paint_ready: its element's client
+   rectangles and the offer's own asks, under a resting drive opened on the entered job), so the offer reads
+   them from the job's memo. False ("not yet") when the activation must rest, its questions suspended on the
+   job; true when no offer is left. Asked before each `step`, with no drive open. */
 bool document_paint_ready(DocumentPaintFrame *f);
 void document_paint_finish(DocumentPaintFrame *f);
 bool document_paint_finished(const DocumentPaintFrame *f);

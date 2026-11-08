@@ -38656,7 +38656,12 @@ static bool tf_box_paint(JSContext *ctx, lxb_dom_element_t *root, DisplayList *o
     BoxPaintWalk *w = box_paint_begin(ctx, root, out, census);
     bool ok;
 
-    while (box_paint_step(w)) {}
+    for (;;) {
+        while (!box_paint_ready(w))
+            CHECK(!layout_job_declined(job), "a paint selftest's offer declined a selector match, whose fork only "
+                                             "update the rendering's step machine can take");
+        if (!box_paint_step(w)) break;
+    }
     ok = box_paint_end(w);
     tf_job_leave(job);
     return ok;

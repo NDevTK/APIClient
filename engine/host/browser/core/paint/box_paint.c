@@ -36,6 +36,8 @@
 #include "core/paint/box_paint.h"
 #include "core/paint/display_list.h"
 #include "core/paint/paint_order.h"
+#include "core/layout/layout_job.h"   /* the resting drive the next offer's asks are made under */
+#include "solver/rest_unit.h"
 #include <lexbor/core/base.h>   /* lexbor_calloc: the allocator the engine gives its refusal edge */
 #include "quickjs.h"
 
@@ -1173,7 +1175,7 @@ static bool bp_line_boxes(BpState *st, lxb_dom_element_t *el)
     size_t n, i;
     bool ok = true;
 
-    if (block_flow_establishes_inline_context_served(el, "core/paint/document_paint.c's document_paint_ready")) {
+    if (block_flow_establishes_inline_context_served(el, "core/paint/box_paint.c's box_paint_ready")) {
         BlockFlowRun whole;
 
         /* §9.4.2's context with an ELEMENT to name it is the WHOLE of this container's content — the run with
@@ -1436,25 +1438,23 @@ static bool bp_hold_next(BoxPaintWalk *w)
     return w->held;
 }
 
-bool box_paint_next_element(BoxPaintWalk *w, lxb_dom_element_t **el)
+bool box_paint_ready(BoxPaintWalk *w)
 {
-    DCHECK(w != NULL && w->ok && el != NULL, "CSS 2.1 §E.2's next offer was asked of a painter that stopped");
+    LayoutJobDrive d;
+    bool ready, establishes;
+
+    DCHECK(w != NULL && w->ok, "CSS 2.1 §E.2's next offer was asked of a painter that stopped");
     DCHECK(css_cascade_record_is_held(),
            "CSS 2.1 §E.2's next offer was asked with no cascade record held — its caller asks inside the layout "
            "job the walk paints on");
-    if (!bp_hold_next(w)) return false;
-    *el = w->el;
-    return true;
-}
-
-bool box_paint_next_ask(BoxPaintWalk *w)
-{
-    bool establishes;
-
-    DCHECK(w != NULL && w->ok, "CSS 2.1 §E.2's next offer's producers were asked of a painter that stopped");
     if (!bp_hold_next(w)) return true;
-    if (w->step != PAINT_STEP_LINE_BOXES) return true;
-    return block_flow_establishes_inline_context_ask(w->el, &establishes);
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+    layout_job_drive_begin_resting(&d);
+    ready = element_view_client_rects_ask(w->el, &d) &&
+            (w->step != PAINT_STEP_LINE_BOXES || block_flow_establishes_inline_context_ask(w->el, &establishes));
+    layout_job_drive_end(&d);
+    rest_unit_end();
+    return ready;
 }
 
 bool box_paint_step(BoxPaintWalk *w)
