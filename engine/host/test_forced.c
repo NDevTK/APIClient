@@ -23684,9 +23684,13 @@ TF_UNIT void probes_flatshadow(const char *js, Probe *tab, int *n) {
 }
 
 /* The rows of the `longline` document (fixture/longline.h): CSS 2.2 §9.4.2's line box over 20,001 inline boxes
-   and an atomic inline, filled across rests inside getBoundingClientRect. */
+   and an atomic inline, filled across rests inside getBoundingClientRect. long-line-rests: every turn, the
+   rendering step's paint of that line included, offers a suspend point within one quantum of work, read from
+   `sliceOverrunGapWork` (the widest stretch of work between two offers in any turn). */
 TF_UNIT void probes_longline(const char *js, Probe *tab, int *n) {
-    const char *ll_why = NULL; int ll_tt = 1;
+    const char *ll_why = NULL, *lr_why = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int ll_tt = 1, lr_tt = 1;
     fold_row(&ll_tt, &ll_why, !!strstr(js, "\"/api/longline\""),
              "NOT REACHED: no /api/longline record, so the document aborted before its fetch");
     fold_row(&ll_tt, &ll_why, param_value_is(js, "/api/longline", "x", "20") &&
@@ -23694,8 +23698,13 @@ TF_UNIT void probes_longline(const char *js, Probe *tab, int *n) {
                               param_value_is(js, "/api/longline", "h", "30"),
              "CSS 2.2 §9.4.2: the last empty inline box of the long line is not the point (20, 30) on the 30px "
              "image's baseline, in a 30px line box");
+    fold_row(&lr_tt, &lr_why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&lr_tt, &lr_why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: a layout or paint of the long line "
+             "ran its line box fill or its §10.8 extents to completion on a drive that does not rest");
     const Probe rows[] = {
         { "long-line", ll_tt, "/api/longline", SESS_EXPLORE, ll_why },
+        { "long-line-rests", lr_tt, "/api/longline", SESS_EXPLORE, lr_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
