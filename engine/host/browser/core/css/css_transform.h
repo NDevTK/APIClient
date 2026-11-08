@@ -18,6 +18,8 @@
 
 #include <lexbor/dom/dom.h>
 
+#include "core/css/css_transform_function.h"
+
 /* §2 Terminology's two categories of transformable element, and the answer for an element in neither. */
 typedef enum {
     CSS_TRANSFORMABLE_NONE = 0,
@@ -40,8 +42,19 @@ bool css_transform_is_transformable(lxb_dom_element_t *el);
 /* The first category alone: a transformable element "whose layout is governed by the CSS box model". */
 bool css_transform_is_css_box_transformable(lxb_dom_element_t *el);
 
+/* css-transforms-2 §6 "Current Transformation Matrix"'s steps 3 to 7 as one list, in its order: translate,
+   rotate and scale, then each function of `transform`. Step 6's offset is not a property this engine has. TRUE
+   with `*out` owned by the caller (release it with `css_transform_list_free`); FALSE writing an empty list
+   when all four are `none`. */
+bool css_transform_composed_list(lxb_dom_element_t *el, CssTransformList *out);
+
 /* §2 Terminology's TRANSFORMED ELEMENT — "an element with a computed value other than none for the transform
-   property", over core/css/css_computed_value.h's computed `transform`. */
+   property" — over the list above: css-transforms-2 §5 gives every value but `none` of translate, rotate and
+   scale the same effects "per usual for transforms". */
 bool css_transform_is_transformed(lxb_dom_element_t *el);
+
+/* css-transforms-1 §2 "The Transform Rendering Model": "For elements whose layout is governed by the CSS box
+   model", a transform creates a stacking context and "a containing block for all descendants". */
+bool css_transform_creates_context(lxb_dom_element_t *el);
 
 #endif

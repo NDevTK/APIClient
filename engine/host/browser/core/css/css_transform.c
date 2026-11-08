@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <lexbor/core/base.h>
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
@@ -113,25 +114,44 @@ bool css_transform_is_css_box_transformable(lxb_dom_element_t *el)
     return css_transform_category(el) == CSS_TRANSFORMABLE_CSS_BOX;
 }
 
+bool css_transform_composed_list(lxb_dom_element_t *el, CssTransformList *out)
+{
+    static const char *const INDIVIDUAL[] = { "translate", "rotate", "scale" };
+    CssTransformFunction own[3];
+    CssTransformList list = { NULL, 0 };
+    size_t n = 0, i;
+    bool has_list;
+
+    DCHECK(el != NULL && out != NULL, "css-transforms-2 §6's list was asked of no element or into nowhere");
+    has_list = css_computed_transform_list(el, &list);
+    for (i = 0; i < COUNTOF(INDIVIDUAL); i++)
+        if (css_computed_individual_transform(el, INDIVIDUAL[i], &own[n])) n++;
+    if (n == 0) {
+        *out = list;
+        return has_list;
+    }
+    out->n = n + list.n;
+    out->fn = lexbor_malloc(out->n * sizeof *out->fn);
+    CHECK(out->fn != NULL, "css-transforms-2 §6: OOM composing an element's transform functions");
+    memcpy(out->fn, own, n * sizeof *own);
+    if (list.n > 0) memcpy(out->fn + n, list.fn, list.n * sizeof *list.fn);
+    css_transform_list_free(&list);
+    return true;
+}
+
 bool css_transform_is_transformed(lxb_dom_element_t *el)
 {
-    char *v;
+    CssTransformList list;
     bool out;
 
     DCHECK(el != NULL, "css-transforms-1 §2 Terminology's transformed-element question was asked with no "
                        "element");
-    /* "An element with a computed value other than none for the transform property" — the whole definition,
-       and it is a test on the COMPUTED value rather than the specified one because that is what §2 says. The
-       two differ only by §3's absolutization of lengths, which cannot turn a list into `none` nor `none` into
-       a list, so the distinction this predicate draws is one the entry below can already make for every value
-       it can answer at all. */
-    v = css_computed_value(el, "transform");
-    DCHECK(v != NULL, "CSS Cascade §7.1 \"Initial Values\" produced no computed `transform` — css-transforms-1 §3 \"The "
-                      "transform Property\" gives it an `Initial:` value of `none` and "
-                      "core/css/css_style_declaration.c "
-                      "carries that row for lexbor's registry, which has no entry of its own, so the cascade's "
-                      "last layer always answers");
-    out = strcmp(v, "none") != 0;
-    free(v);
+    out = css_transform_composed_list(el, &list);
+    if (out) css_transform_list_free(&list);
     return out;
+}
+
+bool css_transform_creates_context(lxb_dom_element_t *el)
+{
+    return css_transform_is_css_box_transformable(el) && css_transform_is_transformed(el);
 }

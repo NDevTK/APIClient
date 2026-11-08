@@ -82,20 +82,6 @@ static bool so_is_positioned(lxb_dom_element_t *el)
     return !css_computed_keyword_is(el, "position", CSS_KEYWORD_STATIC);
 }
 
-/* DOES A TRANSFORM APPLY TO THIS BOX — the one fact css-transforms-1 §2 "The Transform Rendering Model" states
-   three rules over, asked once here so the three cannot come apart. §2's sentence names both conjuncts: "For
-   elements whose layout is governed by the CSS box model, any value other than none for the transform property
-   results in the creation of a stacking context." The element half is §2 Terminology's first category of
-   transformable element (core/css/css_transform.h), so an SVG element under another one, which is the second
-   category, forms no stacking context by this rule.
-   The three callers below each quote their own sentence of §2 rather than a predicate named after one of
-   them: §2 says a stacking context is created, which layer the box is painted in, and what its stack level is,
-   and those are three questions asked of this single bit. */
-static bool so_transform_applies(lxb_dom_element_t *el)
-{
-    return css_transform_is_css_box_transformable(el) && css_transform_is_transformed(el);
-}
-
 /* css-contain-2 §3.3 "Layout Containment" and §3.5 "Paint Containment": "The ... containment box creates a
    stacking context" (core/layout/containment.h). */
 static bool so_containment_applies(lxb_dom_element_t *el)
@@ -203,7 +189,7 @@ bool stacking_context_forms(lxb_dom_element_t *el)
        IT MUST STAND ABOVE THE EARLY RETURN BELOW AND THAT IS STRUCTURAL RATHER THAN STYLISTIC: the `position`
        test two lines down is §9.9.1's own precondition and returns for every static box, so a transform arm
        written after it would be unreachable for the whole population it is about. */
-    if (so_transform_applies(el)) return true;
+    if (css_transform_creates_context(el)) return true;
     /* css-contain-2's sentence is a disjunct of the same kind, and stands above the early return for the same
        reason. */
     if (so_containment_applies(el)) return true;
@@ -243,7 +229,7 @@ int stacking_level(lxb_dom_element_t *el)
             "display types\". A caller that reached here with such an element has classified it into a layer "
             "a stack level orders, which is the defect to fix rather than a 0 to return",
             box_subject(el, nbuf, sizeof nbuf));
-    DCHECKF(so_is_positioned(el) || so_is_root_element(lxb_dom_interface_node(el)) || so_transform_applies(el) ||
+    DCHECKF(so_is_positioned(el) || so_is_root_element(lxb_dom_interface_node(el)) || css_transform_creates_context(el) ||
             so_containment_applies(el),
             "%s: CSS 2.1 §9.9.1's stack level was asked of a box that has none. `z-index`'s own \"Applies to:\" "
             "line is \"positioned elements\", and §9.9.1 says the same thing where it defines the concept — "
@@ -358,7 +344,7 @@ StackingLayer stacking_layer_of(lxb_dom_element_t *el)
        because §2 states the layer over every element the transform applies to and says nothing about `float`:
        a floated transformed box is painted at level 0 like any other, and the float test would otherwise
        claim it for layer 4. */
-    if (so_transform_applies(el)) return STACKING_LAYER_LEVEL_ZERO;
+    if (css_transform_creates_context(el)) return STACKING_LAYER_LEVEL_ZERO;
     /* Layer 6 for a non-positioned containment box: it is one of "the child stacking contexts with stack level
        0", since `z-index` applies to positioned boxes alone and leaves its stack level at §9.9.1's 0. Asked
        before the float arm for the transform arm's reason. */
