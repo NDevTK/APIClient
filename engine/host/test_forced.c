@@ -17207,8 +17207,11 @@ TF_UNIT void probes_keydomain(const char *js, Probe *tab, int *n) {
     fold_row(&keep_tt, &keep_why, emitted_record_has(js, "/api/kd-a10", "\"door\":\"fetch\""),
              "a global whose name lies in the unknown key's domain did not keep the hit arm of the WindowProxy's "
              "read");
-    fold_row(&keep_tt, &keep_why, emitted_record_has(js, "/api/kd-a14", "\"door\":\"fetch\""),
-             "the global `jQuery123`, whose digits lie in the expando's domain, did not keep the hit arm of the "
+    fold_row(&miss_tt, &miss_why, !strstr(js, "\"/api/kd-a14\""),
+             "a /api/kd-a14 record exists: the global `jQuery123`, whose digits do not begin with the `371` "
+             "replace(/\\D/g, \"\") keeps of the version, took an arm where it hit");
+    fold_row(&keep_tt, &keep_why, emitted_record_has(js, "/api/kd-a15", "\"door\":\"fetch\""),
+             "the global `jQuery3710123`, whose digits lie in the expando's domain, did not keep the hit arm of the "
              "WindowProxy's read");
     const Probe rows[] = {
         { "keydomain-miss", miss_tt, "kdKey", SESS_EXPLORE, miss_why },

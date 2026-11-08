@@ -9,7 +9,8 @@
    No global variable of this page begins with a domain's prefix (`zq`, `zi`, `zg`). jQuery's own expando
    (`"jQuery" + ("3.7.1" + Math.random()).replace(/\D/g, "")`) is at least nine units long with only digits after
    its prefix, so the global `jQuery` (too short, kd-a12) and `znNotDigits` (a non-digit after `zn`, kd-a13) are
-   outside it, and a global `jQuery123` keeps the hit arm (kd-a14). One of test_forced.c's exploring documents
+   outside it. The digits begin with the version's own `371`, which no match of /\D/g removes, so `jQuery123` is
+   outside it too (kd-a14) and `jQuery3710123` keeps the hit arm (kd-a15). One of test_forced.c's exploring documents
    (TF_DOCS); it ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_KEYDOMAIN_H
 #define ENGINE_HOST_FIXTURE_KEYDOMAIN_H
@@ -48,6 +49,8 @@ static const char HTML_KEYDOMAIN[] =
     "if (window[kdClsKey]) fetch('/api/kd-a13'); else fetch('/api/kd-b13');"
     "window.jQuery123 = 1;"
     "if (window[kdJqKey]) fetch('/api/kd-a14'); else fetch('/api/kd-b14');"
+    "window.jQuery3710123 = 1;"
+    "if (window[kdJqKey]) fetch('/api/kd-a15'); else fetch('/api/kd-b15');"
     "var kdOther = new Object(); kdOther[location.hash] = 1;"
     "if (kdOther[kdKey]) fetch('/api/kd-a5'); else fetch('/api/kd-b5');"
     "</script>"
