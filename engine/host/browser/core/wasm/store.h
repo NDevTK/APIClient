@@ -20,6 +20,7 @@
 
 #include "quickjs.h"
 #include "core/wasm/matching.h"
+#include "core/wasm/type_registry.h"
 #include "core/wasm/wasm_module.h"
 
 typedef struct WasmInstance WasmInstance;
@@ -84,13 +85,15 @@ typedef struct {
 typedef struct WasmStore {
     JSContext *ctx;              /* borrowed: the agent's context, which owns the objects below */
     JSValue owner;               /* the reference wasm_store_new answered, which owns this store */
+    WasmTypeRegistry *registry;  /* borrowed: the agent's type registry, which every type space here interns in */
     WasmList funcs, globals, tables, mems, elems, datas;   /* by address: each its instance's type below */
-    WasmList instances;          /* WasmInstance *, borrowed: the module instances, by address */
+    WasmList instances;          /* JSValue, owned: the module instances' owners (instance.h), by address */
     WasmList types;              /* const WasmTypes *, borrowed: the type spaces store types index (§4.2.6) */
 } WasmStore;
 
-/* A new store owned by a new object of the agent's store class, whose reference is `owner`. */
-WasmStore *wasm_store_new(JSContext *ctx);
+/* A new store owned by a new object of the agent's store class, whose reference is `owner`; its type spaces are
+   `registry`'s (borrowed, outliving the store). */
+WasmStore *wasm_store_new(JSContext *ctx, WasmTypeRegistry *registry);
 /* The store `owner` owns, or NULL when `owner` is no store's. */
 WasmStore *wasm_store_of(JSValueConst owner);
 /* Drop the reference wasm_store_new answered; the store goes when its owner does. */
@@ -115,7 +118,7 @@ size_t wasm_store_add_table(WasmStore *s, const WasmLimits *type, WasmStoreValTy
 size_t wasm_store_add_mem(WasmStore *s, const WasmLimits *type);
 size_t wasm_store_add_elem(WasmStore *s, uint64_t n);
 size_t wasm_store_add_data(WasmStore *s, WasmDataInstance d);
-size_t wasm_store_add_instance(WasmStore *s, WasmInstance *inst);
+size_t wasm_store_add_instance(WasmStore *s, JSValueConst owner);
 size_t wasm_store_add_types(WasmStore *s, const WasmTypes *types);
 /* The store's class, declared once per agent (core/platform.c's `wasm_store` row), and its release. */
 void wasm_store_class_init(JSContext *ctx);

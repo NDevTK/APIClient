@@ -6,6 +6,7 @@
 
 #include "check.h"
 #include "core/agent_state.h"
+#include "core/wasm/instance.h"
 #include "core/wasm/linear_memory.h"
 #include "core/wasm/reference_vector.h"
 #include "solver/cow.h"
@@ -22,6 +23,7 @@ static const CowRecord FUNC_REC = { sizeof(WasmFuncInstance), NULL, 0 };
 static const CowRecord GLOBAL_REC = { sizeof(WasmGlobalInstance), NULL, 0 };
 static const CowRecord TABLE_REC = { sizeof(WasmTableInstance), TABLE_VALS, 1 };
 static const CowRecord MEM_REC = { sizeof(JSValue), MEM_VALS, 1 };
+static const CowRecord INSTANCE_REC = { sizeof(JSValue), MEM_VALS, 1 };
 static const CowRecord ELEM_REC = { sizeof(WasmElemInstance), ELEM_VALS, 1 };
 static const CowRecord DATA_REC = { sizeof(WasmDataInstance), NULL, 0 };
 static const CowRecord POINTER_REC = { sizeof(void *), NULL, 0 };
@@ -104,7 +106,7 @@ const WasmDataInstance *wasm_store_data(const WasmStore *s, size_t a)
 
 WasmInstance *wasm_store_instance(const WasmStore *s, size_t a)
 {
-    return *(WasmInstance **)list_at(&s->instances, a, sizeof(WasmInstance *), "module instance");
+    return wasm_instance_of(*(JSValue *)list_at(&s->instances, a, sizeof(JSValue), "module instance"));
 }
 
 const WasmTypes *wasm_store_types(const WasmStore *s, size_t a)
@@ -186,22 +188,25 @@ size_t wasm_store_add_data(WasmStore *s, WasmDataInstance d)
     return s->datas.n - 1;
 }
 
-size_t wasm_store_add_instance(WasmStore *s, WasmInstance *inst)
+size_t wasm_store_add_instance(WasmStore *s, JSValueConst owner)
 {
-    *(WasmInstance **)list_append(s, &s->instances, &POINTER_REC) = inst;
+    JSValue *slot;
+
+    DCHECK(wasm_instance_of(owner)->store == s, "a WebAssembly module instance was added to a store not its own");
+    slot = list_append(s, &s->instances, &INSTANCE_REC);
+    cow_record_set(s->ctx, slot, &INSTANCE_REC, slot, JS_DupValue(s->ctx, owner));
     return s->instances.n - 1;
 }
 
 size_t wasm_store_add_types(WasmStore *s, const WasmTypes *types)
 {
-    DCHECK(types != NULL && types->registry != NULL, "a WebAssembly type space was added with no registry");
-    DCHECK(s->types.n == 0 || wasm_store_types(s, 0)->registry == types->registry,
-           "a WebAssembly store's type spaces use two type registries");
+    DCHECK(types != NULL && types->registry == s->registry, "a WebAssembly type space was added to a store whose "
+           "type registry it is not interned in");
     *(const WasmTypes **)list_append(s, &s->types, &POINTER_REC) = types;
     return s->types.n - 1;
 }
 
-/* Release the objects the entries own, as the owner's finalizer; the module instances are their owners'. */
+/* Mark and release the objects the entries own. */
 static void store_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
@@ -212,6 +217,8 @@ static void store_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
     for (i = 0; i < s->tables.n; i++) JS_MarkValue(rt, wasm_store_table(s, i)->refs, mark_func);
     for (i = 0; i < s->elems.n; i++) JS_MarkValue(rt, wasm_store_elem(s, i)->refs, mark_func);
     for (i = 0; i < s->mems.n; i++) JS_MarkValue(rt, wasm_store_mem(s, i), mark_func);
+    for (i = 0; i < s->instances.n; i++)
+        JS_MarkValue(rt, *(JSValue *)list_at(&s->instances, i, sizeof(JSValue), "module instance"), mark_func);
 }
 
 static void store_finalizer(JSRuntime *rt, JSValue val)
@@ -224,6 +231,8 @@ static void store_finalizer(JSRuntime *rt, JSValue val)
     for (i = 0; i < s->tables.n; i++) JS_FreeValueRT(rt, wasm_store_table(s, i)->refs);
     for (i = 0; i < s->elems.n; i++) JS_FreeValueRT(rt, wasm_store_elem(s, i)->refs);
     for (i = 0; i < s->mems.n; i++) JS_FreeValueRT(rt, wasm_store_mem(s, i));
+    for (i = 0; i < s->instances.n; i++)
+        JS_FreeValueRT(rt, *(JSValue *)list_at(&s->instances, i, sizeof(JSValue), "module instance"));
     list_free(&s->funcs);
     list_free(&s->globals);
     list_free(&s->tables);
@@ -235,15 +244,17 @@ static void store_finalizer(JSRuntime *rt, JSValue val)
     free(s);
 }
 
-WasmStore *wasm_store_new(JSContext *ctx)
+WasmStore *wasm_store_new(JSContext *ctx, WasmTypeRegistry *registry)
 {
     WasmStore *s;
 
     DCHECK(ctx != NULL && g_class != 0, "a WebAssembly store was made before wasm_store_class_init declared its "
            "class");
+    DCHECK(registry != NULL, "a WebAssembly store was made with no type registry");
     s = calloc(1, sizeof *s);
     CHECK(s != NULL, "a WebAssembly store could not be allocated: out of memory");
     s->ctx = ctx;
+    s->registry = registry;
     s->owner = JS_NewObjectProtoClass(ctx, JS_NULL, g_class);
     CHECK(!JS_IsException(s->owner), "a WebAssembly store's owner object could not be allocated: out of memory");
     JS_SetOpaque(s->owner, s);

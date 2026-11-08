@@ -1,6 +1,7 @@
 /* WebAssembly Core Specification (Release 3.0) §4.6 "Instructions". See interpreter.h. */
 #include "core/wasm/interpreter.h"
 
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,7 +19,9 @@ enum { L_FUNC = 1, L_BLOCK, L_LOOP, L_IF };
 #define F32_CANON 0x7FC00000u
 #define F64_CANON 0x7FF8000000000000ull
 
-static bool grow(void **p, size_t *cap, size_t n, size_t elem)
+/* Room for entry `n` of one of `it`'s stacks, on the agent's allocator (a step machine's state copies and frees
+   what it owns with it). */
+static bool grow(WasmInterpreter *it, void **p, size_t *cap, size_t n, size_t elem)
 {
     size_t c;
     void *q;
@@ -26,7 +29,7 @@ static bool grow(void **p, size_t *cap, size_t n, size_t elem)
     if (n < *cap) return true;
     c = *cap ? *cap * 2 : 64;
     if (c > SIZE_MAX / elem) return false;
-    q = realloc(*p, c * elem);
+    q = js_realloc(it->store->ctx, *p, c * elem);
     if (q == NULL) return false;
     *p = q;
     *cap = c;
@@ -37,7 +40,7 @@ static bool push_label(WasmInterpreter *it, uint8_t kind, size_t entry, size_t h
 {
     WasmLabel *l;
 
-    if (!grow((void **)&it->labels, &it->cap_labels, it->n_labels, sizeof *it->labels)) return false;
+    if (!grow(it, (void **)&it->labels, &it->cap_labels, it->n_labels, sizeof *it->labels)) return false;
     l = &it->labels[it->n_labels++];
     l->kind = kind;
     l->entry = entry;
@@ -56,7 +59,7 @@ static uint64_t pop(WasmInterpreter *it)
 
 static bool push(WasmInterpreter *it, uint64_t lo)
 {
-    if (!grow((void **)&it->vals, &it->cap_vals, it->n_vals, sizeof *it->vals)) return false;
+    if (!grow(it, (void **)&it->vals, &it->cap_vals, it->n_vals, sizeof *it->vals)) return false;
     it->vals[it->n_vals].lo = lo;
     it->vals[it->n_vals].hi = 0;
     it->n_vals++;
@@ -106,11 +109,12 @@ static WasmExecStatus push_frame(WasmInterpreter *it, size_t func, size_t return
     c = &m->codes[fi->code];
     t = &m->types[m->func_types[fi->code]];
     DCHECK(it->n_vals >= t->n_params, "a validated WebAssembly call has fewer operands than its parameters");
-    if (!grow((void **)&it->frames, &it->cap_frames, it->n_frames, sizeof *it->frames)) return WASM_EXEC_NO_ROOM;
+    if (!grow(it, (void **)&it->frames, &it->cap_frames, it->n_frames, sizeof *it->frames)) return WASM_EXEC_NO_ROOM;
     for (n = t->n_params, i = 0; i < c->n_locals; i++) n += m->locals[c->locals + i].count;
     f = &it->frames[it->n_frames];
     memset(f, 0, sizeof *f);
-    f->locals = calloc(n ? n : 1, sizeof *f->locals);
+    f->locals = n < SIZE_MAX / sizeof *f->locals ? js_mallocz(it->store->ctx, (n ? n : 1) * sizeof *f->locals)
+                                                  : NULL;
     if (f->locals == NULL) return WASM_EXEC_NO_ROOM;
     it->n_frames++;
     f->inst = fi->inst;
@@ -135,7 +139,7 @@ static WasmExecStatus pop_frame(WasmInterpreter *it)
 
     it->n_labels = f->label_base;
     it->pc = f->return_pc;
-    free(f->locals);
+    js_free(it->store->ctx, f->locals);
     it->n_frames--;
     return it->n_frames == 0 ? WASM_EXEC_DONE : WASM_EXEC_MORE;
 }
@@ -164,7 +168,7 @@ WasmExecStatus wasm_interpreter_begin_expr(WasmInterpreter *it, WasmInstance *in
 
     begin(it, inst);
     it->n_results = 1;
-    if (!grow((void **)&it->frames, &it->cap_frames, 0, sizeof *it->frames)) return WASM_EXEC_NO_ROOM;
+    if (!grow(it, (void **)&it->frames, &it->cap_frames, 0, sizeof *it->frames)) return WASM_EXEC_NO_ROOM;
     f = &it->frames[it->n_frames++];
     memset(f, 0, sizeof *f);
     f->inst = inst->addr;
@@ -590,7 +594,7 @@ static WasmExecStatus call(WasmInterpreter *it, size_t func, bool tail)
         it->n_vals = f->val_base + n;
         return_pc = f->return_pc;
         it->n_labels = f->label_base;
-        free(f->locals);
+        js_free(it->store->ctx, f->locals);
         it->n_frames--;
     }
     return push_frame(it, func, return_pc);
@@ -1030,7 +1034,7 @@ static WasmExecStatus execute(WasmInterpreter *it, const WasmInstruction *in, si
 static WasmExecStatus finish(WasmInterpreter *it, WasmExecStatus st)
 {
     if (st != WASM_EXEC_MORE && st != WASM_EXEC_FORK && st != WASM_EXEC_HOST_CALL)
-        while (it->n_frames > 0) free(it->frames[--it->n_frames].locals);
+        while (it->n_frames > 0) js_free(it->store->ctx, it->frames[--it->n_frames].locals);
     return st;
 }
 
@@ -1045,7 +1049,7 @@ WasmExecStatus wasm_interpreter_return(WasmInterpreter *it, const WasmValue *res
     it->host.pending = false;
     it->n_vals -= it->host.n_args;
     for (i = 0; i < n; i++) {
-        if (!grow((void **)&it->vals, &it->cap_vals, it->n_vals, sizeof *it->vals))
+        if (!grow(it, (void **)&it->vals, &it->cap_vals, it->n_vals, sizeof *it->vals))
             return finish(it, WASM_EXEC_NO_ROOM);
         it->vals[it->n_vals++] = results[i];
     }
@@ -1128,12 +1132,33 @@ void wasm_interpreter_message(const WasmInterpreter *it, WasmExecStatus st, char
     else snprintf(buf, cap, "%s", m != NULL ? m : "");
 }
 
+static void frame_visit(JSContext *ctx, void *elem, JSStepVisit *v)
+{
+    WasmFrame *f = elem;
+
+    v->buf(ctx, (void **)&f->locals, (f->n_locals ? f->n_locals : 1) * sizeof *f->locals);
+}
+
+void wasm_interpreter_visit(JSContext *ctx, WasmInterpreter *it, JSStepVisit *v)
+{
+    DCHECKF(it->n_frames <= it->cap_frames && it->cap_frames <= INT_MAX, "a WebAssembly interpreter holds %zu "
+            "frames in room for %zu", it->n_frames, it->cap_frames);
+    v->array(ctx, (void **)&it->frames, sizeof *it->frames, (int)it->n_frames, (int)it->cap_frames, frame_visit);
+    v->buf(ctx, (void **)&it->vals, it->cap_vals * sizeof *it->vals);
+    v->buf(ctx, (void **)&it->labels, it->cap_labels * sizeof *it->labels);
+}
+
 void wasm_interpreter_free(WasmInterpreter *it)
 {
     DCHECK(it != NULL, "a WebAssembly invocation was freed with no interpreter");
-    while (it->n_frames > 0) free(it->frames[--it->n_frames].locals);
-    free(it->frames);
-    free(it->vals);
-    free(it->labels);
+    if (it->store == NULL) {
+        DCHECK(it->frames == NULL && it->vals == NULL && it->labels == NULL, "a WebAssembly interpreter that "
+               "never began holds stacks");
+        return;
+    }
+    while (it->n_frames > 0) js_free(it->store->ctx, it->frames[--it->n_frames].locals);
+    js_free(it->store->ctx, it->frames);
+    js_free(it->store->ctx, it->vals);
+    js_free(it->store->ctx, it->labels);
     memset(it, 0, sizeof *it);
 }

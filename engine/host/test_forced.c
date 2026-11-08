@@ -25,6 +25,7 @@
 #include "core/wasm/interpreter.h" /* WebAssembly Core §4.6's interpreter core */
 #include "core/wasm/instance.h"    /* WebAssembly Core §4.7.2's instantiation */
 #include "core/wasm/reference_vector.h" /* WebAssembly Core §4.2.8 and §4.2.12: references per flow */
+#include "core/wasm/wasm_js.h"     /* the WebAssembly JS API's machines */
 #include "fixture/wasm_valid.h"     /* the rows that validator answers */
 #include "fixture/wasm_exec.h"      /* the testsuite's assert_return and assert_trap rows the interpreter answers */
 #include "core/image/image_header.h" /* css-images-3 §4.1's natural dimensions — cross-checked by @PNGDEC */
@@ -477,15 +478,23 @@ static JSValue js_wasm_memory_load(JSContext *ctx, JSValueConst this_val, int ar
    funcrefs), element segments 0 and 1 (two references each), data segments 0 and 1 (three bytes each) and memory
    0 (one page); wasmStoreOp(store, op, i, v) writes or reads one record through the store's own accessors and
    answers a number. */
-static WasmInstance g_wasm_store_row_instance;   /* the data segments' instance, whose bytes no op reads */
+static WasmTypeRegistry *wasm_agent_types(void);
 static JSValue js_wasm_store_new(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    WasmStore *s = wasm_store_new(ctx);
+    /* The data segments' instance, of a module with nothing in it, whose bytes no op reads. */
+    static const WasmModule empty;
+    static const WasmSideTable no_side;
+    static const WasmTypes no_types;
+    static const uint8_t no_bytes[3];
+    static const size_t no_imports[4];
+    WasmStore *s = wasm_store_new(ctx, wasm_agent_types());
+    JSValue inst = wasm_instance_new(s, &empty, no_bytes, &no_side, &no_types, JS_UNDEFINED, no_imports);
     WasmGlobalInstance g = { { 0, 0 }, { { WASM_TYPE_I32, false, 0, 0 }, SIZE_MAX }, true };
     WasmStoreValType funcref = { { WASM_TYPE_REF, true, WASM_HEAP_FUNC, 0 }, SIZE_MAX };
     WasmLimits two = { false, false, 2, 0 }, one = { false, false, 1, 0 };
 
     (void)this_val; (void)argc; (void)argv;
-    wasm_store_add_instance(s, &g_wasm_store_row_instance);
+    CHECK(wasm_store_add_instance(s, inst) == 0, "wasmStoreNew: the fixture store's instance is not at address 0");
+    JS_FreeValue(ctx, inst);
     CHECK(wasm_store_add_global(s, g) == 0 && wasm_store_add_global(s, g) == 1
           && wasm_store_add_table(s, &two, funcref) == 0 && wasm_store_add_elem(s, 2) == 0
           && wasm_store_add_elem(s, 2) == 1 && wasm_store_add_data(s, (WasmDataInstance){ 0, 0, 3 }) == 0
@@ -524,6 +533,29 @@ static JSValue js_wasm_store_op(JSContext *ctx, JSValueConst this_val, int argc,
     else CHECKF(false, "wasmStoreOp: the fixture asked for op \"%s\", which this native does not define", op);
     JS_FreeCString(ctx, op);
     return JS_NewFloat64(ctx, r);
+}
+
+/* The WebAssembly JS API's instantiation machine (core/wasm/wasm_js.h) over a store wasmStoreNew made:
+   wasmInstantiator(store) answers its callable, which takes a module's bytes and answers the new instance's
+   store address; wasmInstanceMemory(store, instance, i) answers memory i of that instance, for wasmMemoryLoad. */
+static JSValue js_wasm_instantiator(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1 || wasm_store_of(argv[0]) == NULL) return JS_ThrowTypeError(ctx, "wasmInstantiator: not a store");
+    return wasm_js_instantiate_closure(ctx, argv[0]);
+}
+static JSValue js_wasm_instance_memory(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    WasmStore *s = argc >= 3 ? wasm_store_of(argv[0]) : NULL;
+    const WasmInstance *inst;
+    uint32_t a = 0, i = 0;
+
+    (void)this_val;
+    if (s == NULL) return JS_ThrowTypeError(ctx, "wasmInstanceMemory: not a store");
+    if (JS_ToUint32(ctx, &a, argv[1]) < 0 || JS_ToUint32(ctx, &i, argv[2]) < 0) return JS_EXCEPTION;
+    if (a >= s->instances.n) return JS_ThrowRangeError(ctx, "wasmInstanceMemory: no such instance");
+    inst = wasm_store_instance(s, a);
+    if (i >= inst->imported_mems + inst->module->n_memories)
+        return JS_ThrowRangeError(ctx, "wasmInstanceMemory: no such memory");
+    return JS_DupValue(ctx, wasm_store_mem(s, inst->mems[i]));
 }
 
 /* the DOM READ host-edge (getBodyAttr stands in for el.getAttribute): reads the CURRENT flow's view of the
@@ -2037,6 +2069,15 @@ static const char *HTML_COLD =
     " w('mstore', m, g + 2); w('gadd', 0, add); }"
     "if (cfg.admin) { wstWrite(0, 65, 66, 3, 100, 68); wstRead('t'); }"
     "else { wstWrite(1, 80, 81, 1, 200, 83); wstRead('f'); }"
+    "</script>"
+    /* WebAssembly Core §4.7.2's instantiation as the JS API's machine: a module of one page whose start function
+       stores memory.grow(1)'s answer at byte 0, so the grow's two outcomes are two flows, the success's memory
+       holding 1 and a second page, the assumption's 255 and none. */
+    "<script>"
+    "var wis = wasmStoreNew(); var wia = wasmInstantiator(wis)(new Uint8Array([0,97,115,109,1,0,0,0,1,4,1,96,0,0,"
+    "3,2,1,0,5,3,1,0,1,8,1,0,10,13,1,11,0,65,0,65,1,64,0,58,0,0,11]));"
+    "var wim = wasmInstanceMemory(wis, wia, 0);"
+    "fetch('/api/winst/g?v=' + wasmMemoryLoad(wim, 0) + '.' + wasmMemoryLoad(wim, 65536));"
     "</script>"
     /* AND ONE EXTERNAL SCRIPT THIS FIXTURE'S ZONE REFUSES TO ASK FOR, WHICH IS THE ONE CURSOR THIS ENGINE
        CANNOT PASS AND THEREFORE THE FIRST HALF OF `park-remoteop`. That row asks whether a flow parked
@@ -6252,15 +6293,34 @@ static WasmExecStatus wasm_next(WasmInterpreter *it, WasmExecStatus st, bool exa
 
 /* The instantiation's status after `st`: a step, or the start function's choice (its example arm) or host
    call's answer. */
-static WasmExecStatus wasm_instance_next(WasmInstance *inst, WasmExecStatus st)
+static WasmExecStatus wasm_instance_next(WasmInstantiation *run, WasmExecStatus st)
 {
     WasmValue r;
     size_t n;
 
-    if (st == WASM_EXEC_FORK) return wasm_instance_choose(inst, true);
-    if (st != WASM_EXEC_HOST_CALL) return wasm_instance_step(inst);
-    n = wasm_host_results(&inst->start, &r);
-    return wasm_instance_return(inst, n ? &r : NULL, n);
+    if (st == WASM_EXEC_FORK) return wasm_instantiation_choose(run, true);
+    if (st != WASM_EXEC_HOST_CALL) return wasm_instantiation_step(run);
+    n = wasm_host_results(&run->start, &r);
+    return wasm_instantiation_return(run, n ? &r : NULL, n);
+}
+
+/* Instantiate a selftest's module to an answer, with nothing to interleave: the store's instance, or NULL with
+   `*pst` the refusal or trap. */
+static WasmInstance *wasm_selftest_instantiate(WasmStore *store, const WasmModule *m, const uint8_t *bytes,
+                                               const WasmModuleValidator *v, const size_t *externs, size_t n,
+                                               WasmExecStatus *pst)
+{
+    WasmInstantiation run;
+    WasmInstance *inst;
+    WasmExecStatus st;
+
+    st = wasm_instantiation_begin(&run, store, m, bytes, wasm_module_validator_side_table(v), &v->ctx.types,
+                                  externs, n, JS_UNDEFINED);
+    while (wasm_running(st)) st = wasm_instance_next(&run, st);
+    inst = st == WASM_EXEC_DONE ? run.inst : NULL;
+    wasm_instantiation_free(&run);
+    *pst = st;
+    return inst;
 }
 
 /* f3268fa9's interpreter/host/spectest.ml as a host in one store: its print functions (types from
@@ -6400,34 +6460,32 @@ static void wasm_link_selftest(JSContext *ctx)
     const WasmInstance *insts[1];
     WasmModuleDecoder ed;
     WasmModuleValidator ev;
-    WasmInstance e;
+    WasmInstance *e;
     WasmSpectest host;
     WasmStore *store;
     WasmExecStatus st;
     size_t i;
 
-    store = wasm_store_new(ctx);
+    store = wasm_store_new(ctx, wasm_agent_types());
     wasm_spectest_begin(&host, store);
     wasm_module_decoder_init(&ed, eb, WASM_LINK_EXPORTER_LEN);
     CHECK(wasm_module_decoder_run(&ed) == WASM_DECODE_DONE, "the link rows' exporter does not decode");
     wasm_module_validator_init(&ev, &ed.module, eb, wasm_agent_types());
     CHECK(wasm_module_validator_run(&ev) == WASM_VALIDATE_DONE, "the link rows' exporter is invalid");
-    st = wasm_instance_begin(&e, store, &ed.module, eb, wasm_module_validator_side_table(&ev), &ev.ctx.types,
-                             NULL, 0);
-    while (wasm_running(st)) st = wasm_instance_next(&e, st);
+    e = wasm_selftest_instantiate(store, &ed.module, eb, &ev, NULL, 0, &st);
     CHECK(st == WASM_EXEC_DONE, "the link rows' exporter did not instantiate");
-    insts[0] = &e;
+    insts[0] = e;
     for (i = 0; i < COUNTOF(WASM_LINK_ROWS); i++) {
         const WasmLinkRow *row = &WASM_LINK_ROWS[i];
         const uint8_t *bytes = (const uint8_t *)row->bytes;
         WasmModuleDecoder d;
         WasmModuleValidator v;
-        WasmInstance inst;
+        WasmInstance *inst;
         WasmInterpreter it;
         size_t *externs;
 
         if (row->before != NULL) {
-            st = wasm_interpreter_begin(&it, &e, wasm_export_index(e.module, e.bytes, WASM_EXTERN_FUNC, row->before),
+            st = wasm_interpreter_begin(&it, e, wasm_export_index(e->module, e->bytes, WASM_EXTERN_FUNC, row->before),
                                         NULL, 0);
             while (wasm_running(st)) st = wasm_next(&it, st, true);
             CHECKF(st == WASM_EXEC_DONE, "the link row %s: %s answered %s", row->src, row->before,
@@ -6439,15 +6497,13 @@ static void wasm_link_selftest(JSContext *ctx)
         wasm_module_validator_init(&v, &d.module, bytes, wasm_agent_types());
         CHECKF(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the link row %s is invalid", row->src);
         externs = wasm_resolve_imports(&host, names, insts, 1, &d.module, bytes);
-        st = wasm_instance_begin(&inst, store, &d.module, bytes, wasm_module_validator_side_table(&v),
-                                 &v.ctx.types, externs, d.module.n_imports);
-        while (wasm_running(st)) st = wasm_instance_next(&inst, st);
+        inst = wasm_selftest_instantiate(store, &d.module, bytes, &v, externs, d.module.n_imports, &st);
         CHECKF(row->linked ? st == WASM_EXEC_DONE : st == WASM_EXEC_LINK_INCOMPATIBLE,
                "the link row %s answered %s; it %s", row->src, st == WASM_EXEC_DONE ? "linked"
                : wasm_exec_status_message(st), row->linked ? "links" : "is \"incompatible import type\"");
         for (size_t k = 0; row->linked && k < 2; k++) {
             const char *name = k == 0 ? row->run : row->then;
-            WasmInstance *in = k == 0 ? &inst : &e;
+            WasmInstance *in = k == 0 ? inst : e;
             uint32_t want = k == 0 ? row->result : row->then_result;
 
             if (name == NULL) continue;
@@ -6461,11 +6517,9 @@ static void wasm_link_selftest(JSContext *ctx)
             wasm_interpreter_free(&it);
         }
         free(externs);
-        wasm_instance_free(&inst);
         wasm_module_validator_free(&v);
         wasm_module_decoder_free(&d);
     }
-    wasm_instance_free(&e);
     wasm_module_validator_free(&ev);
     wasm_module_decoder_free(&ed);
     wasm_spectest_free(&host);
@@ -6479,15 +6533,16 @@ static void wasm_interpreter_park(WasmInterpreter *to, const WasmInterpreter *it
     size_t k;
 
     *to = *it;
-    to->frames = malloc((it->cap_frames ? it->cap_frames : 1) * sizeof *to->frames);
-    to->vals = malloc((it->cap_vals ? it->cap_vals : 1) * sizeof *to->vals);
-    to->labels = malloc((it->cap_labels ? it->cap_labels : 1) * sizeof *to->labels);
+    to->frames = js_malloc(it->store->ctx, (it->cap_frames ? it->cap_frames : 1) * sizeof *to->frames);
+    to->vals = js_malloc(it->store->ctx, (it->cap_vals ? it->cap_vals : 1) * sizeof *to->vals);
+    to->labels = js_malloc(it->store->ctx, (it->cap_labels ? it->cap_labels : 1) * sizeof *to->labels);
     CHECK(to->frames && to->vals && to->labels, "a parked WebAssembly interpreter could not be allocated");
     if (it->n_frames) memcpy(to->frames, it->frames, it->n_frames * sizeof *to->frames);
     if (it->n_vals) memcpy(to->vals, it->vals, it->n_vals * sizeof *to->vals);
     if (it->n_labels) memcpy(to->labels, it->labels, it->n_labels * sizeof *to->labels);
     for (k = 0; k < it->n_frames; k++) {
-        to->frames[k].locals = malloc((it->frames[k].n_locals ? it->frames[k].n_locals : 1) * sizeof(WasmValue));
+        to->frames[k].locals = js_malloc(it->store->ctx, (it->frames[k].n_locals ? it->frames[k].n_locals : 1)
+                                                         * sizeof(WasmValue));
         CHECK(to->frames[k].locals != NULL, "a parked WebAssembly frame could not be allocated");
         if (it->frames[k].n_locals)
             memcpy(to->frames[k].locals, it->frames[k].locals, it->frames[k].n_locals * sizeof(WasmValue));
@@ -6502,7 +6557,7 @@ static void wasm_host_call_selftest(JSContext *ctx)
     const uint8_t *bytes = (const uint8_t *)WASM_HOST_CALLER;
     WasmModuleDecoder d;
     WasmModuleValidator v;
-    WasmInstance inst[2];
+    WasmInstance *inst[2];
     WasmStore *store;
     size_t types, k, i, externs[2][2];
 
@@ -6510,7 +6565,7 @@ static void wasm_host_call_selftest(JSContext *ctx)
     CHECK(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the host call module does not decode");
     wasm_module_validator_init(&v, &d.module, bytes, wasm_agent_types());
     CHECK(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the host call module is invalid");
-    store = wasm_store_new(ctx);
+    store = wasm_store_new(ctx, wasm_agent_types());
     types = wasm_store_add_types(store, &v.ctx.types);
     for (k = 0; k < 2; k++) {
         WasmExecStatus st;
@@ -6521,9 +6576,7 @@ static void wasm_host_call_selftest(JSContext *ctx)
 
             externs[k][i] = wasm_store_add_func(store, f);
         }
-        st = wasm_instance_begin(&inst[k], store, &d.module, bytes, wasm_module_validator_side_table(&v),
-                                 &v.ctx.types, externs[k], 2);
-        while (wasm_running(st)) st = wasm_instance_next(&inst[k], st);
+        inst[k] = wasm_selftest_instantiate(store, &d.module, bytes, &v, externs[k], 2, &st);
         CHECKF(st == WASM_EXEC_DONE, "the host call module's instantiation answered \"%s\"",
                wasm_exec_status_message(st));
     }
@@ -6535,7 +6588,7 @@ static void wasm_host_call_selftest(JSContext *ctx)
         WasmExecStatus st, sts[2];
         uint32_t calls = 0;
 
-        st = wasm_interpreter_begin(&it, &inst[0], func, args, row->n_args);
+        st = wasm_interpreter_begin(&it, inst[0], func, args, row->n_args);
         while (wasm_running(st)) {
             if (st == WASM_EXEC_HOST_CALL) {
                 calls++;
@@ -6550,7 +6603,7 @@ static void wasm_host_call_selftest(JSContext *ctx)
                st == WASM_EXEC_DONE ? "a return" : wasm_exec_status_message(st),
                it.n_vals ? (unsigned long long)it.vals[0].lo : 0ull, calls, row->result, row->calls);
         wasm_interpreter_free(&it);
-        for (k = 0; k < 2; k++) sts[k] = wasm_interpreter_begin(&two[k], &inst[k], func, args, row->n_args);
+        for (k = 0; k < 2; k++) sts[k] = wasm_interpreter_begin(&two[k], inst[k], func, args, row->n_args);
         while (wasm_running(sts[0]) || wasm_running(sts[1]))
             for (k = 0; k < 2; k++)
                 if (wasm_running(sts[k])) sts[k] = wasm_next(&two[k], sts[k], true);
@@ -6560,7 +6613,6 @@ static void wasm_host_call_selftest(JSContext *ctx)
             wasm_interpreter_free(&two[k]);
         }
     }
-    for (k = 0; k < 2; k++) wasm_instance_free(&inst[k]);
     wasm_store_release(store);
     wasm_module_validator_free(&v);
     wasm_module_decoder_free(&d);
@@ -6574,11 +6626,11 @@ static void wasm_cross_instance_selftest(JSContext *ctx)
     const size_t len[2] = { WASM_XMOD_EXPORTER_LEN, WASM_XMOD_CALLER_LEN };
     WasmModuleDecoder d[2];
     WasmModuleValidator v[2];
-    WasmInstance inst[2];
+    WasmInstance *inst[2];
     WasmStore *store;
     size_t k, i;
 
-    store = wasm_store_new(ctx);
+    store = wasm_store_new(ctx, wasm_agent_types());
     for (k = 0; k < 2; k++) {
         WasmExecStatus st;
 
@@ -6586,21 +6638,20 @@ static void wasm_cross_instance_selftest(JSContext *ctx)
         CHECKF(wasm_module_decoder_run(&d[k]) == WASM_DECODE_DONE, "cross-instance module %zu does not decode", k);
         wasm_module_validator_init(&v[k], wasm_module_decoder_module(&d[k]), bytes[k], wasm_agent_types());
         CHECKF(wasm_module_validator_run(&v[k]) == WASM_VALIDATE_DONE, "cross-instance module %zu is invalid", k);
-        st = wasm_instance_begin(&inst[k], store, wasm_module_decoder_module(&d[k]), bytes[k],
-                                 wasm_module_validator_side_table(&v[k]), &v[k].ctx.types, NULL, 0);
-        while (wasm_running(st)) st = wasm_instance_next(&inst[k], st);
+        inst[k] = wasm_selftest_instantiate(store, wasm_module_decoder_module(&d[k]), bytes[k], &v[k], NULL, 0,
+                                            &st);
         CHECKF(st == WASM_EXEC_DONE, "cross-instance module %zu's instantiation answered \"%s\"", k,
                wasm_exec_status_message(st));
     }
     for (i = 0; i < COUNTOF(WASM_CROSS_INSTANCE_ROWS); i++) {
         const WasmCrossInstanceRow *row = &WASM_CROSS_INSTANCE_ROWS[i];
-        size_t f = inst[0].funcs[wasm_export_index(&d[0].module, bytes[0], WASM_EXTERN_FUNC, row->put)];
-        size_t t = inst[1].tables[wasm_export_index(&d[1].module, bytes[1], WASM_EXTERN_TABLE, "tab")];
+        size_t f = inst[0]->funcs[wasm_export_index(&d[0].module, bytes[0], WASM_EXTERN_FUNC, row->put)];
+        size_t t = inst[1]->tables[wasm_export_index(&d[1].module, bytes[1], WASM_EXTERN_TABLE, "tab")];
         WasmInterpreter it;
         WasmExecStatus st;
 
         wasm_refs_set(wasm_store_table(store, t)->refs, 0, (WasmValue){ (uint64_t)f + 1, 0 });
-        st = wasm_interpreter_begin(&it, &inst[1], wasm_export_index(&d[1].module, bytes[1], WASM_EXTERN_FUNC,
+        st = wasm_interpreter_begin(&it, inst[1], wasm_export_index(&d[1].module, bytes[1], WASM_EXTERN_FUNC,
                                                                       row->call), NULL, 0);
         while (wasm_running(st)) st = wasm_next(&it, st, true);
         if (row->trap)
@@ -6614,7 +6665,6 @@ static void wasm_cross_instance_selftest(JSContext *ctx)
         wasm_interpreter_free(&it);
     }
     for (k = 0; k < 2; k++) {
-        wasm_instance_free(&inst[k]);
         wasm_module_validator_free(&v[k]);
         wasm_module_decoder_free(&d[k]);
     }
@@ -6661,13 +6711,10 @@ static void wasm_exec_instantiate(WasmExecWorld *w, WasmExecModule *x, size_t nu
 {
     const uint8_t *bytes = (const uint8_t *)WASM_TESTSUITE_ROWS[x->module].bytes;
     size_t *externs = wasm_resolve_imports(&w->host, w->names, w->named, w->n_names, &x->d.module, bytes);
-    WasmInstance *inst = malloc(sizeof *inst);
     WasmExecStatus st;
+    WasmInstance *inst = wasm_selftest_instantiate(w->store, &x->d.module, bytes, &x->v, externs,
+                                                   x->d.module.n_imports, &st);
 
-    CHECK(inst != NULL, "a testsuite instance could not be allocated");
-    st = wasm_instance_begin(inst, w->store, &x->d.module, bytes, wasm_module_validator_side_table(&x->v),
-                             &x->v.ctx.types, externs, x->d.module.n_imports);
-    while (wasm_running(st)) st = wasm_instance_next(inst, st);
     CHECKF(st == WASM_EXEC_DONE, "the instantiation of %s answered \"%s\"", src, wasm_exec_status_message(st));
     free(externs);
     w->insts[num] = inst;
@@ -6682,7 +6729,6 @@ static void wasm_exec_unlinkable(WasmExecWorld *w, WasmExecModule *x, const Wasm
     size_t *externs = calloc(m->n_imports + 1, sizeof *externs), k;
     const char *got = NULL;
     bool wrong = false;
-    WasmInstance inst;
     WasmExecStatus st;
 
     CHECK(externs != NULL, "an unlinkable row's import list could not be allocated");
@@ -6695,12 +6741,9 @@ static void wasm_exec_unlinkable(WasmExecWorld *w, WasmExecModule *x, const Wasm
     }
     if (got == NULL && wrong) got = "incompatible import type";
     if (got == NULL) {
-        st = wasm_instance_begin(&inst, w->store, m, bytes, wasm_module_validator_side_table(&x->v),
-                                 &x->v.ctx.types, externs, m->n_imports);
-        while (wasm_running(st)) st = wasm_instance_next(&inst, st);
+        wasm_selftest_instantiate(w->store, m, bytes, &x->v, externs, m->n_imports, &st);
         got = st == WASM_EXEC_DONE ? "a link" : wasm_exec_status_message(st);
         CHECKF(st != WASM_EXEC_DONE, "the unlinkable module of %s linked", row->src);
-        wasm_instance_free(&inst);
     }
     CHECKF(strncmp(got, row->trap, strlen(row->trap)) == 0, "the unlinkable module of %s answered \"%s\"; the "
            "testsuite expects \"%s\"", row->src, got, row->trap);
@@ -6720,7 +6763,7 @@ static void wasm_exec_script(JSContext *ctx, size_t i, size_t n)
         if (WASM_EXEC_ROWS[j].instance + 1 > slots) slots = WASM_EXEC_ROWS[j].instance + 1;
     CHECK(mods != NULL, "a testsuite script's modules could not be allocated");
     for (k = 0; k < 3; k++) {
-        w[k].store = wasm_store_new(ctx);
+        w[k].store = wasm_store_new(ctx, wasm_agent_types());
         wasm_spectest_begin(&w[k].host, w[k].store);
         w[k].insts = calloc(slots, sizeof *w[k].insts);
         w[k].names = calloc(n - i + 1, sizeof *w[k].names);
@@ -6788,11 +6831,6 @@ static void wasm_exec_script(JSContext *ctx, size_t i, size_t n)
         free(args);
     }
     for (k = 0; k < 3; k++) {
-        for (j = 0; j < slots; j++)
-            if (w[k].insts[j] != NULL) {
-                wasm_instance_free(w[k].insts[j]);
-                free(w[k].insts[j]);
-            }
         free(w[k].insts);
         free(w[k].names);
         free(w[k].named);
@@ -6811,7 +6849,7 @@ static void wasm_exec_script(JSContext *ctx, size_t i, size_t n)
  * that reallocated could not extend in place, and a table's first element across a grow by 1000. */
 static void wasm_store_stable_selftest(JSContext *ctx)
 {
-    WasmStore *store = wasm_store_new(ctx);
+    WasmStore *store = wasm_store_new(ctx, wasm_agent_types());
     WasmGlobalInstance g = { { 7, 0 }, { { WASM_TYPE_I32, false, 0, 0 }, SIZE_MAX }, true };
     WasmStoreValType funcref = { { WASM_TYPE_REF, true, WASM_HEAP_FUNC, 0 }, SIZE_MAX };
     WasmLimits limits = { false, false, 1, 0 };
@@ -6856,7 +6894,7 @@ TF_UNIT void wasm_interpreter_selftest(JSContext *ctx)
         WasmModuleDecoder d;
         WasmModuleValidator v;
         WasmStore *store;
-        WasmInstance inst;
+        WasmInstance *inst;
         WasmInterpreter it;
         WasmExecStatus st;
         size_t e, func = SIZE_MAX;
@@ -6870,19 +6908,16 @@ TF_UNIT void wasm_interpreter_selftest(JSContext *ctx)
                 && memcmp(bytes + d.module.exports[e].name_offset, row->export_name, strlen(row->export_name)) == 0)
                 func = d.module.exports[e].index;
         CHECKF(func != SIZE_MAX, "the invoke row %s has no export %s", row->src, row->export_name);
-        store = wasm_store_new(ctx);
-        st = wasm_instance_begin(&inst, store, &d.module, bytes, wasm_module_validator_side_table(&v),
-                                 &v.ctx.types, NULL, 0);
-        while (wasm_running(st)) st = wasm_instance_next(&inst, st);
+        store = wasm_store_new(ctx, wasm_agent_types());
+        inst = wasm_selftest_instantiate(store, &d.module, bytes, &v, NULL, 0, &st);
         CHECKF(st == WASM_EXEC_DONE, "%s: the instantiation answered \"%s\"", row->src, wasm_exec_status_message(st));
-        st = wasm_interpreter_begin(&it, &inst, func, NULL, 0);
+        st = wasm_interpreter_begin(&it, inst, func, NULL, 0);
         while (wasm_running(st)) st = wasm_next(&it, st, !row->assume);
         CHECKF(st == WASM_EXEC_DONE && it.n_vals == 1 && it.vals[0].lo == row->result,
                "%s: answered %s with %zu values, the first %llu; the row expects %u", row->src,
                st == WASM_EXEC_DONE ? "a return" : wasm_exec_status_message(st), it.n_vals,
                it.n_vals ? (unsigned long long)it.vals[0].lo : 0ull, row->result);
         wasm_interpreter_free(&it);
-        wasm_instance_free(&inst);
         wasm_store_release(store);
         wasm_module_validator_free(&v);
         wasm_module_decoder_free(&d);
@@ -9318,6 +9353,9 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     tf_global_define(ctx, g, "wasmMemoryNew", JS_NewCFunction(ctx, js_wasm_memory_new, "wasmMemoryNew", 1));
     tf_global_define(ctx, g, "wasmStoreNew", JS_NewCFunction(ctx, js_wasm_store_new, "wasmStoreNew", 0));
     tf_global_define(ctx, g, "wasmStoreOp", JS_NewCFunction(ctx, js_wasm_store_op, "wasmStoreOp", 4));
+    tf_global_define(ctx, g, "wasmInstantiator", JS_NewCFunction(ctx, js_wasm_instantiator, "wasmInstantiator", 1));
+    tf_global_define(ctx, g, "wasmInstanceMemory",
+                     JS_NewCFunction(ctx, js_wasm_instance_memory, "wasmInstanceMemory", 3));
     tf_global_define(ctx, g, "wasmMemoryStore", JS_NewCFunction(ctx, js_wasm_memory_store, "wasmMemoryStore", 3));
     tf_global_define(ctx, g, "wasmMemoryLoad", JS_NewCFunction(ctx, js_wasm_memory_load, "wasmMemoryLoad", 2));
     /* ONE LITERAL FOR THE SOURCE NAME, because this file had TWO and they disagreed. The probe that asks
@@ -28525,6 +28563,21 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
                  == param_value_count(js, "/api/wstore/f", WSTORE[k].param),
                  WSTORE[k].what);
     }
+    /* The instantiation row: the start function's memory.grow forked, and each outcome's flow read back its own
+       memory, the success's 1 at byte 0 and a second page, the assumption's 255 and no second page. */
+    const char *winst_why = NULL;
+    int winst_ok = 1;
+    fold_row(&winst_ok, &winst_why, param_value_count_of(js, "/api/winst/g", "v", "1.0") > 0,
+             "the grow's success arm did not reach the read-back: no /api/winst/g value is 1.0, so the instantiation "
+             "did not complete (core/wasm/wasm_js.c's machine) or its start function's grow did not succeed");
+    fold_row(&winst_ok, &winst_why, param_value_count_of(js, "/api/winst/g", "v", "255.-1") > 0,
+             "the grow's assumption arm did not reach the read-back: no /api/winst/g value is 255.-1, so the "
+             "machine's INST_CHOOSE did not fork the outcome through step_fork_run");
+    fold_row(&winst_ok, &winst_why,
+             param_value_count_of(js, "/api/winst/g", "v", "1.0") + param_value_count_of(js, "/api/winst/g", "v",
+                                                                                          "255.-1")
+             == param_value_count(js, "/api/winst/g", "v"),
+             "an arm read a memory other than its outcome's: a /api/winst/g value is neither 1.0 nor 255.-1");
     const Probe rows[] = {
         /* THE TWO COLD SESSIONS. Their key is the @S sink whose candidate sessions are what makes a park write
            a 'c' record at all, so the row still names a statement of the document it runs over; the SESSION is
@@ -28603,6 +28656,8 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
         { WSTORE[3].name, wstore_ok[3], "wasmStoreOp", SESS_PARK, wstore_why[3] },
         { WSTORE[4].name, wstore_ok[4], "wasmStoreOp", SESS_PARK, wstore_why[4] },
         { WSTORE[5].name, wstore_ok[5], "wasmStoreOp", SESS_PARK, wstore_why[5] },
+        { "winst-park", winst_ok, "wasmInstantiator", SESS_PARK, winst_why },
+        { "winst-resume", winst_ok, "wasmInstantiator", SESS_RESUME, winst_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

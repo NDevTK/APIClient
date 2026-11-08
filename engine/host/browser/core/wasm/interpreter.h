@@ -10,8 +10,8 @@
  * The page's bytes have been decoded and validated, so an instruction the validator accepted that this file
  * does not execute is this codebase's gap (CHECK_FAIL), never a refusal.
  * Named residual. Not covered: a host function that throws (exceptions), and the vector, exception and
- * aggregate instructions and the references other than functions'. Next diff builds: the start function, then
- * the JS API's install. Absence shows as: invoking a function that reaches one of them stops the process at the
+ * aggregate instructions and the references other than functions'. Next diff builds: the JS API's install
+ * (wasm_js.h). Absence shows as: invoking a function that reaches one of them stops the process at the
  * CHECK_FAIL naming it; a host throw has no answer to give. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
@@ -20,6 +20,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "quickjs-step.h"
 #include "core/wasm/code_validator.h"
 #include "core/wasm/store.h"
 #include "core/wasm/wasm_module.h"
@@ -100,6 +101,8 @@ typedef struct {
     uint32_t n_args, n_results;
 } WasmHostCall;
 
+/* Every owned array is on the agent's allocator (js_malloc on `store->ctx`), so a step machine's state that
+   embeds an interpreter copies and frees it through its visit. */
 typedef struct {
     WasmStore *store;            /* borrowed: every frame's instance is the store's, by its address */
     WasmBulk bulk;
@@ -139,6 +142,8 @@ WasmExecStatus wasm_interpreter_choose(WasmInterpreter *it, bool example);
 const char *wasm_exec_status_message(WasmExecStatus st);
 /* eval.ml's message for the trap `it` answered, with the element index call_indirect's two element traps name. */
 void wasm_interpreter_message(const WasmInterpreter *it, WasmExecStatus st, char *buf, size_t cap);
+/* What `it` owns, declared to a step machine's visit (quickjs-step.h's JSStepVisit). */
+void wasm_interpreter_visit(JSContext *ctx, WasmInterpreter *it, JSStepVisit *v);
 void wasm_interpreter_free(WasmInterpreter *it);
 
 #endif
