@@ -1509,6 +1509,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/insertrecord.h"
 #include "fixture/fragrest.h"
 #include "fixture/mixinrest.h"
+#include "fixture/adoptrest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2277,6 +2278,7 @@ TF_DOCS[] = {
     { "insertrecord", HTML_INSERTRECORD },
     { "fragrest", HTML_FRAGREST },
     { "mixinrest", HTML_MIXINREST },
+    { "adoptrest", HTML_ADOPTREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -17619,6 +17621,42 @@ TF_UNIT void probes_mixinrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, 1);
 }
 
+/* The rows of the `adoptrest` document (fixture/adoptrest.h). adopt-append-rests: the appending arm's two
+   cross-document appendChild calls and adopt-adoptnode-rests: the '#an' arm's adoptNode, each rest inside the call
+   (`sliceOverrunGapWork` under one quantum, a fact of the whole document) and read the node document each move
+   gave the box. adopt-sibling-tree: the '#keep' arm reads the box still this document's. */
+TF_UNIT void probes_adoptrest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *awhy = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1, at_ = 1, kt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/ad-done", "p", "1") && param_value_is(js, "/api/ad-done", "c", "100002"),
+             "NOT REACHED: no /api/ad-done?p=1&c=100002 record, so the appends did not finish with the box whole in "
+             "the target");
+    fold_row(&tt, &why, param_value_is(js, "/api/ad-done", "m", "1") && param_value_is(js, "/api/ad-done", "o", "1"),
+             "DOM §4.5 adopt step 3.1: a descendant's node document is not the document each insert adopted it into");
+    fold_row(&tt, &why, param_value_is(js, "/api/ad-done", "n", "1") && param_value_is(js, "/api/ad-done", "w", "1"),
+             "the appending arm did not find the box's named elements back in this document");
+    fold_row(&at_, &awhy, param_value_is(js, "/api/ad-an", "o", "1") && param_value_is(js, "/api/ad-an", "c", "100002"),
+             "NOT REACHED or wrong: no /api/ad-an?o=1&c=100002 record, so adoptNode did not finish with the box's "
+             "descendants in the second document");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: a cross-document insert of 100,002 "
+             "elements ran adopt's step 3 walk inside one step instead of resting per node");
+    fold_row(&at_, &awhy, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: an adoptNode of 100,002 elements ran "
+             "adopt's step 3 walk inside one step instead of resting per node");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/ad-kept", "o", "1") && param_value_is(js, "/api/ad-kept", "c", "100002"),
+             "NOT REACHED: no /api/ad-kept?o=1&c=100002 record, so the sibling arm did not read the box this "
+             "document's with its children");
+    const Probe rows[] = {
+        { "adopt-append-rests", tt, "adBox", SESS_EXPLORE, why },
+        { "adopt-adoptnode-rests", at_, "adBox", SESS_EXPLORE, awhy },
+        { "adopt-sibling-tree", kt, "adBox", SESS_EXPLORE, kwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The row of the `keydomainwalk` document (fixture/keydomainwalk.h): 200 unknown-key reads of a Document and a
    WindowProxy over 2,000 unnamed elements charge no walk of them. */
 static long kdw_census(const char *js, const char *key);
@@ -29726,6 +29764,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_insertrecord(js, probes, &np);
     probes_fragrest(js, probes, &np);
     probes_mixinrest(js, probes, &np);
+    probes_adoptrest(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
