@@ -255,7 +255,7 @@ static void es_determine_position(lxb_dom_element_t *target, ScrollLogicalPositi
            "user agent must scroll snap the resulting position to one of that element's scroll snap positions "
            "if its nearest scroll container is a scroll snap container'. BUILD css-scroll-snap-1's snap "
            "positions and apply them to the position below");
-    element_view_bounding_box_px(target, r);
+    element_view_bounding_box_served_px(target, r, "core/dom/element_scrolling.c's es_target_rects_ask");
     elo[ES_X] = r[0];  ehi[ES_X] = css_px_add(r[0], r[2]);
     elo[ES_Y] = r[1];  ehi[ES_Y] = css_px_add(r[1], r[3]);
     /* THE BLOCK POSITION DRIVES THE BLOCK AXIS AND THE INLINE POSITION THE INLINE ONE, and in a `horizontal-tb`

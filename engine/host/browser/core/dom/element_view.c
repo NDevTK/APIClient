@@ -1829,6 +1829,15 @@ void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4])
     free(r);
 }
 
+void element_view_bounding_box_served_px(lxb_dom_element_t *el, CssPx out[4], const char *asker)
+{
+    LayoutJobServed s;
+
+    layout_job_served_begin(&s, asker);
+    element_view_bounding_box_px(el, out);
+    layout_job_served_end(&s);
+}
+
 /* §6's get the bounding box over step 1's `n` client rectangles, minted. §6's `[NewObject]` holds because the
    rectangle is minted on every call. */
 static JSValue ev_bounding_rect_mint(const EvTarget *t, CssPx (*r)[4], size_t n)

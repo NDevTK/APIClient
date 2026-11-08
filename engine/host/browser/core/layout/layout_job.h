@@ -291,6 +291,18 @@ bool layout_job_bf_step(size_t at);
    innermost. */
 bool layout_job_scan_take(void);
 
+/* A read its caller states is served: everything it reads was answered by an ask `asker` made earlier in the
+   job. `end` asserts the read laid out no box, took no line item and tested no style rule (the census kinds
+   core/timing/thread_work.h charges for that work), naming `asker` and the read's site. Dev-only; the record is
+   empty in release. */
+typedef struct {
+    const char *asker;
+    unsigned long long box, line, rules;
+} LayoutJobServed;
+void layout_job_served_begin(LayoutJobServed *s, const char *asker);
+void layout_job_served_end_at(const LayoutJobServed *s, const char *file, int line);
+#define layout_job_served_end(s) layout_job_served_end_at((s), __FILE__, __LINE__)
+
 /* A resting build of an author match (core/css/css_style_declaration.h's cssom_style_ask) is about to test one
    style rule. Asserts a resting drive is innermost; answers false when it has spent its items, and the build
    then parks its position and answers "not yet"; otherwise it takes one rule. */

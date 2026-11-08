@@ -669,6 +669,41 @@ bool layout_job_scan_take(void)
     return true;
 }
 
+void layout_job_served_begin(LayoutJobServed *s, const char *asker)
+{
+#if APICLIENT_DEV
+    ThreadWorkCensus tw;
+
+    DCHECK(s != NULL && asker != NULL, "a served read was bracketed with no record or no asker named");
+    thread_work_census(&tw);
+    s->asker = asker;
+    s->box = tw.charged_input[THREAD_WORK_LAYOUT_BOX];
+    s->line = tw.charged_input[THREAD_WORK_LAYOUT_LINE];
+    s->rules = tw.charged_input[THREAD_WORK_SELECTOR_MATCH];
+#else
+    (void)s; (void)asker;
+#endif
+}
+
+void layout_job_served_end_at(const LayoutJobServed *s, const char *file, int line)
+{
+#if APICLIENT_DEV
+    ThreadWorkCensus tw;
+
+    thread_work_census(&tw);
+    DCHECKF(tw.charged_input[THREAD_WORK_LAYOUT_BOX] == s->box && tw.charged_input[THREAD_WORK_LAYOUT_LINE] == s->line
+                && tw.charged_input[THREAD_WORK_SELECTOR_MATCH] == s->rules,
+            "%s:%d read layout as served and computed it: %llu box questions, %llu line items and %llu rule tests "
+            "inside the read. %s asks what this read needs under its resting drive before the read; ask the "
+            "missing producer there",
+            file, line, (unsigned long long)tw.charged_input[THREAD_WORK_LAYOUT_BOX] - s->box,
+            (unsigned long long)tw.charged_input[THREAD_WORK_LAYOUT_LINE] - s->line,
+            (unsigned long long)tw.charged_input[THREAD_WORK_SELECTOR_MATCH] - s->rules, s->asker);
+#else
+    (void)s; (void)file; (void)line;
+#endif
+}
+
 bool layout_job_rule_take(void)
 {
     LayoutJob *job = lj_current();

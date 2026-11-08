@@ -296,6 +296,9 @@ static bool bp_background_color_at(BpState *st, lxb_dom_element_t *el, const Css
     return true;
 }
 
+/* The offer's element's client rectangles are asked by box_paint_ready before its step reads them. */
+#define BP_ASKER "core/paint/box_paint.c's box_paint_ready"
+
 /* THE SAME MARK AT THE BOX'S OWN BORDER BOX, which is every block-level caller's rectangle. It is a second
    ENTRY and emphatically not a second MARK: an inline box is laid at a FRAGMENT rectangle instead (see
    `bp_inline_box_marks`), and CSS 2.1 §E.2's step 7.2.1 item 1 and its step 2 and step 4 item 1 are one item
@@ -304,7 +307,7 @@ static bool bp_background_color(BpState *st, lxb_dom_element_t *el)
 {
     CssPx rect[4];
 
-    element_view_bounding_box_px(el, rect);
+    element_view_bounding_box_served_px(el, rect, BP_ASKER);
     return bp_background_color_at(st, el, rect);
 }
 
@@ -393,7 +396,7 @@ static bool bp_border(BpState *st, lxb_dom_element_t *el)
 {
     CssPx rect[4];
 
-    element_view_bounding_box_px(el, rect);
+    element_view_bounding_box_served_px(el, rect, BP_ASKER);
     return bp_border_at(st, el, rect);
 }
 
@@ -408,7 +411,7 @@ static void bp_content_box_origin(lxb_dom_element_t *el, CssPx *x, CssPx *y)
 {
     CssPx box[4], width[4];
 
-    element_view_bounding_box_px(el, box);
+    element_view_bounding_box_served_px(el, box, BP_ASKER);
     used_value_border_widths_px(el, width);
     *x = css_px_add(box[0], css_px_add(width[3], used_value_px(el, "padding-left")));
     *y = css_px_add(box[1], css_px_add(width[0], used_value_px(el, "padding-top")));

@@ -293,12 +293,14 @@ void element_view_bounding_box_of(const CssPx (*r)[4], size_t n, CssPx out[4]);
  * The FOUR NUMBERS are the same derivation `getBoundingClientRect` reports: one client-rect list in this
  * vocabulary and one reduction of it (element_view.c). `el` must be an element. */
 void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4]);
-/* Named residual. Not covered: this entry's callers scrollIntoView and Intersection Observer lay out to
-   completion in a drive of their own, so neither rests where the page's own `getBoundingClientRect` does (paint
-   asks first, in document_paint_ready). Next diff builds: `element_view_client_rects_ask` above, asked by each
-   caller's step machine before it reads.
-   Absence shows as: layout_job.c's nested-drive DFAIL with one of those callers on the stack, or a
-   REST_UNIT_LAYOUT_DESCENDANTS unit over the quantum inside one of them. */
+/* Named residual. Not covered: this entry's caller Intersection Observer lays out to completion in a drive of
+   its own, so it does not rest where the page's own `getBoundingClientRect` does (paint and scrollIntoView ask
+   first, and read through the served entry below). Next diff builds: `element_view_client_rects_ask` above,
+   asked by its step machine before it reads.
+   Absence shows as: a REST_UNIT_LAYOUT_DESCENDANTS unit over the quantum inside it. */
+/* The same read, for a caller whose `asker` asked `el`'s client rectangles first in this job: asserted served
+   (core/layout/layout_job.h's LayoutJobServed). */
+void element_view_bounding_box_served_px(lxb_dom_element_t *el, CssPx out[4], const char *asker);
 
 /* The smallest rectangle enclosing all `n` > 0 rectangles of `r` (each x, y, width, height), into `out` in the
    same order. Each rectangle's edges are Geometry Interfaces §3's derived ones, the minimum and maximum of its
