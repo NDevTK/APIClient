@@ -826,6 +826,7 @@ static const TfServed TF_SERVED[] = {
       "postMessage(rxwR.test('a'.repeat(327680) + 'b') && !rxwR.test('a'.repeat(327680))"
       " && rxwR.source.length === 327681);" },
     { "https://x.test/chunk/replyprog.js", "text/javascript",  "fetch('/api/progran');" },
+    { "https://x.test/chunk/nrframe.js",   "text/javascript",  "parent.fetch('/api/nr-frame-ran');" },
     { "https://x.test/chunk/xsrow.js",     "text/javascript",  "fetch('/api/xsrow?n=' + window.__xsn);" },
     { "https://x.test/chunk/replyctl.js",  "application/json", "fetch('/api/ctlran');" },
     { "https://x.test/chunk/injsrc.js",    "text/javascript",
@@ -1761,6 +1762,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/getiterfork.h"
 #include "fixture/flexscroll.h"
 #include "fixture/realmfree.h"
+#include "fixture/navrealm.h"
 #include "fixture/xwinfwd.h"
 #include "fixture/msgprefix.h"
 #include "fixture/prefixjoin.h"
@@ -2565,6 +2567,7 @@ TF_DOCS[] = {
     { "getiterfork", HTML_GETITERFORK },
     { "flexscroll", HTML_FLEXSCROLL },
     { "realmfree", HTML_REALMFREE },
+    { "navrealm", HTML_NAVREALM },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -20914,6 +20917,30 @@ TF_UNIT void probes_realmfree(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `navrealm` document (fixture/navrealm.h): both arms ran, and the two scripts written into the
+   frame in the '#nr' arm ran in that arm's own realm for the frame's document after the other arm's realm for it
+   was collected. */
+TF_UNIT void probes_navrealm(const char *js, Probe *tab, int *n) {
+    const char *r_why = NULL, *q_why = NULL, *f_why = NULL, *i_why = NULL;
+    int r_tt = 1, q_tt = 1, f_tt = 1, i_tt = 1;
+    fold_row(&r_tt, &r_why, !!strstr(js, "\"/api/nr-removed\""),
+             "NOT REACHED: there is no /api/nr-removed record, so the arm that removed the frame never ran");
+    fold_row(&q_tt, &q_why, !!strstr(js, "\"/api/nr-queued\""),
+             "NOT REACHED: there is no /api/nr-queued record, so no arm wrote the frame's scripts");
+    fold_row(&f_tt, &f_why, !!strstr(js, "\"/api/nr-frame-ran\""),
+             "NOT REACHED: there is no /api/nr-frame-ran record, so the external script written into the frame in "
+             "the '#nr' arm never ran");
+    fold_row(&i_tt, &i_why, !!strstr(js, "\"/api/nr-inline-ran\""),
+             "NOT REACHED: there is no /api/nr-inline-ran record, so the inline script queued behind it never ran");
+    const Probe rows[] = {
+        { "nr-removed", r_tt, "nrArm", SESS_EXPLORE, r_why },
+        { "nr-queued", q_tt, "nrArm", SESS_EXPLORE, q_why },
+        { "nr-frame-ran", f_tt, "nrArm", SESS_EXPLORE, f_why, .gate = "nr-queued" },
+        { "nr-inline-ran", i_tt, "nrArm", SESS_EXPLORE, i_why, .gate = "nr-queued" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `uriclass` document (fixture/uriclass.h): an encoded unknown holds only the units Encode
    produces, so a RegExp over a unit outside them is decided, and one over a unit inside them forks. */
 TF_UNIT void probes_uriclass(const char *js, Probe *tab, int *n) {
@@ -30264,6 +30291,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_getiterfork(js, probes, &np);
     probes_flexscroll(js, probes, &np);
     probes_realmfree(js, probes, &np);
+    probes_navrealm(js, probes, &np);
     probes_xwinfwd(js, probes, &np);
     probes_msgprefix(js, probes, &np);
     probes_prefixjoin(js, probes, &np);
