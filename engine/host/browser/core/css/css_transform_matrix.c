@@ -482,29 +482,6 @@ typedef struct {
     bool               content_box;
 } CssTmPlan;
 
-/* Whether `el` declares `name` with a value other than `initial`, spelled or through a CSS-wide keyword that
-   resolves to it (none of these properties is inherited). */
-static bool css_tm_declared(lxb_dom_element_t *el, const char *name, const char *initial)
-{
-    char *decl = cssom_cascaded_value(el, name);
-    bool declared = decl != NULL && strcasecmp(decl, initial) != 0 && strcasecmp(decl, "initial") != 0 &&
-                    strcasecmp(decl, "unset") != 0;
-
-    free(decl);
-    return declared;
-}
-
-/* css-transforms-2's §7 preserve-3d on the parent keeps a 3D rendering context where the flattening below
-   assumes there is none. */
-static void css_tm_unbuilt_properties(lxb_dom_element_t *el)
-{
-    lxb_dom_element_t *parent = css_parent_element(el);
-
-    if (parent != NULL && css_tm_declared(parent, "transform-style", "flat"))
-        DFAIL("css-transforms-2 §4.1.4 \"Accumulated 3D Transformation Matrix Computation\": the parent declares "
-              "`transform-style`, which this engine computes no value for. BUILD §7's preserve-3d accumulation");
-}
-
 /* `el`'s parent when §8's perspective applies to it with a value other than `none`, written to `d`; NULL
    otherwise. §8's `Applies to:` line is transformable elements. */
 static lxb_dom_element_t *css_tm_perspective_parent(lxb_dom_element_t *el, CssPx *d)
@@ -572,7 +549,6 @@ static void css_tm_plan(lxb_dom_element_t *el, CssTmPlan *p)
     /* §3 "The transform Property"'s `Applies to: transformable elements` first, so a declaration on a box it
        does not apply to moves nothing, as core/css/css_transform.h states. */
     if (!css_transform_is_transformable(el) || !css_transform_composed_list(el, &p->list)) return;
-    css_tm_unbuilt_properties(el);
     linear = css_tm_of_list(&p->list, NULL);
     p->applies = true;
     p->anchored = !css_tm4_is_translation(&linear);
@@ -584,19 +560,14 @@ static void css_tm_plan(lxb_dom_element_t *el, CssTmPlan *p)
     p->read_y |= p->origin.y.kind != CSS_LENGTH_ABSOLUTE;
 }
 
-CssTransformMatrix css_transform_matrix_of_element(lxb_dom_element_t *el)
+/* The 4x4 of the plan's list within its origin bracket. Consumes the plan's list. */
+static CssTransformMatrix3d css_tm_element_own4(lxb_dom_element_t *el, CssTmPlan *pp)
 {
     CssTransformMatrix3d m, t;
-    CssTmPlan p;
-    CssPx ref[2] = { css_px(0.0), css_px(0.0) }, ax, ay, d;
+    CssTmPlan p = *pp;
+    CssPx ref[2] = { css_px(0.0), css_px(0.0) }, ax, ay;
     FlowPoint corner;
-    lxb_dom_element_t *parent;
 
-    DCHECK(el != NULL, "css-transforms-1 §2's transformation matrix was asked for with no element");
-    css_tm_plan(el, &p);
-    /* An untransformed child needs no parent perspective either: it maps z = 0 to z = 0, where the perspective
-       matrix's w is 1, so the flattened product is the identity. */
-    if (!p.applies) return css_transform_matrix_identity();
     if (p.read_x) ref[0] = css_tm_reference_size(el, false);
     if (p.read_y) ref[1] = css_tm_reference_size(el, true);
     m = css_tm_of_list(&p.list, ref);
@@ -618,14 +589,36 @@ CssTransformMatrix css_transform_matrix_of_element(lxb_dom_element_t *el)
         t = css_tm4_translation(css_px_scale(ax, -1.0), css_px_scale(ay, -1.0), css_px_scale(p.origin.z, -1.0));
         m = css_tm4_multiply(&m, &t);
     }
+    return m;
+}
+
+/* §2's four steps for `el` — its own transformation matrix, the map "from where the element would have
+   rendered into that local coordinate system" — as css-transforms-2 §6's 4x4 in the initial containing block's
+   space, the origin bracket anchored at §4's origin measured from §5's reference box corner at its layout
+   position; then §4.1.4's parent perspective matrix. `carries_depth` is whether points with z ≠ 0 reach it
+   (descendants accumulated into it in a 3D rendering context); otherwise an untransformed element maps z = 0
+   to z = 0, where the perspective matrix's w is 1, and its flattened matrix is the identity. False, writing the
+   identity, when neither applies. */
+static bool css_tm_element4(lxb_dom_element_t *el, bool carries_depth, CssTransformMatrix3d *out)
+{
+    CssTransformMatrix3d t;
+    CssTmPlan p;
+    CssPx d;
+    lxb_dom_element_t *parent;
+
+    DCHECK(el != NULL && out != NULL, "css-transforms-1 §2's transformation matrix was asked for with no element");
+    *out = css_tm4_identity();
+    css_tm_plan(el, &p);
+    if (p.applies) *out = css_tm_element_own4(el, &p);
+    else if (!carries_depth) return false;
     /* css-transforms-2 §4.1.4: "If parent element has a value for perspective which is not none, pre-multiply
        the parent element's perspective matrix into the transform." */
     parent = css_tm_perspective_parent(el, &d);
     if (parent != NULL) {
         t = css_tm_perspective_matrix(parent, d);
-        m = css_tm4_multiply(&t, &m);
+        *out = css_tm4_multiply(&t, out);
     }
-    return css_tm4_flatten(&m);
+    return p.applies || parent != NULL;
 }
 
 /* §3.2's percentages read the reference box of an element whose layout is the CSS box model's; SVG 2's, and
@@ -722,26 +715,38 @@ bool css_transform_matrix_resolved_ask(lxb_dom_element_t *el)
 }
 
 /* The layout `el`'s matrix reads, asked: false ("not yet") when a question was deferred. */
-static bool css_tm_element_ask(lxb_dom_element_t *el)
+static bool css_tm_element_ask(lxb_dom_element_t *el, bool carries_depth)
 {
     CssTmPlan p;
     FlowPoint corner;
     CssPx unused, d;
-    bool done;
+    bool done = true;
     lxb_dom_element_t *parent;
 
     css_tm_plan(el, &p);
-    if (!p.applies) return true;
-    css_transform_list_free(&p.list);
-    parent = css_tm_perspective_parent(el, &d);
-    if (parent != NULL && !css_tm_perspective_matrix_ask(parent)) return false;
-    done = (!p.read_x || css_tm_reference_size_ask(el, false)) && (!p.read_y || css_tm_reference_size_ask(el, true));
-    if (done && p.anchored) {
-        done = flow_border_box_origin_ask(el, &corner);
-        if (done && p.content_box)
-            done = used_value_px_ask(el, "padding-left", &unused) && used_value_px_ask(el, "padding-top", &unused);
+    if (!p.applies && !carries_depth) return true;
+    if (p.applies) {
+        css_transform_list_free(&p.list);
+        done = (!p.read_x || css_tm_reference_size_ask(el, false)) &&
+               (!p.read_y || css_tm_reference_size_ask(el, true));
+        if (done && p.anchored) {
+            done = flow_border_box_origin_ask(el, &corner);
+            if (done && p.content_box)
+                done = used_value_px_ask(el, "padding-left", &unused) &&
+                       used_value_px_ask(el, "padding-top", &unused);
+        }
     }
-    return done;
+    parent = css_tm_perspective_parent(el, &d);
+    return done && (parent == NULL || css_tm_perspective_matrix_ask(parent));
+}
+
+/* Whether `on`'s child on the chain participates in a 3D rendering context `on` establishes or extends
+   (css-transforms-2 §4.1.2 "3D Rendering Contexts": "An element participates in a 3D rendering context if its
+   parent establishes or extends a 3D rendering context"), so the child's 4x4 is not flattened into `on`'s
+   plane. */
+static bool css_tm_child_participates(lxb_dom_element_t *on)
+{
+    return on != NULL && css_transform_style_used_preserve_3d(on);
 }
 
 bool css_transform_matrix_current_ask(lxb_dom_element_t *el)
@@ -750,21 +755,35 @@ bool css_transform_matrix_current_ask(lxb_dom_element_t *el)
 
     DCHECK(el != NULL, "css-transforms-1 §2's current transformation matrix was asked of no element");
     for (on = el; on != NULL; on = css_parent_element(on))
-        if (!css_tm_element_ask(on)) return false;
+        if (!css_tm_element_ask(on, on != el && css_tm_child_participates(on))) return false;
     return true;
 }
 
 CssTransformMatrix css_transform_matrix_current(lxb_dom_element_t *el)
 {
     CssTransformMatrix out = css_transform_matrix_identity();
+    CssTransformMatrix3d acc = css_tm4_identity(), m;
     lxb_dom_element_t *on;
+    bool open = false;
 
     DCHECK(el != NULL, "css-transforms-1 §2's current transformation matrix was asked for with no element");
     /* "The current transformation matrix is computed by post-multiplying all transformation matrices starting
        from the viewport coordinate system and ending with the transformation matrix of an element": walked
        upward, each ancestor is the `outer` operand. Every element's matrix is already anchored at its own box
-       in the initial containing block's space, so the product needs no further conjugation. */
-    for (on = el; on != NULL; on = css_parent_element(on))
-        out = css_transform_matrix_multiply(css_transform_matrix_of_element(on), out);
+       in the initial containing block's space, so the product needs no further conjugation. Within a 3D
+       rendering context the 4x4s accumulate (css-transforms-2 §4.1.4's accumulated 3D transformation
+       matrix); a run of them is flattened where the next ancestor's used transform-style is flat, which
+       §4.1.3 "Transformed element hierarchies" states as "create a flattened representation of their content". */
+    for (on = el; on != NULL; on = css_parent_element(on)) {
+        if (css_tm_element4(on, on != el && css_tm_child_participates(on), &m)) {
+            acc = css_tm4_multiply(&m, &acc);
+            open = true;
+        }
+        if (open && !css_tm_child_participates(css_parent_element(on))) {
+            out = css_transform_matrix_multiply(css_tm4_flatten(&acc), out);
+            acc = css_tm4_identity();
+            open = false;
+        }
+    }
     return out;
 }

@@ -3,13 +3,16 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include <lexbor/core/base.h>
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_style_declaration.h"
 #include "core/css/css_transform.h"
+#include "core/layout/containment.h"
 #include "core/layout/replaced_element.h"
 
 /* §2 Terminology's FIRST category's own exclusions, which are computed `display` values — "table-column boxes,
@@ -156,5 +159,48 @@ bool css_transform_creates_context(lxb_dom_element_t *el)
     CssPx d;
 
     return css_transform_is_css_box_transformable(el) &&
-           (css_transform_is_transformed(el) || css_computed_perspective(el, &d));
+           (css_transform_is_transformed(el) || css_computed_perspective(el, &d) ||
+            css_computed_transform_style_is_preserve_3d(el));
+}
+
+/* §7.1's list, whose properties this engine derives no computed value for, each with its value that groups
+   nothing: "opacity: any value less than 1", "filter: any value other than none", and so on. */
+static const struct { const char *name, *ungrouped; } CSS_TR_GROUPING_UNMODELLED[] = {
+    { "opacity", "1" }, { "filter", "none" }, { "clip", "auto" }, { "clip-path", "none" },
+    { "isolation", "auto" }, { "mask-image", "none" }, { "mask-border-source", "none" },
+    { "mix-blend-mode", "normal" },
+};
+
+/* §7.1 "Grouping property values": "overflow: any value other than visible or clip", "contain: paint and any
+   other property/value combination that causes paint containment", and the list above. */
+static bool css_tr_groups(lxb_dom_element_t *el)
+{
+    static const char *const AXES[] = { "overflow-x", "overflow-y" };
+    size_t i;
+
+    for (i = 0; i < COUNTOF(AXES); i++)
+        if (!css_computed_keyword_is(el, AXES[i], CSS_KEYWORD_VISIBLE) &&
+            !css_computed_keyword_is(el, AXES[i], CSS_KEYWORD_CLIP))
+            return true;
+    if (containment_paint(el)) return true;
+    for (i = 0; i < COUNTOF(CSS_TR_GROUPING_UNMODELLED); i++) {
+        char *decl = cssom_cascaded_value(el, CSS_TR_GROUPING_UNMODELLED[i].name);
+        bool declared = decl != NULL && strcasecmp(decl, CSS_TR_GROUPING_UNMODELLED[i].ungrouped) != 0 &&
+                        strcasecmp(decl, "initial") != 0 && strcasecmp(decl, "unset") != 0;
+
+        free(decl);
+        if (declared)
+            DFAILF("css-transforms-2 §7.1 \"Grouping property values\": a preserve-3d element declares `%s`, "
+                   "whose value may force a used transform-style of flat, and this engine derives no computed "
+                   "value for it. BUILD its `Computed value:` line and test it here",
+                   CSS_TR_GROUPING_UNMODELLED[i].name);
+    }
+    return false;
+}
+
+bool css_transform_style_used_preserve_3d(lxb_dom_element_t *el)
+{
+    DCHECK(el != NULL, "css-transforms-2 §7's used transform-style was asked of no element");
+    return css_transform_is_transformable(el) && css_computed_transform_style_is_preserve_3d(el) &&
+           !css_tr_groups(el);
 }

@@ -56,7 +56,13 @@ bool css_transform_is_transformed(lxb_dom_element_t *el);
 /* css-transforms-1 §2 "The Transform Rendering Model": "For elements whose layout is governed by the CSS box
    model", a transform creates a stacking context and "a containing block for all descendants"; css-transforms-2
    §8 "The perspective Property" gives a `perspective` other than `none` both, "just like the transform property
-   does". */
+   does", and §7 "The transform-style Property" gives a computed `preserve-3d` both. */
 bool css_transform_creates_context(lxb_dom_element_t *el);
+
+/* css-transforms-2 §7's used value of `transform-style` on `el` is `preserve-3d`: its computed value, on a
+   transformable element, with none of §7.1 "Grouping property values"' properties, which "force the element to
+   have a used style of flat". Such an element establishes or extends §4.1.2's 3D rendering context, and its
+   children participate in it. */
+bool css_transform_style_used_preserve_3d(lxb_dom_element_t *el);
 
 #endif

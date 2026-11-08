@@ -134,6 +134,7 @@ typedef enum {
     X(SCALE,               "scale",               LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(PERSPECTIVE,         "perspective",         LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(PERSPECTIVE_ORIGIN,  "perspective-origin",  LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
+    X(TRANSFORM_STYLE,     "transform-style",     LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(ANIMATION_NAME,            "animation-name",            LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
     X(ANIMATION_DURATION,        "animation-duration",        LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
     X(ANIMATION_TIMING_FUNCTION, "animation-timing-function", LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \

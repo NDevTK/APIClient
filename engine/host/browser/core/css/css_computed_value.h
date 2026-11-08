@@ -143,6 +143,9 @@ bool css_computed_transform_box_is_content(lxb_dom_element_t *el);
    box corner, percentages left unresolved, and a Z offset. */
 CssTransformOrigin css_computed_transform_origin(lxb_dom_element_t *el);
 
+/* Whether css-transforms-2 §7 "The transform-style Property"'s computed value of `el` is `preserve-3d`. */
+bool css_computed_transform_style_is_preserve_3d(lxb_dom_element_t *el);
+
 /* css-transforms-2 §8 "The perspective Property"'s computed value of `el`, an absolute length; false for
    `none`. */
 bool css_computed_perspective(lxb_dom_element_t *el, CssPx *out);

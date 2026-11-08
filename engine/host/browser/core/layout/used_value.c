@@ -1206,8 +1206,8 @@ static bool uv_cb_not_root(lxb_dom_element_t *el)
    transforms (§5 "Individual Transform Properties: the translate, scale, and rotate properties": every value
    but `none` creates "a stacking context and containing block for all descendants"), §7 "The transform-style
    Property" (`preserve-3d` "on a transformable element") and §8 "The perspective Property" ("just like the
-   transform property does"). The transform and perspective rows answer one fact, core/css/css_transform.h's;
-   each keeps its own row for will-change, which names the property. */
+   transform property does"). The transform, transform-style and perspective rows answer one fact,
+   core/css/css_transform.h's; each keeps its own row for will-change, which names the property. */
 static const UvCbProperty UV_CB_PROPERTIES[] = {
     { "position",        false, uv_cb_any,                              uv_cb_positioned,              "static" },
     { "transform",       true,  css_transform_is_css_box_transformable, css_transform_creates_context, "none" },
@@ -1215,7 +1215,7 @@ static const UvCbProperty UV_CB_PROPERTIES[] = {
     { "translate",       true,  css_transform_is_css_box_transformable, css_transform_creates_context, "none" },
     { "rotate",          true,  css_transform_is_css_box_transformable, css_transform_creates_context, "none" },
     { "scale",           true,  css_transform_is_css_box_transformable, css_transform_creates_context, "none" },
-    { "transform-style", true,  css_transform_is_css_box_transformable, NULL,                          "flat" },
+    { "transform-style", true,  css_transform_is_css_box_transformable, css_transform_creates_context, "flat" },
     { "perspective",     true,  css_transform_is_css_box_transformable, css_transform_creates_context, "none" },
     { "filter",          true,  uv_cb_not_root,                         NULL,                          "none" },
 };

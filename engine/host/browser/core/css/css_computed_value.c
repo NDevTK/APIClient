@@ -2686,6 +2686,17 @@ static CssTransformOrigin css_cv_perspective_origin(lxb_dom_element_t *el, char 
     return o;
 }
 
+bool css_computed_transform_style_is_preserve_3d(lxb_dom_element_t *el)
+{
+    char *v = css_computed_value(el, "transform-style");
+    bool preserve;
+
+    DCHECK(v != NULL, "css-transforms-2 §7's computed `transform-style` came back as no value; its row derives one");
+    preserve = strcmp(v, "preserve-3d") == 0;
+    free(v);
+    return preserve;
+}
+
 bool css_computed_perspective(lxb_dom_element_t *el, CssPx *out)
 {
     char *spec;
@@ -2888,6 +2899,14 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
         CssTransformOrigin o = css_cv_transform_origin(el, spec);
 
         return css_transform_origin_serialize(&o);
+    }
+    /* css-transforms-2 §7: `Computed value: specified keyword`, over `flat | preserve-3d`, folded to lowercase.
+       A value outside the grammar is the declaration CSS Syntax drops, which leaves the initial `flat`. */
+    case CSS_PROPERTY_TRANSFORM_STYLE: {
+        bool preserve = css_cv_kw_is(spec, "preserve-3d");
+
+        free(spec);
+        return css_cv_strdup(preserve ? "preserve-3d" : "flat");
     }
     /* css-transforms-2 §8: "the keyword none or an absolute length". */
     case CSS_PROPERTY_PERSPECTIVE: {

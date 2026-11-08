@@ -35,8 +35,9 @@
  * 3x3 PROJECTIVE MATRIX §7's flattening leaves of it. With `transform-style: flat`, the initial value, each
  * element's content is drawn into its parent's plane, so a point enters every element's matrix with z = 0 and
  * leaves it with its z discarded: the third row and column of the 4x4 never reach the parent, and what does is
- * the 3x3 of rows x, y, w over columns x, y, 1. The 2D matrices of css-transforms-1 are its affine case
- * (p = q = 0, s = 1).
+ * the 3x3 of rows x, y, w over columns x, y, 1. Inside a 3D rendering context (§4.1.2, a used `preserve-3d`)
+ * the 4x4s multiply unflattened, and the run is flattened into the plane of the context's parent. The 2D
+ * matrices of css-transforms-1 are its affine case (p = q = 0, s = 1).
  *
  * EVERY ENTRY IS A `CssPx`, WHICH IS A STATEMENT ABOUT WHERE AN ENVIRONMENT FACT CAN ENTER A TRANSFORM. The
  * translations are `<length-percentage>`s, so `translate(10vw)` is a function of the initial containing block,
@@ -84,13 +85,6 @@ CssTransformMatrix css_transform_matrix_multiply(CssTransformMatrix outer, CssTr
    translation's, which core/css/css_length.h's arithmetic assembles — a `translate(10vw)` applied to a border
    area derived from the initial containing block is one function of that block and not two numbers. */
 void css_transform_matrix_map(CssTransformMatrix m, CssPx x, CssPx y, CssPx *out_x, CssPx *out_y);
-
-/* §2's FOUR STEPS for `el` — its own TRANSFORMATION MATRIX, the map "from where the element would have
-   rendered into that local coordinate system" — expressed in the initial containing block's space: the origin
-   bracket is anchored at §4's origin measured from §5's reference box corner, placed at its layout position.
-   The IDENTITY for an element no transform applies to, which is both arms of the conjunction
-   core/css/css_transform.h states. */
-CssTransformMatrix css_transform_matrix_of_element(lxb_dom_element_t *el);
 
 /* §2's CURRENT TRANSFORMATION MATRIX — "From the perspective of the user an element effectively accumulates
    all the transform properties of its ancestors as well as any local transform applied to it", computed as
