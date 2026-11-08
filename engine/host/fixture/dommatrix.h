@@ -57,6 +57,10 @@ static const char HTML_DOMMATRIX[] =
     "};"
     "var dmS = Object.keys(dmQ).map(function (k) { return k + '=' + String(dmQ[k]).replace(/[^A-Za-z0-9.-]/g, '_'); }).join('&');"
     "fetch('/api/dommatrix?' + dmS);"
+    /* §6.4's m13 setter over an unknown: `screen.width & 3` is an environment unknown whose example is in [0, 3],
+       and whether the value is 0 decides is 2D, so both arms reach the fetch. */
+    "var dmF = new DOMMatrix(); dmF.m13 = screen.width & 3;"
+    "fetch('/api/dmfork?s=' + dmF.is2D);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

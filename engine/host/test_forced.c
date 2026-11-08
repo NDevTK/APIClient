@@ -22974,8 +22974,16 @@ TF_UNIT void probes_dommatrix(const char *js, Probe *tab, int *n) {
              DM_IS("pt", "3_1_3_2_function"),
              "Geometry Interfaces §2's DOMPoint setters, defaults or fromPoint do not read");
 #undef DM_IS
+    const char *df_why = NULL; int df_tt = 1;
+    fold_row(&df_tt, &df_why, !!strstr(js, "\"/api/dmfork\""),
+             "NOT REACHED: no /api/dmfork record, so the document aborted before its second fetch");
+    fold_row(&df_tt, &df_why,
+             param_value_is(js, "/api/dmfork", "s", "true") && param_value_is(js, "/api/dmfork", "s", "false"),
+             "Geometry Interfaces §6.4's m13 setter over an unknown value does not run both arms of its "
+             "is 2D test — one arm was decided by the value's example");
     const Probe rows[] = {
         { "geometry-interfaces", dm_tt, "/api/dommatrix", SESS_EXPLORE, dm_why },
+        { "geometry-is2d-fork", df_tt, "/api/dmfork", SESS_EXPLORE, df_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
