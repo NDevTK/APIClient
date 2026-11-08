@@ -30992,6 +30992,7 @@ typedef struct JSReSearch {
     JSValue str;             /* ToString(string) (owned) */
     JSValue prevLast;        /* @@search's saved lastIndex (owned) */
     JSValue res;             /* RegExpExec's result (owned) */
+    JSValue pred;            /* @@search step 9's `result !== null` over an unknown result (owned), or undefined */
     JSValue result;          /* DONE (owned) */
     JSValue cbx[3];          /* [this, exec, S] — RegExpExec's call request */
 } JSReSearch;
@@ -95424,7 +95425,8 @@ static const JSTrampStepDef js_str_matchAll_def =
       .algorithm = "22.1.3.14 String.prototype.matchAll", .steps = js_str_matchAll_steps };
 static const JSTrampStepDef js_str_search_def =
     { sizeof(JSStrMatch), js_str_match_step, js_str_match_fini, JS_ATOM_Symbol_search, .visit = js_str_match_visit,
-      .algorithm = "22.1.3.21 String.prototype.search", .steps = js_str_search_steps };
+      .algorithm = "22.1.3.21 String.prototype.search", .steps = js_str_search_steps,
+      .forwards_unknown_receiver = 1 };
 /* Declared where the machine is; a definition sits with its siblings rather than with the algorithm it names. */
 static const char *const js_str_replace_steps[];
 static const char *const js_str_replaceAll_steps[];
@@ -111377,13 +111379,14 @@ static int js_re_search_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
         /* FIRST, before anything that can throw: the teardown frees exactly what the state holds. */
         s->str = JS_UNDEFINED; s->prevLast = JS_UNDEFINED; s->res = JS_UNDEFINED; s->result = JS_UNDEFINED;
+        s->pred = JS_UNDEFINED;
         if (!JS_IsObject(s->hdr.this_val)) { JS_ThrowTypeErrorNotAnObject(ctx); return -1; }
         s->hdr.stage = RES_STR;
     }
-    if (s->hdr.stage == RES_STR && !search && g_concolic.is && g_concolic.is(step_arg(&s->hdr, 0))) {
-        /* test's step 3 over an unknown that is a String in every world (its domain says so): §7.1.17 ToString
-           returns a String argument itself, so RegExpExec runs over the unknown, whose RegExpBuiltinExec decides
-           from the subject's domain (REX_DOMAIN). */
+    if (s->hdr.stage == RES_STR && g_concolic.is && g_concolic.is(step_arg(&s->hdr, 0))) {
+        /* test's and @@search's step 3 over an unknown that is a String in every world (its domain says so):
+           §7.1.17 ToString returns a String argument itself, so RegExpExec runs over the unknown, whose
+           RegExpBuiltinExec decides from the subject's domain (REX_DOMAIN). */
         JSValue pre = JS_UNDEFINED;
         uint64_t ascii[2];
         int wide = 0;
@@ -111424,9 +111427,7 @@ static int js_re_search_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         if (r) return r < 0 ? -1 : r;
         if (!search) {   /* test steps 4-5 */
             /* An unknown match is a predicate of the match, `match !== null`, through the hook that owns
-               §7.2.14 over an unknown. Named residual. Not covered: @@search's step 9 over an unknown match.
-               Next diff builds: its two completions, -1 and the match's index, forked on the same predicate.
-               How its absence shows: `s.search(re)` over unknown input never answers -1. */
+               §7.2.14 over an unknown. */
             if (g_concolic.is(s->res)) {
                 JSValue pair[2] = { js_dup(s->res), JS_NULL };
 
@@ -111466,6 +111467,23 @@ static int js_re_search_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
     if (s->hdr.stage == RES_NULL) {
         /* step 9: no match is -1, and nothing more is read */
         if (JS_IsNull(s->res)) { JS_FreeValue(ctx, cb_result); s->result = js_int32(-1); return 0; }
+        /* An unknown match is null in some worlds and not in others: the step's two completions are the arms of
+           `result !== null`, through the hook that owns §7.2.14 over an unknown. */
+        if (g_concolic.is(s->res)) {
+            int some = 1;
+
+            JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
+            if (JS_IsUndefined(s->pred)) {
+                JSValue pair[2] = { js_dup(s->res), JS_NULL };
+
+                if (!g_concolic.cmp(ctx, pair + 2, /*is_neq*/true, JS_CONCOLIC_EQ_STRICT))
+                    DFAIL("the concolic comparison hook declined an unknown RegExpExec result");
+                s->pred = pair[0];
+            }
+            r = step_tobool_run(ctx, &s->hdr, s->pred, "22.2.6.12 step 9 (if result is null, return -1)", &some);
+            if (r) return r < 0 ? -1 : r;
+            if (!some) { s->result = js_int32(-1); return 0; }
+        }
         s->hdr.stage = RES_INDEX;
     }
     /* step 10: `? Get(result, "index")` — off whatever the exec produced */
@@ -111486,6 +111504,7 @@ static void js_re_search_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->str);
     v->val(ctx, &s->prevLast);
     v->val(ctx, &s->res);
+    v->val(ctx, &s->pred);
 }
 
 static JSValue js_re_search_fini(JSContext *ctx, void *st, bool take_result)

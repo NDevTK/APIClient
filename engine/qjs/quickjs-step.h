@@ -412,7 +412,8 @@ typedef struct JSTrampStepDef {
     uint8_t string_split;
     /* Whether the algorithm takes an unknown receiver itself, reading it only through operations the engine
        answers over an unknown (§23.1.3's [[Get]], [[HasProperty]] and LengthOfArrayLike, each a member read or a
-       per-position length fork): the unknown-callee [[Call]] machine then calls it with the receiver. */
+       per-position length fork; §22.1.3.21's hand-off to the searcher, or its ToString): the unknown-callee
+       [[Call]] machine then calls it with the receiver. */
     uint8_t forwards_unknown_receiver;
     /* The algorithm's own steps over an unknown receiver, from the facets the receiver and the arguments state:
        its completion, or JS_UNINITIALIZED where the facets decide no step. Asked by the unknown-callee [[Call]]
