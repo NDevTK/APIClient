@@ -6039,17 +6039,18 @@ async function engineFinalize(eng) {
   result._fkey = eng.fkey; result._prior = eng.prior;   // engine-computed key + parked entry -> persisted below
   return result;
 }
-/* A WASM abort is the engine crashing. It stays scoped to this engine, so one page cannot kill the scheduler
-   serving other tabs, but it is impossible to overlook: a console.error banner, a persistent crash count, a
-   `_run:"crashed"` record every consumer reads, and no completeness claim anywhere (no counters, no frontier
-   write). What the engine already observed is not discarded (see engineFinalize). */
+/* An instance whose renderer ended: a WASM abort, or renderer-host.js closing a renderer that stopped
+   answering (`renderer-unresponsive`); `m` carries which. It stays scoped to this engine, so one page cannot
+   kill the scheduler serving other tabs, but it is impossible to overlook: a console.error banner, a persistent
+   crash count, a `_run:"crashed"` record every consumer reads, and no completeness claim anywhere (no counters,
+   no frontier write). What the engine already observed is not discarded (see engineFinalize). */
 function crashBanner(stage, m) {   // every abort path (create, step, teardown) routes here, so no crash is quiet
   /* Neither operation can throw (an increment of a declared number, a console write), so nothing here is
      caught: the crash path must always announce itself. The counter is declared at load, so "no crash"
      differs from "bridge.js not loaded". */
   self._engineCrashOccurred++;
   console.error("\n==== ENGINE CRASH (" + stage + ") — " +
-                (stage === "result-refused" ? "THIS ZONE REFUSED THE INSTANCE'S ANSWER" : "WASM ABORTED") +
+                (stage === "result-refused" ? "THIS ZONE REFUSED THE INSTANCE'S ANSWER" : "ITS RENDERER ENDED") +
                 ", run marked crashed, NOT swallowed ====\n" + m + "\n");
 }
 // The C-side CHECK/DCHECK prints its @WHY/@E root line (phase/cond/at/reason) to the frame's line buffer
