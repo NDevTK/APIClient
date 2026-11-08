@@ -57105,8 +57105,10 @@ void JS_FlowGraphGapName(JSContext *ctx, int what, int id, char *buf, size_t cap
     case FG_GAP_CLASS:
     case FG_GAP_WEAK:
         DCHECK(id >= 0 && (uint32_t)id < ctx->rt->class_count, "flow graph: a gap names a class this runtime has not");
-        snprintf(buf, cap, "%s %s", what == FG_GAP_CLASS ? "class" : "weak",
-                 JS_AtomGetStr(ctx, name, sizeof name, ctx->rt->class_array[id].class_name));
+        /* With the class id: five function classes share the name "Function", and a census keyed by the name
+           alone would compose one key for each of them. */
+        snprintf(buf, cap, "%s %s #%d", what == FG_GAP_CLASS ? "class" : "weak",
+                 JS_AtomGetStr(ctx, name, sizeof name, ctx->rt->class_array[id].class_name), id);
         return;
     case FG_GAP_TAG:          snprintf(buf, cap, "tag %d", id); return;
     case FG_GAP_SYMBOL_KEY:   snprintf(buf, cap, "symbolKey %d", id); return;
