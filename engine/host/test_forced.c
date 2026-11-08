@@ -6121,16 +6121,25 @@ static size_t wasm_export_index(const WasmModule *m, const uint8_t *bytes, WasmE
  * (0 to 6, which print nothing here and return nothing) and WASM_HOST_CALL_ROWS' add (100). */
 enum { WASM_SELFTEST_HOST_ADD = 100 };
 
-static WasmExecStatus wasm_host_answer(WasmInterpreter *it)
+/* The results of the host call `it` has pending, into `out`; answers their count. */
+static size_t wasm_host_results(const WasmInterpreter *it, WasmValue *out)
 {
     const WasmFuncInstance *f = &it->store->funcs[it->host.func];
-    WasmValue sum = { 0, 0 };
 
     CHECKF(f->is_host && (f->host < 7 || f->host == WASM_SELFTEST_HOST_ADD), "a WebAssembly selftest called host "
            "function %u, which no selftest defines", f->host);
-    if (f->host < 7) return wasm_interpreter_return(it, NULL, 0);
-    sum.lo = (uint32_t)(it->vals[it->n_vals - 2].lo + it->vals[it->n_vals - 1].lo);
-    return wasm_interpreter_return(it, &sum, 1);
+    if (f->host < 7) return 0;
+    out->lo = (uint32_t)(it->vals[it->n_vals - 2].lo + it->vals[it->n_vals - 1].lo);
+    out->hi = 0;
+    return 1;
+}
+
+static WasmExecStatus wasm_host_answer(WasmInterpreter *it)
+{
+    WasmValue r;
+    size_t n = wasm_host_results(it, &r);
+
+    return wasm_interpreter_return(it, n ? &r : NULL, n);
 }
 
 /* An invocation that answered `st` is still running. */
@@ -6146,6 +6155,19 @@ static WasmExecStatus wasm_next(WasmInterpreter *it, WasmExecStatus st, bool exa
     if (st == WASM_EXEC_FORK) return wasm_interpreter_choose(it, example);
     if (st == WASM_EXEC_HOST_CALL) return wasm_host_answer(it);
     return wasm_interpreter_step(it);
+}
+
+/* The instantiation's status after `st`: a step, or the start function's choice (its example arm) or host
+   call's answer. */
+static WasmExecStatus wasm_instance_next(WasmInstance *inst, WasmExecStatus st)
+{
+    WasmValue r;
+    size_t n;
+
+    if (st == WASM_EXEC_FORK) return wasm_instance_choose(inst, true);
+    if (st != WASM_EXEC_HOST_CALL) return wasm_instance_step(inst);
+    n = wasm_host_results(&inst->start, &r);
+    return wasm_instance_return(inst, n ? &r : NULL, n);
 }
 
 /* f3268fa9's interpreter/host/spectest.ml as a host in one store: its print functions (types from
@@ -6299,7 +6321,7 @@ static void wasm_link_selftest(JSContext *ctx)
     CHECK(wasm_module_validator_run(&ev) == WASM_VALIDATE_DONE, "the link rows' exporter is invalid");
     st = wasm_instance_begin(&e, &store, &ed.module, eb, wasm_module_validator_side_table(&ev), &ev.ctx.types,
                              NULL, 0);
-    while (st == WASM_EXEC_MORE) st = wasm_instance_step(&e);
+    while (wasm_running(st)) st = wasm_instance_next(&e, st);
     CHECK(st == WASM_EXEC_DONE, "the link rows' exporter did not instantiate");
     insts[0] = &e;
     for (i = 0; i < COUNTOF(WASM_LINK_ROWS); i++) {
@@ -6326,7 +6348,7 @@ static void wasm_link_selftest(JSContext *ctx)
         externs = wasm_resolve_imports(&host, names, insts, 1, &d.module, bytes);
         st = wasm_instance_begin(&inst, &store, &d.module, bytes, wasm_module_validator_side_table(&v),
                                  &v.ctx.types, externs, d.module.n_imports);
-        while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst);
+        while (wasm_running(st)) st = wasm_instance_next(&inst, st);
         CHECKF(row->linked ? st == WASM_EXEC_DONE : st == WASM_EXEC_LINK_INCOMPATIBLE,
                "the link row %s answered %s; it %s", row->src, st == WASM_EXEC_DONE ? "linked"
                : wasm_exec_status_message(st), row->linked ? "links" : "is \"incompatible import type\"");
@@ -6408,7 +6430,7 @@ static void wasm_host_call_selftest(JSContext *ctx)
         }
         st = wasm_instance_begin(&inst[k], &store, &d.module, bytes, wasm_module_validator_side_table(&v),
                                  &v.ctx.types, externs[k], 2);
-        while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst[k]);
+        while (wasm_running(st)) st = wasm_instance_next(&inst[k], st);
         CHECKF(st == WASM_EXEC_DONE, "the host call module's instantiation answered \"%s\"",
                wasm_exec_status_message(st));
     }
@@ -6473,7 +6495,7 @@ static void wasm_cross_instance_selftest(JSContext *ctx)
         CHECKF(wasm_module_validator_run(&v[k]) == WASM_VALIDATE_DONE, "cross-instance module %zu is invalid", k);
         st = wasm_instance_begin(&inst[k], &store, wasm_module_decoder_module(&d[k]), bytes[k],
                                  wasm_module_validator_side_table(&v[k]), &v[k].ctx.types, NULL, 0);
-        while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst[k]);
+        while (wasm_running(st)) st = wasm_instance_next(&inst[k], st);
         CHECKF(st == WASM_EXEC_DONE, "cross-instance module %zu's instantiation answered \"%s\"", k,
                wasm_exec_status_message(st));
     }
@@ -6552,7 +6574,7 @@ static void wasm_exec_instantiate(WasmExecWorld *w, WasmExecModule *x, size_t nu
     CHECK(inst != NULL, "a testsuite instance could not be allocated");
     st = wasm_instance_begin(inst, &w->store, &x->d.module, bytes, wasm_module_validator_side_table(&x->v),
                              &x->v.ctx.types, externs, x->d.module.n_imports);
-    while (st == WASM_EXEC_MORE) st = wasm_instance_step(inst);
+    while (wasm_running(st)) st = wasm_instance_next(inst, st);
     CHECKF(st == WASM_EXEC_DONE, "the instantiation of %s answered \"%s\"", src, wasm_exec_status_message(st));
     free(externs);
     w->insts[num] = inst;
@@ -6582,7 +6604,7 @@ static void wasm_exec_unlinkable(WasmExecWorld *w, WasmExecModule *x, const Wasm
     if (got == NULL) {
         st = wasm_instance_begin(&inst, &w->store, m, bytes, wasm_module_validator_side_table(&x->v),
                                  &x->v.ctx.types, externs, m->n_imports);
-        while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst);
+        while (wasm_running(st)) st = wasm_instance_next(&inst, st);
         got = st == WASM_EXEC_DONE ? "a link" : wasm_exec_status_message(st);
         CHECKF(st != WASM_EXEC_DONE, "the unlinkable module of %s linked", row->src);
         wasm_instance_free(&inst);
@@ -6726,7 +6748,7 @@ TF_UNIT void wasm_interpreter_selftest(JSContext *ctx)
         wasm_store_init(&store, ctx);
         st = wasm_instance_begin(&inst, &store, &d.module, bytes, wasm_module_validator_side_table(&v),
                                  &v.ctx.types, NULL, 0);
-        while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst);
+        while (wasm_running(st)) st = wasm_instance_next(&inst, st);
         CHECKF(st == WASM_EXEC_DONE, "%s: the instantiation answered \"%s\"", row->src, wasm_exec_status_message(st));
         st = wasm_interpreter_begin(&it, &inst, func, NULL, 0);
         while (wasm_running(st)) st = wasm_next(&it, st, !row->assume);

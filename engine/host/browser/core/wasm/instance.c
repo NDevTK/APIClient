@@ -10,7 +10,7 @@
 
 enum {
     I_IMPORTS = 0, I_ALLOC, I_GLOBALS, I_TABLES, I_TABLE_FILL, I_ELEMS, I_ACTIVE, I_ACTIVE_COPY, I_DATA, I_DATA_COPY,
-    I_DONE
+    I_START, I_DONE
 };
 
 static size_t imported(const WasmModule *m, WasmExternKind kind)
@@ -31,7 +31,6 @@ WasmExecStatus wasm_instance_begin(WasmInstance *inst, WasmStore *store, const W
            "a WebAssembly instantiation began without its module");
     DCHECKF(n_externs == m->n_imports && (n_externs == 0 || externs != NULL), "a WebAssembly instantiation was "
             "given %zu external addresses for %zu imports", n_externs, m->n_imports);
-    CHECK(!m->has_start, "a WebAssembly module's start function is not built in instance.c");
     memset(inst, 0, sizeof *inst);
     inst->store = store;
     inst->module = m;
@@ -189,6 +188,30 @@ static WasmTableInstance *table(WasmInstance *inst, size_t x)
     return &inst->store->tables[inst->tables[x]];
 }
 
+/* The start function's status `st`: while it runs, the instance's; once it answers, the instantiation's end. */
+static WasmExecStatus started(WasmInstance *inst, WasmExecStatus st)
+{
+    if (st == WASM_EXEC_MORE || st == WASM_EXEC_FORK || st == WASM_EXEC_HOST_CALL) return st;
+    wasm_interpreter_free(&inst->start);
+    inst->starting = false;
+    inst->phase = I_DONE;
+    return st;
+}
+
+WasmExecStatus wasm_instance_choose(WasmInstance *inst, bool example)
+{
+    DCHECK(inst != NULL && inst->starting, "a WebAssembly instantiation's choice was made with no start function "
+           "running");
+    return started(inst, wasm_interpreter_choose(&inst->start, example));
+}
+
+WasmExecStatus wasm_instance_return(WasmInstance *inst, const WasmValue *results, size_t n)
+{
+    DCHECK(inst != NULL && inst->starting, "a WebAssembly instantiation's host call was answered with no start "
+           "function running");
+    return started(inst, wasm_interpreter_return(&inst->start, results, n));
+}
+
 WasmExecStatus wasm_instance_step(WasmInstance *inst)
 {
     const WasmModule *m = inst->module;
@@ -304,8 +327,8 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         const WasmData *d;
 
         if (inst->item == m->n_datas) {
-            inst->phase = I_DONE;
-            return WASM_EXEC_DONE;
+            inst->phase = I_START;
+            return WASM_EXEC_MORE;
         }
         d = &m->datas[inst->item];
         if (d->mode == WASM_SEGMENT_PASSIVE) return next(inst, I_DATA);
@@ -333,6 +356,15 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         JS_FlowRetireWork(1);
         return WASM_EXEC_MORE;
     }
+    case I_START:
+        /* §4.7.2 step 29: the start function is invoked as (call x) in the instance's frame. */
+        if (inst->starting) return started(inst, wasm_interpreter_step(&inst->start));
+        if (!m->has_start) {
+            inst->phase = I_DONE;
+            return WASM_EXEC_DONE;
+        }
+        inst->starting = true;
+        return started(inst, wasm_interpreter_begin(&inst->start, inst, m->start, NULL, 0));
     default: break;
     }
     CHECK_FAIL("a WebAssembly instantiation was stepped after it answered");
@@ -342,6 +374,7 @@ void wasm_instance_free(WasmInstance *inst)
 {
     DCHECK(inst != NULL, "a WebAssembly instance was freed with no instance");
     if (inst->evaluating) wasm_interpreter_free(&inst->init);
+    if (inst->starting) wasm_interpreter_free(&inst->start);
     free(inst->funcs);
     free(inst->globals);
     free(inst->tables);

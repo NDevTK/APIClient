@@ -86,8 +86,9 @@ static const WasmSideTableRow WASM_SIDE_TABLE_ROWS[] = {
  * global initializers, the second reading the first (40 + 2, then that times 3), and a table.grow by one, on
  * its example arm (the old size, 0, as V8 answers) and on its assumption arm (-1). `assume` runs every choice
  * the interpreter forks (interpreter.h's WasmChoice) on the assumption arm. The memory rows (§4.6.8, and
- * §4.7.2's active data segments) were converted from text by f3268fa9's reference interpreter (`-d -o`),
- * which asserts each result, as V8 answers it. */
+ * §4.7.2's active data segments and start function) were converted from text by f3268fa9's reference
+ * interpreter (`-d -o`), which asserts each result, as V8 answers it; an instantiation's own choices run their
+ * example arm. */
 typedef struct {
     const char *src;
     size_t len;
@@ -156,6 +157,19 @@ static const WasmInvokeRow WASM_INVOKE_ROWS[] = {
       "\242\200\200\200\000\001\234\200\200\200\000\000\101\376\377\003\101\200\203\002\073\001\000\101"
       "\376\377\003\056\001\000\101\377\377\003\055\000\000\152\013",
       "g", 0xFFFF8201u },
+    { "a start function that reads a data segment's byte into a global", 116,
+      "\000\141\163\155\001\000\000\000\001\210\200\200\200\000\002\140\000\000\140\000\001\177\003\203"
+      "\200\200\200\000\002\000\001\005\203\200\200\200\000\001\000\001\006\206\200\200\200\000\001\177"
+      "\001\101\001\013\007\205\200\200\200\000\001\001\147\000\001\010\201\200\200\200\000\000\012\233"
+      "\200\200\200\000\002\214\200\200\200\000\000\043\000\101\000\055\000\000\152\044\000\013\204\200"
+      "\200\200\000\000\043\000\013\013\207\200\200\200\000\001\000\101\000\013\001\005",
+      "g", 6 },
+    { "a start function whose memory.grow forks, on its example arm", 86,
+      "\000\141\163\155\001\000\000\000\001\210\200\200\200\000\002\140\000\000\140\000\001\177\003\203"
+      "\200\200\200\000\002\000\001\005\203\200\200\200\000\001\000\000\007\205\200\200\200\000\001\001"
+      "\147\000\001\010\201\200\200\200\000\000\012\226\200\200\200\000\002\207\200\200\200\000\000\101"
+      "\001\100\000\032\013\204\200\200\200\000\000\077\000\013",
+      "g", 1 },
 };
 
 /* Cross-instance rows: two modules validated against one type registry, each instantiated in one store; the host
