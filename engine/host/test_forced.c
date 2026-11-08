@@ -1506,6 +1506,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/insertrest.h"
 #include "fixture/textrest.h"
 #include "fixture/childremoverest.h"
+#include "fixture/insertrecord.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2271,6 +2272,7 @@ TF_DOCS[] = {
     { "insertrest", HTML_INSERTREST },
     { "textrest", HTML_TEXTREST },
     { "childremoverest", HTML_CHILDREMOVEREST },
+    { "insertrecord", HTML_INSERTRECORD },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -17482,6 +17484,61 @@ TF_UNIT void probes_childremoverest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `insertrecord` document (fixture/insertrecord.h): one per member, each the records and children
+   it leaves. al and ib expect DOM §4.2.3 insert step 6's previousSibling, bound before step 7.1's adopt removes
+   node, where Chrome 153 reads the sibling after the removal; every other value is Chrome 153's. */
+TF_UNIT void probes_insertrecord(const char *js, Probe *tab, int *n) {
+    static const struct { const char *row, *param, *want, *why; } R[] = {
+        { "insertrecord-append-last", "al", "p_a_rb_pa_n0~p_ab_r_pb_n0_ca.b",
+          "DOM §4.2.3 insert step 8: appendChild of parent's last child queues its addition with step 6's "
+          "previousSibling, which is node itself" },
+        { "insertrecord-insert-own-next", "ib", "p_a_rb_pa_nc~p_ab_r_pb_nc_ca.b.c",
+          "DOM §4.2.3 insert step 8: insertBefore(node, node's next sibling) queues its addition with step 6's "
+          "previousSibling, which is node itself" },
+        { "insertrecord-fragment-append", "fr", "f_a_rx.y_p0_n0~p_ax.y_r_pa_n0_ca.x.y",
+          "DOM §4.2.3 insert steps 4.2 and 8: appending a fragment queues one record on the fragment, then one "
+          "on parent naming both children" },
+        { "insertrecord-fragment-insert", "fi", "f_a_rx.y_p0_n0~p_ax.y_r_pa_nb_ca.x.y.b",
+          "DOM §4.2.3 insert steps 4.2 and 8: inserting a fragment before a child queues one record each on the "
+          "fragment and on parent" },
+        { "insertrecord-fragment-empty", "fe", "_ca",
+          "DOM §4.2.3 insert step 3: an empty fragment's insert queues no record" },
+        { "insertrecord-append", "ap", "p_ax.tk_r_pa_n0_ca.x.tk",
+          "DOM §4.2.6 append: a node and a string are one fragment insert, one record" },
+        { "insertrecord-prepend", "pp", "p_atk.x_r_p0_na_ctk.x.a",
+          "DOM §4.2.6 prepend: a string and a node are one fragment insert before the first child" },
+        { "insertrecord-before", "bf", "p_a_ra_p0_nb~p_ax.a_r_p0_nb_cx.a.b",
+          "DOM §4.2.8 before: the viable previous sibling skips a node of `nodes`, which the conversion moves" },
+        { "insertrecord-after", "af", "p_a_rb_pa_n0~p_ab.x_r_pa_n0_ca.b.x",
+          "DOM §4.2.8 after: the viable next sibling skips a node of `nodes`" },
+        { "insertrecord-replacewith", "rw", "p_ax.tk_rb_pa_nc_ca.x.tk.c",
+          "DOM §4.2.8 replaceWith: replace queues one record naming the fragment's children and this" },
+        { "insertrecord-replacechildren", "rc", "p_a_ra_p0_nb~p_ax.a_rb_p0_n0_cx.a",
+          "DOM §4.2.3 replace all: replaceChildren queues one record naming both lists, after the conversion's "
+          "removal" },
+        { "insertrecord-replacechild", "rp", "p_ax_ra_p0_nb_cx.b",
+          "DOM §4.2.3 replace: replaceChild queues one record naming the node and child" },
+        { "insertrecord-replacechild-sibling", "rs", "p_a_rb_pa_n0~p_ab_ra_p0_n0_cb",
+          "DOM §4.2.3 replace step 6: adopt removes node while child is still in place, so its record names "
+          "child as previousSibling" },
+        { "insertrecord-replacechild-fragment", "rf", "f_a_rx.y_p0_n0~p_ax.y_ra_p0_nb_cx.y.b",
+          "DOM §4.2.3 replace: a fragment's children leave it in one record and arrive in replace's one record" },
+        { "insertrecord-insertadjacent", "ia", "p_ax_r_pa_n0~p_atk_r_p0_na_ctk.a.x",
+          "DOM §4.9 insertAdjacentElement and insertAdjacentText: each is one pre-insert, one record" },
+    };
+    int i;
+
+    for (i = 0; i < (int)COUNTOF(R); i++) {
+        const char *why = NULL; int tt = 1;
+        fold_row(&tt, &why, !!strstr(js, "\"/api/insertrecord\""),
+                 "NOT REACHED: there is no /api/insertrecord record, so the animation frame callback never ran or "
+                 "the document aborted before it");
+        fold_row(&tt, &why, param_value_is(js, "/api/insertrecord", R[i].param, R[i].want), R[i].why);
+        const Probe row[] = { { R[i].row, tt, "/api/insertrecord", SESS_EXPLORE, why } };
+        probes_append(tab, n, row, 1);
+    }
+}
+
 /* The row of the `keydomainwalk` document (fixture/keydomainwalk.h): 200 unknown-key reads of a Document and a
    WindowProxy over 2,000 unnamed elements charge no walk of them. */
 static long kdw_census(const char *js, const char *key);
@@ -29586,6 +29643,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_insertrest(js, probes, &np);
     probes_textrest(js, probes, &np);
     probes_childremoverest(js, probes, &np);
+    probes_insertrecord(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);

@@ -61,6 +61,10 @@ int node_insert_run(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, int base
     switch (phase) {
     case NODE_INSERT_PHASE_RANGES:
         if (s->child) range_insert_steps(ctx, s->parent, s->child, 1);         /* STEP 5 */
+        /* Step 6 binds previousSibling before step 7.1's adopt removes node, so when node is child's previous
+           sibling (parent's last child for a null child) step 8's record names node itself. Chrome 153 names
+           the sibling left after the removal, the order the standard had while pre-insert adopted before
+           insert; whatwg/dom#1488 restored that order for replace only (whatwg/dom#814). */
         s->prev = s->child ? s->child->prev : s->parent->last_child;           /* STEP 6 */
         if (s->node->parent) {                                                 /* STEP 7.1: adopt step 2 */
             node_remove_start(hdr, &s->rm, s->node, /*suppress_observers*/ false,
