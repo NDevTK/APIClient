@@ -137,8 +137,10 @@ typedef struct {
     lxb_dom_node_t    *doc;
     ScrollLogicalPosition block, inline_pos;
     ElementScrollingIntoViewPhase phase;   /* where the walk continues once no box is open */
-    /* The box being measured, before steps 2.2 to 2.4 run over it. */
+    /* The box being measured, before steps 2.2 to 2.4 run over it, and an element box whose open is waiting on
+       its own layout (NULL for none). */
     bool                    box_open;
+    lxb_dom_element_t      *opening;
     ElementScrollingMeasure m;
 } ElementScrollingIntoView;
 

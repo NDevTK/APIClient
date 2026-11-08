@@ -88,10 +88,10 @@
    matters. */
 bool scrolling_area_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool vertical);
 
-/* Both columns as a cursor over the descendant walk, for a step machine that rests inside it: `walk_*`
-   computes everything before the walk, each `step` folds one descendant node or answers false ("not yet": the
-   node's origin deferred a question, which is suspended on the current job for the caller's drive, and the
-   cursor still names the node), and `extent` answers once `done`. The element's row needs an element with an
+/* Both columns as a cursor over the descendant walk, for a step machine that rests inside it: `walk_*` opens
+   it, reading no layout, each `step` folds one descendant node (the first step seeds the walk with the box's
+   own edges) or answers false ("not yet": a question it asked was deferred, which is suspended on the current
+   job for the caller's drive, and the cursor still names the node), and `extent` answers once `done`. The element's row needs an element with an
    associated box (core/dom/element_view.h's one predicate, §6's own step 6). The viewport's row needs a `doc`
    with a document element, and takes `icb_extent`, this axis of the initial containing block, from
    core/frame/viewport.h (CSS 2.2 §10.1 gives it "the dimensions of the viewport"); its extent is at least that,

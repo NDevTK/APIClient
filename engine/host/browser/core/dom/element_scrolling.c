@@ -334,6 +334,7 @@ void element_scrolling_into_view_begin(ElementScrollingIntoView *w, lxb_dom_elem
     w->inline_pos = inline_pos;
     w->phase = ES_INTO_VIEW_ANCESTORS;
     w->box_open = false;
+    w->opening = NULL;
 }
 
 /* Step 2.2 to step 2.4 for one scrolling box, and whether the walk ends after it. */
@@ -436,9 +437,58 @@ double element_scrolling_measured_clamp(const ElementScrollingMeasure *m, bool v
     return es_clamp(&m->box, vertical ? ES_Y : ES_X, v);
 }
 
-/* Open a scrolling box (`el` NULL for the viewport) and begin its first area walk. */
+/* A scrolling box's own layout, and below the target's client rectangles, each asked under a resting drive this
+   opens on the entered job, inside one REST_UNIT_LAYOUT_DESCENDANTS bracket. */
+static bool es_box_layout_ask(lxb_dom_element_t *el)
+{
+    LayoutJobDrive d;
+    FlowPoint o;
+    CssPx px;
+    bool ready = false;
+
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+    layout_job_drive_begin_resting(&d);
+    /* Each pass computes the questions the last one suspended, up to the drive's allowances, then asks again. */
+    while (!ready && block_flow_drive_deferred(&d)) {
+        ready = flow_padding_box_origin_ask(el, &o) && used_value_padding_edge_ask(el, false, &px) &&
+                used_value_padding_edge_ask(el, true, &px);
+        DCHECK(ready || layout_job_drive_spent(&d) || layout_job_drive_pending(&d),
+               "a scrolling box's own layout answered \"not yet\" with no question suspended and no allowance "
+               "spent, so its next activation would ask the same thing for ever");
+    }
+    layout_job_drive_end(&d);
+    rest_unit_end();
+    return ready;
+}
+
+static bool es_target_rects_ask(lxb_dom_element_t *target)
+{
+    LayoutJobDrive d;
+    bool ready = false;
+
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+    layout_job_drive_begin_resting(&d);
+    while (!ready && block_flow_drive_deferred(&d)) {
+        ready = element_view_client_rects_ask(target, &d);
+        DCHECK(ready || layout_job_drive_spent(&d) || layout_job_drive_pending(&d),
+               "scroll a target into view's client rectangles answered \"not yet\" with no question suspended "
+               "and no allowance spent, so its next activation would ask the same thing for ever");
+    }
+    layout_job_drive_end(&d);
+    rest_unit_end();
+    return ready;
+}
+
+/* Open a scrolling box (`el` NULL for the viewport) and begin its first area walk. An element's own layout is
+   asked first under a resting drive; while it is "not yet" the open is held in `opening` and repeated by the
+   next call. */
 static void es_into_view_open(ElementScrollingIntoView *w, lxb_dom_element_t *el, JSContext *dctx)
 {
+    if (el != NULL && !es_box_layout_ask(el)) {
+        w->opening = el;
+        return;
+    }
+    w->opening = NULL;
     if (el != NULL) es_box_open_element(el, dctx, &w->m.box);
     else            es_box_open_viewport(w->doc, dctx, &w->m.box);
     w->m.doc = w->doc;
@@ -447,10 +497,12 @@ static void es_into_view_open(ElementScrollingIntoView *w, lxb_dom_element_t *el
     es_area_begin(&w->m);
 }
 
-/* One rest unit of the open box's area walks, or, once both are complete, the visit. */
+/* One rest unit of the open box's area walks, or, once both are complete, the visit, whose step 2.2 reads the
+   target's border box: its client rectangles are asked first under a resting drive. */
 static bool es_into_view_measure(ElementScrollingIntoView *w, const char *behavior)
 {
-    if (element_scrolling_measure_next(&w->m)) return true;
+    if (w->m.axis <= ES_Y && element_scrolling_measure_next(&w->m)) return true;
+    if (!es_target_rects_ask(w->target)) return true;
     w->box_open = false;
     return es_into_view_visit(w, &w->m.box, behavior);
 }
@@ -462,6 +514,10 @@ bool element_scrolling_into_view_next(ElementScrollingIntoView *w, const char *b
     DCHECK(w->phase != ES_INTO_VIEW_DONE, "§6.1's ancestor walk was continued after it ended");
     if (w->box_open) return es_into_view_measure(w, behavior);
     dctx = document_active_realm_of(w->doc);
+    if (w->opening != NULL) {
+        es_into_view_open(w, w->opening, dctx);
+        return true;
+    }
     DCHECK(dctx != NULL,
            "§6.1's ancestor walk is inside a Document that is no navigable's ACTIVE document. The walk starts at "
            "an element with a box, which is defined over the document being presented, and it leaves a "

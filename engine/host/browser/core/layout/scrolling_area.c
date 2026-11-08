@@ -407,21 +407,46 @@ static bool sa_anon_flex_items_fold(lxb_dom_element_t *c, bool vertical, bool en
    clause at all. A NULL anchor is the spec's own absence and not a mode switch: there is no ancestor of a
    viewport for a containing block to be, so there is nothing for the test to be asked about. */
 /* The folds of one node, in order: its own margin edge, its inline formatting context, then each of its anonymous
-   block boxes. A step folds one of them, so the rest unit counts boxes, not nodes with their whole content. */
-enum { SA_STAGE_EDGE = 0, SA_STAGE_CONTEXT, SA_STAGE_ANON };
+   block boxes. A step folds one of them, so the rest unit counts boxes, not nodes with their whole content. The
+   walk's first step is the seed (`sa_walk_seed`), which the root takes before its own folds. */
+enum { SA_STAGE_EDGE = 0, SA_STAGE_CONTEXT, SA_STAGE_ANON, SA_STAGE_SEED };
 
 /* Open the walk over `root`'s descendants with the extreme at `seed`. The cursor starts at `root` itself, whose
    own margin edge is the caller's while its two shapes of §9.4.2's context are folded by the walk's steps: the
    anonymous inline boxes around its descendant text nodes are descendants' boxes. */
-static void sa_walk_open(ScrollingAreaWalk *w, lxb_dom_element_t *root, lxb_dom_element_t *exclude_under,
-                         CssPx seed)
+static void sa_walk_open(ScrollingAreaWalk *w, lxb_dom_element_t *root, lxb_dom_element_t *exclude_under)
 {
     w->root = root;
     w->exclude_under = exclude_under;
-    w->best = seed;
     w->n = lxb_dom_interface_node(root);
-    w->stage = SA_STAGE_EDGE;
+    w->stage = SA_STAGE_SEED;
     w->anon = 0;
+}
+
+/* The walk's first step, under the caller's resting drive like every other: the element row's own padding box
+   (§2's two beginning edges, and the padding edge folded into the ending extreme), or the viewport row's
+   document element's own margin edge beside the initial containing block's. False ("not yet") with the
+   question suspended and nothing written. */
+static bool sa_walk_seed(ScrollingAreaWalk *w)
+{
+    FlowPoint o;
+    CssPx padding, own;
+
+    if (!w->viewport) {
+        if (!flow_padding_box_origin_ask(w->root, &o)) return false;
+        if (!used_value_padding_edge_ask(w->root, w->vertical, &padding)) return false;
+        w->lo = w->vertical ? o.y : o.x;
+        w->hi = css_px_add(w->lo, padding);
+        w->floor = padding;
+        w->best = w->ending_at_hi ? w->hi : w->lo;
+    } else {
+        if (!flow_border_box_origin_ask(w->root, &o)) return false;
+        if (!used_value_padding_edge_ask(w->root, w->vertical, &padding)) return false;
+        own = sa_edge_from_origin(w->root, o, w->vertical, w->ending_at_hi);
+        w->best = w->ending_at_hi ? css_px_max(w->hi, own) : css_px_min(w->lo, own);
+    }
+    w->stage = SA_STAGE_EDGE;
+    return true;
 }
 
 /* Fold the cursor node's next box into the extreme, advancing the cursor past the node after its last one.
@@ -434,6 +459,7 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
     bool descend;
 
     DCHECK(n != NULL, "a scrolling area's descendant walk was stepped after it was complete");
+    if (w->stage == SA_STAGE_SEED) return sa_walk_seed(w);
     /* css-display-3 §2.5's `none` is the one answer that reaches past this node — see the banner. */
     descend = n->type != LXB_DOM_NODE_TYPE_ELEMENT || element_view_subtree_has_boxes(n);
 
@@ -590,10 +616,7 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
 
 void scrolling_area_walk_element(ScrollingAreaWalk *w, lxb_dom_element_t *el, bool vertical)
 {
-    CssPx padding, lo, hi;
-    bool ending_at_hi;
     char nbuf[160];
-    FlowPoint origin;
 
     DCHECK(el != NULL, "a scrolling area was asked for with no element");
     /* §2's ELEMENT ROW IS WRITTEN OVER ONE PADDING EDGE, AND A NON-REPLACED INLINE BOX HAS ONE PER FRAGMENT —
@@ -630,22 +653,15 @@ void scrolling_area_walk_element(ScrollingAreaWalk *w, lxb_dom_element_t *el, bo
        core/layout/flow_position.h owns the border-to-padding step, so the read of `border-top-width` that used
        to sit in this file is gone rather than duplicated — css-overflow-3 §2.3 "Scrolling Overflow"'s scrollport
        is the same rectangle and would have been the second copy. */
-    origin = flow_padding_box_origin(el);
-    ending_at_hi = scrolling_area_ending_edge_at_higher_coordinate(el, vertical);
-    padding = used_value_padding_edge_px(el, vertical);
     /* §2's two BEGINNING edges for an element are "the element's top padding edge" and "the element's left
        padding edge", and its two ENDING edges are the extreme over that same padding edge and the descendants'
        margin edges — so the element's own padding box is in the extreme rather than beside it, which is what
-       makes a scrolling area at least as large as the padding box for every element in every document. */
-    lo = vertical ? origin.y : origin.x;
-    hi = css_px_add(lo, padding);
+       makes a scrolling area at least as large as the padding box for every element in every document. The
+       padding box is the walk's first step (`sa_walk_seed`), so its layout is asked under the caller's drive. */
     w->vertical = vertical;
-    w->ending_at_hi = ending_at_hi;
+    w->ending_at_hi = scrolling_area_ending_edge_at_higher_coordinate(el, vertical);
     w->viewport = false;
-    w->lo = lo;
-    w->hi = hi;
-    w->floor = padding;
-    sa_walk_open(w, el, el, ending_at_hi ? hi : lo);
+    sa_walk_open(w, el, el);
 }
 
 /* css-writing-modes-4 §8 "The Principal Writing Mode"' ELEMENT — the one whose used `writing-mode` and
@@ -765,12 +781,8 @@ void scrolling_area_walk_viewport(ScrollingAreaWalk *w, lxb_dom_node_t *doc, Css
     w->root = rootn != NULL ? lxb_dom_interface_element(rootn) : NULL;
     w->n = NULL;
     w->best = ending_at_hi ? hi : lo;
-    if (rootn != NULL && element_view_has_box(rootn)) {
-        lxb_dom_element_t *root = lxb_dom_interface_element(rootn);
-        CssPx own = sa_edge_from_origin(root, flow_border_box_origin(root), vertical, ending_at_hi);
-
-        sa_walk_open(w, root, NULL, ending_at_hi ? css_px_max(hi, own) : css_px_min(lo, own));
-    }
+    /* The document element's own margin edge is the walk's first step (`sa_walk_seed`). */
+    if (rootn != NULL && element_view_has_box(rootn)) sa_walk_open(w, lxb_dom_interface_element(rootn), NULL);
 }
 
 bool scrolling_area_walk_done(const ScrollingAreaWalk *w)
