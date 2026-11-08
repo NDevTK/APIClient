@@ -63,6 +63,7 @@
 #include "core/html/html_link.h"
 #include "core/html/html_option.h"
 #include "core/html/html_dialog.h"   /* HTML §4.11.4's attribute change steps and removing steps, both below */
+#include "core/timing/thread_work.h"
 #include "core/rendering/visual_update.h"   /* an attribute change is a visible effect HTML §8.1.7.3 asks about */
 #include "core/html/input_value.h"   /* HTML §4.10.5's type change steps, in the family below */
 #include "core/html/fragment_parser.h"
@@ -2345,7 +2346,8 @@ static bool tree_steps_can_run(const lxb_dom_node_t *n)
    cannot rest, run HERE because the chokepoint is inside insert's per-node loop: Lexbor is handed one node of
    `nodes` at a time, so a later node of the same insert is not yet in the tree. §6.6.7's autofocus step can fork
    and is the walk's (TS_NODE_AUTOFOCUS). Each runs in the node's own document's realm, not the mutating one's.
-   None may change the tree, which would record a tree step of its own, asserted. */
+   None may change the tree, which would record a tree step of its own, asserted. Each node is one
+   THREAD_WORK_DOM_WALK unit. */
 static void tree_steps_insertion_steps(lxb_dom_node_t *root)
 {
     lxb_dom_node_t *n;
@@ -2385,6 +2387,7 @@ static void tree_steps_insertion_steps(lxb_dom_node_t *root)
         DCHECK(g_ts_n == recorded,
                "an insertion step mutated the node tree — §4.2.3 says they \"must not modify the node tree that "
                "insertedNode participates in\"");
+        thread_work_charge(THREAD_WORK_DOM_WALK, 1);
         n = shadow_root_next_in_shadow_including(ctx, n, root);
     }
 }
@@ -2597,7 +2600,8 @@ static void tree_steps_list_append(JSContext *ctx, TreeStepBuf *b, lxb_dom_node_
 }
 
 /* §4.2.3 INSERT STEP 12 — "for each node of staticNodeList: if node is CONNECTED, then run the post-connection
-   steps with node". ONE ENTRY per call, so the second phase yields exactly as the first does.
+   steps with node". ONE ENTRY per call, charged as one THREAD_WORK_DOM_WALK unit, so the second phase yields
+   exactly as the first does.
    IT TAKES `ctx` FOR THE REQUEST AND FOR NOTHING ELSE. Every STEP here runs in the NODE'S document's realm,
    which this function resolves per entry and which the mutating member's realm is never the answer to — the
    parameter that could carry the wrong one is still not on the signature. What `ctx` is used for is the
@@ -2646,6 +2650,7 @@ static int tree_steps_post_connection(JSContext *ctx, TreeStepBuf *b, JSValue in
         r = html_script_exec_run(dctx, &b->exec, in, out_cb, out_argc);
         if (r) return r;
         b->pcphase = TS_PC_STEPS;
+        thread_work_charge(THREAD_WORK_DOM_WALK, 1);
         b->k++;
         return b->k < b->list_n ? JS_STEP_YIELD : 0;
     }
@@ -2729,11 +2734,13 @@ static int tree_steps_post_connection(JSContext *ctx, TreeStepBuf *b, JSValue in
             b->pcphase = TS_PC_STEPS;
         }
     }
+    thread_work_charge(THREAD_WORK_DOM_WALK, 1);
     b->k++;
     return b->k < b->list_n ? JS_STEP_YIELD : 0;
 }
 
-/* §4.2.3 INSERT STEP 7.7's step that can fork, and step 11. ONE NODE per call.
+/* §4.2.3 INSERT STEP 7.7's step that can fork, and step 11. ONE NODE per call, charged as one THREAD_WORK_DOM_WALK
+   unit.
    JS_STEP_YIELD while there is more to do — which is what makes the caller's drain a yield per node —
    JS_STEP_FORK when a per-node effect's answer depends on unknown external state, and 0 only when the SECOND
    phase is over too. `h` is the DRIVING machine's header: a fork is snapshotted at that machine, and the arm
@@ -2803,6 +2810,7 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
                "a children-changed entry was resumed mid-node — it has no per-node steps to park inside, so "
                "its cursor is its root and its phase is the walk's initial one for the whole of its life");
         tree_steps_list_push(ctx, b, n);
+        thread_work_charge(THREAD_WORK_DOM_WALK, 1);
         e->cursor = NULL;
         if (++b->i < b->n) return JS_STEP_YIELD;
         if (open) return 0;
@@ -2858,6 +2866,7 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
     /* §4.2.3 insert step 11, for THIS node — appended after its insertion steps and after the one step that
        can fork, so a re-entered node is collected exactly once. */
     tree_steps_list_append(ctx, b, n);
+    thread_work_charge(THREAD_WORK_DOM_WALK, 1);
     /* THE WALK IS SHADOW-INCLUDING, and that is the whole of what §4.2.3 asks for on BOTH sides of a tree
        change. `insert` step 7.7 is "For each shadow-including inclusive descendant inclusiveDescendant of node,
        in shadow-including tree order", whose step 7.7.1 is "Run the insertion steps with inclusiveDescendant";
