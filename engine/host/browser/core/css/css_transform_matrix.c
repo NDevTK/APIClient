@@ -1,30 +1,25 @@
 /* css-transforms-1 §2 "The Transform Rendering Model". See css_transform_matrix.h for which edition's section
    numbers these are, for why §3.2's two-step product is NOT this algorithm, and for why the linear part of the
    matrix is a `double` while its translation is a `CssPx`.
-
-   WHAT THE TWO RELEASE ARMS OF THIS ONE ALGORITHM LEAVE BEHIND, STATED TOGETHER BECAUSE NO GATE HERE CAN
-   REACH THEM. A crash below and an assert are dev-only, so a release build takes both arms at once and they
-   must compose rather than merely each be defensible: `css_tm_of_function`'s `default:` returns the IDENTITY
-   for a rotation, a scale, a skew or a `matrix()`, and `css_transform_matrix_current`'s linear-part assert is
-   compiled out. THE TWO AGREE, and that is the point: the first arm makes every matrix a translation, so the
-   second arm's invariant still HOLDS in release rather than merely going unchecked, and the composition in
-   the initial containing block's space stays exact. What
-   a release build reports for a rotated box is the UNTRANSFORMED border area — which is the answer this engine
-   gave before it read `transform` at all, is what a user agent with no transform support reports, and is a
-   rectangle rather than a state a consumer has no step for. NOTHING HERE RETURNS A PARTIALLY-MAPPED
-   RECTANGLE, which is the incoherent shape: a release arm that mapped the translations and dropped the
-   rotation would report a box in a place neither the layout nor the page ever put one. */
+   A list holding a 3D function whose matrix is not a 2D matrix crashes in dev; its release arm makes that
+   element's matrix the identity, so a release build reports the element's own box untransformed rather than
+   a box mapped through part of its list. */
+#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <string.h>
 
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_dimension.h"
 #include "core/css/css_length.h"
 #include "core/css/css_transform.h"
 #include "core/css/css_transform_function.h"
 #include "core/css/css_transform_matrix.h"
+#include "core/css/css_transform_origin.h"
+#include "core/layout/flow_position.h"
 #include "core/layout/used_value.h"
 
 CssTransformMatrix css_transform_matrix_identity(void)
@@ -65,6 +60,7 @@ void css_transform_matrix_map(CssTransformMatrix m, CssPx x, CssPx y, CssPx *out
     *out_y = css_px_add(css_px_add(css_px_scale(x, m.b), css_px_scale(y, m.d)), m.f);
 }
 
+
 /* css-transforms-1 §5 "Transform reference box: the transform-box property"'s reference box of `el` on one axis,
    its width or (`vertical`) its height: "For elements with associated CSS layout box, the used value for
    fill-box is content-box and for stroke-box and view-box is border-box". */
@@ -82,164 +78,328 @@ static bool css_tm_reference_size_ask(lxb_dom_element_t *el, bool vertical)
                                                      : used_value_border_edge_ask(el, vertical, &unused);
 }
 
-/* One translation argument of `el`'s transform on one axis: css-transforms-1 §7 "The Transform Functions": "A
-   percentage for horizontal translations is relative to the width of the reference box. A percentage for
-   vertical translations is relative to the height of the reference box." The percentage is a used value, since
-   css-values-4 §10.11 "Computed Value" leaves it unresolved at computed-value time. */
-static CssPx css_tm_translation_px(lxb_dom_element_t *el, const CssLength *len, bool vertical)
+/* One `<length-percentage>` of `el`'s transform or transform-origin against the reference box size `ref` on
+   its axis: css-transforms-1 §7 "The Transform Functions" ("A percentage for horizontal translations is
+   relative to the width of the reference box") and §4 ("A percentage for the horizontal offset is relative to
+   the width of the reference box"). The percentage is a used value, since css-values-4 §10.11 "Computed Value"
+   leaves it unresolved at computed-value time. `ref` is NULL on the pass that reads only the linear part. */
+static CssPx css_tm_length_px(const CssLength *len, const CssPx *ref)
 {
     DCHECK(len->kind != CSS_LENGTH_KEYWORD,
-           "css-transforms-1 §7.1 \"2D Transform Functions\" gives every translation function a "
-           "`<length-percentage>` argument, which admits no keyword at all — so a keyword here is a value "
-           "core/css/css_transform_function.c's grammar accepted and its own `Value:` line does not");
+           "a transform or transform-origin length is a keyword; core/css/css_transform_function.c and "
+           "core/css/css_transform_origin.c parse with no keyword set and compute keywords to percentages");
     if (len->kind == CSS_LENGTH_ABSOLUTE) return len->px;
-    return css_length_resolve_pct(*len, css_tm_reference_size(el, vertical));
+    if (ref == NULL) return css_px(0.0);
+    return css_length_resolve_pct(*len, *ref);
 }
 
-/* §12 "Mathematical Description of Transform Functions"' MATRIX FOR ONE `<transform-function>`.
- *
- * THREE OF §7.1's ELEVEN ARE WRITTEN HERE AND THE OTHER EIGHT CRASH, and the line between them is NOT which
- * matrices §12 states — it states all of them — but which ones §2's OWN BRACKET LETS THIS ENGINE REACH. §2's
- * four steps are "Start with the identity matrix.", "Translate by the computed X and Y of transform-origin",
- * "Multiply by each of the transform functions in transform property from left to right" and "Translate by the
- * negated computed X and Y values of transform-origin", so the product of step 3 is CONJUGATED by the origin.
- * TRANSLATIONS COMMUTE WITH TRANSLATIONS, so where every function in the list is one of §7.1's three
- * translations that conjugation cancels EXACTLY — T(o)·T(t)·T(-o) is T(t) for EVERY value of `o` whatever,
- * including one no component here can compute — and §5 "Transform reference box: the transform-box property"'s
- * own additional term ("A reference box adds an additional offset to the origin specified by the
- * transform-origin property") is a translation too and cancels with it. That is a derivation over §2's
- * arithmetic and not an assumption about the page: the origin is not defaulted, guessed or ignored here, it is
- * ABSENT FROM THE ANSWER because the algorithm removes it.
- * FOR EVERY OTHER FUNCTION THE BRACKET SURVIVES and the origin is the first thing that would have to exist, so
- * that is what the crash names rather than §12's remaining rows, which are the easy half.
- * A percentage translation is in the first population: it commutes like any other translation, and only its
- * number reads §5's reference box (`css_tm_translation_px`). */
-static CssTransformMatrix css_tm_of_function(lxb_dom_element_t *el, const CssTransformFunction *fn)
+/* An angle argument in degrees: css-values-4 §7.1's canonical unit, or 0 for §7's `<zero>`, which the parse
+   stores with an empty unit. */
+static double css_tm_angle_deg(const CssTransformFunction *fn, unsigned i)
+{
+    double deg;
+    bool ok;
+
+    if (fn->angle_unit[i][0] == '\0') return 0.0;
+    ok = css_angle_deg(fn->angle_unit[i], strlen(fn->angle_unit[i]), fn->angle[i], &deg);
+    DCHECK(ok, "a transform angle carries a unit core/css/css_transform_function.c admitted and "
+               "css_angle_deg does not convert; the two read one unit table");
+    return deg;
+}
+
+/* sin and cos of `deg` degrees, exact where they are 0 or ±1: π/180 is not a binary fraction, so
+   sin(90 · π/180) is 1 but cos(90 · π/180) is 6.1e-17, and a quarter turn would shear by that much. */
+static void css_tm_sin_cos(double deg, double *s, double *c)
+{
+    double r = fmod(deg, 360.0);
+
+    if (r < 0.0) r += 360.0;
+    if (r == 0.0)        { *s = 0.0;  *c = 1.0; }
+    else if (r == 90.0)  { *s = 1.0;  *c = 0.0; }
+    else if (r == 180.0) { *s = 0.0;  *c = -1.0; }
+    else if (r == 270.0) { *s = -1.0; *c = 0.0; }
+    else                 { *s = sin(deg * M_PI / 180.0); *c = cos(deg * M_PI / 180.0); }
+}
+
+/* tan of `deg` degrees, exactly 0 at the multiples of 180 for css_tm_sin_cos's reason. */
+static double css_tm_tan(double deg)
+{
+    return fmod(deg, 180.0) == 0.0 ? 0.0 : tan(deg * M_PI / 180.0);
+}
+
+/* §12's 2D rotation by `deg`: a = m11 = cos, b = m12 = sin, c = m21 = −sin, d = m22 = cos. */
+static CssTransformMatrix css_tm_rotation(double deg)
 {
     CssTransformMatrix out = css_transform_matrix_identity();
+    double s, c;
 
-    DCHECK(fn->argc > 0, "css-transforms-1 §3 \"The transform Property\"'s `<transform-list>` production is "
-                         "`<transform-function>+` and every one of §7.1 \"2D Transform Functions\"' functions "
-                         "has at least one required argument, so a function that parsed wrote at least one");
-    switch (fn->kind) {
-    /* "A 2D translation with the parameters tx and ty is equivalent to a 3D translation where tz has zero as a
-       value" — §12's own row, and its `tz` is the third dimension this engine's 3x2 does not carry. */
-    case CSS_TF_TRANSLATE:
-        out.e = css_tm_translation_px(el, &fn->length[0], false);
-        /* §7.1's own default, applied HERE because core/css/css_transform_function.h records what the author
-           WROTE: "If <ty> is not provided, ty has zero as a value". */
-        if (fn->argc > 1) out.f = css_tm_translation_px(el, &fn->length[1], true);
-        break;
-    case CSS_TF_TRANSLATE_X:
-        out.e = css_tm_translation_px(el, &fn->length[0], false);
-        break;
-    case CSS_TF_TRANSLATE_Y:
-        out.f = css_tm_translation_px(el, &fn->length[0], true);
-        break;
-    case CSS_TF_MATRIX3D:
-    case CSS_TF_TRANSLATE3D:
-    case CSS_TF_TRANSLATE_Z:
-    case CSS_TF_SCALE3D:
-    case CSS_TF_SCALE_Z:
-    case CSS_TF_ROTATE3D:
-    case CSS_TF_ROTATE_X:
-    case CSS_TF_ROTATE_Y:
-    case CSS_TF_ROTATE_Z:
-    case CSS_TF_PERSPECTIVE:
-        DFAIL("css-transforms-2 §12.2 \"3D Transform Functions\": this element's list holds a 3D function, and "
-              "this component's matrix is the 3x2 2D one, which has no Z row or column. BUILD css-transforms-2 "
-              "§6 \"Current Transformation Matrix\"'s 4x4 here and in css_transform_matrix.h, with each "
-              "function's matrix from §16 \"Mathematical Description of Transform Functions\", and flatten "
-              "only where a consumer maps a rectangle");
-        break;
-    default:
-        DFAIL("css-transforms-1 §2 \"The Transform Rendering Model\" computes an element's transformation "
-              "matrix in FOUR steps — \"Start with the identity matrix.\", \"Translate by the computed X and Y "
-              "of transform-origin\", \"Multiply by each of the transform functions in transform property from "
-              "left to right\", \"Translate by the negated computed X and Y values of transform-origin\" — and "
-              "the list this element computed holds a function that is NOT one of §7.1 \"2D Transform "
-              "Functions\"' three translations, so steps 2 and 4 do not cancel and the ORIGIN is part of the "
-              "answer. THE MISSING VALUE IS §4 \"The transform-origin Property\"'s, and it is missing at the "
-              "root rather than here: its `Initial:` line is `50% 50%` and its `Computed value:` line is `see "
-              "background-position`, and core/css/css_computed_value.c models the property NOT AT ALL — "
-              "`css_computed_models` answers false for it, lexbor's registry carries no entry, and "
-              "core/css/css_style_declaration.c carries no initial-value row, so the cascade answers nothing "
-              "for every element on every page and a declared one arrives as a raw `__CUSTOM` value no grammar "
-              "has looked at. WHAT TO BUILD, IN ORDER: (1) §4's `Value:` grammar and its `see "
-              "background-position` computed value, beside core/css/css_transform_function.c, with the "
-              "initial-value row and the `css_computed_models` entry that make an undeclared element "
-              "answerable; (2) §5 \"Transform reference box: the transform-box property\", whose `Initial:` is "
-              "`view-box` and whose own sentence resolves it for this engine — \"For elements with associated "
-              "CSS layout box, the used value for fill-box is content-box and for stroke-box and view-box is "
-              "border-box\" — so a percentage origin resolves against the border box "
-              "core/layout/used_value.h's `used_value_border_edge_px` already answers; (3) §12 \"Mathematical "
-              "Description of Transform Functions\"' matrices for the remaining eight functions, which are "
-              "arithmetic over arguments core/css/css_transform_function.h has already parsed; and (4) THE "
-              "POSITION CONJUGATION THIS COMPONENT DOES NOT PERFORM — §5's \"A reference box adds an "
-              "additional offset to the origin specified by the transform-origin property\" makes an element's "
-              "origin its BORDER BOX's corner plus that offset, and `css_transform_matrix_current` composes "
-              "its chain in the initial containing block's space, where a translation is position-independent "
-              "and a rotation is not. That function asserts the invariant so this cannot be forgotten");
-    }
+    css_tm_sin_cos(deg, &s, &c);
+    out.a = c; out.b = s; out.c = -s; out.d = c;
     return out;
+}
+
+/* A computed length that is exactly zero with no environment fact behind it, so a 4x4 entry it fills is the
+   2D matrix's 0 on every viewport. */
+static bool css_tm_length_is_zero(const CssLength *len)
+{
+    return len->kind == CSS_LENGTH_ABSOLUTE && len->px.env == CSS_ENV_NONE && len->px.px == 0.0;
+}
+
+/* §12 "Mathematical Description of Transform Functions"' matrix for one `<transform-function>`, as the six
+   parameters a = m11, b = m12, c = m21, d = m22, e = m41, f = m42 (css-transforms-2 §3 "Two Dimensional
+   Subset"'s reduction). A css-transforms-2 §12.2 "3D Transform Functions" function is answered when its
+   §16 "Mathematical Description of Transform Functions" matrix is a 2D matrix in css-transforms-1
+   Terminology's sense; false otherwise, after the crash. `ref` is the reference box (width, height), or NULL
+   on the linear-part pass. */
+static bool css_tm_of_function(const CssTransformFunction *fn, const CssPx *ref, CssTransformMatrix *out)
+{
+    const CssPx *w = ref, *h = ref ? &ref[1] : NULL;
+    const double *n = fn->number;
+    double z;
+
+    DCHECK(fn->argc > 0, "css-transforms-1 §3's `<transform-list>` is `<transform-function>+` and every §7.1 "
+                         "and css-transforms-2 §12.2 function has a required argument");
+    *out = css_transform_matrix_identity();
+    switch (fn->kind) {
+    case CSS_TF_MATRIX:
+        out->a = n[0]; out->b = n[1]; out->c = n[2]; out->d = n[3];
+        out->e = css_px(n[4]); out->f = css_px(n[5]);
+        return true;
+    /* §7.1: "If <ty> is not provided, ty has zero as a value". */
+    case CSS_TF_TRANSLATE:
+        out->e = css_tm_length_px(&fn->length[0], w);
+        if (fn->argc > 1) out->f = css_tm_length_px(&fn->length[1], h);
+        return true;
+    case CSS_TF_TRANSLATE_X:
+        out->e = css_tm_length_px(&fn->length[0], w);
+        return true;
+    case CSS_TF_TRANSLATE_Y:
+        out->f = css_tm_length_px(&fn->length[0], h);
+        return true;
+    /* §7.1: "If the second parameter is not provided, it takes a value equal to the first." */
+    case CSS_TF_SCALE:
+        out->a = n[0];
+        out->d = fn->argc > 1 ? n[1] : n[0];
+        return true;
+    case CSS_TF_SCALE_X:
+        out->a = n[0];
+        return true;
+    case CSS_TF_SCALE_Y:
+        out->d = n[0];
+        return true;
+    case CSS_TF_ROTATE:
+    /* css-transforms-2 §12.2: "same as rotate3d(0, 0, 1, <angle>), which is a 3d transform equivalent to the
+       2d transform rotate(<angle>)". */
+    case CSS_TF_ROTATE_Z:
+        *out = css_tm_rotation(css_tm_angle_deg(fn, 0));
+        return true;
+    /* §12's skew: m21 = tan(alpha) and m12 = tan(beta); §7.1: "If the second parameter is not provided, it
+       has a zero value." */
+    case CSS_TF_SKEW:
+        out->c = css_tm_tan(css_tm_angle_deg(fn, 0));
+        if (fn->argc > 1) out->b = css_tm_tan(css_tm_angle_deg(fn, 1));
+        return true;
+    case CSS_TF_SKEW_X:
+        out->c = css_tm_tan(css_tm_angle_deg(fn, 0));
+        return true;
+    case CSS_TF_SKEW_Y:
+        out->b = css_tm_tan(css_tm_angle_deg(fn, 0));
+        return true;
+    /* "16 values in column-major order": m11, m12, m13, m14, m21, …, m44. */
+    case CSS_TF_MATRIX3D:
+        if (n[2] == 0.0 && n[3] == 0.0 && n[6] == 0.0 && n[7] == 0.0 && n[8] == 0.0 && n[9] == 0.0 &&
+            n[10] == 1.0 && n[11] == 0.0 && n[14] == 0.0 && n[15] == 1.0) {
+            out->a = n[0]; out->b = n[1]; out->c = n[4]; out->d = n[5];
+            out->e = css_px(n[12]); out->f = css_px(n[13]);
+            return true;
+        }
+        break;
+    case CSS_TF_TRANSLATE3D:
+        if (css_tm_length_is_zero(&fn->length[2])) {
+            out->e = css_tm_length_px(&fn->length[0], w);
+            out->f = css_tm_length_px(&fn->length[1], h);
+            return true;
+        }
+        break;
+    case CSS_TF_TRANSLATE_Z:
+        if (css_tm_length_is_zero(&fn->length[0])) return true;
+        break;
+    case CSS_TF_SCALE3D:
+        if (n[2] == 1.0) {
+            out->a = n[0];
+            out->d = n[1];
+            return true;
+        }
+        break;
+    case CSS_TF_SCALE_Z:
+        if (n[0] == 1.0) return true;
+        break;
+    /* §16's rotation over the normalized [x, y, z]: about [0, 0, ±1] it is the Z rotation by ±alpha, and "A
+       direction vector that cannot be normalized, such as [0,0,0], will cause the rotation to not be
+       applied." */
+    case CSS_TF_ROTATE3D:
+        if (n[0] == 0.0 && n[1] == 0.0) {
+            z = n[2];
+            if (z != 0.0) *out = css_tm_rotation(z > 0.0 ? css_tm_angle_deg(fn, 0) : -css_tm_angle_deg(fn, 0));
+            return true;
+        }
+        break;
+    /* About the X or Y axis, a 2D matrix exactly when sc and sq are 0, a whole number of turns. */
+    case CSS_TF_ROTATE_X:
+    case CSS_TF_ROTATE_Y: {
+        double s, c;
+
+        css_tm_sin_cos(css_tm_angle_deg(fn, 0), &s, &c);
+        if (s == 0.0 && c == 1.0) return true;
+        break;
+    }
+    /* "If the parameter d is none it is treated as infinity (and the resulting matrix is the identity
+       matrix)." */
+    case CSS_TF_PERSPECTIVE:
+        if (fn->perspective_none) return true;
+        break;
+    }
+    DFAIL("css-transforms-2 §12.2 \"3D Transform Functions\": this element's list holds a 3D function whose "
+          "§16 \"Mathematical Description of Transform Functions\" matrix is not a 2D matrix, and this "
+          "component's matrix is the 3x2 2D one. BUILD css-transforms-2 §6 \"Current Transformation Matrix\"'s "
+          "4x4 here and in css_transform_matrix.h, with §4.1 \"3D Transform Rendering\"'s flattening where a "
+          "consumer maps a rectangle");
+    return false;
+}
+
+/* The matrix of every function in `list`, post-multiplied left to right: §2's step 3, "Multiply by each of
+   the transform functions in transform property from left to right". False when one is not a 2D matrix. */
+static bool css_tm_of_list(const CssTransformList *list, const CssPx *ref, CssTransformMatrix *out)
+{
+    CssTransformMatrix fm;
+    size_t i;
+
+    *out = css_transform_matrix_identity();
+    for (i = 0; i < list->n; i++) {
+        if (!css_tm_of_function(&list->fn[i], ref, &fm)) return false;
+        *out = css_transform_matrix_multiply(*out, fm);
+    }
+    return true;
+}
+
+static bool css_tm_linear_is_identity(CssTransformMatrix m)
+{
+    return m.a == 1.0 && m.b == 0.0 && m.c == 0.0 && m.d == 1.0;
+}
+
+/* Whether `list` reads the reference box on each axis through a percentage translation. */
+static void css_tm_list_reads(const CssTransformList *list, bool *x, bool *y)
+{
+    size_t i;
+
+    *x = *y = false;
+    for (i = 0; i < list->n; i++) {
+        const CssTransformFunction *fn = &list->fn[i];
+
+        switch (fn->kind) {
+        case CSS_TF_TRANSLATE:
+        case CSS_TF_TRANSLATE3D:
+            *x |= fn->length[0].kind != CSS_LENGTH_ABSOLUTE;
+            *y |= fn->argc > 1 && fn->length[1].kind != CSS_LENGTH_ABSOLUTE;
+            break;
+        case CSS_TF_TRANSLATE_X:
+            *x |= fn->length[0].kind != CSS_LENGTH_ABSOLUTE;
+            break;
+        case CSS_TF_TRANSLATE_Y:
+            *y |= fn->length[0].kind != CSS_LENGTH_ABSOLUTE;
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+/* What `el`'s matrix reads of layout, decided from its computed values alone. `anchored` is false when the
+   list's linear part is the identity: §2's origin bracket T(o)·M·T(−o) is then M exactly for every o, and so
+   is the conjugation by the element's own position, so neither is read. */
+typedef struct {
+    bool               applies;      /* a transformable element with a `<transform-list>` of 2D matrices */
+    CssTransformList   list;
+    CssTransformOrigin origin;
+    bool               anchored;
+    bool               read_x, read_y;   /* the reference box's width and height */
+    bool               content_box;
+} CssTmPlan;
+
+static void css_tm_plan(lxb_dom_element_t *el, CssTmPlan *p)
+{
+    CssTransformMatrix linear;
+
+    memset(p, 0, sizeof *p);
+    /* §3 "The transform Property"'s `Applies to: transformable elements` first, so a declaration on a box it
+       does not apply to moves nothing, as core/css/css_transform.h states. */
+    if (!css_transform_is_transformable(el) || !css_computed_transform_list(el, &p->list)) return;
+    if (!css_tm_of_list(&p->list, NULL, &linear)) {
+        css_transform_list_free(&p->list);
+        return;
+    }
+    p->applies = true;
+    p->anchored = !css_tm_linear_is_identity(linear);
+    css_tm_list_reads(&p->list, &p->read_x, &p->read_y);
+    p->content_box = css_computed_transform_box_is_content(el);
+    if (!p->anchored) return;
+    p->origin = css_computed_transform_origin(el);
+    p->read_x |= p->origin.x.kind != CSS_LENGTH_ABSOLUTE;
+    p->read_y |= p->origin.y.kind != CSS_LENGTH_ABSOLUTE;
 }
 
 CssTransformMatrix css_transform_matrix_of_element(lxb_dom_element_t *el)
 {
-    CssTransformMatrix out = css_transform_matrix_identity();
-    CssTransformList list;
-    size_t i;
+    CssTransformMatrix m;
+    CssTmPlan p;
+    CssPx ref[2] = { css_px(0.0), css_px(0.0) }, ax, ay, sx, sy;
+    FlowPoint corner;
+    bool ok;
 
-    DCHECK(el != NULL, "css-transforms-1 §2 \"The Transform Rendering Model\"'s transformation matrix was "
-                       "asked for with no element");
-    /* §3 "The transform Property"'s `Applies to:` line is `transformable elements`, so an element the
-       property does not apply to answers the identity however its `transform` computed — which is what keeps
-       a `<span style="transform:rotate(45deg)">` from reaching the crash below over a declaration that moves
-       nothing. BOTH conjuncts, in this order, exactly as core/css/css_transform.h states them. */
-    if (!css_transform_is_transformable(el)) return out;
-    /* §2's step 3 over css-transforms-1 §3 "The transform Property"'s computed value — "Multiply by each of
-       the transform functions in transform property from left to right". FALSE is `none`, which that section's
-       `Initial:` line gives every element no declaration reached, and the identity is such an element's whole
-       matrix. */
-    if (!css_computed_transform_list(el, &list)) return out;
-    DCHECK(list.n > 0, "css-transforms-1 §3 \"The transform Property\"'s `<transform-list>` production is "
-                       "`<transform-function>+`, which admits no empty match, so a list that parsed is never "
-                       "empty and `none` is the other arm of the `Value:` line rather than a list of none");
-    /* LEFT TO RIGHT, with each function POST-MULTIPLIED onto what is already there: the accumulated matrix is
-       the `outer` operand because the functions written earlier are applied later to a point, which is §8 "The
-       Transform Function Lists"' own equivalence — "a nested set of transforms is equivalent to a single list
-       of transform functions applied from the coordinate system of the ancestor to the local coordinate system
-       of a given element". */
-    for (i = 0; i < list.n; i++)
-        out = css_transform_matrix_multiply(out, css_tm_of_function(el, &list.fn[i]));
-    css_transform_list_free(&list);
-    return out;
+    DCHECK(el != NULL, "css-transforms-1 §2's transformation matrix was asked for with no element");
+    css_tm_plan(el, &p);
+    if (!p.applies) return css_transform_matrix_identity();
+    if (p.read_x) ref[0] = css_tm_reference_size(el, false);
+    if (p.read_y) ref[1] = css_tm_reference_size(el, true);
+    ok = css_tm_of_list(&p.list, ref, &m);
+    css_transform_list_free(&p.list);
+    DCHECK(ok, "a transform list css_tm_plan read as 2D matrices was not one on its second reading");
+    if (!p.anchored) return m;
+    /* §2's steps 2 and 4 bracket the product by the origin, which §4 measures from the reference box's top-left
+       corner and §5 places there ("A reference box adds an additional offset to the origin"). The chain is
+       composed in the initial containing block's space, so the anchor is that corner's layout position plus
+       the origin: T(A)·M·T(−A) maps p to M(p − A) + A, whose translation is M's plus A − L·A. */
+    corner = flow_border_box_origin(el);
+    ax = css_px_add(corner.x, css_tm_length_px(&p.origin.x, &ref[0]));
+    ay = css_px_add(corner.y, css_tm_length_px(&p.origin.y, &ref[1]));
+    if (p.content_box) {
+        ax = css_px_add(ax, used_value_leading_edge_px(el, false));
+        ay = css_px_add(ay, used_value_leading_edge_px(el, true));
+    }
+    sx = css_px_sub(ax, css_px_add(css_px_scale(ax, m.a), css_px_scale(ay, m.c)));
+    sy = css_px_sub(ay, css_px_add(css_px_scale(ax, m.b), css_px_scale(ay, m.d)));
+    m.e = css_px_add(m.e, sx);
+    m.f = css_px_add(m.f, sy);
+    return m;
 }
 
-/* The reference box sizes `el`'s own percentage translations read, asked: false ("not yet") when one was
-   deferred. A function other than a translation reads none here, and crashes in `css_tm_of_function`. */
+/* The layout `el`'s matrix reads, asked: false ("not yet") when a question was deferred. */
 static bool css_tm_element_ask(lxb_dom_element_t *el)
 {
-    CssTransformList list;
-    bool done = true;
-    size_t i;
+    CssTmPlan p;
+    FlowPoint corner;
+    CssPx unused;
+    bool done;
 
-    if (!css_transform_is_transformable(el) || !css_computed_transform_list(el, &list)) return true;
-    for (i = 0; done && i < list.n; i++) {
-        const CssTransformFunction *fn = &list.fn[i];
-        bool x = false, y = false;
-
-        if (fn->kind == CSS_TF_TRANSLATE) {
-            x = fn->length[0].kind != CSS_LENGTH_ABSOLUTE;
-            y = fn->argc > 1 && fn->length[1].kind != CSS_LENGTH_ABSOLUTE;
-        } else if (fn->kind == CSS_TF_TRANSLATE_X) {
-            x = fn->length[0].kind != CSS_LENGTH_ABSOLUTE;
-        } else if (fn->kind == CSS_TF_TRANSLATE_Y) {
-            y = fn->length[0].kind != CSS_LENGTH_ABSOLUTE;
-        }
-        done = (!x || css_tm_reference_size_ask(el, false)) && (!y || css_tm_reference_size_ask(el, true));
+    css_tm_plan(el, &p);
+    if (!p.applies) return true;
+    css_transform_list_free(&p.list);
+    done = (!p.read_x || css_tm_reference_size_ask(el, false)) && (!p.read_y || css_tm_reference_size_ask(el, true));
+    if (done && p.anchored) {
+        done = flow_border_box_origin_ask(el, &corner);
+        if (done && p.content_box)
+            done = used_value_px_ask(el, "padding-left", &unused) && used_value_px_ask(el, "padding-top", &unused);
     }
-    css_transform_list_free(&list);
     return done;
 }
 
@@ -258,48 +418,12 @@ CssTransformMatrix css_transform_matrix_current(lxb_dom_element_t *el)
     CssTransformMatrix out = css_transform_matrix_identity();
     lxb_dom_element_t *on;
 
-    DCHECK(el != NULL, "css-transforms-1 §2 \"The Transform Rendering Model\"'s current transformation matrix "
-                       "was asked for with no element");
+    DCHECK(el != NULL, "css-transforms-1 §2's current transformation matrix was asked for with no element");
     /* "The current transformation matrix is computed by post-multiplying all transformation matrices starting
-       from the viewport coordinate system and ending with the transformation matrix of an element", which is
-       the chain walked from `el` UPWARD with each ancestor becoming the `outer` operand — the root's matrix
-       ends up outermost and the element's innermost, which is the order the section's own SVG example states.
-       THE CHAIN IS THE ELEMENT'S ANCESTOR ELEMENTS IN ITS OWN DOCUMENT and stops at the document element,
-       which is the same chain core/css/css_transform.h walks and what CSSOM VIEW §6 "Extensions to the Element
-       Interface" means by "the transforms that apply to the element and its ancestors". */
-    for (on = el; on != NULL; on = css_parent_element(on)) {
-        CssTransformMatrix tm = css_transform_matrix_of_element(on);
-
-        /* THE COMPOSITION IS PERFORMED IN THE INITIAL CONTAINING BLOCK'S SPACE AND NOT IN EACH ELEMENT'S OWN,
-           WHICH IS EXACT FOR A TRANSLATION AND WRONG FOR EVERYTHING ELSE. §2 defines an element's matrix as
-           the map into its PARENT'S coordinate system, anchored at the element's own transform-origin, and §5
-           "Transform reference box: the transform-box property" adds that element's reference box's position
-           to that origin — "A reference box adds an additional offset to the origin specified by the
-           transform-origin property". A TRANSLATION IS POSITION-INDEPENDENT, so conjugating one by its
-           element's border-box corner is the same translation and the offset is not merely small but ABSENT
-           from the answer; a matrix with any other linear part is not, and composing one here without first
-           conjugating it by `flow_border_box_origin` would report a rectangle rotated about the document's
-           origin instead of the element's own box.
-           THE ASSERT IS THE FORCING FUNCTION AND NOT A DESCRIPTION OF ONE. `css_tm_of_function` crashes for
-           every function that is not a translation, so no other linear part can exist today and this condition
-           is an invariant rather than a filter — the day that crash is built out, this fires and names the
-           conjugation as part of the same diff. The comparison is EXACT because both spellings are written
-           literals: `css_transform_matrix_identity` writes 1.0 and 0.0 and a translation matrix keeps them, so
-           nothing here is the result of an arithmetic that could round. */
-        DCHECK(tm.a == 1.0 && tm.b == 0.0 && tm.c == 0.0 && tm.d == 1.0,
-               "css-transforms-1 §2 \"The Transform Rendering Model\"'s current transformation matrix was "
-               "composed over an element whose own transformation matrix has a linear part other than the "
-               "identity. This walk multiplies each ancestor's matrix in the INITIAL CONTAINING BLOCK's space, "
-               "which is exact for a translation (a translation is the same map wherever it is anchored) and "
-               "wrong for a rotation, a scale or a skew: §2 anchors an element's matrix at its own "
-               "transform-origin and §5 \"Transform reference box: the transform-box property\" adds that "
-               "element's reference box's position to it — \"A reference box adds an additional offset to the "
-               "origin specified by the transform-origin property\" — so such a matrix must be CONJUGATED by "
-               "that element's own border-box corner before it is composed here. BUILD that conjugation in the "
-               "SAME DIFF as the matrix that fired this: take the corner from core/layout/flow_position.h's "
-               "`flow_border_box_origin`, add §4 \"The transform-origin Property\"'s own offset, and compose "
-               "T(corner+origin) * M * T(-(corner+origin)) rather than M");
-        out = css_transform_matrix_multiply(tm, out);
-    }
+       from the viewport coordinate system and ending with the transformation matrix of an element": walked
+       upward, each ancestor is the `outer` operand. Every element's matrix is already anchored at its own box
+       in the initial containing block's space, so the product needs no further conjugation. */
+    for (on = el; on != NULL; on = css_parent_element(on))
+        out = css_transform_matrix_multiply(css_transform_matrix_of_element(on), out);
     return out;
 }

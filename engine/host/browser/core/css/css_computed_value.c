@@ -33,6 +33,7 @@
 #include "core/css/css_syntax_match.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_transform_function.h"
+#include "core/css/css_transform_origin.h"
 #include "core/css/css_var.h"
 #include "core/css/font_metrics.h"
 #include "core/css/font_size_functions.h"
@@ -2644,6 +2645,31 @@ static char *computed_contain(char *spec)
     return css_contain_serialize(ok ? bits : 0);
 }
 
+/* css-transforms-1 §4's computed value, over core/css/css_transform_origin.h's grammar. A value outside it is
+   the declaration CSS Syntax drops, which leaves §4's initial `50% 50%`, as css_cv_transform_list's `none` is
+   §3's. CONSUMES `spec`. */
+static CssTransformOrigin css_cv_transform_origin(lxb_dom_element_t *el, char *spec)
+{
+    CssCvFontCtx slot;
+    CssFontMetrics font = css_cv_font_metrics(&slot, el, "transform-origin");
+    CssTransformOrigin o;
+
+    if (!css_transform_origin_parse(css_cv_realm(el), &font, spec, &o)) o = css_transform_origin_initial();
+    free(spec);
+    return o;
+}
+
+CssTransformOrigin css_computed_transform_origin(lxb_dom_element_t *el)
+{
+    char *spec;
+
+    css_cv_modelled(el, "transform-origin");
+    spec = css_cv_specified(el, "transform-origin");
+    DCHECK(spec != NULL, "CSS Cascade §7.1 produced no specified `transform-origin`; "
+                         "core/css/css_style_declaration.c carries its `Initial: 50% 50%` row");
+    return css_cv_transform_origin(el, spec);
+}
+
 bool css_computed_transform_box_is_content(lxb_dom_element_t *el)
 {
     char *v = css_computed_value(el, "transform-box");
@@ -2783,6 +2809,12 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        value`. */
     case CSS_PROPERTY_WILL_CHANGE:
         return spec;
+    /* css-transforms-1 §4: `Computed value: see background-position`, the one entry above's. */
+    case CSS_PROPERTY_TRANSFORM_ORIGIN: {
+        CssTransformOrigin o = css_cv_transform_origin(el, spec);
+
+        return css_transform_origin_serialize(&o);
+    }
     /* css-transforms-1 §5 "Transform reference box: the transform-box property": `Computed value: specified
        keyword`, over `content-box | border-box | fill-box | stroke-box | view-box`, folded to lowercase. A value
        outside the grammar is the invalid declaration CSS Syntax drops, which leaves the initial `view-box`. */

@@ -128,6 +128,7 @@ typedef enum {
     X(CONTAIN,             "contain",             LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(WILL_CHANGE,         "will-change",         LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(TRANSFORM_BOX,       "transform-box",       LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
+    X(TRANSFORM_ORIGIN,    "transform-origin",    LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(ANIMATION_NAME,            "animation-name",            LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
     X(ANIMATION_DURATION,        "animation-duration",        LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
     X(ANIMATION_TIMING_FUNCTION, "animation-timing-function", LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \

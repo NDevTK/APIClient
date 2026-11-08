@@ -116,6 +116,7 @@
 #include "core/css/css_keyword.h"
 #include "core/css/css_length.h"
 #include "core/css/css_transform_function.h"
+#include "core/css/css_transform_origin.h"
 #include "core/css/font_metrics.h"
 #include "core/fonts/font_matching.h"
 #include "quickjs.h"
@@ -137,6 +138,10 @@ bool css_computed_will_change_names(lxb_dom_element_t *el, const char *property)
 /* Whether the used css-transforms-1 §5 `transform-box` of `el`, an element with a CSS layout box, is its content
    box (`content-box` or `fill-box`) rather than its border box (`border-box`, `stroke-box` or `view-box`). */
 bool css_computed_transform_box_is_content(lxb_dom_element_t *el);
+
+/* css-transforms-1 §4 "The transform-origin Property"'s computed value of `el`: two offsets from §5's reference
+   box corner, percentages left unresolved, and a Z offset. */
+CssTransformOrigin css_computed_transform_origin(lxb_dom_element_t *el);
 
 /* css-transforms-1 §3 "The transform Property"'s COMPUTED VALUE AS THE PARSED LIST — the THIRD shape this
    component answers, and it is an entry for the same reason `css_computed_line_height` and

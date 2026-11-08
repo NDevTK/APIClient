@@ -31,15 +31,11 @@
  * transform-origin Property" gives that origin an `Initial:` value of `50% 50%`, so the bracket is NON-ZERO
  * FOR EVERY ELEMENT WITH A BOX and a consumer built to §3.2 would rotate every box about its top-left corner.
  *
- * THE SHAPE IS §12's OWN 3x2 AND NOT A 4x4, and that is the spec's sentence rather than a narrowing chosen
- * here: §12 "Mathematical Description of Transform Functions" opens "Mathematically, all transform functions
- * can be represented as 4x4 transformation matrices of the following form:" and then states the equivalence
- * this engine's whole function set lives inside — "A 2D 3x2 matrix with six parameters a, b, c, d, e and f is
- * equivalent to the matrix:". css-transforms-1 §7.1 "2D Transform Functions" is the only function grammar
- * core/css/css_transform_function.h parses, and css-transforms-2 §12.2 "3D Transform Functions"' names crash
- * there by name, so the third row and third column of a 4x4 built here could never hold anything but the
- * identity — ten slots no caller writes and no caller reads. The day a level-2 function parses, the widening
- * is this struct and its two operations, and the crash that names it is in that parser.
+ * THE SHAPE IS §12's OWN 3x2 AND NOT A 4x4. §12 "Mathematical Description of Transform Functions" states the
+ * equivalence: "A 2D 3x2 matrix with six parameters a, b, c, d, e and f is equivalent to the matrix:". Every
+ * css-transforms-1 §7.1 "2D Transform Functions" function is one, and so is every css-transforms-2 3D function
+ * whose matrix is a 2D matrix in Terminology's sense (translate3d(x, y, 0), rotateZ(), scale3d(x, y, 1)); a
+ * 3D function whose matrix is not crashes in core/css/css_transform_matrix.c naming the 4x4 to build.
  *
  * THE LINEAR PART IS A `double` AND THE TRANSLATION IS A `CssPx`, WHICH IS A STATEMENT ABOUT WHERE AN
  * ENVIRONMENT FACT CAN ENTER A TRANSFORM. §7.1 gives the scales and matrix() a `<number>` argument and the
@@ -89,12 +85,10 @@ CssTransformMatrix css_transform_matrix_multiply(CssTransformMatrix outer, CssTr
 void css_transform_matrix_map(CssTransformMatrix m, CssPx x, CssPx y, CssPx *out_x, CssPx *out_y);
 
 /* §2's FOUR STEPS for `el` — its own TRANSFORMATION MATRIX, the map "from where the element would have
-   rendered into that local coordinate system". The IDENTITY for an element no transform applies to, which is
-   both arms of the conjunction core/css/css_transform.h states: `Applies to: transformable elements` and a
-   computed `transform` of `none`.
-   IT ASKS FOR NO TRANSFORM-ORIGIN AND THAT IS NOT A GAP ON THE PATH IT ANSWERS — see the .c for the
-   cancellation, which is a property of §2's own bracket rather than an approximation — and it CRASHES BY NAME
-   on the path where the bracket survives. */
+   rendered into that local coordinate system" — expressed in the initial containing block's space: the origin
+   bracket is anchored at §4's origin measured from §5's reference box corner, placed at its layout position.
+   The IDENTITY for an element no transform applies to, which is both arms of the conjunction
+   core/css/css_transform.h states. */
 CssTransformMatrix css_transform_matrix_of_element(lxb_dom_element_t *el);
 
 /* §2's CURRENT TRANSFORMATION MATRIX — "From the perspective of the user an element effectively accumulates
@@ -105,9 +99,9 @@ CssTransformMatrix css_transform_matrix_of_element(lxb_dom_element_t *el);
    "the transforms that apply to the element and its ancestors" names. */
 CssTransformMatrix css_transform_matrix_current(lxb_dom_element_t *el);
 
-/* The layout the matrix above reads, asked under a resting drive (core/layout/layout_job.h): the reference box
-   of each element on the chain whose transform holds a percentage translation. False ("not yet") with the
-   question suspended for the caller's drive. */
+/* The layout the matrix above reads, asked under a resting drive (core/layout/layout_job.h): for each element
+   on the chain, its reference box size where a percentage reads it and, where the origin bracket survives, its
+   border box corner. False ("not yet") with the question suspended for the caller's drive. */
 bool css_transform_matrix_current_ask(lxb_dom_element_t *el);
 
 #endif
