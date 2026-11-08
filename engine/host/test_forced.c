@@ -1620,6 +1620,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/datenum.h"
 #include "fixture/rxcompile.h"
 #include "fixture/b64coerce.h"
+#include "fixture/bigintunk.h"
 #include "fixture/dateparsecoerce.h"
 #include "fixture/capstackproxy.h"
 #include "fixture/rxmodule.h"
@@ -2401,6 +2402,7 @@ TF_DOCS[] = {
     { "datenum", HTML_DATENUM },
     { "rxcompile", HTML_RXCOMPILE },
     { "b64coerce", HTML_B64COERCE },
+    { "bigintunk", HTML_BIGINTUNK },
     { "dateparsecoerce", HTML_DATEPARSECOERCE },
     { "capstackproxy", HTML_CAPSTACKPROXY },
     { "rxmodule", HTML_RXMODULE },
@@ -22691,6 +22693,21 @@ TF_UNIT void probes_b64coerce(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `bigintunk` document (fixture/bigintunk.h): BigInt over each unknown returned. */
+TF_UNIT void probes_bigintunk(const char *js, Probe *tab, int *n) {
+    const char *a_why = NULL; int a_tt = 1;
+    fold_row(&a_tt, &a_why, param_value_is(js, "/api/bigunk-absent", "w", "buRAN"),
+             "no /api/bigunk-absent?w=buRAN record: BigInt over an absent global's unknown did not return a value");
+    const char *c_why = NULL; int c_tt = 1;
+    fold_row(&c_tt, &c_why, param_value_is(js, "/api/bigunk-clock", "w", "buRAN"),
+             "no /api/bigunk-clock?w=buRAN record: BigInt over the clock's unknown did not return a value");
+    const Probe rows[] = {
+        { "bigunk-absent", a_tt, "/api/bigunk-absent", SESS_EXPLORE, a_why },
+        { "bigunk-clock", c_tt, "/api/bigunk-clock", SESS_EXPLORE, c_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `dateparsecoerce` document (fixture/dateparsecoerce.h): Date.parse ran the page's toString
    once and parsed the date it answered. */
 TF_UNIT void probes_dateparsecoerce(const char *js, Probe *tab, int *n) {
@@ -30152,6 +30169,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_datenum(js, probes, &np);
     probes_rxcompile(js, probes, &np);
     probes_b64coerce(js, probes, &np);
+    probes_bigintunk(js, probes, &np);
     probes_dateparsecoerce(js, probes, &np);
     probes_capstackproxy(js, probes, &np);
     probes_rxmodule(js, probes, &np);
