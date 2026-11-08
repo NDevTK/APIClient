@@ -116,44 +116,11 @@ static bool hev_html_local_name_is(const lxb_dom_node_t *n, const char *name)
 
 /* ---- the inputs §7 branches on and this engine cannot read ---------------------------------------------- */
 
-/* WHICH QUESTION EACH UNREADABLE PROPERTY IS AN OPERAND OF — AND THEY ARE TWO QUESTIONS THAT USED TO BE ASKED
-   AS ONE. All four below are properties core/css/css_computed_value.h does not derive, and ONE list of them
-   gated every member of §7 alike, so an ancestor DECLARING `transform` aborted `offsetHeight`. That is
-   CLAUDE.md's two-question predicate exactly: the STRICTER question (`offsetParent`'s walk over positioning
-   containing blocks) decided it, the LOOSER one (an extent, which walks no ancestor at all) paid, and the cost
-   was silent because a refusal reads as correctness rather than as loss. The two are split here, each list
-   stating what it is an operand OF, and the walk below is told which question its caller is asking. */
-
-/* AN OPERAND OF THE POSITIONING QUESTION ONLY. Neither property reaches a used value except through
-   css-position-3 §2.1 "Containing Blocks of Positioned Boxes"' positioning containing block, and each says so in
-   its own section. css-transforms-1 §2 "The Transform Rendering Model": "For elements whose layout is governed
-   by the CSS box model, the transform property does not affect the flow of the content surrounding the
-   transformed element". css-will-change-1 §2 "Hinting at Future Behavior: the will-change property" states the
-   whole of the other one: "The will-change property has no direct effect on the element it is specified on,
-   beyond the creation of stacking contexts and containing blocks as specified above" — three normative effects,
-   a stacking context and the two containing blocks, and nothing else. CSSOM VIEW §7 says it a third time for
-   the two members that read no ancestor: an extent is returned "ignoring any transforms that apply to the
-   element and its ancestors", so the transform never enters the number even where one applies. */
-/* THE SET ITSELF IS NOT DECLARED HERE ANY MORE AND THE CITATIONS ABOVE ARE WHY IT WAS. It was a two-name
-   array in this file while this was the only component reading §2.1's Note; core/layout/used_value.c reads
-   it too now, to decide CSS 2.1 §10.1's third and fourth cases, so the Note is spelled ONCE beside §10.1's
-   four cases and both components ask the same entry for it. A second copy here would be free to gain a
-   property that one did not, after which this chain check would pass over an ancestor whose containing
-   block the layout could not read. */
-
-/* AN OPERAND OF EVERY QUESTION §7 ASKS, INCLUDING THE TWO MEMBERS THAT READ NO ANCESTOR. `zoom` is CSS Viewport §4
+/* An operand of every member §7 states, including the two that read no ancestor. `zoom` is CSS Viewport §4
    "The zoom property": every number §7 reports is an UNSCALED one, and "the unscaled value of a CSS length
    relative to an element is the scaled value divided by the element's effective zoom", whose product runs over
    the whole flat-tree chain. */
 static const char *const HEV_UNREADABLE_ALWAYS[] = { "zoom" };
-
-/* WHICH OF THE TWO A CALLER IS ASKING. It is a fact about the MEMBER and never about the element: `offsetParent`
-   IS the positioning walk, `offsetTop`/`offsetLeft` are DEFINED by subtracting from its result, and
-   `offsetWidth`/`offsetHeight` name it nowhere in either of their two steps. */
-typedef enum {
-    HEV_CHAIN_POSITIONING,  /* the member reads a §2.1 positioning containing block itself */
-    HEV_CHAIN_EXTENT        /* the member reads only the border boxes of its own principal box's fragments */
-} HevChainQuestion;
 
 /* DOES THIS ELEMENT DECLARE THE PROPERTY? The CASCADED value, which is a DETECTOR for an input this component
    cannot read and never a value it uses — its only outcome is the crash. */
@@ -166,45 +133,19 @@ static bool hev_declares(lxb_dom_element_t *el, const char *name)
     return declared;
 }
 
-/* IS §2.1's POSITIONING CONTAINING BLOCK AN OPERAND OF ANY USED VALUE THIS ELEMENT'S BORDER BOX IS DERIVED
-   FROM? §2.1's opening sentence is the whole answer, and it is a SCOPE statement rather than a rule: "The
-   containing block of a static, relative, or sticky box is as defined by its formatting context. For fixed and
-   absolute boxes, it is defined as follows". So the properties §2.1 lists change a used value only where some
-   box on the chain is `absolute` or `fixed`; for every other box the containing block comes from the formatting
-   context, which §2.1 does not touch.
-   THE ANCESTOR CHAIN IS A SOUND OVER-APPROXIMATION OF THE CONTAINING-BLOCK CHAIN, which is what this question
-   needs of it and all it needs: §2.1's own "nearest ancestor box that establishes" and CSS 2.1 §10.1 "Definition
-   of 'containing block'"' formatting-context cases both select an ANCESTOR, so no containing block in the chain
-   is outside this walk. The error is one-sided — a false TRUE costs one crash naming a real absence, and there
-   is no false FALSE. */
-static bool hev_chain_reads_positioning_cb(lxb_dom_node_t *n)
-{
-    lxb_dom_node_t *a;
-
-    for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
-        lxb_dom_element_t *el = lxb_dom_interface_element(a);
-
-        if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED))
-            return true;
-    }
-    return false;
-}
-
 /* THE CHAIN, CHECKED ONCE BEFORE ANY OF §7's FACTS IS READ. The absences are asked about together because they
    are the same failure — an input the walk below cannot see — and because all of them are decided over the same
    ancestor chain.
-   THE SHADOW QUESTION IS FIRST BECAUSE IT IS WHAT MAKES THIS CHAIN THE RIGHT ONE, and it is asked for EVERY
-   question rather than only the positioning one. §7 walks the FLAT TREE (CSS Scoping §4.1 "Flattening the DOM
+   The shadow question is first because it is what makes this chain the right one. §7 walks the FLAT TREE (CSS Scoping §4.1 "Flattening the DOM
    into an Element Tree"), and the node tree is that tree exactly when no element on the chain hosts a shadow
    root and the element's root is not one — a slotted element's flat-tree parent is its assigned SLOT, which the
    node tree does not have it under at all. That reaches an EXTENT too, because CSS Viewport §4's effective zoom
    is a product over "all flat tree ancestors" and a shadow tree's elements are not node-tree ancestors of a
    slotted element. Neither the flat tree nor DOM §4.8's `closed-shadow-hidden` exists in this engine, so a tree
    with a shadow root in it crashes naming both rather than being walked in the tree §7 does not name. */
-static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n, HevChainQuestion q)
+static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n)
 {
     lxb_dom_node_t *a, *root = n;
-    const char *positioning = NULL;
     size_t i;
 
     for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
@@ -242,7 +183,6 @@ static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n, HevCha
                        "different-effective-zoom bullet can fire. BUILD this property's `Computed value:` line "
                        "in css_computed_value.c and record its shorthands in css_shorthand.c",
                        HEV_UNREADABLE_ALWAYS[i]);
-        if (positioning == NULL) positioning = used_value_positioning_cb_unreadable(el);
         root = a;
     }
     if (root->parent != NULL && shadow_root_is(root->parent))
@@ -251,19 +191,6 @@ static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n, HevCha
               "CSS Scoping §4.1's flattening puts the shadow tree's children. BUILD the flat-tree parent (the "
               "host, for the shadow root's own children) together with DOM §4.8's closed-shadow-hidden, which "
               "is the other half §7's every bullet is qualified by");
-    /* THE POSITIONING LIST IS ASKED LAST BECAUSE ITS SECOND OPERAND IS THE WHOLE CHAIN. A declaration alone is
-       not an unreadable INPUT here: it is one only where §2.1's containing block is consulted, which for an
-       EXTENT is decided by the chain and not by this element. The walk above records the declaration and the
-       scope question is asked once, and only where a declaration was found — so an ordinary page whose
-       ancestors carry no such declaration never pays for the second walk. */
-    if (positioning != NULL && (q == HEV_CHAIN_POSITIONING || hev_chain_reads_positioning_cb(n)))
-        DFAILF("an element on this CSSOM VIEW §7 chain declares `%s`, which css-position-3 §2.1 \"Containing "
-               "Blocks of Positioned Boxes\" counts among the properties that establish a positioning containing "
-               "block, and core/css/css_computed_value.h derives no computed value for it, while this member reads "
-               "that containing block (it is `offsetParent` or defined against it, or a box on this chain is "
-               "`absolute` or `fixed`). BUILD its `Computed value:` line and its `does` test in "
-               "core/layout/used_value.c's `UV_CB_PROPERTIES`",
-               positioning);
 }
 
 /* ---- §7's `offsetParent` --------------------------------------------------------------------------------- */
@@ -596,14 +523,9 @@ static int js_hev_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
            "next activation would ask the same thing over the same state for ever");
     if (matched) {
         hev_target(hdr->this_val, &t);
-        /* THE CHAIN CHECK RUNS FOR EVERY MEMBER, BUT NOT WITH THE SAME QUESTION. `offsetWidth` reads no
-           ancestor, yet CSS Viewport §4 makes its unscaled value a function of every flat-tree ancestor's
-           `zoom`, so the chain is an operand of it and the shadow half is what makes this chain the right one.
-           css-position-3 §2.1's positioning containing block is named in `offsetParent`'s steps and in neither
-           extent's, so those two ask HEV_CHAIN_EXTENT. */
-        hev_require_readable_chain(t.rctx, t.node,
-                                   (member == HEV_OFFSET_WIDTH || member == HEV_OFFSET_HEIGHT)
-                                       ? HEV_CHAIN_EXTENT : HEV_CHAIN_POSITIONING);
+        /* The chain check runs for every member: `offsetWidth` reads no ancestor, yet CSS Viewport §4 makes its
+           unscaled value a function of every flat-tree ancestor's `zoom`. */
+        hev_require_readable_chain(t.rctx, t.node);
         while (block_flow_drive_deferred(&d)) {
             /* HTML §15.4.2's rule 5 label is measured ahead of the member's read, which takes it from the
                job's record. */

@@ -3170,6 +3170,10 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
     { "perspective", "none" }, { "perspective-origin", "50% 50%" },
     /* css-transforms-2 §7 "The transform-style Property", `Initial: flat`; lexbor's registry carries none. */
     { "transform-style", "flat" },
+    /* filter-effects-1 §5 "Graphic filters: the filter property" and filter-effects-2 §2 "Backdrop filters: the
+       backdrop-filter property", each `Initial: none`; compositing-2 §3.4.1 "The mix-blend-mode property",
+       `Initial: normal`, and §3.4.2 "The isolation property", `Initial: auto`. Lexbor's registry carries none. */
+    { "filter", "none" }, { "backdrop-filter", "none" }, { "mix-blend-mode", "normal" }, { "isolation", "auto" },
     /* CSS 2.1 §17 Tables' four, each straight off its own `Initial:` line: §17.4.1 Caption position and
        alignment gives `caption-side` `top`, §17.5.2 Table width algorithms: the 'table-layout' property gives
        `table-layout` `auto`, §17.6 Borders gives `border-collapse` `separate`, and §17.6.1 The separated

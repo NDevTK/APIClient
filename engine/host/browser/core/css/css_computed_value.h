@@ -143,6 +143,12 @@ bool css_computed_transform_box_is_content(lxb_dom_element_t *el);
    box corner, percentages left unresolved, and a Z offset. */
 CssTransformOrigin css_computed_transform_origin(lxb_dom_element_t *el);
 
+/* css-color-4 §3.3 "Transparency: the opacity property"'s computed value of `el`, a number in [0,1]. */
+double css_computed_opacity(lxb_dom_element_t *el);
+
+/* Whether the computed `filter` or `backdrop-filter` (`name`) of `el` is `none` (filter-effects-1 §5). */
+bool css_computed_filter_is_none(lxb_dom_element_t *el, const char *name);
+
 /* Whether css-transforms-2 §7 "The transform-style Property"'s computed value of `el` is `preserve-3d`. */
 bool css_computed_transform_style_is_preserve_3d(lxb_dom_element_t *el);
 

@@ -258,6 +258,19 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
        `<overflow-position> = unsafe | safe`. */
     case CSS_KEYWORDS_OVERFLOW_POSITION:
         return k == CSS_KEYWORD_UNSAFE || k == CSS_KEYWORD_SAFE;
+    /* compositing-2 §3.4.1 "The mix-blend-mode property": `<blend-mode> | plus-lighter`, `<blend-mode> = normal |
+       darken | multiply | color-burn | lighten | screen | color-dodge | overlay | soft-light | hard-light |
+       difference | exclusion | hue | saturation | color | luminosity`. */
+    case CSS_KEYWORDS_MIX_BLEND_MODE:
+        return k == CSS_KEYWORD_NORMAL || k == CSS_KEYWORD_DARKEN || k == CSS_KEYWORD_MULTIPLY ||
+               k == CSS_KEYWORD_COLOR_BURN || k == CSS_KEYWORD_LIGHTEN || k == CSS_KEYWORD_SCREEN ||
+               k == CSS_KEYWORD_COLOR_DODGE || k == CSS_KEYWORD_OVERLAY || k == CSS_KEYWORD_SOFT_LIGHT ||
+               k == CSS_KEYWORD_HARD_LIGHT || k == CSS_KEYWORD_DIFFERENCE || k == CSS_KEYWORD_EXCLUSION ||
+               k == CSS_KEYWORD_HUE || k == CSS_KEYWORD_SATURATION || k == CSS_KEYWORD_COLOR ||
+               k == CSS_KEYWORD_LUMINOSITY || k == CSS_KEYWORD_PLUS_LIGHTER;
+    /* compositing-2 §3.4.2 "The isolation property": `<isolation-mode> = auto | isolate`. */
+    case CSS_KEYWORDS_ISOLATION:
+        return k == CSS_KEYWORD_AUTO || k == CSS_KEYWORD_ISOLATE;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;

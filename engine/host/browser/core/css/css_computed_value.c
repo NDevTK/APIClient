@@ -17,6 +17,7 @@
 #include "core/css/css_contain.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_display.h"
+#include "core/css/css_filter.h"
 #include "core/css/css_font_family.h"
 #include "core/css/css_grid_template_areas.h"
 #include "core/css/css_grid_track_list.h"
@@ -2697,6 +2698,57 @@ bool css_computed_transform_style_is_preserve_3d(lxb_dom_element_t *el)
     return preserve;
 }
 
+/* css-color-4 §3.3 "Transparency: the opacity property": `<opacity-value> = <number> | <percentage>`, with
+   "Percentages: map to the range [0,1]" and `Computed value: specified number, clamped to the range [0,1]`.
+   A value that fails the grammar here is a substituted `var()` (lexbor validated every other declaration), which
+   css-values-5 makes invalid at computed-value time and so `unset`: the initial 1, as opacity is not inherited.
+   CONSUMES `spec`. */
+static char *css_cv_opacity(lxb_dom_element_t *el, char *spec)
+{
+    size_t n = strlen(spec);
+    double v = 1.0;
+    char *end = NULL;
+
+    if (strchr(spec, '(') != NULL) {
+        CssCvFontCtx slot;
+        CssFontMetrics font = css_cv_font_metrics(&slot, el, "opacity");
+
+        if (!css_length_math_number(css_cv_realm(el), &font, spec, &v)) v = 1.0;
+    }
+    else if (n > 0) {
+        v = strtod(spec, &end);
+        if (end == spec + n - 1 && *end == '%') v /= 100.0;
+        else if (end != spec + n) v = 1.0;
+    }
+    free(spec);
+    return css_length_serialize_number(v < 0.0 ? 0.0 : v > 1.0 ? 1.0 : v, "");
+}
+
+double css_computed_opacity(lxb_dom_element_t *el)
+{
+    char *v = css_computed_value(el, "opacity");
+    double out;
+
+    DCHECK(v != NULL, "css-color-4 §3.3's computed `opacity` came back as no value; its row derives one");
+    out = strtod(v, NULL);
+    free(v);
+    return out;
+}
+
+bool css_computed_filter_is_none(lxb_dom_element_t *el, const char *name)
+{
+    char *v;
+    bool none;
+
+    DCHECKF(strcmp(name, "filter") == 0 || strcmp(name, "backdrop-filter") == 0,
+            "`%s` is not one of the two properties whose value is filter-effects-1 §5's grammar", name);
+    v = css_computed_value(el, name);
+    DCHECKF(v != NULL, "the computed `%s` came back as no value; its row derives one", name);
+    none = css_filter_is_none(v);
+    free(v);
+    return none;
+}
+
 bool css_computed_perspective(lxb_dom_element_t *el, CssPx *out)
 {
     char *spec;
@@ -2907,6 +2959,19 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
 
         free(spec);
         return css_cv_strdup(preserve ? "preserve-3d" : "flat");
+    }
+    case CSS_PROPERTY_OPACITY:
+        return css_cv_opacity(el, spec);
+    /* filter-effects-1 §5 and filter-effects-2 §2, `Computed value: as specified`, which §6.2 "Computed Values
+       of Filter Functions" refines for the functions. */
+    case CSS_PROPERTY_FILTER:
+    case CSS_PROPERTY_BACKDROP_FILTER: {
+        CssCvFontCtx slot;
+        CssFontMetrics font = css_cv_font_metrics(&slot, el, name);
+        char *out = css_filter_computed(css_cv_realm(el), &font, spec);
+
+        free(spec);
+        return out;
     }
     /* css-transforms-2 §8: "the keyword none or an absolute length". */
     case CSS_PROPERTY_PERSPECTIVE: {

@@ -1162,14 +1162,12 @@ typedef struct {
    rectangles. §2.1's Notes list the properties and end in an ellipsis: "Properties that can cause a box to
    establish an absolute positioning containing block include position, transform, will-change, contain…", and
    the same without `position` for a fixed positioning containing block. Each row is one such property and the
-   module that says so; `does` is NULL for one whose computed value is not derived, which is refused where it is
-   declared, since skipping the ancestor would answer the next one up, a real rectangle of the wrong box. ------ */
+   module that says so. ------------------------------------------------------------------------------------- */
 typedef struct {
     const char *name;
     bool fixed;                            /* it establishes a fixed positioning containing block as well */
     bool (*could)(lxb_dom_element_t *el); /* some non-initial value would, on this element */
-    bool (*does)(lxb_dom_element_t *el);  /* its computed value does; NULL where none is derived */
-    const char *initial;                   /* its `Initial:` value, which establishes nothing */
+    bool (*does)(lxb_dom_element_t *el);  /* its computed value does */
 } UvCbProperty;
 
 static bool uv_cb_any(lxb_dom_element_t *el)
@@ -1194,12 +1192,23 @@ static bool uv_cb_contained(lxb_dom_element_t *el)
 
 /* filter-effects-1 §5 "Graphic filters: the filter property": "A value other than none for the filter property
    results in the creation of a containing block for absolute and fixed positioned descendants unless the element
-   it applies to is document root element in the current browsing context". */
+   it applies to is document root element in the current browsing context"; filter-effects-2 §2 "Backdrop
+   filters: the backdrop-filter property" states the same of `backdrop-filter`. */
 static bool uv_cb_not_root(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el);
 
     return !(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT);
+}
+
+static bool uv_cb_filter(lxb_dom_element_t *el)
+{
+    return uv_cb_not_root(el) && !css_computed_filter_is_none(el, "filter");
+}
+
+static bool uv_cb_backdrop_filter(lxb_dom_element_t *el)
+{
+    return uv_cb_not_root(el) && !css_computed_filter_is_none(el, "backdrop-filter");
 }
 
 /* css-transforms-1 §2 "The Transform Rendering Model" for `transform`, and css-transforms-2's three individual
@@ -1209,67 +1218,33 @@ static bool uv_cb_not_root(lxb_dom_element_t *el)
    transform property does"). The transform, transform-style and perspective rows answer one fact,
    core/css/css_transform.h's; each keeps its own row for will-change, which names the property. */
 static const UvCbProperty UV_CB_PROPERTIES[] = {
-    { "position",        false, uv_cb_any,                              uv_cb_positioned,              "static" },
-    { "transform",       true,  css_transform_is_css_box_transformable, css_transform_creates_context, "none" },
-    { "contain",         true,  containment_layout_paint_applies,       uv_cb_contained,               "none" },
-    { "translate",       true,  css_transform_is_css_box_transformable, css_transform_creates_context, "none" },
-    { "rotate",          true,  css_transform_is_css_box_transformable, css_transform_creates_context, "none" },
-    { "scale",           true,  css_transform_is_css_box_transformable, css_transform_creates_context, "none" },
-    { "transform-style", true,  css_transform_is_css_box_transformable, css_transform_creates_context, "flat" },
-    { "perspective",     true,  css_transform_is_css_box_transformable, css_transform_creates_context, "none" },
-    { "filter",          true,  uv_cb_not_root,                         NULL,                          "none" },
+    { "position",        false, uv_cb_any,                              uv_cb_positioned },
+    { "transform",       true,  css_transform_is_css_box_transformable, css_transform_creates_context },
+    { "contain",         true,  containment_layout_paint_applies,       uv_cb_contained },
+    { "translate",       true,  css_transform_is_css_box_transformable, css_transform_creates_context },
+    { "rotate",          true,  css_transform_is_css_box_transformable, css_transform_creates_context },
+    { "scale",           true,  css_transform_is_css_box_transformable, css_transform_creates_context },
+    { "transform-style", true,  css_transform_is_css_box_transformable, css_transform_creates_context },
+    { "perspective",     true,  css_transform_is_css_box_transformable, css_transform_creates_context },
+    { "filter",          true,  uv_cb_not_root,                         uv_cb_filter },
+    { "backdrop-filter", true,  uv_cb_not_root,                         uv_cb_backdrop_filter },
 };
-
-/* Whether `el` declares row `p` with a value other than its initial one, spelled or through `initial` or
-   `unset` (none of these properties is inherited). */
-static bool uv_cb_declared(lxb_dom_element_t *el, const UvCbProperty *p)
-{
-    char *decl = cssom_cascaded_value(el, p->name);
-    bool declared = decl != NULL && strcasecmp(decl, p->initial) != 0 && strcasecmp(decl, "initial") != 0 &&
-                    strcasecmp(decl, "unset") != 0;
-
-    free(decl);
-    return declared;
-}
-
-const char *used_value_positioning_cb_unreadable(lxb_dom_element_t *el)
-{
-    size_t i;
-
-    for (i = 0; i < COUNTOF(UV_CB_PROPERTIES); i++)
-        if (UV_CB_PROPERTIES[i].does == NULL && uv_cb_declared(el, &UV_CB_PROPERTIES[i]))
-            return UV_CB_PROPERTIES[i].name;
-    return NULL;
-}
 
 /* Whether `anc` establishes css-position-3 §2.1's absolute (`fixed` false) or fixed positioning containing
    block. css-will-change-1 §2 "Hinting at Future Behavior: the will-change property" makes a named property
    count as set: "If any non-initial value of a property would cause the element to generate a containing block
    for absolutely positioned elements, specifying that property in will-change must cause the element to
-   generate a containing block for absolutely positioned elements", and the same for fixed ones. `subject` is
-   named in the refusal beside the ancestor whose declaration it reads. */
-static bool uv_establishes_positioning_cb(lxb_dom_element_t *subject, lxb_dom_element_t *anc, bool fixed)
+   generate a containing block for absolutely positioned elements", and the same for fixed ones. */
+static bool uv_establishes_positioning_cb(lxb_dom_element_t *anc, bool fixed)
 {
     size_t i;
-    char nbuf[160], abuf[160];
 
     for (i = 0; i < COUNTOF(UV_CB_PROPERTIES); i++) {
         const UvCbProperty *p = &UV_CB_PROPERTIES[i];
 
         if (fixed && !p->fixed) continue;
         if (css_computed_will_change_names(anc, p->name) && p->could(anc)) return true;
-        if (p->does != NULL) {
-            if (p->does(anc)) return true;
-            continue;
-        }
-        {
-            if (uv_cb_declared(anc, p))
-                DFAILF("%s, whose ancestor %s declares `%s`, which css-position-3 §2.1 \"Containing Blocks of "
-                       "Positioned Boxes\" counts among the properties that establish a positioning containing "
-                       "block, and core/css/css_computed_value.h derives no computed value for it. BUILD its "
-                       "`Computed value:` line and give its row in `UV_CB_PROPERTIES` a `does` test",
-                       box_subject(subject, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf), p->name);
-        }
+        if (p->does(anc)) return true;
     }
     return false;
 }
@@ -1277,17 +1252,17 @@ static bool uv_establishes_positioning_cb(lxb_dom_element_t *subject, lxb_dom_el
 bool used_value_establishes_positioning_cb(lxb_dom_element_t *el, bool fixed)
 {
     DCHECK(el != NULL, "css-position-3 §2.1's establishment question was asked of no element");
-    return uv_establishes_positioning_cb(el, el, fixed);
+    return uv_establishes_positioning_cb(el, fixed);
 }
 
-static bool uv_establishes_abspos_cb(lxb_dom_element_t *subject, lxb_dom_element_t *anc)
+static bool uv_establishes_abspos_cb(lxb_dom_element_t *anc)
 {
-    return uv_establishes_positioning_cb(subject, anc, false);
+    return uv_establishes_positioning_cb(anc, false);
 }
 
-static bool uv_establishes_fixedpos_cb(lxb_dom_element_t *subject, lxb_dom_element_t *anc)
+static bool uv_establishes_fixedpos_cb(lxb_dom_element_t *anc)
 {
-    return uv_establishes_positioning_cb(subject, anc, true);
+    return uv_establishes_positioning_cb(anc, true);
 }
 
 /* §10.1's four cases, in the spec's own order, answering the BOX whose CONTENT EDGE is the rectangle. Each
@@ -1378,7 +1353,7 @@ static UvCb uv_cb(lxb_dom_element_t *el)
                       "above states in full",
                       box_subject(el, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf));
             if (contents) continue;
-            if (!(fixed ? uv_establishes_fixedpos_cb(el, anc) : uv_establishes_abspos_cb(el, anc))) continue;
+            if (!(fixed ? uv_establishes_fixedpos_cb(anc) : uv_establishes_abspos_cb(anc))) continue;
             if (inline_box)
                 DFAILF("%s, whose nearest positioned ancestor %s is an INLINE box: "
                       "§10.1's FOURTH case has a sub-case for exactly this and CSS 2.1 does not finish it — "

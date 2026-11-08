@@ -486,6 +486,11 @@ bool css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *
    `calc(1px + 1s)` are not. FALSE for a `<percentage>`, for a keyword, and for anything else. */
 bool css_length_is_length(const char *value);
 
+/* A math function `text` whose css-values-4 §10.9 type matches `<number>` or `<percentage>`, as a number (a
+   percentage divided by 100), its `<length>` leaves absolutized as `css_length_parse` absolutizes a dimension.
+   False for text that is neither. */
+bool css_length_math_number(JSContext *realm, const CssFontMetrics *font, const char *text, double *out);
+
 /* §5.6 "Mixing Percentages and Dimensions"'s `<length-percentage>`, which is the SAME walk with two arms
    widened: a literal `<percentage>` is one, and a math function is one when its §10.9 type matches
    `<length-percentage>` — `calc(100% - 2em)`, which §10.9.1's calculation context makes a `<length>` in every

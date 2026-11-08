@@ -135,7 +135,24 @@
     X(SPACE_BETWEEN,      "space-between") \
     X(SPACE_AROUND,       "space-around") \
     X(SPACE_EVENLY,       "space-evenly") \
-    X(LEGACY,             "legacy")
+    X(LEGACY,             "legacy") \
+    X(ISOLATE,            "isolate") \
+    X(MULTIPLY,           "multiply") \
+    X(SCREEN,             "screen") \
+    X(OVERLAY,            "overlay") \
+    X(DARKEN,             "darken") \
+    X(LIGHTEN,            "lighten") \
+    X(COLOR_DODGE,        "color-dodge") \
+    X(COLOR_BURN,         "color-burn") \
+    X(HARD_LIGHT,         "hard-light") \
+    X(SOFT_LIGHT,         "soft-light") \
+    X(DIFFERENCE,         "difference") \
+    X(EXCLUSION,          "exclusion") \
+    X(HUE,                "hue") \
+    X(SATURATION,         "saturation") \
+    X(COLOR,              "color") \
+    X(LUMINOSITY,         "luminosity") \
+    X(PLUS_LIGHTER,       "plus-lighter")
 
 /* INVALID is zero so a zeroed value that is not a keyword holds no keyword. */
 typedef enum {
@@ -194,7 +211,9 @@ typedef enum {
     CSS_KEYWORDS_SELF_POSITION,
     CSS_KEYWORDS_CONTENT_POSITION,
     CSS_KEYWORDS_CONTENT_DISTRIBUTION,
-    CSS_KEYWORDS_OVERFLOW_POSITION
+    CSS_KEYWORDS_OVERFLOW_POSITION,
+    CSS_KEYWORDS_MIX_BLEND_MODE,
+    CSS_KEYWORDS_ISOLATION
 } CssKeywordSet;
 
 /* The keyword `ident` (its first `n` bytes) spells, ASCII case-insensitively, or CSS_KEYWORD_INVALID when it

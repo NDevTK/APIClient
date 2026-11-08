@@ -397,14 +397,9 @@ CssPx used_value_inset_resolved_px(lxb_dom_element_t *el, CssLength len, bool ve
 
 /* css-position-3 §2.1 "Containing Blocks of Positioned Boxes": whether `el` establishes an absolute (`fixed`
    false) or a fixed positioning containing block, over every property §2.1's Notes reach (core/layout/
-   used_value.c's `UV_CB_PROPERTIES`, with css-will-change-1 §2's `will-change` naming any of them). A declared
-   property whose computed value is not derived crashes naming it. Readers: §10.1's third and fourth cases and
+   used_value.c's `UV_CB_PROPERTIES`, with css-will-change-1 §2's `will-change` naming any of them). Readers: §10.1's third and fourth cases and
    CSSOM View §7's offsetParent (core/html/html_element_view.c). */
 bool used_value_establishes_positioning_cb(lxb_dom_element_t *el, bool fixed);
-
-/* The first property of the same list that `el` declares with a non-initial value and whose computed value is
-   not derived, or NULL: what CSSOM View §7's chain check refuses. */
-const char *used_value_positioning_cb_unreadable(lxb_dom_element_t *el);
 
 /* The same rectangle's width: §10.1's first case from the viewport, its second from the content edge of the
    box above, and §17.4's table wrapper box from §17.4's own sentence ("The width of the table wrapper box is

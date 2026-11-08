@@ -179,15 +179,15 @@ bool css_transform_creates_context(lxb_dom_element_t *el)
 }
 
 /* §7.1's list, whose properties this engine derives no computed value for, each with its value that groups
-   nothing: "opacity: any value less than 1", "filter: any value other than none", and so on. */
+   nothing: "clip: any value other than auto", "clip-path: any value other than none", and so on. */
 static const struct { const char *name, *ungrouped; } CSS_TR_GROUPING_UNMODELLED[] = {
-    { "opacity", "1" }, { "filter", "none" }, { "clip", "auto" }, { "clip-path", "none" },
-    { "isolation", "auto" }, { "mask-image", "none" }, { "mask-border-source", "none" },
-    { "mix-blend-mode", "normal" },
+    { "clip", "auto" }, { "clip-path", "none" }, { "mask-image", "none" }, { "mask-border-source", "none" },
 };
 
-/* §7.1 "Grouping property values": "overflow: any value other than visible or clip", "contain: paint and any
-   other property/value combination that causes paint containment", and the list above. */
+/* §7.1 "Grouping property values": "overflow: any value other than visible or clip", "opacity: any value less
+   than 1", "filter: any value other than none", "isolation: used value of isolate", "mix-blend-mode: any value
+   other than normal", "contain: paint and any other property/value combination that causes paint
+   containment", and the list above. */
 static bool css_tr_groups(lxb_dom_element_t *el)
 {
     static const char *const AXES[] = { "overflow-x", "overflow-y" };
@@ -198,6 +198,10 @@ static bool css_tr_groups(lxb_dom_element_t *el)
             !css_computed_keyword_is(el, AXES[i], CSS_KEYWORD_CLIP))
             return true;
     if (containment_paint(el)) return true;
+    if (css_computed_opacity(el) < 1.0 || !css_computed_filter_is_none(el, "filter") ||
+        css_computed_keyword_is(el, "isolation", CSS_KEYWORD_ISOLATE) ||
+        !css_computed_keyword_is(el, "mix-blend-mode", CSS_KEYWORD_NORMAL))
+        return true;
     for (i = 0; i < COUNTOF(CSS_TR_GROUPING_UNMODELLED); i++) {
         char *decl = cssom_cascaded_value(el, CSS_TR_GROUPING_UNMODELLED[i].name);
         bool declared = decl != NULL && strcasecmp(decl, CSS_TR_GROUPING_UNMODELLED[i].ungrouped) != 0 &&

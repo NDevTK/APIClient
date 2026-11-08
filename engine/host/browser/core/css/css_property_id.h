@@ -115,6 +115,8 @@ typedef enum {
     X(JUSTIFY_ITEMS,       "justify-items",       LXB_CSS_PROPERTY__UNDEF,         ALIGN, ALL, NONE)              \
     X(ALIGN_SELF,          "align-self",          LXB_CSS_PROPERTY_ALIGN_SELF,     ALIGN, ALL, NONE)              \
     X(JUSTIFY_SELF,        "justify-self",        LXB_CSS_PROPERTY__UNDEF,         ALIGN, ALL, NONE)              \
+    X(MIX_BLEND_MODE,      "mix-blend-mode",      LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, MIX_BLEND_MODE)  \
+    X(ISOLATION,           "isolation",           LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, ISOLATION)       \
     CSS_PROPERTY_TEXT_LIST(X)
 
 /* The text-shaped rows. Which `Computed value:` line each derives, and which algorithm reads it, is stated at
@@ -135,6 +137,9 @@ typedef enum {
     X(PERSPECTIVE,         "perspective",         LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(PERSPECTIVE_ORIGIN,  "perspective-origin",  LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(TRANSFORM_STYLE,     "transform-style",     LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
+    X(OPACITY,             "opacity",             LXB_CSS_PROPERTY_OPACITY,        TEXT, ALL, UNTYPED)            \
+    X(FILTER,              "filter",              LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
+    X(BACKDROP_FILTER,     "backdrop-filter",     LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(ANIMATION_NAME,            "animation-name",            LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
     X(ANIMATION_DURATION,        "animation-duration",        LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
     X(ANIMATION_TIMING_FUNCTION, "animation-timing-function", LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \

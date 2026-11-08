@@ -1347,6 +1347,26 @@ static CssPx css_len_math_length(void *ctx, double n, const char *unit, size_t u
     return css_len_unit_px(c->realm, c->font, lower, n);
 }
 
+bool css_length_math_number(JSContext *realm, const CssFontMetrics *font, const char *text, double *out)
+{
+    CssLenMathCtx mc = { realm, font };
+    CssMathResolver res = { css_len_math_length, &mc, realm };
+    CssMathValue v;
+    size_t n;
+
+    DCHECK(text != NULL && out != NULL, "a math function's number was asked of no text or into nowhere");
+    n = strlen(text);
+    if (css_math_eval(text, n, &res, CSS_MATH_PROD_NUMBER, &v)) {
+        *out = v.num.px;
+        return true;
+    }
+    if (!css_math_eval(text, n, &res, CSS_MATH_PROD_PERCENTAGE, &v)) return false;
+    DCHECK(v.tree == NULL, "a <percentage> math function kept a calculation tree, which only a percentage "
+                           "resolved against another type can need");
+    *out = (v.pct_term ? v.pct : v.num.px) / 100.0;
+    return true;
+}
+
 static bool css_len_unit_known(const char *unit);
 
 bool css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *value, CssKeywordSet keywords,
