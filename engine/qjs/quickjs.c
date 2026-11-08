@@ -56710,7 +56710,8 @@ struct JSFlowGraph {
     FGBuf bytes;
     JSValue *anchors;
     JSVarRef **cells;   /* baseline closure cells the graph names, one counted reference each */
-    uint32_t n_anchors, n_roots, n_objs, n_cells;
+    JSContext **realms; /* the realms a lazily built property is built in, one counted reference each */
+    uint32_t n_anchors, n_roots, n_objs, n_cells, n_realms;
     FGGap *gaps;
     uint32_t n_gaps;
 };
@@ -56955,9 +56956,23 @@ static void fg_key(FGWriter *w, FGBuf *out, JSAtom atom)
     fg_string(w, out, a);
 }
 
-/* The own data properties of `p` from shape slot `from` on, in shape order: the live count, then each key, its
-   three attributes and its value. An accessor, a variable reference or a lazily initialized property has no
-   writer yet. */
+/* A realm the graph holds a counted reference to, by index: a function's lazily built prototype is built in it
+   (js_instantiate_prototype). */
+static uint32_t fg_realm(FGWriter *w, JSContext *realm)
+{
+    JSFlowGraph *g = w->g;
+
+    for (uint32_t i = 0; i < g->n_realms; i++)
+        if (g->realms[i] == realm) return i;
+    g->realms = fg_grow(g->realms, sizeof *g->realms * (g->n_realms + 1));
+    g->realms[g->n_realms] = JS_DupContext(realm);
+    return g->n_realms++;
+}
+
+/* The own properties of `p` from shape slot `from` on, in shape order: the live count, then each key, its three
+   attributes, and its storage: a value ('V'), an accessor's getter and setter ('G'), or a function's lazily built
+   prototype and the realm it is built in ('L'). A variable reference or another lazy initializer has no writer
+   yet. */
 static void fg_props(FGWriter *w, FGBuf *out, JSObject *p, int from)
 {
     JSShape *sh = p->shape;
@@ -56968,18 +56983,33 @@ static void fg_props(FGWriter *w, FGBuf *out, JSObject *p, int from)
     fg_u32(out, live);   /* a deleted slot is not written: the rebuilt shape holds the live ones in order */
     for (int i = from; i < sh->prop_count; i++, prs++) {
         if (prs->atom == JS_ATOM_NULL) continue;
-        if ((prs->flags & JS_PROP_TMASK) && w->survey) {
-            fg_gap(w, out, FG_GAP_PROP_KIND, (int)(prs->flags & JS_PROP_TMASK));
+        int kind = prs->flags & JS_PROP_TMASK;
+        bool lazy_proto = kind == JS_PROP_AUTOINIT && js_autoinit_get_id(&p->prop[i]) == JS_AUTOINIT_ID_PROTOTYPE;
+
+        if (kind != 0 && kind != JS_PROP_GETSET && !lazy_proto && w->survey) {
+            fg_gap(w, out, FG_GAP_PROP_KIND, kind);
             continue;
         }
-        if (prs->flags & JS_PROP_TMASK) {
-            DCHECKF(false, "flow graph: a private object on a parked graph holds a property of kind %d (an accessor, a "
-                   "variable reference or a lazy initializer), which has no writer yet", (int)(prs->flags & JS_PROP_TMASK));
+        if (kind != 0 && kind != JS_PROP_GETSET && !lazy_proto) {
+            DCHECKF(false, "flow graph: a private object on a parked graph holds a property of kind %d (a variable "
+                   "reference, or a lazy initializer other than a function's prototype), which has no writer yet",
+                   kind);
             FG_NO_WRITER();
         }
         fg_key(w, out, prs->atom);
         fg_u8(out, (uint8_t)(prs->flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE | JS_PROP_ENUMERABLE)));
-        fg_value(w, out, p->prop[i].u.value);
+        if (kind == JS_PROP_GETSET) {
+            JSObject *gs[2] = { p->prop[i].u.getset.getter, p->prop[i].u.getset.setter };
+            fg_u8(out, 'G');
+            for (int k = 0; k < 2; k++)
+                if (gs[k]) fg_value(w, out, JS_MKPTR(JS_TAG_OBJECT, gs[k])); else fg_u8(out, 'U');
+        } else if (lazy_proto) {
+            fg_u8(out, 'L');
+            fg_u32(out, fg_realm(w, js_autoinit_get_realm(&p->prop[i])));
+        } else {
+            fg_u8(out, 'V');
+            fg_value(w, out, p->prop[i].u.value);
+        }
     }
 }
 
@@ -57312,8 +57342,28 @@ static void fg_rprops(FGReader *r, JSValueConst o, int extra)
 
     for (uint32_t k = 0; k < np; k++) {
         JSAtom key = fg_rkey(r);
-        uint8_t fl = fg_r8(r);
+        uint8_t fl = fg_r8(r), how = fg_r8(r);
 
+        if (how == 'G') {
+            JSValue get = fg_rvalue(r), set = fg_rvalue(r);
+            CHECK(JS_DefineProperty(r->ctx, o, key, JS_UNDEFINED, get, set,
+                                    (fl & (JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE)) | JS_PROP_HAS_GET |
+                                    JS_PROP_HAS_SET | JS_PROP_HAS_CONFIGURABLE | JS_PROP_HAS_ENUMERABLE | extra) >= 0,
+                  "flow graph: a rebuilt object refused an accessor");
+            JS_FreeValue(r->ctx, get);
+            JS_FreeValue(r->ctx, set);
+            JS_FreeAtom(r->ctx, key);
+            continue;
+        }
+        if (how == 'L') {
+            uint32_t ri = fg_r32(r);
+            CHECK(ri < r->g->n_realms, "flow graph: a lazily built property names no realm the graph holds");
+            CHECK(JS_DefineAutoInitProperty(r->g->realms[ri], o, key, JS_AUTOINIT_ID_PROTOTYPE, NULL, fl) >= 0,
+                  "flow graph: a rebuilt function refused its lazily built prototype");
+            JS_FreeAtom(r->ctx, key);
+            continue;
+        }
+        CHECK(how == 'V', "flow graph: a property carries a kind this reader does not know");
         CHECK(JS_DefinePropertyValue(r->ctx, o, key, fg_rvalue(r), fl | extra) >= 0,
               "flow graph: a rebuilt object refused a property");
         JS_FreeAtom(r->ctx, key);
@@ -57568,6 +57618,8 @@ void JS_FlowGraphFree(JSContext *ctx, JSFlowGraph *g)
     for (uint32_t i = 0; i < g->n_anchors; i++) JS_FreeValue(ctx, g->anchors[i]);
     for (uint32_t i = 0; i < g->n_cells; i++) free_var_ref(ctx->rt, g->cells[i]);
     (free)(g->cells);
+    for (uint32_t i = 0; i < g->n_realms; i++) JS_FreeContext(g->realms[i]);
+    (free)(g->realms);
     (free)(g->gaps);
     (free)(g->anchors); (free)(g->bytes.b); (free)(g);
 }
