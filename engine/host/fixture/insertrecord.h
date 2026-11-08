@@ -2,11 +2,11 @@
    pre-insert, replace and replace all, as each member that reaches them queues them: appendChild and insertBefore
    of a node (al, ib) and of a DocumentFragment (fr, fi, fe), ParentNode's append and prepend and ChildNode's
    before, after and replaceWith (ap, pp, bf, af, rw), replaceChildren (rc), replaceChild of a node, of a sibling
-   and of a fragment (rp, rs, rf), and insertAdjacentElement/Text (ia). Each value lists the records, then the
-   children (`_c`).
+   and of a fragment (rp, rs, rf), insertAdjacentElement/Text (ia), and HTML §8.5.4-§8.5.6's innerHTML,
+   outerHTML and insertAdjacentHTML (ih, oh, ah). Each value lists the records, then the children (`_c`).
    Chrome 153 (Playwright) answers every value test_forced.c's rows expect except al and ib, where it reports the
    node's previous sibling after adopt's removal (al=p_a_rb_pa_n0~p_ab_r_pa_n0_ca.b,
-   ib=p_a_rb_pa_nc~p_ab_r_pa_nc_ca.b.c); see node_insert.c's step 6.
+   ib=p_a_rb_pa_nc~p_ab_r_pa_nc_ca.b.c); see node_insert.c's step 6. ih, oh and ah are not measured in Chrome.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_INSERTRECORD_H
@@ -57,6 +57,11 @@ static const char HTML_INSERTRECORD[] =
     "  p = box(['a', 'b']); f = frag(['x', 'y']); run('rf', p, f, function () { p.replaceChild(f, p.firstChild); });"
     "  p = box(['a']); run('ia', p, null, function () { p.firstChild.insertAdjacentElement('afterend', mk('x')); "
     "p.firstChild.insertAdjacentText('beforebegin', 'k'); });"
+    "  p = box(['a', 'b']); run('ih', p, null, function () { p.innerHTML = '<i id=x></i><i id=y></i>'; });"
+    "  p = box(['a', 'b', 'c']); run('oh', p, null, function () { p.childNodes[1].outerHTML = "
+    "'<i id=x></i><i id=y></i>'; });"
+    "  p = box(['a']); run('ah', p, null, function () { p.firstChild.insertAdjacentHTML('afterend', "
+    "'<i id=x></i><i id=y></i>'); p.insertAdjacentHTML('afterbegin', 'k'); });"
     "  fetch('/api/insertrecord?' + Object.keys(r).map(function (k) { return k + '=' + r[k]; }).join('&'));"
     "});"
     "</script>"

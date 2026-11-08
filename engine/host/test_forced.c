@@ -1528,6 +1528,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fragrest.h"
 #include "fixture/mixinrest.h"
 #include "fixture/adoptrest.h"
+#include "fixture/htmlrest.h"
+#include "fixture/htmlclearrest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2303,6 +2305,8 @@ TF_DOCS[] = {
     { "fragrest", HTML_FRAGREST },
     { "mixinrest", HTML_MIXINREST },
     { "adoptrest", HTML_ADOPTREST },
+    { "htmlrest", HTML_HTMLREST },
+    { "htmlclearrest", HTML_HTMLCLEARREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -17963,6 +17967,12 @@ TF_UNIT void probes_insertrecord(const char *js, Probe *tab, int *n) {
           "DOM §4.2.3 replace: a fragment's children leave it in one record and arrive in replace's one record" },
         { "insertrecord-insertadjacent", "ia", "p_ax_r_pa_n0~p_atk_r_p0_na_ctk.a.x",
           "DOM §4.9 insertAdjacentElement and insertAdjacentText: each is one pre-insert, one record" },
+        { "insertrecord-innerhtml", "ih", "p_ax.y_ra.b_p0_n0_cx.y",
+          "HTML §8.5.4 innerHTML setter step 5: replace all with the fragment queues one record naming both lists" },
+        { "insertrecord-outerhtml", "oh", "p_ax.y_rb_pa_nc_ca.x.y.c",
+          "HTML §8.5.5 outerHTML setter step 7: replace queues one record naming the fragment's children and this" },
+        { "insertrecord-insertadjacenthtml", "ah", "p_ax.y_r_pa_n0~p_atk_r_p0_na_ctk.a.x.y",
+          "HTML §8.5.6 insertAdjacentHTML step 6: each insert of the fragment queues one record on parent" },
     };
     int i;
 
@@ -18007,6 +18017,72 @@ TF_UNIT void probes_fragrest(const char *js, Probe *tab, int *n) {
     const Probe rows[] = {
         { "fragment-append-rests", tt, "frBox", SESS_EXPLORE, why },
         { "fragment-append-sibling-tree", kt, "frBox", SESS_EXPLORE, kwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `htmlrest` document (fixture/htmlrest.h). innerhtml-rests: the setting arm's innerHTML of a
+   box of 100,002 elements into the empty target rests inside the setter (`sliceOverrunGapWork` under one
+   quantum), and the arm then reads the box in the target whole and both names present. innerhtml-sibling-tree:
+   the sibling arm, which can run while the first is parked mid-setter, reads the target empty and both names
+   absent. */
+TF_UNIT void probes_htmlrest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1, kt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/hr-done", "p", "1") && param_value_is(js, "/api/hr-done", "c", "100002"),
+             "NOT REACHED: no /api/hr-done?p=1&c=100002 record, so the setter did not finish with the box whole in "
+             "the target");
+    fold_row(&tt, &why, param_value_is(js, "/api/hr-done", "n", "1") && param_value_is(js, "/api/hr-done", "w", "1"),
+             "the setting arm did not find the inserted box's named elements: the name index missed an element "
+             "replace all's insert put in the document tree");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: an innerHTML of a box of 100,002 "
+             "elements placed it inside one step instead of resting per node");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/hr-kept", "t", "0"),
+             "NOT REACHED: no /api/hr-kept?t=0 record, so the sibling arm did not read the target empty");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/hr-kept", "n", "1") && param_value_is(js, "/api/hr-kept", "w", "1"),
+             "the sibling arm found the box's named elements: the setting arm's name-index upkeep reached a flow "
+             "whose tree does not hold them");
+    const Probe rows[] = {
+        { "innerhtml-rests", tt, "hrTarget", SESS_EXPLORE, why },
+        { "innerhtml-sibling-tree", kt, "hrTarget", SESS_EXPLORE, kwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `htmlclearrest` document (fixture/htmlclearrest.h). innerhtml-clear-rests: the setting arm's
+   innerHTML over the box, whose one child holds 100,002 elements, rests inside the setter (`sliceOverrunGapWork`
+   under one quantum), and the arm then reads one `<b>` child, the inner div detached and both names absent.
+   innerhtml-clear-sibling-tree: the sibling arm reads the inner div in place with its children and both names
+   present. */
+TF_UNIT void probes_htmlclearrest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1, kt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/hc-done", "c", "1") && param_value_is(js, "/api/hc-done", "t", "1") &&
+             param_value_is(js, "/api/hc-done", "o", "1"),
+             "NOT REACHED: no /api/hc-done?c=1&t=1&o=1 record, so the setter did not finish with the parsed `<b>` "
+             "as the box's one child and the inner div removed");
+    fold_row(&tt, &why, param_value_is(js, "/api/hc-done", "n", "1") && param_value_is(js, "/api/hc-done", "w", "1"),
+             "the setting arm still found a removed element by name: the name index kept an entry replace all took "
+             "out of the document tree");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: an innerHTML over a subtree of "
+             "100,002 elements removed it inside one step instead of resting per node");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/hc-kept", "p", "1") && param_value_is(js, "/api/hc-kept", "c", "100002"),
+             "NOT REACHED: no /api/hc-kept?p=1&c=100002 record, so the sibling arm did not read the inner div in "
+             "place with its children");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/hc-kept", "n", "1") && param_value_is(js, "/api/hc-kept", "w", "1"),
+             "the sibling arm did not find the inner div's named elements: the setting arm's name-index upkeep "
+             "reached a flow whose tree still holds them");
+    const Probe rows[] = {
+        { "innerhtml-clear-rests", tt, "hcBox", SESS_EXPLORE, why },
+        { "innerhtml-clear-sibling-tree", kt, "hcBox", SESS_EXPLORE, kwhy },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -30365,6 +30441,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fragrest(js, probes, &np);
     probes_mixinrest(js, probes, &np);
     probes_adoptrest(js, probes, &np);
+    probes_htmlrest(js, probes, &np);
+    probes_htmlclearrest(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
