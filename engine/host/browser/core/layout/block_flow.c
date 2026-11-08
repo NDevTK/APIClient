@@ -635,9 +635,10 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
               "the element tree by its contents\" as a child sequence — so what is owed here is ROUTING this "
               "walk to it and NOT a second copy of the rule. "
               "THIS FILE'S OWN WALKS ARE ROUTED, WHICH IS WHY REACHING THIS LINE NOW MEANS A CALLER OUTSIDE "
-              "THEM: `bf_content_next`, `block_flow_establishes_inline_context_ask`, `bf_inline_box_breaks`, the run's start and step "
-              "and `block_flow_run_generates_box` all take that sequence, so nothing this file enumerates can "
-              "hand this classification a `contents` element any more. A caller that still composes a child "
+              "THEM: `bf_content_next`, `block_flow_establishes_inline_context_ask`, `bf_inline_box_breaks`, the "
+              "run's start and step and `block_flow_run_generates_box` all take that sequence, so nothing this "
+              "file enumerates can hand this classification a `contents` element any more. A caller that still "
+              "composes a child "
               "list with `->first_child` and `->next`, or a box parent with `->parent`, is what gets here — "
               "and `block_flow_child_kind`'s own box-parent precondition names that caller directly. "
               "THE COUPLING THAT MADE THE ROUTING ONE LANDING RATHER THAN SEVERAL IS RECORDED BECAUSE A "
@@ -676,7 +677,8 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
     if (block) return BLOCK_FLOW_CHILD_BLOCK;
     /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes": this child is inline-level, so it is not on
        §9.4.1's stack at all — §9.4.2's line boxes hold it, and which of the two formatting contexts this block
-       container establishes is decided over the WHOLE child list rather than here (block_flow_establishes_inline_context_ask). */
+       container establishes is decided over the WHOLE child list rather than here
+       (block_flow_establishes_inline_context_ask). */
     if (inline_level) return BLOCK_FLOW_CHILD_INLINE;
     /* CSS 2.1 §17.4 Tables in the visual formatting model ANSWERS THIS CLASSIFICATION, and it used to abort
        here. The box §9.4.1's stack places for a `display: table` element is not the table box at all: "the
@@ -1003,10 +1005,10 @@ static bool bf_box(lxb_dom_element_t *el, BfBaseline pass, BfBox *out);
    children is answered at its first member, and only a container that holds none reads its whole content.
    The scan is a pre-order walk of css-display-3 §2.5's spliced sequences, which `block_flow_next_block_box`
    also walks (core/layout/intrinsic_size.c asserts the two agree). It descends into each inline box, because
-   §9.2.1.1's second paragraph puts an in-flow block-level box inside one on THIS container's box list ("the
-   block-level box becomes a sibling of those anonymous boxes"), and into nothing else: an atomic inline keeps
-   its block-level children. A float, an outside marker and a member with no box decide nothing (§9.5: "since a
-   float is not in the flow"). */
+   CSS 2.2 §9.2.1.1's second paragraph puts an in-flow block-level box inside one on THIS container's box list
+   ("the block-level box becomes a sibling of those anonymous boxes"), and into nothing else: an atomic inline
+   keeps its block-level children. A float, an outside marker and a member with no box decide nothing (CSS 2.2
+   §9.5 "Floats": "since a float is not in the flow"). */
 
 /* Moves the scan past `*at`, a member of `*parent`'s sequence, entering it when `enter`; false with both
    unchanged when a style the step reads parked. */

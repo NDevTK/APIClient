@@ -530,9 +530,9 @@ void dom_attr_normalize_parsed(lxb_dom_node_t *root)
                 if (lxb_dom_tree_observer()) lxb_dom_tree_observer()->attr_added(el, a);
             }
         }
-        /* HTML §13.2.6.4.4 inserts a `<template>`'s markup into its §4.12.3 template contents, which no child
-           link reaches, so the walk enters the content fragment before the element's own children and climbs
-           back out through its host. */
+        /* HTML §13.2.6.4.4 'The "in head" insertion mode' inserts a `<template>`'s markup into its HTML §4.12.3
+           "The template element" contents, which no child link reaches, so the walk enters the content fragment
+           before the element's own children and climbs back out through its host. */
         content = node_template_content(n);
         if (content && content->first_child) { n = content->first_child; continue; }
         if (n->first_child) { n = n->first_child; continue; }

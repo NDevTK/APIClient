@@ -645,11 +645,12 @@ void flow_placement_inline_scan_hold(const lxb_dom_element_t *el, const BlockFlo
 {
     FpEntry *e;
 
-    DCHECK(el != NULL && at != NULL, "a §9.4.2 scan's place was held for no container or no place");
+    DCHECK(el != NULL && at != NULL, "an inline formatting context scan's place was held for no container");
     e = fp_entry_for_write(el);
-    CHECK(e != NULL, "a §9.4.2 scan stopped with no placement record to hold its place; it stops only under a "
-                     "resting drive, whose job holds one");
-    DCHECK(!e->has_inline_context, "a §9.4.2 scan held its place after its container's answer was recorded");
+    CHECK(e != NULL, "an inline formatting context scan stopped with no placement record to hold its place; it "
+                     "stops only under a resting drive, whose job holds one");
+    DCHECK(!e->has_inline_context,
+           "an inline formatting context scan held its place after its container's answer was recorded");
     e->inline_scan = *at;
     e->has_inline_scan = true;
 }
@@ -658,7 +659,8 @@ bool flow_placement_inline_scan_peek(const lxb_dom_element_t *el, BlockFlowInlin
 {
     const FpEntry *e;
 
-    DCHECK(el != NULL && out != NULL, "a §9.4.2 scan's place was asked for no container or nowhere to put it");
+    DCHECK(el != NULL && out != NULL, "an inline formatting context scan's place was asked for no container or "
+                                      "nowhere to put it");
     e = fp_entry_peek(el);
     if (e == NULL || !e->has_inline_scan) return false;
     *out = e->inline_scan;
@@ -669,12 +671,12 @@ void flow_placement_inline_context_record(const lxb_dom_element_t *el, bool esta
 {
     FpEntry *e;
 
-    DCHECK(el != NULL, "§9.4.2's establishing condition was recorded for no container");
+    DCHECK(el != NULL, "the inline formatting context condition was recorded for no container");
     e = fp_entry_for_write(el);
-    CHECK(e != NULL, "§9.4.2's establishing condition was answered with no placement record held; every "
+    CHECK(e != NULL, "the inline formatting context condition was answered with no placement record held; every "
                      "computed-value read it made needs the job that holds one");
     DCHECKF(!e->has_inline_context || e->inline_context == establishes,
-            "one container's §9.4.2 establishing condition was answered both ways in one job (%d then %d)",
+            "one container's inline formatting context condition was answered both ways in one job (%d then %d)",
             (int)e->inline_context, (int)establishes);
     e->inline_context = establishes;
     e->has_inline_context = true;
@@ -685,7 +687,8 @@ bool flow_placement_inline_context_peek(const lxb_dom_element_t *el, bool *out)
 {
     const FpEntry *e;
 
-    DCHECK(el != NULL && out != NULL, "§9.4.2's establishing condition was asked for no container or nowhere");
+    DCHECK(el != NULL && out != NULL,
+           "the inline formatting context condition was asked for no container or nowhere to answer");
     e = fp_entry_peek(el);
     if (e == NULL || !e->has_inline_context) return false;
     *out = e->inline_context;

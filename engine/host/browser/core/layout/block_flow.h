@@ -372,8 +372,8 @@ bool block_flow_run_generates_box(lxb_dom_element_t *el, BlockFlowRun run);
    element; a mixed container answers false, since its runs are §9.2.1.1's anonymous block boxes. It is exported
    so CSSOM VIEW §2's scrolling area, the intrinsic sizes and paint use this file's classification rather than
    a second copy that could disagree about §9.2.2.1's white space.
-   The content, not the child list: §9.2.1.1's second paragraph makes an in-flow block-level box inside an
-   inline box "a sibling of those anonymous boxes", so such a container answers false.
+   The content, not the child list: CSS 2.2 §9.2.1.1's second paragraph makes an in-flow block-level box inside
+   an inline box "a sibling of those anonymous boxes", so such a container answers false.
    The ask classifies one member per step (the container's sequence and, through each inline box, its
    descendants), asking each member's style first and taking one element of a resting drive's scan allowance
    (core/layout/layout_job.h's layout_job_scan_take); the answer and a stopped scan's place are held per
