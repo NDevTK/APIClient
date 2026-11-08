@@ -383,6 +383,8 @@ typedef struct JSGCEdgeCensus {
 #define JS_FREE_DRAIN_DEPTH_MAX 1
 
 struct JSRuntime {
+    /* The last realm serial minted (JS_GetContextSerial): monotone, never reused. */
+    uint64_t realm_serial_last;
     /* The private name a published record's program writes are latched under (js_record_write_note): one per
        runtime, minted on the first write a host asks to be latched, released at JS_FreeRuntime. */
     JSAtom record_write_key;
@@ -956,6 +958,7 @@ struct JSAgentRecord {
 struct JSContext {
     JSGCObjectHeader header; /* must come first */
     JSRuntime *rt;
+    uint64_t serial;         /* minted at creation from rt->realm_serial_last; never reused */
     struct list_head link;
     JSAgentRecord *agent;    /* realm.[[AgentSignifier]]: set once by JS_SetRealmAgent, owned by rt */
 
@@ -5300,6 +5303,7 @@ JSContext *JS_NewContextRaw(JSRuntime *rt)
         return NULL;
     JS_REF_COUNT(ctx) = 1;
     add_gc_object(rt, &ctx->header, JS_GC_OBJ_TYPE_JS_CONTEXT);
+    ctx->serial = ++rt->realm_serial_last;
 
     ctx->class_proto = js_malloc_rt(rt, sizeof(ctx->class_proto[0]) *
                                     rt->class_count);
@@ -5382,6 +5386,13 @@ JSContext *JS_NewContext(JSRuntime *rt)
     }
 
     return ctx;
+}
+
+uint64_t JS_GetContextSerial(JSContext *ctx)
+{
+    DCHECK(ctx != NULL && ctx->serial != 0,
+           "a realm serial was asked of no realm, or of one JS_NewContextRaw never stamped");
+    return ctx->serial;
 }
 
 void *JS_GetContextOpaque(JSContext *ctx)

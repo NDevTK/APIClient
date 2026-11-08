@@ -816,6 +816,9 @@ JS_EXTERN void JS_GCNamedBy(JSRuntime *rt, JSValueConst *objs, int n, int *from_
  * a census expected to be collectable. */
 JS_EXTERN bool JS_GCDumpRootPath(JSRuntime *rt, JSContext *target);
 
+/* The realm's serial: minted from its runtime's counter at creation and never reused, so a record that outlives
+   a realm can name it without a pointer a later realm may be allocated at. Nonzero. */
+JS_EXTERN uint64_t JS_GetContextSerial(JSContext *ctx);
 JS_EXTERN void *JS_GetContextOpaque(JSContext *ctx);
 JS_EXTERN void JS_SetContextOpaque(JSContext *ctx, void *opaque);
 JS_EXTERN JSRuntime *JS_GetRuntime(JSContext *ctx);

@@ -2691,6 +2691,7 @@ void flow_release(JSContext *ctx, Flow *f) {
        owned by that tree or, for a node a flow created, by the flow's DOM delta, which dom_buf_free discarded. */
     free(f->dyn_el); f->dyn_el = NULL;
     free(f->dyn_doc); f->dyn_doc = NULL;
+    free(f->dyn_realm); f->dyn_realm = NULL;
     free(f->dyn_id); f->dyn_id = NULL;
     free(f->dyn_run); f->dyn_run = NULL;
     free(f->dyn_token); f->dyn_token = NULL;
@@ -6698,7 +6699,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
            "frees that Array and every [vector, taken, arm] row it names, so a flow reaching here with one was "
            "removed without being released");
     DCHECK(f->dyn == NULL && f->dyn_cand == NULL && f->dyn_type == NULL && f->dyn_url == NULL &&
-           f->dyn_el == NULL && f->dyn_doc == NULL && f->dyn_id == NULL && f->dyn_run == NULL &&
+           f->dyn_el == NULL && f->dyn_doc == NULL && f->dyn_realm == NULL && f->dyn_id == NULL &&
+           f->dyn_run == NULL &&
            f->dyn_token == NULL && f->dyn_pos == NULL && f->dec_blob == NULL && f->pin_blob == NULL,
            "a flow was removed with its lazily-loaded chunk bodies or its suspended decision/pin blobs still "
            "attached — the flow's own allocations, freed by nothing else");
@@ -6790,10 +6792,14 @@ int flow_is_member(const Flow *f) {
 
 /* See flow.h. A started row is not counted: it is either finished, and the compile site never starts a row twice,
    or the row the flow stands on, whose document that flow's timeline presents and so keeps its realm alive. */
-int flow_frontier_programs_unstarted_for_document(uint32_t doc) {
+int flow_frontier_programs_unstarted_in_realm(uint64_t realm) {
     int n = 0;
 
-    for (int i = 0; i < g_flows_n; i++) n += flow_programs_unstarted_for_document(g_flows[i], doc);
+    for (int i = 0; i < g_flows_n; i++) {
+        const Flow *f = g_flows[i];
+
+        for (int k = 0; k < f->dyn_n; k++) n += f->dyn_realm[k] == realm && flow_row_unstarted(f, k);
+    }
     return n;
 }
 
@@ -6962,6 +6968,7 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
             f->dyn_url[w]   = f->dyn_url[k];
             f->dyn_el[w]    = f->dyn_el[k];
             f->dyn_doc[w]   = f->dyn_doc[k];
+            f->dyn_realm[w] = f->dyn_realm[k];
             /* The name travels with the row: its `dyn_id` does not change, so every register entry naming it still
                does. */
             f->dyn_id[w]    = f->dyn_id[k];

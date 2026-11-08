@@ -5461,6 +5461,8 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
            realm. */
         sib->dyn_doc = reclaim_malloc((size_t)parent->dyn_n * sizeof(uint32_t));
         CHECK(sib->dyn_doc, "engine: OOM fork dyn documents");
+        sib->dyn_realm = reclaim_malloc((size_t)parent->dyn_n * sizeof(uint64_t));
+        CHECK(sib->dyn_realm, "engine: OOM fork dyn realms");
         /* Each row's name, copied, never re-minted: a register entry outstanding at the fork is shared by both
            arms (solver/pending.h) and names its row, so a fresh name would leave it resolving to nothing in one
            arm. */
@@ -5484,7 +5486,8 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
            is asserted rather than defaulted: a zero kind is DYN_PAGE_SCRIPT, a real kind, and would compile a
            candidate or an address (DYN_SCRIPT_SRC) as a page script. */
         DCHECK(parent->dyn_cand != NULL && parent->dyn_type != NULL && parent->dyn_url != NULL &&
-               parent->dyn_el != NULL && parent->dyn_doc != NULL && parent->dyn_id != NULL &&
+               parent->dyn_el != NULL && parent->dyn_doc != NULL && parent->dyn_realm != NULL &&
+               parent->dyn_id != NULL &&
                parent->dyn_run != NULL && parent->dyn_token != NULL && parent->dyn_pos != NULL,
                "a flow holds queued programs with no kind, script type, address, document, name, arrival "
                "stamp, token or position column — the ten arrays are one table and are allocated together, so "
@@ -5500,6 +5503,7 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
             sib->dyn_type[i] = parent->dyn_type[i];
             sib->dyn_el[i] = parent->dyn_el[i];
             sib->dyn_doc[i] = parent->dyn_doc[i];
+            sib->dyn_realm[i] = parent->dyn_realm[i];
             sib->dyn_id[i] = parent->dyn_id[i];
             sib->dyn_run[i] = parent->dyn_run[i];
             sib->dyn_pos[i] = parent->dyn_pos[i];
@@ -7496,11 +7500,13 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
         f->dyn_url = realloc(f->dyn_url, (size_t)f->dyn_cap * sizeof(char *));
         f->dyn_el = realloc(f->dyn_el, (size_t)f->dyn_cap * sizeof(lxb_dom_element_t *));
         f->dyn_doc = realloc(f->dyn_doc, (size_t)f->dyn_cap * sizeof(uint32_t));
+        f->dyn_realm = realloc(f->dyn_realm, (size_t)f->dyn_cap * sizeof(uint64_t));
         f->dyn_id = realloc(f->dyn_id, (size_t)f->dyn_cap * sizeof(uint64_t));
         f->dyn_run = realloc(f->dyn_run, (size_t)f->dyn_cap * sizeof(uint64_t));
         f->dyn_token = realloc(f->dyn_token, (size_t)f->dyn_cap * sizeof(char *));
         f->dyn_pos = realloc(f->dyn_pos, (size_t)f->dyn_cap);
-        CHECK(f->dyn && f->dyn_cand && f->dyn_type && f->dyn_url && f->dyn_el && f->dyn_doc && f->dyn_id &&
+        CHECK(f->dyn && f->dyn_cand && f->dyn_type && f->dyn_url && f->dyn_el && f->dyn_doc && f->dyn_realm &&
+              f->dyn_id &&
               f->dyn_run && f->dyn_token && f->dyn_pos,
               "engine: OOM dynamic-script queue");
     }
@@ -7558,6 +7564,7 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
         memmove(&f->dyn_url[at + 1],   &f->dyn_url[at],   tail * sizeof(char *));
         memmove(&f->dyn_el[at + 1],    &f->dyn_el[at],    tail * sizeof(lxb_dom_element_t *));
         memmove(&f->dyn_doc[at + 1],   &f->dyn_doc[at],   tail * sizeof(uint32_t));
+        memmove(&f->dyn_realm[at + 1], &f->dyn_realm[at], tail * sizeof(uint64_t));
         memmove(&f->dyn_id[at + 1],    &f->dyn_id[at],    tail * sizeof(uint64_t));
         memmove(&f->dyn_run[at + 1],   &f->dyn_run[at],   tail * sizeof(uint64_t));
         memmove(&f->dyn_token[at + 1], &f->dyn_token[at], tail * sizeof(char *));
@@ -7573,6 +7580,17 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
     /* The element is borrowed, not copied. */
     f->dyn_el[at] = el;
     f->dyn_doc[at] = doc;
+    /* The realm this timeline presents the document through, read only for the flow holding the thread, since
+       window_proxy_realm_of_document answers for the applied timeline. Named residual: a row minted onto a member
+       that is not running (a joined document's scripts seeded onto every standing flow) records no realm. Next
+       diff builds: the read under that member's own view of the navigable. How its absence would show: a realm
+       torn down while such a row of its document is queued passes navigable.c's teardown assert uncounted. */
+    {
+        JSContext *rr = doc != DYN_DOC_TOP_LEVEL && f == flow_running() ? window_proxy_realm_of_document(doc)
+                                                                         : NULL;
+
+        f->dyn_realm[at] = rr ? JS_GetContextSerial(rr) : 0;
+    }
     /* The row is named at creation and never again (the shift above carried every moved row's name), and the
        name is also its arrival stamp (solver/flow.c's g_work_seq), so flow_step orders the row against this
        flow's queued callbacks. It is taken when the row joins the sequence, not when its bytes were asked for.
@@ -10434,6 +10452,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                entry answers which document this is a program of, for every kind; a same-origin agent cluster holds
                a realm per document, so the non-session documents are not a fixed set. */
             JSContext *prog_ctx = doc_realm(flow_dyn_doc(f));
+            DCHECKF(f->script_i >= f->dyn_n || f->dyn_realm[f->script_i] == 0 ||
+                        f->dyn_realm[f->script_i] == JS_GetContextSerial(prog_ctx),
+                    "a program row minted for realm %llu of its document is compiling in realm %llu — a timeline's "
+                    "realm for a document is fixed once it presents one, so the row's timeline changed realms "
+                    "under it", (unsigned long long)(f->script_i < f->dyn_n ? f->dyn_realm[f->script_i] : 0),
+                    (unsigned long long)JS_GetContextSerial(prog_ctx));
             /* An inline program's name is its document's address: HTML §4.12.1.1's "let base URL be el's node
                document's document base URL" for a script with no `src`, which a relative `import('./chunk.js')`
                inside it resolves against. document_base_url is the one component that owns a document's address,

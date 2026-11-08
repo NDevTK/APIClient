@@ -626,6 +626,11 @@ typedef struct Flow {
        because a queued program outlives the turn that queued it and a handle survives a park. It is also where
        a cross-agent operation's document lives. */
     uint32_t *dyn_doc;
+    /* The serial (JS_GetContextSerial) of the realm the minting timeline presented `dyn_doc` through, or 0 where
+       it presented none: a document handle names one realm per timeline (core/frame/window_proxy.c), so this is
+       which of them the row compiles in. A serial and not a pointer, because a freed realm's address can be a
+       later realm's. A fork copies it; the compile asserts it against doc_realm's answer. */
+    uint64_t *dyn_realm;
     /* Each row's name: the one fact about a row that a shift cannot change. §4.12.1.1's immediate execution
        interposes rows below the cursor and §7.5.10's destroy removes them, so anything outside this table names
        a row by this id, never by position (flow_dyn_row_by_id searches by value). Minted from one global clock
@@ -1990,13 +1995,12 @@ Flow *flow_at(int i);
    are released). */
 int   flow_cow_entries_naming(JSValueConst v);
 
-/* How many unstarted programs the whole frontier holds for one document: flow_programs_unstarted_for_document
- * summed over every member. A `dyn_doc` entry is a uint32 handle that keeps nothing alive and stays readable after
- * its realm is gone, unlike every counted JSValue by which a flow names a realm, so core/frame/navigable.c asserts
- * this at the moment a realm dies. A started row is the flow's history, not a queued task (HTML §7.5.10 step 5
+/* How many unstarted programs the whole frontier holds for the realm whose serial is `realm`: rows whose
+ * `dyn_realm` is it, summed over every member. A row keeps nothing alive, so core/frame/navigable.c asserts this
+ * is zero at the moment a realm dies. A started row is the flow's history, not a queued task (HTML §7.5.10 step 5
  * removes only tasks not yet run), and is never compiled again. Pure (no allocation, no JS value, no reference),
  * because the realm-teardown hook runs inside a collection. */
-int   flow_frontier_programs_unstarted_for_document(uint32_t doc);
+int   flow_frontier_programs_unstarted_in_realm(uint64_t realm);
 
 /* How many programs of one document one flow has queued and not started. Per flow because HTML §7.5.10
  * "Destroying documents" runs once per timeline over its own delta, and another flow's rows for that document

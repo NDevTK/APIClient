@@ -293,15 +293,15 @@ static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
     for (i = 0; i < g_realms_n; i++) {
         if (g_realms[i] != cctx) continue;
         /* The collector proved this realm unreachable, so no flow is suspended inside it: frames, jobs, parked
-           continuations and COW captures all hold it by counted reference. A program row names its document by
-           `uint32_t` handle (solver/flow.h's `dyn_doc`), which holds nothing, and an unstarted row is compiled
-           through window_proxy_realm_of_document, whose answer borrows the realm. So no unstarted row of this
-           document may survive it: HTML §7.5.10 "Destroying documents" step 5 removes a document's tasks
+           continuations and COW captures all hold it by counted reference. A program row names the realm it
+           compiles in by serial (solver/flow.h's `dyn_realm`), which holds nothing; other timelines' realms for
+           the same document handle are other realms, and their rows are theirs. So no unstarted row minted for
+           this realm may survive it: HTML §7.5.10 "Destroying documents" step 5 removes a document's tasks
            "without running those tasks", and a started row is not a task but the flow's history, never compiled
            again. */
-        DCHECK(flow_frontier_programs_unstarted_for_document(document_doc(cctx)) == 0,
-               "a realm was torn down while the frontier still held UNSTARTED PROGRAM ROWS for its document — a "
-               "row names its document by handle and holds no reference, so compiling it afterwards asks for a "
+        DCHECK(flow_frontier_programs_unstarted_in_realm(JS_GetContextSerial(cctx)) == 0,
+               "a realm was torn down while the frontier still held UNSTARTED PROGRAM ROWS minted for it — a "
+               "row names its realm by serial and holds no reference, so compiling it afterwards asks for a "
                "realm this teardown has released. The timeline that left the document has to drop its rows "
                "(flow_programs_remove_for_document) where it leaves");
         /* AND THE THREE-NUMBER LAW, AT THE ONE SITE THAT LOWERS THE LIVE COUNT. It is asserted at both
