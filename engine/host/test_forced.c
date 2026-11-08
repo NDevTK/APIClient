@@ -3651,12 +3651,13 @@ TF_UNIT void malloc_accounting_selftest(void)
    deleted slot, an integer key, a non-writable property, two references to one non-extensible object, a self
    cycle, and an array naming both the shared object and the baseline one. The rebuilt roots must be new objects that keep every identity
    relation, resolve the baseline object to itself, and write the same bytes and anchors again. Two more arrays:
-   a sparse one (elements as ordinary properties, a frozen length) and a dense one holding a named property. */
+   a sparse one (elements as ordinary properties, a frozen length) and a dense one holding a named property. And
+   an Error carrying a message and a property naming the shared object. */
 TF_UNIT void flow_graph_selftest(void)
 {
     JSRuntime *rt = JS_NewRuntime();
     JSContext *ctx;
-    JSValue base, sym, r, x, arr, sparse, extra, roots[2], back[2], v, w;
+    JSValue base, sym, r, x, arr, sparse, extra, err, roots[2], back[2], v, w;
     JSAtom symkey;
     JSFlowGraph *g1, *g2;
     const uint8_t *b1, *b2;
@@ -3678,6 +3679,7 @@ TF_UNIT void flow_graph_selftest(void)
     arr = JS_NewArray(ctx);
     sparse = JS_NewArray(ctx);
     extra = JS_NewArray(ctx);
+    err = JS_NewError(ctx);
     CHECK(JS_SetPropertyStr(ctx, x, "v", JS_NewInt32(ctx, 7)) >= 0 && JS_PreventExtensions(ctx, x) >= 0 &&
           JS_SetPropertyStr(ctx, r, "i", JS_NewInt32(ctx, 1)) >= 0 &&
           JS_SetPropertyStr(ctx, r, "d", JS_NewFloat64(ctx, 3.5)) >= 0 &&
@@ -3707,7 +3709,12 @@ TF_UNIT void flow_graph_selftest(void)
           JS_SetPropertyUint32(ctx, extra, 0, JS_NewString(ctx, "e0")) >= 0 &&
           JS_SetPropertyUint32(ctx, extra, 1, JS_NewInt32(ctx, 2)) >= 0 &&
           JS_SetPropertyStr(ctx, extra, "named", JS_DupValue(ctx, x)) >= 0 &&
-          JS_SetPropertyStr(ctx, r, "extra", extra) >= 0,
+          JS_SetPropertyStr(ctx, r, "extra", extra) >= 0 &&
+          !JS_IsException(err) &&
+          JS_DefinePropertyValueStr(ctx, err, "message", JS_NewString(ctx, "boom"),
+                                    JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE) >= 0 &&
+          JS_SetPropertyStr(ctx, err, "cause", JS_DupValue(ctx, x)) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "err", err) >= 0,
           "the flow graph's witness could not build its graph");
     {
         JSValue sp = JS_GetPropertyStr(ctx, r, "sparse");
@@ -3782,6 +3789,18 @@ TF_UNIT void flow_graph_selftest(void)
         }
         JS_FreeValue(ctx, len); JS_FreeValue(ctx, e1000); JS_FreeValue(ctx, named); JS_FreeValue(ctx, e1);
         JS_FreeValue(ctx, sp); JS_FreeValue(ctx, ex);
+    }
+    {
+        JSValue e = JS_GetPropertyStr(ctx, back[0], "err"), m = JS_GetPropertyStr(ctx, e, "message");
+        JSValue c = JS_GetPropertyStr(ctx, e, "cause"), po = JS_GetPrototype(ctx, e), pw = JS_GetPrototype(ctx, err);
+        const char *ms = JS_ToCString(ctx, m);
+
+        CHECK(JS_IsError(e) && JS_VALUE_GET_PTR(e) != JS_VALUE_GET_PTR(err) && ms && !strcmp(ms, "boom") &&
+              JS_VALUE_GET_PTR(c) == JS_VALUE_GET_PTR(back[1]) && JS_VALUE_GET_PTR(po) == JS_VALUE_GET_PTR(pw),
+              "a rebuilt Error is not an Error, or lost its message, a property's identity or its prototype");
+        JS_FreeCString(ctx, ms);
+        JS_FreeValue(ctx, m); JS_FreeValue(ctx, c); JS_FreeValue(ctx, po); JS_FreeValue(ctx, pw);
+        JS_FreeValue(ctx, e);
     }
     JS_FlowGraphFree(ctx, g1);
     JS_FlowGraphFree(ctx, g2);
