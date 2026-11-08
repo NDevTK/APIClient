@@ -2,7 +2,8 @@
    holds a declarative open shadow root whose tree is `#fsPad` (13px tall, padding-left 11px) and a div with
    padding-left 5px around a default `<slot>`; the host's light child `#fsSlotted` (17x19) is assigned to that
    slot, so its box is the slot's child in the flat tree and stands below `#fsPad` behind the 5px padding.
-   Chrome reads `#fsPad` at x 7, y 0, 1273 wide in the 1280px viewport, and `#fsSlotted` at x 12, y 13, 17 wide.
+   Chrome reads `#fsPad` at x 7, y 0, 1273 wide in the 1280px viewport, and `#fsSlotted` at x 12, y 13, 17 wide;
+   DOM §4.2.4's getElementById on the shadow root finds `#fsPad`.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_FLATSHADOW_H
@@ -18,10 +19,12 @@ static const char HTML_FLATSHADOW[] =
     "<div style=\"padding-left:5px\"><slot></slot></div></template>"
     "<div id=fsSlotted style=\"width:17px;height:19px\"></div></div>"
     "<script>"
-    "var fsP = document.getElementById('fsHost').shadowRoot.firstElementChild.getBoundingClientRect();"
+    "var fsRoot = document.getElementById('fsHost').shadowRoot;"
+    "var fsP = fsRoot.firstElementChild.getBoundingClientRect();"
     "var fsS = document.getElementById('fsSlotted').getBoundingClientRect();"
     "fetch('/api/flatshadow?px=' + fsP.left + '&pw=' + fsP.width + '&py=' + fsP.top +"
-    "      '&sx=' + fsS.left + '&sy=' + fsS.top + '&sw=' + fsS.width);"
+    "      '&sx=' + fsS.left + '&sy=' + fsS.top + '&sw=' + fsS.width + '&g=' + (fsRoot.getElementById('fsPad') ==="
+    "      fsRoot.firstElementChild ? 1 : 0));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

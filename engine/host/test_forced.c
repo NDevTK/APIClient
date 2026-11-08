@@ -23182,8 +23182,12 @@ TF_UNIT void probes_flatshadow(const char *js, Probe *tab, int *n) {
                               param_value_is(js, "/api/flatshadow", "sw", "17"),
              "CSS Scoping's flat tree: the slotted #fsSlotted is not laid out as its slot's child, at (12, 13) and "
              "17px wide");
+    const char *fg_why = NULL; int fg_tt = 1;
+    fold_row(&fg_tt, &fg_why, param_value_is(js, "/api/flatshadow", "g", "1"),
+             "DOM §4.2.4: the shadow root's getElementById('fsPad') is not its first element child #fsPad");
     const Probe rows[] = {
         { "flat-shadow", fs_tt, "/api/flatshadow", SESS_EXPLORE, fs_why },
+        { "shadow-root-by-id", fg_tt, "/api/flatshadow", SESS_EXPLORE, fg_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
