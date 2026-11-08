@@ -32,6 +32,7 @@
 #include "core/css/css_shorthand.h"
 #include "core/css/css_syntax_match.h"
 #include "core/css/css_style_declaration.h"
+#include "core/css/css_individual_transform.h"
 #include "core/css/css_transform_function.h"
 #include "core/css/css_transform_matrix.h"
 #include "core/css/css_transform_origin.h"
@@ -2660,6 +2661,30 @@ static CssTransformOrigin css_cv_transform_origin(lxb_dom_element_t *el, char *s
     return o;
 }
 
+/* css-transforms-2 §5's computed `translate`, `rotate` or `scale` over core/css/css_individual_transform.h's
+   grammar; false for `none`, which a value outside the grammar also computes to. CONSUMES `spec`. */
+static bool css_cv_individual_transform(lxb_dom_element_t *el, const char *name, char *spec,
+                                        CssTransformFunction *out)
+{
+    CssCvFontCtx slot;
+    CssFontMetrics font = css_cv_font_metrics(&slot, el, name);
+    bool ok = css_individual_transform_parse(css_cv_realm(el), &font, name, spec, out);
+
+    free(spec);
+    return ok;
+}
+
+bool css_computed_individual_transform(lxb_dom_element_t *el, const char *name, CssTransformFunction *out)
+{
+    char *spec;
+
+    css_cv_modelled(el, name);
+    spec = css_cv_specified(el, name);
+    DCHECKF(spec != NULL, "CSS Cascade §7.1 produced no specified `%s`; core/css/css_style_declaration.c "
+                          "carries its `Initial: none` row", name);
+    return css_cv_individual_transform(el, name, spec, out);
+}
+
 CssTransformOrigin css_computed_transform_origin(lxb_dom_element_t *el)
 {
     char *spec;
@@ -2815,6 +2840,15 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
         CssTransformOrigin o = css_cv_transform_origin(el, spec);
 
         return css_transform_origin_serialize(&o);
+    }
+    /* css-transforms-2 §5's three `Computed value:` lines, each the keyword none or the computed components. */
+    case CSS_PROPERTY_TRANSLATE:
+    case CSS_PROPERTY_ROTATE:
+    case CSS_PROPERTY_SCALE: {
+        CssTransformFunction fn;
+
+        if (!css_cv_individual_transform(el, name, spec, &fn)) return css_cv_strdup("none");
+        return css_individual_transform_serialize(name, &fn);
     }
     /* css-transforms-1 §5 "Transform reference box: the transform-box property": `Computed value: specified
        keyword`, over `content-box | border-box | fill-box | stroke-box | view-box`, folded to lowercase. A value

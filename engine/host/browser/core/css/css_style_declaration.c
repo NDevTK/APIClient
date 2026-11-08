@@ -3162,6 +3162,9 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
     /* css-transforms-1 §4 "The transform-origin Property", `Initial: 50% 50%`; lexbor's registry carries no
        `transform-origin` entry. */
     { "transform-origin", "50% 50%" },
+    /* css-transforms-2 §5 "Individual Transform Properties: the translate, scale, and rotate properties", each
+       `Initial: none`; lexbor's registry carries none of the three. */
+    { "translate", "none" }, { "rotate", "none" }, { "scale", "none" },
     /* CSS 2.1 §17 Tables' four, each straight off its own `Initial:` line: §17.4.1 Caption position and
        alignment gives `caption-side` `top`, §17.5.2 Table width algorithms: the 'table-layout' property gives
        `table-layout` `auto`, §17.6 Borders gives `border-collapse` `separate`, and §17.6.1 The separated

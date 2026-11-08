@@ -466,29 +466,46 @@ static bool css_tm_declared(lxb_dom_element_t *el, const char *name, const char 
     return declared;
 }
 
-/* css-transforms-2's properties that change an element's matrix or its parent's and that this engine does not
-   compute: §6's translate, rotate and scale enter the element's own matrix, §8's perspective on the parent
-   pre-multiplies its perspective matrix (§4.1.4), and §7's preserve-3d keeps a 3D rendering context where the
-   flattening below assumes there is none. */
+/* css-transforms-2's properties on the parent that change a child's matrix and that this engine does not
+   compute: §8's perspective pre-multiplies its perspective matrix (§4.1.4), and §7's preserve-3d keeps a 3D
+   rendering context where the flattening below assumes there is none. */
 static void css_tm_unbuilt_properties(lxb_dom_element_t *el)
 {
-    static const struct { const char *name, *initial; } OWN[] = {
-        { "translate", "none" }, { "rotate", "none" }, { "scale", "none" },
-    };
     lxb_dom_element_t *parent = css_parent_element(el);
-    size_t i;
 
-    for (i = 0; i < COUNTOF(OWN); i++)
-        if (css_tm_declared(el, OWN[i].name, OWN[i].initial))
-            DFAILF("css-transforms-2: `%s` is declared on an element whose matrix the chain composes, and this "
-                   "engine computes no value for it. BUILD its `Computed value:` line and its step in §6 "
-                   "\"Current Transformation Matrix\"", OWN[i].name);
     if (parent != NULL && (css_tm_declared(parent, "perspective", "none") ||
                            css_tm_declared(parent, "transform-style", "flat")))
         DFAIL("css-transforms-2 §4.1.4 \"Accumulated 3D Transformation Matrix Computation\": the parent declares "
               "`perspective` or `transform-style`, which this engine computes no value for. BUILD §8's "
               "perspective matrix over §9's perspective-origin and pre-multiply it into the child's matrix, and "
               "§7's preserve-3d accumulation");
+}
+
+/* css-transforms-2 §6's steps 3 to 7 as one list: "Translate by the computed X, Y, and Z values of translate",
+   "Rotate by the computed <angle> about the specified axis of rotate", "Scale by the computed X, Y, and Z values
+   of scale", then "Multiply by each of the transform functions in transform from left to right". Step 6's
+   offset is not a property this engine has. False when all four are `none`. */
+static bool css_tm_composed_list(lxb_dom_element_t *el, CssTransformList *out)
+{
+    static const char *const INDIVIDUAL[] = { "translate", "rotate", "scale" };
+    CssTransformFunction own[3];
+    CssTransformList list = { NULL, 0 };
+    size_t n = 0, i;
+    bool has_list = css_computed_transform_list(el, &list);
+
+    for (i = 0; i < COUNTOF(INDIVIDUAL); i++)
+        if (css_computed_individual_transform(el, INDIVIDUAL[i], &own[n])) n++;
+    if (n == 0) {
+        *out = list;
+        return has_list;
+    }
+    out->n = n + list.n;
+    out->fn = lexbor_malloc(out->n * sizeof *out->fn);
+    CHECK(out->fn != NULL, "css-transforms-2 §6: OOM composing an element's transform functions");
+    memcpy(out->fn, own, n * sizeof *own);
+    if (list.n > 0) memcpy(out->fn + n, list.fn, list.n * sizeof *list.fn);
+    css_transform_list_free(&list);
+    return true;
 }
 
 static void css_tm_plan(lxb_dom_element_t *el, CssTmPlan *p)
@@ -511,7 +528,7 @@ static void css_tm_plan(lxb_dom_element_t *el, CssTmPlan *p)
     }
     /* §3 "The transform Property"'s `Applies to: transformable elements` first, so a declaration on a box it
        does not apply to moves nothing, as core/css/css_transform.h states. */
-    if (!css_transform_is_transformable(el) || !css_computed_transform_list(el, &p->list)) return;
+    if (!css_transform_is_transformable(el) || !css_tm_composed_list(el, &p->list)) return;
     css_tm_unbuilt_properties(el);
     linear = css_tm_of_list(&p->list, NULL);
     p->applies = true;

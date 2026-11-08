@@ -1193,6 +1193,19 @@ static bool uv_cb_transformed(lxb_dom_element_t *el)
     return css_transform_is_css_box_transformable(el) && css_transform_is_transformed(el);
 }
 
+/* css-transforms-2 §5: each individual transform's value other than `none` creates "a stacking context and
+   containing block for all descendants", on the transformable element of css-transforms-1's first category. */
+static bool uv_cb_individual(lxb_dom_element_t *el, const char *name)
+{
+    CssTransformFunction fn;
+
+    return css_transform_is_css_box_transformable(el) && css_computed_individual_transform(el, name, &fn);
+}
+
+static bool uv_cb_translated(lxb_dom_element_t *el) { return uv_cb_individual(el, "translate"); }
+static bool uv_cb_rotated(lxb_dom_element_t *el) { return uv_cb_individual(el, "rotate"); }
+static bool uv_cb_scaled(lxb_dom_element_t *el) { return uv_cb_individual(el, "scale"); }
+
 /* css-contain-2 §3.3 "Layout Containment" and §3.5 "Paint Containment": each box "establishes an absolute
    positioning containing block and a fixed positioning containing block". */
 static bool uv_cb_contained(lxb_dom_element_t *el)
@@ -1218,9 +1231,9 @@ static const UvCbProperty UV_CB_PROPERTIES[] = {
     { "position",         false,  uv_cb_any,                               uv_cb_positioned,   "static" },
     { "transform",        true,   css_transform_is_css_box_transformable,  uv_cb_transformed,  "none" },
     { "contain",          true,   containment_layout_paint_applies,        uv_cb_contained,    "none" },
-    { "translate",        true,   css_transform_is_css_box_transformable,  NULL,               "none" },
-    { "rotate",           true,   css_transform_is_css_box_transformable,  NULL,               "none" },
-    { "scale",            true,   css_transform_is_css_box_transformable,  NULL,               "none" },
+    { "translate",        true,   css_transform_is_css_box_transformable,  uv_cb_translated,   "none" },
+    { "rotate",           true,   css_transform_is_css_box_transformable,  uv_cb_rotated,      "none" },
+    { "scale",            true,   css_transform_is_css_box_transformable,  uv_cb_scaled,       "none" },
     { "transform-style",  true,   css_transform_is_css_box_transformable,  NULL,               "flat" },
     { "perspective",      true,   css_transform_is_css_box_transformable,  NULL,               "none" },
     { "filter",           true,   uv_cb_not_root,                          NULL,               "none" },

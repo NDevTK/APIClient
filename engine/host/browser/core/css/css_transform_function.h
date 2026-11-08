@@ -165,4 +165,8 @@ void css_transform_list_free(CssTransformList *list);
    OWNED: the caller frees. */
 char *css_transform_list_serialize(const CssTransformList *list);
 
+/* One computed `<length-percentage>` as CSSOM §6.7.2 writes it, a calc() residue as css-values-4 §10.13
+   writes it. Never a keyword (asserted). OWNED. */
+char *css_transform_length_serialize(const CssLength *len);
+
 #endif

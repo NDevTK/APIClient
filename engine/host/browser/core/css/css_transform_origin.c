@@ -9,6 +9,7 @@
 #include "core/css/css_length.h"
 #include "core/css/css_math.h"
 #include "core/css/css_shorthand.h"
+#include "core/css/css_transform_function.h"
 #include "core/css/css_transform_origin.h"
 #include "solver/reclaim.h"
 
@@ -133,28 +134,14 @@ bool css_transform_origin_parse(JSContext *realm, const CssFontMetrics *font, co
     return true;
 }
 
-static char *to_length_text(const CssLength *len)
-{
-    switch (len->kind) {
-    case CSS_LENGTH_ABSOLUTE:   return css_length_serialize_px(len->px.px);
-    case CSS_LENGTH_PERCENTAGE: return css_length_serialize_pct(len->pct);
-    case CSS_LENGTH_CALCULATED:
-        return len->tree != NULL ? css_math_tree_serialize(len->tree) : css_length_serialize_calc(len->pct, len->px.px);
-    case CSS_LENGTH_KEYWORD:    break;
-    }
-    DFAIL("a computed transform-origin offset is a keyword; css_transform_origin_parse computes every keyword to "
-          "its percentage and css_length_parse is given no keyword set, so no origin it writes holds one");
-    return reclaim_strdup("");
-}
-
 char *css_transform_origin_serialize(const CssTransformOrigin *o)
 {
     char *x, *y, *z = NULL, *out;
     size_t n;
 
     DCHECK(o != NULL, "a transform-origin was serialized through a NULL handle");
-    x = to_length_text(&o->x);
-    y = to_length_text(&o->y);
+    x = css_transform_length_serialize(&o->x);
+    y = css_transform_length_serialize(&o->y);
     if (o->z.env != CSS_ENV_NONE || o->z.px != 0.0) z = css_length_serialize_px(o->z.px);
     n = strlen(x) + strlen(y) + (z ? strlen(z) + 1 : 0) + 2;
     out = reclaim_malloc(n);

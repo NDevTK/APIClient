@@ -143,6 +143,10 @@ bool css_computed_transform_box_is_content(lxb_dom_element_t *el);
    box corner, percentages left unresolved, and a Z offset. */
 CssTransformOrigin css_computed_transform_origin(lxb_dom_element_t *el);
 
+/* css-transforms-2 §5's computed `translate`, `rotate` or `scale` (`name`) of `el` as the one function §5 makes
+   it equivalent to; false for `none`. */
+bool css_computed_individual_transform(lxb_dom_element_t *el, const char *name, CssTransformFunction *out);
+
 /* css-transforms-1 §3 "The transform Property"'s COMPUTED VALUE AS THE PARSED LIST — the THIRD shape this
    component answers, and it is an entry for the same reason `css_computed_line_height` and
    `css_computed_border_spacing` are: text cannot carry it. §3's `Computed value:` line is "as specified, but

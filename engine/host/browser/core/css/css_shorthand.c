@@ -2960,6 +2960,8 @@ bool css_shorthand_complete_for(const char *longhand)
         "transform-box",
         /* `transform-origin` — css-transforms-1 §4 declares it standalone and no shorthand sets it. */
         "transform-origin",
+        /* css-transforms-2 §5's three individual transforms, each declared standalone. */
+        "translate", "rotate", "scale",
         /* `pointer-events` — NO shorthand in CSS sets it. css-ui-4 §6.2 "Exclusion from Hit-testing: the
            pointer-events property" declares it as a standalone property with its own `Value:` line
            (`auto | none`) and its own `Computed value:` line, and the module states no shorthand over it:

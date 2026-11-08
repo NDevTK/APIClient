@@ -534,7 +534,7 @@ void css_transform_list_free(CssTransformList *list)
    <calc()> expressions where possible" read against css-values-4 §10.13 "Serialization", which keeps BOTH
    terms of the residue — "A value like calc(20px + 0%) would serialize as calc(0% + 20px), maintaining both
    terms in the serialized value" — so a calc() that survives here is one no serialization may avoid. */
-static char *css_tf_length_text(const CssLength *len)
+char *css_transform_length_serialize(const CssLength *len)
 {
     switch (len->kind) {
     case CSS_LENGTH_ABSOLUTE:   return css_length_serialize_px(len->px.px);
@@ -590,10 +590,10 @@ char *css_transform_list_serialize(const CssTransformList *list)
                 break;
             case CSS_TF_ARG_LENGTH_PERCENTAGE:
             case CSS_TF_ARG_LENGTH:
-                t = css_tf_length_text(&fn->length[n_len++]);
+                t = css_transform_length_serialize(&fn->length[n_len++]);
                 break;
             case CSS_TF_ARG_PERSPECTIVE:
-                t = fn->perspective_none ? reclaim_strdup("none") : css_tf_length_text(&fn->length[n_len++]);
+                t = fn->perspective_none ? reclaim_strdup("none") : css_transform_length_serialize(&fn->length[n_len++]);
                 CHECK(t != NULL, "css-transforms-2 §12.2: OOM serializing perspective()");
                 break;
             case CSS_TF_ARG_ANGLE:
