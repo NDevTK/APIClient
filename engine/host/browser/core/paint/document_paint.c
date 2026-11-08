@@ -14,6 +14,8 @@
 #include "core/frame/viewport.h"
 #include "core/graphics/raster_surface.h"
 #include "core/layout/layout_job.h"
+#include "core/dom/element_view.h"   /* CSSOM View §6's client rectangles, asked before an offer reads them */
+#include "solver/rest_unit.h"
 #include "core/paint/box_paint.h"
 #include "core/paint/display_list.h"
 #include "core/paint/display_list_raster.h"
@@ -137,13 +139,28 @@ DocumentPaintFrame *document_paint_begin(JSContext *ctx, lxb_dom_document_t *doc
 bool document_paint_step(DocumentPaintFrame *f)
 {
     DCHECK(f != NULL, "a paint was stepped through nothing");
-    /* NAMED RESIDUAL. Not covered: an offer's own layout reads (box geometry, line boxes, intrinsic sizes) run
-       whole inside the offer on the job's nested drives, and the element census at the end is one walk, so a
-       single box or a large tree still holds the thread for its whole derivation. Next: each producer's
-       geometry asked under a resting drive on step 22's job, the offer answering "not yet" until its operands
-       are answered. How its absence shows: a flow's slice overrun inside step 22 with `_layoutJobRests` flat
-       across that one offer. */
+    /* NAMED RESIDUAL. Not covered: the offer's reads beyond its element's client rectangles (a text run's
+       fragments, a replaced element's intrinsic size) still run whole on the job's nested drives, and the
+       element census at the end is one walk. Next: each such producer asked in document_paint_ready under the
+       same resting drive. How its absence shows: a flow's slice overrun inside step 22 with `_layoutJobRests`
+       flat across one offer whose element's rectangles were already answered. */
     return f->walk != NULL && box_paint_step(f->walk);
+}
+
+bool document_paint_ready(DocumentPaintFrame *f)
+{
+    lxb_dom_element_t *el;
+    LayoutJobDrive d;
+    bool ready;
+
+    DCHECK(f != NULL, "a paint's next offer was asked about through nothing");
+    if (f->walk == NULL || !box_paint_next_element(f->walk, &el)) return true;
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+    layout_job_drive_begin_resting(&d);
+    ready = element_view_client_rects_ask(el, &d);
+    layout_job_drive_end(&d);
+    rest_unit_end();
+    return ready;
 }
 
 void document_paint_finish(DocumentPaintFrame *f)

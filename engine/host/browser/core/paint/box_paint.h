@@ -225,5 +225,9 @@ BoxPaintWalk *box_paint_begin(JSContext *ctx, lxb_dom_element_t *context_el, Dis
                               BoxPaintCensus *census);
 bool box_paint_step(BoxPaintWalk *w);
 bool box_paint_end(BoxPaintWalk *w);
+/* The element of the offer `step` paints next, held so the offer is the same one when `step` runs, for a caller
+   that asks the element's layout before painting it; false when the sequence is complete. Asserted as `step`
+   is: the walk has not stopped and a cascade record is held. */
+bool box_paint_next_element(BoxPaintWalk *w, lxb_dom_element_t **el);
 
 #endif

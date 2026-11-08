@@ -293,9 +293,10 @@ void element_view_bounding_box_of(const CssPx (*r)[4], size_t n, CssPx out[4]);
  * The FOUR NUMBERS are the same derivation `getBoundingClientRect` reports: one client-rect list in this
  * vocabulary and one reduction of it (element_view.c). `el` must be an element. */
 void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4]);
-/* Named residual. Not covered: this entry and its callers (paint, scrollIntoView, Intersection Observer) lay
-   out to completion in a drive of their own, so none rests where the page's own `getBoundingClientRect` does.
-   Next diff builds: `element_view_client_rects_ask` above, asked by each caller's step machine before it reads.
+/* Named residual. Not covered: this entry's callers scrollIntoView and Intersection Observer lay out to
+   completion in a drive of their own, so neither rests where the page's own `getBoundingClientRect` does (paint
+   asks first, in document_paint_ready). Next diff builds: `element_view_client_rects_ask` above, asked by each
+   caller's step machine before it reads.
    Absence shows as: layout_job.c's nested-drive DFAIL with one of those callers on the stack, or a
    REST_UNIT_LAYOUT_DESCENDANTS unit over the quantum inside one of them. */
 

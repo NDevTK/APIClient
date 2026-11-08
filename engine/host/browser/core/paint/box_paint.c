@@ -1399,6 +1399,9 @@ struct BoxPaintWalk {
     PaintOrderCursor *order;
     size_t            before;   /* the list's length when the walk began */
     bool              ok;       /* false once an offer stopped the painter */
+    bool              held;     /* `step` and `el` are the next offer, taken from `order` and not yet painted */
+    PaintStep         step;
+    lxb_dom_element_t *el;
 };
 
 BoxPaintWalk *box_paint_begin(JSContext *ctx, lxb_dom_element_t *context_el, DisplayList *out,
@@ -1426,19 +1429,35 @@ BoxPaintWalk *box_paint_begin(JSContext *ctx, lxb_dom_element_t *context_el, Dis
     return w;
 }
 
+/* Takes the next offer from the order into the walk, once; false when the sequence is complete. */
+static bool bp_hold_next(BoxPaintWalk *w)
+{
+    if (!w->held) w->held = paint_order_next(w->order, &w->step, &w->el);
+    return w->held;
+}
+
+bool box_paint_next_element(BoxPaintWalk *w, lxb_dom_element_t **el)
+{
+    DCHECK(w != NULL && w->ok && el != NULL, "CSS 2.1 §E.2's next offer was asked of a painter that stopped");
+    DCHECK(css_cascade_record_is_held(),
+           "CSS 2.1 §E.2's next offer was asked with no cascade record held — its caller asks inside the layout "
+           "job the walk paints on");
+    if (!bp_hold_next(w)) return false;
+    *el = w->el;
+    return true;
+}
+
 bool box_paint_step(BoxPaintWalk *w)
 {
-    PaintStep step;
-    lxb_dom_element_t *el;
-
     DCHECK(w != NULL && w->ok, "CSS 2.1 §E.2's painter was stepped after it stopped");
     /* Every element's cascade and computed values are held by the caller's record across the walk, so each is
        derived once per paint and an ancestor's inherited value is held when a descendant reads it. */
     DCHECK(css_cascade_record_is_held(),
            "CSS 2.1 §E.2's painter was stepped with no cascade record held — its caller paints inside a layout job "
            "or a computed style hold that spans the walk");
-    if (!paint_order_next(w->order, &step, &el)) return false;
-    w->ok = bp_visit(step, el, &w->st);
+    if (!bp_hold_next(w)) return false;
+    w->held = false;
+    w->ok = bp_visit(w->step, w->el, &w->st);
     return w->ok;
 }
 

@@ -1384,11 +1384,19 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             layout_job_enter(u->job);
             u->frame = document_paint_begin(docctx, document_associated(docctx));
         } else {
+            int rc = layout_job_fork(ctx, &s->hdr, u->job);
+
+            if (rc) return rc;
             layout_job_enter(u->job);
         }
-        while (n-- > 0 && (more = document_paint_step(u->frame))) {}
+        while (n-- > 0 && document_paint_ready(u->frame) && (more = document_paint_step(u->frame))) {}
         if (!more) document_paint_finish(u->frame);
         layout_job_leave(u->job);
+        if (layout_job_declined(u->job)) {
+            int rc = layout_job_fork(ctx, &s->hdr, u->job);
+
+            return rc ? rc : JS_STEP_YIELD;
+        }
         if (more) {
             layout_job_rested(u->job);
             METRIC_ADD(paint_rests, 1);
