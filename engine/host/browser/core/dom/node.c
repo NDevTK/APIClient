@@ -5399,12 +5399,12 @@ static const IdlStepDecl NODE_TEXT_STEP = {
 };
 
 /* §4.4 textContent's SETTER: a CharacterData node runs "replace data", an Element or DocumentFragment runs "string
-   replace all" (DOM §4.2.3), and any other node does nothing. String replace all creates the Text node and runs
+   replace all" (DOM §4.4), and any other node does nothing. String replace all creates the Text node and runs
    core/dom/node_replace.h's replace all machine, whose stages forbid script, so a `<script>`'s children changed
    steps run their post-connection steps once the record is queued. */
 #define NODE_TEXT_SET_STAGES(X) \
-    X(TCS_START,  "DOM §4.4 textContent setter (the switch on this; DOM §4.2.3 string replace all steps 1-2)") \
-    NODE_REPLACE_ALL_ALGO_STAGES(X, TCS_RA, "DOM §4.2.3 string replace all step 3") \
+    X(TCS_START,  "DOM §4.4 textContent setter (the switch on this; DOM §4.4 string replace all steps 1-2)") \
+    NODE_REPLACE_ALL_ALGO_STAGES(X, TCS_RA, "DOM §4.4 string replace all step 3") \
     X(TCS_DONE,   "DOM §4.4 textContent setter (replace all is done)")
 enum { IDL_STEP_STAGE_BASE(NODE_TEXT_SET_STAGES) NODE_TEXT_SET_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const NODE_TEXT_SET_STEPS[] = { NODE_TEXT_SET_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -5491,7 +5491,7 @@ static int js_node_set_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, in
 
 static const IdlStepDecl NODE_TEXT_SET_STEP = {
     js_node_set_text_content, sizeof(NodeReplaceAllState), node_text_set_visit, NULL,
-    "DOM §4.4 Node.textContent setter (over §4.2.3 string replace all)", NODE_TEXT_SET_STEPS,
+    "DOM §4.4 Node.textContent setter (over §4.4 string replace all)", NODE_TEXT_SET_STEPS,
     .script_forbidden = node_text_set_script_forbidden
 };
 

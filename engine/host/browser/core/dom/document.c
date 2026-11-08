@@ -3168,14 +3168,14 @@ static JSValue js_doc_set_html_member(JSContext *ctx, JSValueConst this_val, JSV
 
 /* §3.1.7's `title` setter: "the steps corresponding to the first matching condition", in the standard's order,
    ending with its "Otherwise: do nothing". A created title element is inserted through core/dom/node_insert.h's
-   machine, and both arms end in DOM §4.2.3 string replace all, core/dom/node_replace.h's replace all over the
+   machine, and both arms end in DOM §4.4 string replace all, core/dom/node_replace.h's replace all over the
    Text node, so each rests per node. */
 #define DOC_TITLE_SET_STAGES(X) \
-    X(DTS_START, "HTML §3.1.7 title setter (the matching condition; the title element; DOM §4.2.3 string " \
+    X(DTS_START, "HTML §3.1.7 title setter (the matching condition; the title element; DOM §4.4 string " \
                  "replace all steps 1-2)") \
     NODE_INSERT_ALGO_STAGES(X, DTS_IN, "HTML §3.1.7 title setter (insert or append the created title element)") \
-    X(DTS_REPLACE, "HTML §3.1.7 title setter → DOM §4.2.3 string replace all step 3") \
-    NODE_REPLACE_ALL_ALGO_STAGES(X, DTS_RA, "HTML §3.1.7 title setter → DOM §4.2.3 string replace all step 3") \
+    X(DTS_REPLACE, "HTML §3.1.7 title setter → DOM §4.4 string replace all step 3") \
+    NODE_REPLACE_ALL_ALGO_STAGES(X, DTS_RA, "HTML §3.1.7 title setter → DOM §4.4 string replace all step 3") \
     X(DTS_DONE,  "HTML §3.1.7 title setter (done)")
 enum { IDL_STEP_STAGE_BASE(DOC_TITLE_SET_STAGES) DOC_TITLE_SET_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const DOC_TITLE_SET_STEPS[] = { DOC_TITLE_SET_STAGES(JS_STEP_STAGE_LABEL) NULL };
