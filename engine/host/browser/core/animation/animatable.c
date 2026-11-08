@@ -15,6 +15,11 @@
 #include "core/layout/layout_job.h"
 
 static int g_id_element = -1, g_id_root = -1;
+/* Lifetime counts over the process, read by the result document's census and by nothing that decides. */
+static unsigned long long g_walk_elements, g_walk_rests;
+
+unsigned long long animatable_style_change_elements_life(void) { return g_walk_elements; }
+unsigned long long animatable_style_change_rests_life(void) { return g_walk_rests; }
 
 static uint32_t an_len(JSContext *ctx, JSValueConst arr)
 {
@@ -34,9 +39,15 @@ static void style_change_event(lxb_dom_node_t *root, bool self, bool subtree)
     lxb_dom_node_t *n;
 
     layout_job_enter(job);
-    if (self && root->type == LXB_DOM_NODE_TYPE_ELEMENT) css_animations_update(lxb_dom_interface_element(root));
+    if (self && root->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        css_animations_update(lxb_dom_interface_element(root));
+        g_walk_elements++;
+    }
     for (n = subtree ? root->first_child : NULL; n != NULL && n != root;) {
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) css_animations_update(lxb_dom_interface_element(n));
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            css_animations_update(lxb_dom_interface_element(n));
+            g_walk_elements++;
+        }
         if (n->first_child) { n = n->first_child; continue; }
         while (n != root && n->next == NULL) n = n->parent;
         if (n == root) break;

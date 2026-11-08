@@ -21,4 +21,8 @@ void animatable_free(void);
 void animatable_install_element_members(JSContext *ctx, JSValueConst element_proto);
 void animatable_install_document_or_shadow_root_members(JSContext *ctx, JSValueConst proto);
 
+/* The process's census of the style change event's walk: the elements it visited, and the rests it took. */
+unsigned long long animatable_style_change_elements_life(void);
+unsigned long long animatable_style_change_rests_life(void);
+
 #endif

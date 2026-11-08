@@ -338,6 +338,10 @@ METRIC(tw_script_parse_us, "twScriptParseUs", LIFETIME, "us", PROCESS, "core/tim
    inside a RegExp machine took (quickjs.c's lre_compile_poll). */
 METRIC(tw_regexp_compile_bytes, "twRegexpCompileBytes", LIFETIME, "byte", PROCESS, "qjs/quickjs.c", INT)
 METRIC(tw_regexp_compile_rests, "twRegexpCompileRests", LIFETIME, "rest", PROCESS, "qjs/quickjs.c", INT)
+/* …the elements Web Animations §6.8 getAnimations()' style change event visited, and the rests its walk took. */
+METRIC(wa_style_change_elements, "waStyleChangeElements", LIFETIME, "element", PROCESS,
+       "core/animation/animatable.c", INT)
+METRIC(wa_style_change_rests, "waStyleChangeRests", LIFETIME, "rest", PROCESS, "core/animation/animatable.c", INT)
 METRIC(tw_decode_spans, "twDecodeSpans", LIFETIME, "span", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_decode_bytes, "twDecodeBytes", LIFETIME, "byte", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_decode_us, "twDecodeUs", LIFETIME, "us", PROCESS, "core/timing/thread_work.c", INT)

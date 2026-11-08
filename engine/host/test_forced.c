@@ -1509,6 +1509,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/startin.h"
 #include "fixture/staticinline.h"
 #include "fixture/getanims.h"
+#include "fixture/gabig.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2212,6 +2213,7 @@ TF_DOCS[] = {
     { "startin", HTML_STARTIN },
     { "staticinline", HTML_STATICINLINE },
     { "getanims", HTML_GETANIMS },
+    { "gabig", HTML_GABIG },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -21294,6 +21296,34 @@ TF_UNIT void probes_staticinline(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `gabig` document (fixture/gabig.h): `getAnimations({ subtree: true })` over eight thousand
+   elements answers the one CSSAnimation among them, and its style change event visited every element across
+   several rests, read from the census core/animation/animatable.c raises. */
+TF_UNIT void probes_gabig(const char *js, Probe *tab, int *n) {
+    const char *rests = strstr(js, "\"waStyleChangeRests\":"), *els = strstr(js, "\"waStyleChangeElements\":");
+    long nrests = rests ? strtol(rests + strlen("\"waStyleChangeRests\":"), NULL, 10) : -1;
+    long nels = els ? strtol(els + strlen("\"waStyleChangeElements\":"), NULL, 10) : -1;
+    const char *an_why = NULL; int an_tt = 1;
+    fold_row(&an_tt, &an_why, !!strstr(js, "\"/api/gabig\""),
+             "NOT REACHED: no /api/gabig record, so the document aborted before its fetch");
+    fold_row(&an_tt, &an_why, param_value_is(js, "/api/gabig", "n", "1"),
+             "getAnimations({ subtree: true }) over the container did not answer its one CSS animation");
+    const char *rs_why = NULL; int rs_tt = 1;
+    fold_row(&rs_tt, &rs_why, rests != NULL && els != NULL,
+             "the result document carries no `waStyleChangeRests`/`waStyleChangeElements` row from "
+             "solver/metrics/cold.def");
+    fold_row(&rs_tt, &rs_why, nels >= 8002,
+             "the style change event did not visit the container and its 8001 descendant elements");
+    fold_row(&rs_tt, &rs_why, nrests >= 2,
+             "a style change event several work quanta long took no rest, so it held the thread from its first "
+             "element to its last");
+    const Probe rows[] = {
+        { "gabig-answer", an_tt, "/api/gabig", SESS_EXPLORE, an_why },
+        { "gabig-rests", rs_tt, "/api/gabig", SESS_EXPLORE, rs_why, .gate = "gabig-answer" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `getanims` document (fixture/getanims.h): Web Animations' `getAnimations({ subtree: true })`
    over an animated `<svg>`, answering its CSS animations. */
 TF_UNIT void probes_getanims(const char *js, Probe *tab, int *n) {
@@ -27439,6 +27469,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_startin(js, probes, &np);
     probes_staticinline(js, probes, &np);
     probes_getanims(js, probes, &np);
+    probes_gabig(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
