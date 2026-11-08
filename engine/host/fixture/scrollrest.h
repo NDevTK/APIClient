@@ -1,9 +1,8 @@
-/* THE SCROLL-REST DOCUMENT (`scrollrest`): CSSOM VIEW §6.1's scroll a target into view over the viewport, for a
-   target below 20,000 one-pixel block boxes (test_forced.c's COLLREST_10000, twice, each `<i>` made a block).
-   The viewport's scrolling area walk is seeded with the document element's margin edge and step 2.2 reads the
-   target's border box, and both are CSS 2.1 §9.4.1's walk over those boxes, which a resting drive must hold.
-   The target is 10px tall at 20,000px in a 20,010px document and a 720px viewport: Chrome scrolls the window
-   to 19,290.
+/* The scroll-rest document (`scrollrest`): CSSOM View §6.1's scroll a target into view for a target inside an
+   `overflow:auto` box below 20,000 one-pixel block boxes (test_forced.c's COLLREST_10000, twice, each `<i>` made
+   a block). Both scrolling boxes' area walks and step 2.2's border box read are CSS 2.1 §9.4.1's walk over those
+   boxes, which a resting drive must hold. Chrome scrolls the box to 160 and the window to 19,330, then fires
+   §13.2's `scroll` and `scrollend` at the box (neither bubbles) and at the document (both bubble).
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_SCROLLREST_H
@@ -15,10 +14,21 @@
 static const char HTML_SCROLLREST[] =
     "<!doctype html><html><head><style>#srPre i{display:block;height:1px}</style></head>"
     "<body style=\"margin:0\"><div id=srPre>" COLLREST_10000 COLLREST_10000 "</div>"
-    "<div id=srT style=\"height:10px\"></div>"
+    "<div id=srBox style=\"overflow:auto;height:50px\"><div style=\"height:200px\"></div>"
+    "<div id=srT style=\"height:10px\"></div></div>"
     "<script>"
+    "var srBox = document.getElementById('srBox'), srB = '', srD = '';"
+    "function srF(e) { return (e.bubbles ? 1 : 0) + '' + (e.cancelable ? 1 : 0); }"
+    "srBox.addEventListener('scroll', function (e) { srB += 's' + srF(e); });"
+    "srBox.addEventListener('scrollend', function (e) { srB += 'e' + srF(e); });"
+    "document.addEventListener('scroll', function (e) { srD += e.target === document ? 's' + srF(e) : 'x'; });"
+    "window.addEventListener('scroll', function () { srD += 'w'; });"
+    "document.addEventListener('scrollend', function (e) {"
+    "  if (e.target !== document) { srD += 'x'; return; }"
+    "  fetch('/api/srscrolled?b=' + srB + '&d=' + srD + 'e' + srF(e));"
+    "});"
     "document.getElementById('srT').scrollIntoView();"
-    "fetch('/api/scrollintorest?y=' + window.scrollY);"
+    "fetch('/api/scrollintorest?t=' + srBox.scrollTop + '&y=' + window.scrollY);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

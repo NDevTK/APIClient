@@ -24014,24 +24014,38 @@ TF_UNIT void probes_blocklead(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `scrollrest` document (fixture/scrollrest.h): CSSOM VIEW §6.1's scroll a target into view over
-   the viewport for a target below 20,000 block boxes. scroll-into-view-rests: every turn offers a suspend point
-   within one quantum of work, read from `sliceOverrunGapWork`, and the window lands where Chrome puts it. */
+/* The rows of the `scrollrest` document (fixture/scrollrest.h): CSSOM View §6.1's scroll a target into view for
+   a target in a scroll container below 20,000 block boxes. scroll-into-view-rests: every turn offers a suspend
+   point within one quantum of work, read from `sliceOverrunGapWork`, and the box and the window land where
+   Chrome puts them. scroll-events-element: §13.2's events at the box and the document, as Chrome fires them. */
 TF_UNIT void probes_scrollrest(const char *js, Probe *tab, int *n) {
     const char *why = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
     long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
     int tt = 1;
+    const char *ev_why = NULL;
+    int ev_tt = 1;
 
     fold_row(&tt, &why, !!strstr(js, "\"/api/scrollintorest\""),
              "NOT REACHED: no /api/scrollintorest record, so the document aborted before its fetch");
-    fold_row(&tt, &why, param_value_is(js, "/api/scrollintorest", "y", "19290"),
-             "CSSOM VIEW §6.1: scrollIntoView did not scroll the window to 19,290");
+    fold_row(&tt, &why, param_value_is(js, "/api/scrollintorest", "t", "160"),
+             "CSSOM View §6.1: scrollIntoView did not scroll the overflow:auto box to 160");
+    fold_row(&tt, &why, param_value_is(js, "/api/scrollintorest", "y", "19330"),
+             "CSSOM View §6.1: scrollIntoView did not scroll the window to 19,330");
     fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
     fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
              "a turn held the thread for a quantum or more between two offers: scroll a target into view read a "
              "scrolling box's layout or the target's border box on a drive that does not rest");
+    fold_row(&ev_tt, &ev_why, !!strstr(js, "\"/api/srscrolled\""),
+             "NOT REACHED: no /api/srscrolled record, so the document's `scrollend` never fired");
+    fold_row(&ev_tt, &ev_why, param_value_is(js, "/api/srscrolled", "b", "s00e00"),
+             "CSSOM View §13.2: the scrolled box did not get one `scroll` then one `scrollend`, neither bubbling "
+             "nor cancelable (the scroll steps' step 2, last branch)");
+    fold_row(&ev_tt, &ev_why, param_value_is(js, "/api/srscrolled", "d", "s10we10"),
+             "CSSOM View §13.2: the document did not get a bubbling `scroll` (seen by window) then a bubbling "
+             "`scrollend`, or the box's events reached it");
     const Probe rows[] = {
         { "scroll-into-view-rests", tt, "/api/scrollintorest", SESS_EXPLORE, why },
+        { "scroll-events-element", ev_tt, "/api/srscrolled", SESS_EXPLORE, ev_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
