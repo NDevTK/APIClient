@@ -5562,6 +5562,7 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
        It is OWNED, which is the one cost this conversion adds to the hottest path in the DOM: a refcount pair
        per wrap. */
     JSContext *rctx = document_realm_of(n);
+    uint32_t born;   /* the generation the wrapper is born at: its realm's */
     {
         JSValue proto;
         uint32_t gen;
@@ -5582,41 +5583,32 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
               : (n->type == LXB_DOM_NODE_TYPE_DOCUMENT)
                     ? document_interface_proto(rctx, lxb_dom_interface_document(n))
                     : node_type_proto(rctx, (int)n->type);
-        /* AND IT IS BORN BASELINE, WHICH IS A STATEMENT ABOUT THE TABLE THIS FUNCTION MAINTAINS AND NOT
-           ABOUT THIS OBJECT. §State-isolation's flow-private skip — cow.c's `JS_ObjFlowGen(obj) > d->fork_gen` —
-           decides on the AGE of the object being written and never on who can reach it, and it is sound for
-           an ordinary object by an induction over EDGES: a sibling reaches a post-fork object X only through
-           some O that existed at the fork, so the write O->X is itself captured and X goes unreachable in the
-           same instant its own uncaptured slots survive. THE IDENTITY MAP IS AN EDGE THAT INDUCTION CANNOT
-           SEE — a C table keyed on a lexbor node holding the ONE wrapper that node will ever have, so a
-           wrapper minted by whichever arm asks first is handed to every arm after it with NO property write
-           anywhere for a hook to record, and the induction's "O->X is captured" step has no capture in it.
-           Minted at the live generation, every expando a page writes on an element is skipped by BOTH arms of
-           a fork and survives both unapplies — and so is every per-node platform state this engine keeps in
-           a hidden slot on the wrapper. test_forced.c's `nwisoel` statement and its two `nwiso-*` rows assert
-           the closure.
-           IT IS `JS_SetFlowGen`'s OWN DEFECT ONE CALLER IN, and that primitive's site in quickjs.c records
-           the same shape: an object the host created between two slices carried the LIVE generation, so the
-           age test skipped it in every delta forked before it and a write to it survived that flow's unapply.
-           PARAPHRASED AND NOT QUOTED, for the reason core/html/close_watcher.c gives about its own retired
-           one — a quoted run of this tree's prose is judged as a standard's words by engine/citegen.mjs. The
-           scheduler brackets the host's own time with this primitive because what it creates there is shared
-           by construction; an entry of a registry no hook covers is shared in exactly that sense, whoever
-           minted it.
-           THE BRACKET SAVES A NUMBER AND IS TIGHT AROUND THE ALLOCATION, and both halves are load-bearing.
-           The stamp is the MONOTONIC counter every delta's fork_gen is compared against, so it is RESTORED
-           rather than cleared and re-entered; and a bracket spanning anything that could FORK would restore a
-           value BELOW the live one, making a later object compare as older than an earlier fork. The
-           prototype is resolved OUTSIDE it for that reason and not for tidiness. */
+        /* The wrapper is born at its realm's own generation, the age of the global object every node of that
+           realm's documents is younger than. The identity table below is a C map no property hook covers, so a
+           wrapper is handed to any timeline that asks for its node; cow.c's `JS_ObjFlowGen(obj) > d->fork_gen`
+           skip is sound for it only if the wrapper is no younger than the first fork that can reach the node. A
+           realm built before every fork (the root's, generation 0) makes its wrappers baseline, so a page's
+           expando on an element is captured in every arm. A realm a timeline materialized after its fork
+           (a per-timeline frame realm) is reachable only from that timeline and the forks it takes later, whose
+           fork generations are above the realm's, so its wrappers are captured there and skipped by every
+           delta forked before the realm existed. Stamping them baseline instead would capture the
+           materializing flow's own writes to its own Document as writes to shared state, and those entries
+           would hold the realm alive after its Document is destroyed. The bracket saves and restores the
+           monotonic counter and spans only the allocation: the prototype is resolved outside it, because a
+           bracket around anything that can fork would restore a value below the live one. */
+        {
+            JSValue global = JS_GetGlobalObject(rctx);
+
+            born = JS_ObjFlowGen(global);
+            JS_FreeValue(ctx, global);
+        }
         gen = JS_FlowGen();
-        JS_SetFlowGen(0);
+        DCHECK(born <= gen, "a realm's global is younger than the live flow generation — the counter only rises");
+        JS_SetFlowGen(born);
         obj = JS_NewObjectProtoClass(ctx, proto, node_wrap_class(n));
-        DCHECK(JS_FlowGen() == 0,
-               "the flow generation MOVED inside node_wrap's baseline bracket — restoring the saved number "
-               "would put back a value below the live one, and the stamp is the monotonic counter every "
-               "delta's fork_gen is compared against, so a later object would compare as OLDER than an "
-               "earlier fork. That REUSES a generation, and `flow_gen <= fork_gen` then stops meaning "
-               "`existed at that fork` — which is the whole of what every delta's skip is made of");
+        DCHECK(JS_FlowGen() == born,
+               "the flow generation moved inside node_wrap's bracket — restoring the saved number would put back a "
+               "value below the live one, and every delta's fork_gen is compared against that counter");
         JS_SetFlowGen(gen);
         JS_FreeValue(ctx, proto);
     }
@@ -5631,17 +5623,12 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
         DCHECK(g_wraps[slot].n == NULL, "a node was wrapped twice — the lookup above missed an entry the insert "
                                         "then found, which is two JS objects for one node and every identity "
                                         "comparison between them false");
-        /* AND EVERY ENTRY OF THIS TABLE IS BASELINE. This is the ONE insert, so this names the whole
-           population rather than this call — and it is a claim about the table's own contract, whose other
-           half the `a node was wrapped twice` assert states: one wrapper per node, handed to whoever asks. */
-        DCHECK(JS_ObjFlowGen(obj) == 0,
-               "a node's wrapper was entered into the identity table carrying a FLOW GENERATION. This table "
-               "is a C map no property hook covers, so the entry is handed to every arm of every fork that "
-               "later asks for this node — while cow.c's `JS_ObjFlowGen(obj) > d->fork_gen` skips every write "
-               "to a young object as flow-private, so a page's expando on this element, and every per-node "
-               "state a component keeps in a hidden slot on it, is read back by a sibling world. Mint it "
-               "inside node_wrap's own JS_SetFlowGen bracket rather than relaxing this: an object registered "
-               "in a registry the delta cannot capture is born BASELINE");
+        /* Every entry is born at its realm's generation (the bracket above), the one stamp under which the
+           delta's age test is sound for a wrapper this table hands to whoever asks for its node. */
+        DCHECKF(JS_ObjFlowGen(obj) == born,
+                "a node's wrapper entered the identity table at generation %u, not its realm's %u — the table is a "
+                "C map no property hook covers, so a wrapper younger than its realm is skipped as flow-private by "
+                "a delta whose sibling the table hands it to", JS_ObjFlowGen(obj), born);
         RealmWraps *rw = rwrap_of(rctx, true);
 
         if (rw->n == rw->cap) {
@@ -5660,7 +5647,7 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
         g_wrap_n++;
     }
     /* Web IDL §3.8's internally-create steps define the interface's unforgeable members on the new instance. They
-       are part of its birth, as the baseline-born wrapper is: captured as a flow's write, a sibling's switch-in
+       are part of its birth, like the wrapper's own generation: captured as a flow's write, a sibling's switch-in
        would delete them from the one wrapper every flow shares. */
     if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) {
         cow_engine_write_begin();
