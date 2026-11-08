@@ -67,7 +67,7 @@ static int span_keyword(const char *w, size_t n, const char *const *set)
     return -1;
 }
 
-/* css-values-4 §7.1 "Time Units: the <time> type": a number immediately followed by `s` or `ms`. */
+/* css-values-4 §7.2 "Duration Units: the <time> type and s, ms units": a number followed by `s` or `ms`. */
 static bool span_time(const char *w, size_t n, double *ms)
 {
     double v = 0;

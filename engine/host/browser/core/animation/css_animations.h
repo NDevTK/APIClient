@@ -33,7 +33,7 @@ JSValue css_animations_of(JSContext *ctx, lxb_dom_element_t *el);
 /* CSS Animations Level 2 §2.2: is `animation` ordered as a CSS animation with an owning element (or, canceled
    and not since played, by the owning element it was canceled off)? */
 bool css_animations_owned(JSContext *ctx, JSValueConst animation);
-/* §2.2's order between two such animations: tree order of the owning elements, then position in `animation-name`.
+/* CSS Animations Level 2 §2.2's order between two such animations: tree order of the owning elements, then position in `animation-name`.
    Negative when `a` sorts first. */
 int css_animations_order(JSContext *ctx, JSValueConst a, JSValueConst b);
 

@@ -83,7 +83,7 @@ static void ca_list_free(CaList *l)
     l->n = 0;
 }
 
-/* The longhand's computed list, read through CSS Values 4 §A "Coordinating List-Valued Properties": item `i` of
+/* The longhand's computed list, read through CSS Values 4 Appendix A "Coordinating List-Valued Properties": item `i` of
    a list shorter than the base's repeats it. */
 static void ca_longhand(lxb_dom_element_t *el, const char *name, CaList *out)
 {
@@ -271,7 +271,7 @@ void css_animations_update(lxb_dom_element_t *el)
         free(name);
     }
     /* An existing animation nothing matched is canceled and disassociated (Level 2 §2.1); its owning element at
-       that moment is what §2.2 orders its cancel event by. */
+       that moment is what CSS Animations Level 2 §2.2 orders its cancel event by. */
     for (k = 0, m = ca_len(ctx, existing); k < m; k++) {
         JSValue a = JS_GetPropertyUint32(ctx, existing, k), slots;
 
@@ -320,7 +320,7 @@ void css_animations_update(lxb_dom_element_t *el)
     ca_list_free(&names);
 }
 
-/* ---- Level 2 §2.2 composite order ------------------------------------------------------------------------- */
+/* ---- CSS Animations Level 2 §2.2 composite order ------------------------------------------------------------- */
 
 static JSValue ca_slot(JSContext *ctx, JSValueConst animation, const char *k)
 {
@@ -353,8 +353,9 @@ static int ca_tree_order(lxb_dom_node_t *a, lxb_dom_node_t *b)
     return 1;
 }
 
-/* The element §2.2 orders `animation` by: its owning element, or, for one canceled off it and not yet back on
-   the global animation list, the owning element at the moment it was canceled. JS_NULL for neither. */
+/* The element CSS Animations Level 2 §2.2 orders `animation` by: its owning element, or, for one canceled off it
+   and not yet back on the global animation list, the owning element at the moment it was canceled. JS_NULL for
+   neither. */
 static JSValue ca_order_owner(JSContext *ctx, JSValueConst animation, bool *canceled)
 {
     JSValue o = ca_slot(ctx, animation, "owner"), listed;
@@ -405,7 +406,7 @@ int css_animations_order(JSContext *ctx, JSValueConst a, JSValueConst b)
     return r;
 }
 
-/* ---- §6.1 The CSSAnimation interface --------------------------------------------------------------------- */
+/* ---- CSS Animations Level 2 §6.1 The CSSAnimation interface -------------------------------------------------- */
 
 /* `readonly attribute CSSOMString animationName`: "the value of the animation-name property that caused this
    object to be generated". */
