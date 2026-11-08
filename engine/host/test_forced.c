@@ -23,6 +23,7 @@
 #include "core/wasm/module_validator.h" /* WebAssembly Core §3.5's module validation */
 #include "core/wasm/linear_memory.h" /* WebAssembly Core §4.2.9's per-flow memory */
 #include "core/wasm/interpreter.h" /* WebAssembly Core §4.6's interpreter core */
+#include "core/wasm/instance.h"    /* WebAssembly Core §4.7.2's instantiation */
 #include "fixture/wasm_valid.h"     /* the rows that validator answers */
 #include "fixture/wasm_exec.h"      /* the testsuite's assert_return and assert_trap rows the interpreter answers */
 #include "core/image/image_header.h" /* css-images-3 §4.1's natural dimensions — cross-checked by @PNGDEC */
@@ -6036,6 +6037,10 @@ static void wasm_exec_check(const WasmExecRow *row, const WasmInterpreter *it, W
     const char *msg = wasm_exec_status_message(st);
     uint32_t k;
 
+    if (row->action) {
+        CHECKF(st == WASM_EXEC_DONE, "the WebAssembly action %s trapped with \"%s\"", row->src, msg);
+        return;
+    }
     if (row->trap != NULL) {
         CHECKF(st != WASM_EXEC_DONE && st != WASM_EXEC_MORE && strncmp(msg, row->trap, strlen(row->trap)) == 0,
                "the WebAssembly invocation %s answered %s; the testsuite expects the trap \"%s\"", row->src,
@@ -6064,54 +6069,60 @@ static void wasm_exec_check(const WasmExecRow *row, const WasmInterpreter *it, W
 
 /* WebAssembly Core §4.6's interpreter core (core/wasm/interpreter.h) against the testsuite's rows over its
  * subset (fixture/wasm_exec.h). Each row's module is decoded and validated (the side table is validation's), the
- * export found by name, and the invocation run alone, retiring one unit of work per step it counts; then the
- * rows of each module are run again all at once, one step each in turn, and must answer as they did alone.
- * fixture/wasm_valid.h's WASM_CALL_ROWS come first: calls the testsuite's subset does not reach. */
+ * export found by name; each instance's commands run in order on an instance of their own, each retiring one
+ * unit of work per step it counts, and again on two more instances, one step of each in turn, which must answer
+ * as the first did.
+ * fixture/wasm_valid.h's WASM_INVOKE_ROWS come first: what the testsuite's rows in scope do not reach. */
 TF_UNIT void wasm_interpreter_selftest(void)
 {
     size_t i = 0;
 
-    for (i = 0; i < COUNTOF(WASM_CALL_ROWS); i++) {
-        const WasmCallRow *row = &WASM_CALL_ROWS[i];
+    for (i = 0; i < COUNTOF(WASM_INVOKE_ROWS); i++) {
+        const WasmInvokeRow *row = &WASM_INVOKE_ROWS[i];
         const uint8_t *bytes = (const uint8_t *)row->bytes;
         WasmModuleDecoder d;
         WasmModuleValidator v;
+        WasmInstance inst;
         WasmInterpreter it;
         WasmExecStatus st;
         size_t e, func = SIZE_MAX;
 
         wasm_module_decoder_init(&d, bytes, row->len);
-        CHECKF(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the call row %s does not decode", row->src);
+        CHECKF(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the invoke row %s does not decode", row->src);
         wasm_module_validator_init(&v, wasm_module_decoder_module(&d), bytes);
-        CHECKF(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the call row %s is invalid", row->src);
+        CHECKF(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the invoke row %s is invalid", row->src);
         for (e = 0; e < d.module.n_exports; e++)
             if (d.module.exports[e].name_size == strlen(row->export_name)
                 && memcmp(bytes + d.module.exports[e].name_offset, row->export_name, strlen(row->export_name)) == 0)
                 func = d.module.exports[e].index;
-        CHECKF(func != SIZE_MAX, "the call row %s has no export %s", row->src, row->export_name);
-        st = wasm_interpreter_begin(&it, &d.module, bytes, wasm_module_validator_side_table(&v), func, NULL, 0);
+        CHECKF(func != SIZE_MAX, "the invoke row %s has no export %s", row->src, row->export_name);
+        st = wasm_instance_begin(&inst, &d.module, bytes, wasm_module_validator_side_table(&v));
+        while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst);
+        CHECKF(st == WASM_EXEC_DONE, "%s: the instantiation answered \"%s\"", row->src, wasm_exec_status_message(st));
+        st = wasm_interpreter_begin(&it, &d.module, bytes, wasm_module_validator_side_table(&v), inst.globals, func,
+                                    NULL, 0);
         while (st == WASM_EXEC_MORE) st = wasm_interpreter_step(&it);
         CHECKF(st == WASM_EXEC_DONE && it.n_vals == 1 && it.vals[0].lo == row->result,
                "%s: answered %s with %zu values, the first %llu; V8 answers %u", row->src,
                st == WASM_EXEC_DONE ? "a return" : wasm_exec_status_message(st), it.n_vals,
                it.n_vals ? (unsigned long long)it.vals[0].lo : 0ull, row->result);
         wasm_interpreter_free(&it);
+        wasm_instance_free(&inst);
         wasm_module_validator_free(&v);
         wasm_module_decoder_free(&d);
     }
     i = 0;
-
     while (i < COUNTOF(WASM_EXEC_ROWS)) {
         const WasmTestsuiteRow *mod = &WASM_TESTSUITE_ROWS[WASM_EXEC_ROWS[i].module];
         const uint8_t *bytes = (const uint8_t *)mod->bytes;
         WasmModuleDecoder d;
         WasmModuleValidator v;
         const WasmModule *m;
-        WasmInterpreter *its;
-        WasmExecStatus *sts;
-        size_t j, n, live;
+        const WasmSideTable *side;
+        WasmInstance inst[3];
+        size_t j, n, k;
 
-        for (n = i; n < COUNTOF(WASM_EXEC_ROWS) && WASM_EXEC_ROWS[n].module == WASM_EXEC_ROWS[i].module; n++) {}
+        for (n = i; n < COUNTOF(WASM_EXEC_ROWS) && WASM_EXEC_ROWS[n].instance == WASM_EXEC_ROWS[i].instance; n++) {}
         wasm_module_decoder_init(&d, bytes, mod->len);
         CHECKF(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the module of %s does not decode",
                WASM_EXEC_ROWS[i].src);
@@ -6119,51 +6130,51 @@ TF_UNIT void wasm_interpreter_selftest(void)
         wasm_module_validator_init(&v, m, bytes);
         CHECKF(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the module of %s is invalid",
                WASM_EXEC_ROWS[i].src);
-        its = calloc(n - i, sizeof *its);
-        sts = calloc(n - i, sizeof *sts);
-        CHECK(its != NULL && sts != NULL, "the interpreter selftest's invocations could not be allocated");
+        side = wasm_module_validator_side_table(&v);
+        /* Three instances of the module: one runs the script's commands alone, two run them stepped in turn. */
+        for (k = 0; k < 3; k++) {
+            WasmExecStatus st = wasm_instance_begin(&inst[k], m, bytes, side);
+
+            while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst[k]);
+            CHECKF(st == WASM_EXEC_DONE, "the instantiation for %s answered \"%s\"", WASM_EXEC_ROWS[i].src,
+                   wasm_exec_status_message(st));
+        }
         for (j = i; j < n; j++) {
             const WasmExecRow *row = &WASM_EXEC_ROWS[j];
             WasmValue *args = calloc(row->n_args + 1, sizeof *args);
-            WasmInterpreter alone;
-            WasmExecStatus st;
+            WasmInterpreter alone, two[2];
+            WasmExecStatus st, sts[2];
             size_t e, func = SIZE_MAX;
             uint64_t before;
-            uint32_t k;
+            uint32_t a;
 
             for (e = 0; e < m->n_exports; e++)
                 if (m->exports[e].kind == WASM_EXTERN_FUNC && m->exports[e].name_size == row->export_len
                     && memcmp(bytes + m->exports[e].name_offset, row->export_name, row->export_len) == 0)
                     func = m->exports[e].index;
             CHECKF(func != SIZE_MAX && args != NULL, "%s: no function export of its name", row->src);
-            for (k = 0; k < row->n_args; k++) args[k].lo = WASM_EXEC_VALUES[row->args + k].bits;
+            for (a = 0; a < row->n_args; a++) args[a].lo = WASM_EXEC_VALUES[row->args + a].bits;
             before = JS_FlowPeekRetiredWork();
-            st = wasm_interpreter_begin(&alone, m, bytes, wasm_module_validator_side_table(&v), func, args,
-                                        row->n_args);
+            st = wasm_interpreter_begin(&alone, m, bytes, side, inst[0].globals, func, args, row->n_args);
             while (st == WASM_EXEC_MORE) st = wasm_interpreter_step(&alone);
             CHECKF(JS_FlowPeekRetiredWork() - before == alone.retired && alone.retired > 0,
                    "%s: the interpreter retired %llu units of work for %llu instructions", row->src,
                    (unsigned long long)(JS_FlowPeekRetiredWork() - before), (unsigned long long)alone.retired);
             wasm_exec_check(row, &alone, st);
             wasm_interpreter_free(&alone);
-            sts[j - i] = wasm_interpreter_begin(&its[j - i], m, bytes, wasm_module_validator_side_table(&v), func,
-                                                args, row->n_args);
+            for (k = 0; k < 2; k++)
+                sts[k] = wasm_interpreter_begin(&two[k], m, bytes, side, inst[1 + k].globals, func, args,
+                                                row->n_args);
+            while (sts[0] == WASM_EXEC_MORE || sts[1] == WASM_EXEC_MORE)
+                for (k = 0; k < 2; k++)
+                    if (sts[k] == WASM_EXEC_MORE) sts[k] = wasm_interpreter_step(&two[k]);
+            for (k = 0; k < 2; k++) {
+                wasm_exec_check(row, &two[k], sts[k]);
+                wasm_interpreter_free(&two[k]);
+            }
             free(args);
         }
-        do {
-            live = 0;
-            for (j = i; j < n; j++) {
-                if (sts[j - i] != WASM_EXEC_MORE) continue;
-                sts[j - i] = wasm_interpreter_step(&its[j - i]);
-                live++;
-            }
-        } while (live > 0);
-        for (j = i; j < n; j++) {
-            wasm_exec_check(&WASM_EXEC_ROWS[j], &its[j - i], sts[j - i]);
-            wasm_interpreter_free(&its[j - i]);
-        }
-        free(its);
-        free(sts);
+        for (k = 0; k < 3; k++) wasm_instance_free(&inst[k]);
         wasm_module_validator_free(&v);
         wasm_module_decoder_free(&d);
         i = n;

@@ -119,20 +119,49 @@ static WasmExecStatus pop_frame(WasmInterpreter *it)
     return it->n_frames == 0 ? WASM_EXEC_DONE : WASM_EXEC_MORE;
 }
 
-WasmExecStatus wasm_interpreter_begin(WasmInterpreter *it, const WasmModule *m, const uint8_t *bytes,
-                                      const WasmSideTable *side, size_t func, const WasmValue *args,
-                                      size_t n_args)
+static void begin(WasmInterpreter *it, const WasmModule *m, const uint8_t *bytes, const WasmSideTable *side,
+                  WasmValue *globals)
 {
     size_t i;
 
     DCHECK(it != NULL && m != NULL && bytes != NULL && side != NULL, "a WebAssembly invocation began without its "
                                                                      "module");
-    DCHECKF(func >= imported_funcs(m) && func - imported_funcs(m) < m->n_codes, "a WebAssembly invocation names "
-            "function %zu, which is not one of the module's %zu defined functions", func, m->n_codes);
     memset(it, 0, sizeof *it);
     it->module = m;
     it->bytes = bytes;
     it->side = side;
+    it->globals = globals;
+    for (i = 0; i < m->n_imports; i++) it->imported_globals += m->imports[i].kind == WASM_EXTERN_GLOBAL;
+}
+
+WasmExecStatus wasm_interpreter_begin_expr(WasmInterpreter *it, const WasmModule *m, const uint8_t *bytes,
+                                           const WasmSideTable *side, WasmValue *globals, WasmExpr e)
+{
+    WasmFrame *f;
+
+    begin(it, m, bytes, side, globals);
+    it->n_results = 1;
+    if (!grow((void **)&it->frames, &it->cap_frames, 0, sizeof *it->frames)) return WASM_EXEC_NO_ROOM;
+    f = &it->frames[it->n_frames++];
+    memset(f, 0, sizeof *f);
+    f->code = SIZE_MAX;
+    f->end = e.offset + e.size;
+    f->return_pc = SIZE_MAX;
+    f->n_results = 1;
+    it->pc = e.offset;
+    return push_label(it, L_FUNC, SIZE_MAX, 0, 1, f->end) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
+}
+
+WasmExecStatus wasm_interpreter_begin(WasmInterpreter *it, const WasmModule *m, const uint8_t *bytes,
+                                      const WasmSideTable *side, WasmValue *globals, size_t func,
+                                      const WasmValue *args, size_t n_args)
+{
+    size_t i;
+
+    DCHECK(m != NULL, "a WebAssembly invocation began without its module");
+    DCHECKF(func >= imported_funcs(m) && func - imported_funcs(m) < m->n_codes, "a WebAssembly invocation names "
+            "function %zu, which is not one of the module's %zu defined functions", func, m->n_codes);
+    begin(it, m, bytes, side, globals);
     DCHECKF(n_args == m->types[m->func_types[func - imported_funcs(m)]].n_params, "a WebAssembly invocation passed "
             "%zu arguments to a function of %zu parameters", n_args,
             m->types[m->func_types[func - imported_funcs(m)]].n_params);
@@ -508,6 +537,18 @@ static WasmExecStatus local(WasmInterpreter *it, uint32_t op, uint32_t x)
     return WASM_EXEC_MORE;
 }
 
+/* §4.6.6's global.get and global.set of a defined global, the instance's. */
+static WasmExecStatus global(WasmInterpreter *it, uint32_t op, uint32_t x)
+{
+    CHECKF(x >= it->imported_globals, "the WebAssembly global.get or global.set of imported global %u is not built "
+           "in interpreter.c (a host global)", x);
+    DCHECK(it->globals != NULL && x - it->imported_globals < it->module->n_globals,
+           "a validated WebAssembly global index is past the instance's globals");
+    if (op == 0x23) return push(it, it->globals[x - it->imported_globals].lo) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
+    it->globals[x - it->imported_globals].lo = pop(it);
+    return WASM_EXEC_MORE;
+}
+
 /* §4.6.5's call and return_call of a defined function. A tail call returns from the current frame first, so
    its arguments replace the caller's frame and the callee returns to the caller's caller. */
 static WasmExecStatus call(WasmInterpreter *it, const WasmInstruction *in)
@@ -571,6 +612,7 @@ static WasmExecStatus execute(WasmInterpreter *it, const WasmInstruction *in, si
         a = pop(it);
         return push(it, c != 0 ? a : b) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
     case 0x20: case 0x21: case 0x22: return local(it, in->opcode, in->index[0]);
+    case 0x23: case 0x24: return global(it, in->opcode, in->index[0]);
     case 0x41: return push(it, (uint32_t)(int32_t)in->value) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
     case 0x42: return push(it, (uint64_t)in->value) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
     case 0x43:

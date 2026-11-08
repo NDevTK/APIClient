@@ -82,21 +82,27 @@ static const WasmSideTableRow WASM_SIDE_TABLE_ROWS[] = {
 };
 
 /* Invocation rows the testsuite's subset does not reach, run by node 22's V8 to the same i32: a return_call
- * inside a callee, which returns to its caller's caller (f calls g, g tail-calls h, f adds 1 to h's 6). */
+ * inside a callee, which returns to its caller's caller (f calls g, g tail-calls h, f adds 1 to h's 6), and
+ * two global initializers, the second reading the first (40 + 2, then that times 3). */
 typedef struct {
     const char *src;
     size_t len;
     const char *bytes;
     const char *export_name;
     uint32_t result;
-} WasmCallRow;
+} WasmInvokeRow;
 
-static const WasmCallRow WASM_CALL_ROWS[] = {
+static const WasmInvokeRow WASM_INVOKE_ROWS[] = {
     { "a tail call from a callee returns to its caller's caller", 61,
       "\000\141\163\155\001\000\000\000\001\012\002\140\000\001\177\140\001\177\001\177\003\004\003\000"
       "\001\001\007\005\001\001\146\000\000\012\032\003\011\000\101\005\020\001\101\001\152\013\006\000"
       "\040\000\022\002\013\007\000\040\000\101\001\152\013",
       "f", 7 },
+    { "a global initializer reads the one before it", 53,
+      "\000\141\163\155\001\000\000\000\001\005\001\140\000\001\177\003\002\001\000\006\021\002\177\000"
+      "\101\050\101\002\152\013\177\000\043\000\101\003\154\013\007\005\001\001\147\000\000\012\006\001"
+      "\004\000\043\001\013",
+      "g", 126 },
 };
 
 #endif

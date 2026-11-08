@@ -9,9 +9,9 @@
  * NaN is the positive canonical NaN, and bit operations (abs, neg, copysign, reinterpret) keep bits.
  * The page's bytes have been decoded and validated, so an instruction the validator accepted that this file
  * does not execute is this codebase's gap (CHECK_FAIL), never a refusal.
- * Named residual. Not covered: host calls (imported functions), call_indirect and call_ref, globals (§4.6.6),
+ * Named residual. Not covered: host calls (imported functions) and host globals, call_indirect and call_ref,
  * tables (§4.6.7), memory (§4.6.8), and the reference, vector, exception and aggregate instructions. Next diff
- * builds: globals and tables with an instance record. Absence shows as: invoking a function that reaches one
+ * builds: tables with the instance record (instance.h). Absence shows as: invoking a function that reaches one
  * of them stops the process at the CHECK_FAIL naming its opcode. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
@@ -65,6 +65,8 @@ typedef struct {
     const WasmModule *module;    /* borrowed: the decoded module, its bytes and its validated side table */
     const uint8_t *bytes;
     const WasmSideTable *side;
+    WasmValue *globals;          /* borrowed: the instance's defined globals (instance.h), or NULL */
+    size_t imported_globals;
     size_t pc;                   /* the current frame's next instruction */
     uint32_t n_results;          /* the invoked function's */
     WasmFrame *frames;           /* owned: one per call, the current last */
@@ -77,11 +79,15 @@ typedef struct {
 } WasmInterpreter;
 
 /* Begin §4.7.3's invocation of defined function `func` (an index of the function index space, past the imports)
-   of a module the validator answered DONE for, with `side` its side table. `args` are the function type's
-   parameters, in order, whose count the caller has matched. NO_ROOM when the locals cannot be allocated. */
+   of a module the validator answered DONE for, with `side` its side table and `globals` its instance's. `args`
+   are the function type's parameters, in order, whose count the caller has matched. NO_ROOM when the locals
+   cannot be allocated. */
 WasmExecStatus wasm_interpreter_begin(WasmInterpreter *it, const WasmModule *m, const uint8_t *bytes,
-                                      const WasmSideTable *side, size_t func, const WasmValue *args,
-                                      size_t n_args);
+                                      const WasmSideTable *side, WasmValue *globals, size_t func,
+                                      const WasmValue *args, size_t n_args);
+/* Begin evaluating constant expression `e` (§4.6.13), to one value, the way §4.7.2's instantiation does. */
+WasmExecStatus wasm_interpreter_begin_expr(WasmInterpreter *it, const WasmModule *m, const uint8_t *bytes,
+                                           const WasmSideTable *side, WasmValue *globals, WasmExpr e);
 /* Retire one instruction. MORE, then DONE (the results are vals[0, n_results)) or a trap; stepping again is
    misuse (asserted). */
 WasmExecStatus wasm_interpreter_step(WasmInterpreter *it);
