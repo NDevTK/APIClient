@@ -2031,6 +2031,10 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
     w.run = bf_run_empty();
     w.esc_run = bf_run_empty();
     resumed = bf_walk_resume(body, el, &w, &out);
+    /* §9.4.2's classification below reads every child's `display`: asked first under the caller's resting drive,
+       so a long child list's cascade parks between activations instead of running inside this body. Nothing is
+       staged yet, so "not yet" here restarts the walk, whose asks then find the held styles. */
+    if (!resumed && !wrapper && !box_tree_children_style_ask(el)) return false;
     if (wrapper) wn = bf_wrapper_boxes(el, &wl);
     /* A resumed walk took its branch on its first run. */
     if (!resumed) w.ifc = !wrapper && bf_content_is_inline(el);
