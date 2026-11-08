@@ -15,7 +15,7 @@
  * harness once the browser target is wired.
  */
 import { spawnSync, spawn } from "node:child_process";
-import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, readFileSync, renameSync, rmSync, openSync, closeSync, symlinkSync, linkSync } from "node:fs";
+import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, readFileSync, renameSync, rmSync, openSync, closeSync, symlinkSync } from "node:fs";
 import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { cpus } from "node:os";
 import { createHash } from "node:crypto";
@@ -6742,13 +6742,15 @@ function buildLexbor(force) {
   const srcId = lexborSourceId(LEXBOR_SRC);
   const id = createHash("sha256").update("apiclient-lexbor-v1\0" + tc.flagId + "\0" + srcId)
                                  .digest("hex").slice(0, 32);
-  const lib = join(OBJDIR, "liblexbor-" + id + ".o");
+  const name = "liblexbor-" + id + ".o";
+  const lib = join(OBJDIR, name);
   /* FORCE RECOMPILES AND REPUBLISHES UNDER THE SAME NAME, which is what `node engine/build.mjs lexbor` now
      means and is the whole of what it can mean: the inputs decide the name, so a forced build cannot produce a
      different one, and the bytes it renames into place are the bytes that were already there. */
-  if (!force && existsSync(lib)) {
+  const hit = force ? null : OBJ_STORE.pin(name);
+  if (hit) {
     console.log("[build] lexbor  " + lib + "  (source " + srcId + ", toolchain+flags " + tc.flagId + ")");
-    return lib;
+    return hit;
   }
   const srcs = findC(join(LEXBOR_SRC, "lexbor"), []);
   console.log("[build] lexbor: compiling " + srcs.length + " sources -> " + lib + " (once, ~minutes)");
@@ -6759,7 +6761,7 @@ function buildLexbor(force) {
      bytes, so arriving twice is harmless, and a reader holding an open fd keeps the inode it opened. INSIDE
      OBJDIR because a rename is atomic only within one filesystem and a lane may point `APICLIENT_OBJ_STORE` at
      another one. */
-  const tmp = join(OBJDIR, ".tmp-" + process.pid + "-lexbor");
+  const tmp = OBJ_STORE.tmp("lexbor");
   /* THE RESPONSE FILE CARRIES THE PID TOO AND IS REMOVED AFTER THE SPAWN. It is an INPUT rather than a
      published artifact, so a fixed name there is not a stale-link hazard — it is two concurrent builds in one
      tree handing emcc each other's argument list, which is the same concurrency this function's output name
@@ -6783,9 +6785,9 @@ function buildLexbor(force) {
     console.error("[build] lexbor FAILED rc=" + r.status);
     process.exit(r.status || 1);
   }
-  renameSync(tmp + ".o", lib);                 /* the FACT, published atomically */
+  const pin = OBJ_STORE.publish(tmp + ".o", name);   /* the FACT, published atomically */
   console.log("[build] lexbor OK -> " + lib + " (source " + srcId + ")");
-  return lib;
+  return pin;
 }
 
 // THE IDL GAP AUDIT IS A STAGE OF THIS BUILD — see the stage list at the bottom. It was in nobody's build,
@@ -6943,7 +6945,7 @@ console.log("[rev] the source-derived field contracts were taken at that revisio
    THIS SECTION USED TO SIT BELOW THE `native` TARGET, and that is the whole of why the native compile was
    UNCACHED while the emcc half answered "N sources, 0 to compile (rest cached)". `compileAll` is a `function`
    and hoists, so the native branch could always CALL it; the `const`s it reads cannot — OBJDIR, fileHashes,
-   depName, depFile, objFor and depRecord are the six, every one of them below that branch — so the call threw
+   depName, depFile, objName and depRecord are the six, every one of them below that branch — so the call threw
    in the TDZ before it did anything. Nothing about the SCHEME was emcc-only, which its own banner below says.
    THE RESIDUAL THAT RECORDED THIS NAMED ONE CANDIDATE SHAPE AND THAT SHAPE IS WRONG, which is kept here
    because its reasoning is what a reader re-derives. It said to move the `native` BRANCH below these
@@ -7107,6 +7109,12 @@ console.log("[build] objects  " + OBJDIR +
             (OBJ_STORE.shared ? "  (APICLIENT_OBJ_STORE — shared; a name is a fact about an input set, so a " +
                                 "hit is this revision's object and a miss is a compile)"
                               : "  (this tree's own)"));
+/* The store is bounded by a prune at the exit of every build that used it, least recently used first. The cap
+   is a policy constant, sized from the shared store on this box: builds wrote 0.3 to 1.5 GB of objects an hour
+   and one build's emcc pins held 70 to 100 MB, so 3 GB keeps the last two or so hours of every lane's work warm
+   while leaving the rest of the device to snapshots. */
+const OBJ_STORE_MAX_BYTES = 3 * 1024 ** 3;
+OBJ_STORE.pruneAtExit(OBJ_STORE_MAX_BYTES);
 /* THE FLAGS ARE PART OF THE OBJECT'S NAME, NOT A THING THE CACHE COMPARES. The comment above says a cache
    that misses a header edit reports a stale binary as a fresh one; this cache once missed a FLAG edit, which is
    the same defect with a wider blast radius. `CFLAGS` carries `-DAPICLIENT_DEV=0` under `release` and `=1`
@@ -7215,19 +7223,10 @@ function contentId(tc, deps) {
   }
   return h.digest("hex");
 }
-const objFor = (id) => join(OBJDIR, id + ".o");
-/* A store object this build links is pinned by a hard link in a directory of its own, so pruning or replacing
-   the shared name between the lookup and the link cannot take the object away. The pin is the build's and is
-   removed at exit; null means the store object vanished first, so the source counts as stale. */
-const PIN_DIR = join(OBJDIR, ".pin-" + process.pid);
-mkdirSync(PIN_DIR, { recursive: true });
-process.on("exit", () => rmSync(PIN_DIR, { recursive: true, force: true }));
-const pinObj = (id) => {
-  const pin = join(PIN_DIR, id + ".o");
-  if (existsSync(pin)) return pin;
-  try { linkSync(objFor(id), pin); } catch (e) { if (e.code === "ENOENT") return null; throw e; }
-  return pin;
-};
+/* A store object this build links is the pin `OBJ_STORE.pin` returns, so a prune between the lookup and the
+   link cannot take the object away; null means the store holds no such object, so the source counts as stale. */
+const objName = (id) => id + ".o";
+const pinObj = (id) => OBJ_STORE.pin(objName(id));
 
 /* THE DEPENDENCY RECORD IS A HINT AND THE OBJECT NAME IS A FACT — the invariant the whole scheme rests on, and
    the answer to "can a stale record produce a false HIT?".
@@ -7242,12 +7241,12 @@ const pinObj = (id) => {
    costs a needless recompile and can cost nothing else, which is the only failure mode a memo in a build system
    may have.
    The record's first line is its SUBJECT, checked on read, so a record can never be spent on another source. */
-const depRecord = (tc, src) => join(OBJDIR, createHash("sha256")
-  .update("apiclient-deps-v1\0" + tc.flagId + "\0" + depName(src)).digest("hex").slice(0, 32) + ".deps");
+const depRecord = (tc, src) => createHash("sha256")
+  .update("apiclient-deps-v1\0" + tc.flagId + "\0" + depName(src)).digest("hex").slice(0, 32) + ".deps";
 function recordedDeps(tc, src) {
-  const f = depRecord(tc, src);
-  if (!existsSync(f)) return null;
-  const lines = readFileSync(f, "utf8").split("\n").filter(Boolean);
+  const text = OBJ_STORE.readRecord(depRecord(tc, src));
+  if (text === null) return null;
+  const lines = text.split("\n").filter(Boolean);
   return lines.length > 1 && lines[0] === depName(src) ? lines.slice(1) : null;
 }
 
@@ -7260,7 +7259,7 @@ const TO_COMPILE = SHARED_SOURCES.concat([ENTRY_SMOKE, ENTRY_ABI]);
    would compute the same name and HIT an object compiled against headers that have since been edited. A source
    with no identity is therefore given none: it compiles to a private temporary and is named afterwards. */
 /* THE COMPILE, AS A FUNCTION OF A TOOLCHAIN RATHER THAN OF THE ONLY ONE THERE WAS. The three identities this
-   reads — `recordedDeps`, `contentId`, `objFor` — were already keyed on a flag id; what pinned this to emcc
+   reads — `recordedDeps`, `contentId`, `objName` — were already keyed on a flag id; what pinned this to emcc
    was module-scope state rather than anything about the scheme: one global map, one `requireEmcc()` at the
    spawn, one `cwd: QJS`. Each of those is now the toolchain's own, so a second compiler names its objects in
    the same OBJDIR under a different id and neither can answer for the other.
@@ -7315,7 +7314,7 @@ async function compileAll(tc, sources) {
           /* A PRIVATE TEMPORARY, because the name this object will carry is not known until it has been compiled
              and has said what it read. The pid keeps two concurrent builds out of each other's way; the final
              name they both arrive at is the same one, and arriving there is a rename, which is atomic. */
-          const tmp = join(OBJDIR, ".tmp-" + process.pid + "-" + tmpSeq++);
+          const tmp = OBJ_STORE.tmp(String(tmpSeq++));
           running++;
           const p = spawn(tc.cc, [...tc.cflags, "-MMD", "-MF", tmp + ".d", "-c", src, "-o", tmp + ".o"],
                           { stdio: "inherit", shell: tc.shell, cwd: tc.cwd });
@@ -7332,11 +7331,9 @@ async function compileAll(tc, sources) {
             if (!deps.includes(depName(src))) return "the recorded dependency list does not name the source itself";
             const id = contentId(tc, deps);
             if (!id) return "a file this compile had just read is already gone";
-            renameSync(tmp + ".o", objFor(id));            /* the FACT, published atomically */
-            writeFileSync(depRecord(tc, src), [depName(src), ...deps].join("\n") + "\n");   /* the HINT, after it */
+            const pin = OBJ_STORE.publish(tmp + ".o", objName(id));   /* the FACT, published atomically */
+            OBJ_STORE.writeRecord(depRecord(tc, src), [depName(src), ...deps].join("\n") + "\n");   /* the HINT */
             rmSync(tmp + ".d", { force: true });
-            const pin = pinObj(id);
-            if (!pin) return "the object this compile just published is already gone from the store";
             objOf.set(src, pin);
             return null;
           };

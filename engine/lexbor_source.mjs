@@ -57,7 +57,7 @@
  * are different compilers in one build and a key naming the wrong one would let gcc's archive answer for
  * clang's. Reading it out of `CMakeCache.txt` is cmake's own answer about what it picked.
  */
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -239,15 +239,18 @@ export function lexborNativeArchive(engineDir, tag) {
   const id = createHash("sha256")
                .update("apiclient-lexbor-native-v1\0" + ccId + "\0" + cmakeVer + "\0" + bsId + "\0" + srcId)
                .digest("hex").slice(0, 32);
-  const lib = join(store.dir, "liblexbor_static-" + id + ".a");
+  const name = "liblexbor_static-" + id + ".a";
+  const lib = join(store.dir, name);
   const made = join(build, "liblexbor_static.a");
   const what = `source ${srcId}, build system ${bsId}, cmake ${cmakeVer}, cc+flags ${ccId}`;
 
-  if (existsSync(lib)) {
+  /* The path returned is this process's pin, so a prune before the link cannot take the archive away. */
+  const hit = store.pin(name);
+  if (hit) {
     console.log(`[${tag}] lexbor  ${lib}  (${what}; configure ${cfgMs} ms` +
                 (store.shared ? ", shared store" : ", this tree's own store") + ")");
     rmSync(build, { recursive: true, force: true });
-    return lib;
+    return hit;
   }
   console.log(`[${tag}] building lexbor natively -> ${lib}  (${what}; configure ${cfgMs} ms, now make, ` +
               "~minutes)");
@@ -269,10 +272,10 @@ export function lexborNativeArchive(engineDir, tag) {
      because a rename is atomic only within one filesystem and a lane may point `APICLIENT_OBJ_STORE` at
      another one, which is why the make's output is COPIED there first rather than renamed from the build
      directory. */
-  const tmp = join(store.dir, ".tmp-" + process.pid + "-liblexbor_static.a");
+  const tmp = store.tmp("liblexbor_static.a");
   copyFileSync(made, tmp);
-  renameSync(tmp, lib);
+  const pin = store.publish(tmp, name);
   rmSync(build, { recursive: true, force: true });
   console.log(`[${tag}] lexbor OK -> ${lib}  (${what})`);
-  return lib;
+  return pin;
 }
