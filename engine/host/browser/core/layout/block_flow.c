@@ -1520,11 +1520,11 @@ static BfBox bf_table_box(lxb_dom_element_t *table)
 /* The stack walk's loop state: the enumeration's place (`prev`, `brk`, `at_run`, and `wi` on a wrapper's
    stack), the running position, the open run, and the run escaping through the top edge. `run_inline` is
    whether the enumeration passed an inline-level box between `prev` and `brk`. `ifc` is the walk
-   having taken §9.4.2's branch. */
+   having taken §9.4.2's branch, once `classified` says it chose one. */
 typedef struct {
     lxb_dom_node_t *prev, *brk;
     size_t wi;
-    bool   ifc, at_run, run_inline, escaping, placed;
+    bool   classified, ifc, at_run, run_inline, escaping, placed;
     CssPx  pos;
     BfRun  run, esc_run;
 } BfWalk;
@@ -1538,6 +1538,7 @@ static bool bf_walk_stage(size_t body, lxb_dom_element_t *el, const BfWalk *w, c
     c.prev = w->prev;
     c.brk = w->brk;
     c.wi = w->wi;
+    c.classified = w->classified;
     c.ifc = w->ifc;
     c.at_run = w->at_run;
     c.run_inline = w->run_inline;
@@ -1563,6 +1564,7 @@ static bool bf_walk_resume(size_t body, lxb_dom_element_t *el, BfWalk *w, BfBox 
     w->prev = c.prev;
     w->brk = c.brk;
     w->wi = c.wi;
+    w->classified = c.classified;
     w->ifc = c.ifc;
     w->at_run = c.at_run;
     w->run_inline = c.run_inline;
@@ -2022,6 +2024,7 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
     w.prev = NULL;
     w.brk = NULL;
     w.wi = 0;
+    w.classified = false;
     w.ifc = false;
     w.at_run = true;
     w.run_inline = false;
@@ -2030,14 +2033,15 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
     w.pos = css_px(0.0);
     w.run = bf_run_empty();
     w.esc_run = bf_run_empty();
-    resumed = bf_walk_resume(body, el, &w, &out);
-    /* §9.4.2's classification below reads every child's `display`: asked first under the caller's resting drive,
-       so a long child list's cascade parks between activations instead of running inside this body. Nothing is
-       staged yet, so "not yet" here restarts the walk, whose asks then find the held styles. */
-    if (!resumed && !wrapper && !box_tree_children_style_ask(el)) return false;
+    /* A walk staged before it classified stands at its start, so it runs as a fresh one. */
+    resumed = bf_walk_resume(body, el, &w, &out) && w.classified;
+    /* §9.4.2's classification reads every child's `display`: asked first under the caller's resting drive, so a
+       long child list's cascade parks between activations instead of running inside this body. */
+    if (!resumed && !wrapper && !box_tree_children_style_ask(el)) return bf_walk_stage(body, el, &w, &out);
     if (wrapper) wn = bf_wrapper_boxes(el, &wl);
     /* A resumed walk took its branch on its first run. */
     if (!resumed) w.ifc = !wrapper && bf_content_is_inline(el);
+    w.classified = true;
     /* Where this walk stands in its block formatting context. Its top content edge is known at once when a
        border, padding or an inline formatting context keeps its children's margins from its own, after the first
        child it places otherwise, and at the walk's end when it places none: CSS 2.2 §9.5.1 places a float
