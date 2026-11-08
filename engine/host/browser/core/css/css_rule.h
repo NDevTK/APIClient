@@ -383,6 +383,8 @@ typedef struct {
     uint32_t             n;       /* how many rules were emitted, and how long `layer` is */
     CssPropertyRegistrationEntry *regs;   /* the sheet's `@property` registrations in document order. OWNED. */
     uint32_t             nregs;
+    char               **keyframes;       /* the sheet's applying `@keyframes` names in document order. OWNED. */
+    uint32_t             nkeyframes;
 } CssRuleCascadeSheet;
 
 void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s);

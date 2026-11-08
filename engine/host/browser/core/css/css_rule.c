@@ -4495,11 +4495,16 @@ typedef struct {
        emitter records none, since what it writes is discarded */
     CssPropertyRegistrationEntry *regs;
     uint32_t             nregs, regs_cap;
+    /* CSS Animations 1 §3's applying `@keyframes` names the walk met, in document order, owned; none for a
+       scratch emitter, for the same reason */
+    char               **keyframes;
+    uint32_t             nkeyframes, keyframes_cap;
     bool                 scratch;
 } CascadeEmit;
 
 static void cascade_emit_registration(JSContext *ctx, CascadeEmit *e, const CssRuleData *r);
 static void cascade_emit_registrations_free(CascadeEmit *e);
+static void cascade_emit_keyframes(JSContext *ctx, CascadeEmit *e, const CssRuleData *r);
 
 /* The memo of `@media` answers the walk's current run reads (core/css/media_query.h): set for the run's length
    and cleared at every return, so it is never kept across a rest. */
@@ -4766,7 +4771,10 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        names it (CSS Animations 1 §4.1's `animation-name`), which is a step after the cascade rather than a rule in it
        — CSS Cascade 5 §6.1 "Cascade Sorting Order" puts animations in an origin of their own, above every NORMAL
        author declaration and below every IMPORTANT one. */
-    if (r->type == RULE_TYPE_KEYFRAMES) return true;
+    if (r->type == RULE_TYPE_KEYFRAMES) {
+        if (!e->scratch) cascade_emit_keyframes(ctx, e, r);
+        return true;
+    }
     /* NOR DOES AN `@property`, and for a FIFTH: CSS Properties and Values API 1 §3 makes it "a custom property
        REGISTRATION directly in a stylesheet", whose body declares CSS Properties and Values API 1 §3.1's,
        CSS Properties and Values API 1 §3.2's and CSS Properties and Values API 1 §3.3's descriptors and no property of
@@ -4983,11 +4991,15 @@ CssRuleCascadeStep css_rule_cascade_walk_run(JSContext *ctx, CssRuleCascadeWalk 
     out->n = w->e.n;
     out->regs = w->e.regs;
     out->nregs = w->e.nregs;
+    out->keyframes = w->e.keyframes;
+    out->nkeyframes = w->e.nkeyframes;
     w->e.out.s = NULL;
     w->e.layer = NULL;
     w->e.n = 0;
     w->e.regs = NULL;
     w->e.nregs = w->e.regs_cap = 0;
+    w->e.keyframes = NULL;
+    w->e.nkeyframes = w->e.keyframes_cap = 0;
     DCHECK(out->n == 0 || out->text != NULL,
            "the author cascade emitted rules and no text to hold them — the two are written by one call per "
            "rule and cannot disagree about whether a rule went in");
@@ -5019,6 +5031,10 @@ void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s)
     free((void *)s->layer);
     for (i = 0; i < s->nregs; i++) css_property_registration_entry_free(&s->regs[i]);
     free(s->regs);
+    for (i = 0; i < s->nkeyframes; i++) free(s->keyframes[i]);
+    free(s->keyframes);
+    s->keyframes = NULL;
+    s->nkeyframes = 0;
     s->text = NULL;
     s->layer = NULL;
     s->n = 0;
@@ -5078,6 +5094,25 @@ static void cascade_emit_registrations_free(CascadeEmit *e)
     free(e->regs);
     e->regs = NULL;
     e->nregs = e->regs_cap = 0;
+    for (i = 0; i < e->nkeyframes; i++) free(e->keyframes[i]);
+    free(e->keyframes);
+    e->keyframes = NULL;
+    e->nkeyframes = e->keyframes_cap = 0;
+}
+
+/* `r`'s `<keyframes-name>` (CSS Animations 1 §6.3.2's `name`), appended to `e`'s in document order. */
+static void cascade_emit_keyframes(JSContext *ctx, CascadeEmit *e, const CssRuleData *r)
+{
+    DCHECK(JS_IsString(r->keyframes_name), "a `@keyframes` record lacks the name its constructor always writes");
+    if (e->nkeyframes == e->keyframes_cap) {
+        uint32_t cap = e->keyframes_cap ? e->keyframes_cap * 2 : 8;
+        char **grown = lexbor_realloc(e->keyframes, (size_t)cap * sizeof *grown);
+
+        CHECK(grown != NULL, "cssom: OOM recording a sheet's `@keyframes` names");
+        e->keyframes = grown;
+        e->keyframes_cap = cap;
+    }
+    e->keyframes[e->nkeyframes++] = rule_field_cstr(ctx, r->keyframes_name);
 }
 
 /* ---- the interfaces -------------------------------------------------------------------------------------- */

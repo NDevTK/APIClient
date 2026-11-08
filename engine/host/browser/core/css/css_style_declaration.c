@@ -123,6 +123,7 @@
 #include "core/css/css_presentational_hints.h"
 #include "core/css/css_rule.h"
 #include "core/css/css_sheet_parse.h"
+#include "core/css/css_animation_shorthand.h"
 #include "core/css/css_background_shorthand.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_var.h"   /* css-variables-1 §3's var(), for the parse-time rule below */
@@ -3438,6 +3439,20 @@ char *cssom_initial_value(const char *name)
             return out;
         }
     }
+    /* CSS Animations 1 §4's eight, whose `Initial:` lines core/css/css_animation_shorthand.c states. */
+    {
+        const char *an = css_animation_shorthand_initial(name);
+
+        if (an != NULL) {
+            char *out;
+
+            DCHECK(e == NULL, "a CSS Animations longhand is ALSO in lexbor's property registry — one fact with two "
+                              "answers; delete the value from core/css/css_animation_shorthand.c's AN_INITIAL");
+            out = reclaim_strdup(an);
+            CHECK(out != NULL, "cssom: OOM copying an initial value");
+            return out;
+        }
+    }
     return NULL;
 }
 
@@ -5188,6 +5203,8 @@ static void cssd_own_init(void)
         cssd_own_add(CSSD_INITIAL_UNREGISTERED[i].name);
     for (i = 0; i < CSS_BACKGROUND_SHORTHAND_N; i++)
         cssd_own_add(CSS_BACKGROUND_SHORTHAND_LONGHANDS[i]);
+    for (i = 0; i < CSS_ANIMATION_SHORTHAND_N; i++)
+        cssd_own_add(CSS_ANIMATION_SHORTHAND_LONGHANDS[i]);
     for (i = 0; (n = css_shorthand_name_at(i)) != NULL; i++)
         cssd_own_add(n);
 }
@@ -5270,6 +5287,10 @@ const char *cssom_supported_css_property_named(const char *name)
     for (i = 0; i < CSS_BACKGROUND_SHORTHAND_N; i++)
         if (strcmp(CSS_BACKGROUND_SHORTHAND_LONGHANDS[i], name) == 0)
             return CSS_BACKGROUND_SHORTHAND_LONGHANDS[i];
+    /* CSS Animations 1 §4's eight, asked of the component that owns their grammars. */
+    for (i = 0; i < CSS_ANIMATION_SHORTHAND_N; i++)
+        if (strcmp(CSS_ANIMATION_SHORTHAND_LONGHANDS[i], name) == 0)
+            return CSS_ANIMATION_SHORTHAND_LONGHANDS[i];
     /* And the SHORTHANDS core/css/css_shorthand.h expands, asked of that component rather than listed here. */
     own = css_shorthand_property_named(name);
     if (own != NULL) return own;

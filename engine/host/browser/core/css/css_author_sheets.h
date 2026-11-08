@@ -46,5 +46,8 @@ const CssAuthorSheet *css_author_sheets_at(const CssAuthorSheets *s, uint32_t i)
    `name` in document order, copied into `*out` (freed by css_property_registration_free), or false with `*out`
    untouched. */
 bool css_author_sheets_registration(const CssAuthorSheets *s, const char *name, CssPropertyRegistration *out);
+/* CSS Animations 1 §3's half: does an applying `@keyframes` rule of the set's sheets have `<keyframes-name>`
+   `name` (case-sensitively, as CSS Animations Level 2 §3.2 matches it)? */
+bool css_author_sheets_keyframes(const CssAuthorSheets *s, const char *name);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_CSS_CSS_AUTHOR_SHEETS_H */

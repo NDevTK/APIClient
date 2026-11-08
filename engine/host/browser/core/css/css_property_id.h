@@ -128,6 +128,14 @@ typedef enum {
     X(CONTAIN,             "contain",             LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(WILL_CHANGE,         "will-change",         LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(TRANSFORM_BOX,       "transform-box",       LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
+    X(ANIMATION_NAME,            "animation-name",            LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
+    X(ANIMATION_DURATION,        "animation-duration",        LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
+    X(ANIMATION_TIMING_FUNCTION, "animation-timing-function", LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
+    X(ANIMATION_ITERATION_COUNT, "animation-iteration-count", LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
+    X(ANIMATION_DIRECTION,       "animation-direction",       LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
+    X(ANIMATION_PLAY_STATE,      "animation-play-state",      LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
+    X(ANIMATION_DELAY,           "animation-delay",           LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
+    X(ANIMATION_FILL_MODE,       "animation-fill-mode",       LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
     X(FLEX_GROW,           "flex-grow",           LXB_CSS_PROPERTY_FLEX_GROW,      TEXT, NON_NEGATIVE, UNTYPED)   \
     X(FLEX_SHRINK,         "flex-shrink",         LXB_CSS_PROPERTY_FLEX_SHRINK,    TEXT, NON_NEGATIVE, UNTYPED)   \
     X(ORDER,               "order",               LXB_CSS_PROPERTY_ORDER,          TEXT, ALL, UNTYPED)            \

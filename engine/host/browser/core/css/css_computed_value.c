@@ -12,6 +12,7 @@
 #include "core/css/css_cascade_pass.h"
 #include "core/css/css_color.h"
 #include "core/css/css_computed_style.h"
+#include "core/css/css_animation_shorthand.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_contain.h"
 #include "core/css/css_defaulting.h"
@@ -2797,6 +2798,17 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
         free(spec);
         return css_cv_strdup("view-box");
     }
+    /* CSS Animations 1 §4.1-§4.8: each a list, `animation-duration` and `animation-delay` "each item a duration"
+       and the other six their specified items; core/css/css_animation_shorthand.h derives all eight. */
+    case CSS_PROPERTY_ANIMATION_NAME:
+    case CSS_PROPERTY_ANIMATION_DURATION:
+    case CSS_PROPERTY_ANIMATION_TIMING_FUNCTION:
+    case CSS_PROPERTY_ANIMATION_ITERATION_COUNT:
+    case CSS_PROPERTY_ANIMATION_DIRECTION:
+    case CSS_PROPERTY_ANIMATION_PLAY_STATE:
+    case CSS_PROPERTY_ANIMATION_DELAY:
+    case CSS_PROPERTY_ANIMATION_FILL_MODE:
+        return css_animation_shorthand_computed(name, spec);
     case CSS_PROPERTY_FONT_FAMILY:
         return computed_font_family(el, spec);
     /* `float` (CSS2 §9.5.1) states "Computed value: as specified", and a keyword has no absolutization to do —

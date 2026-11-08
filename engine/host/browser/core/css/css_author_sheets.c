@@ -26,6 +26,8 @@ struct CssAuthorSheets {
     uint32_t            n, cap;
     CssPropertyRegistrationEntry *regs;   /* every applying sheet's `@property` registrations, in order, owned */
     uint32_t            nregs, regs_cap;
+    char              **keyframes;   /* every applying sheet's `@keyframes` names, in document order, owned */
+    uint32_t            nkeyframes, keyframes_cap;
     uint32_t            at;       /* the sheet list position the build reads next */
     CssRuleCascadeWalk *walk;     /* owned: the walk over the sheet at `at`, NULL between sheets */
     bool                sealed;
@@ -66,6 +68,28 @@ static void cas_take_registrations(CssAuthorSheets *s, CssRuleCascadeSheet *view
     free(view->regs);
     view->regs = NULL;
     view->nregs = 0;
+}
+
+/* `view`'s `@keyframes` names moved onto the set's, after every earlier sheet's. */
+static void cas_take_keyframes(CssAuthorSheets *s, CssRuleCascadeSheet *view)
+{
+    uint32_t i;
+
+    if (view->nkeyframes == 0) return;
+    if (s->nkeyframes + view->nkeyframes > s->keyframes_cap) {
+        uint32_t cap = s->keyframes_cap ? s->keyframes_cap : 8;
+        char **grown;
+
+        while (cap < s->nkeyframes + view->nkeyframes) cap *= 2;
+        grown = lexbor_realloc(s->keyframes, (size_t)cap * sizeof *grown);
+        CHECK(grown != NULL, "cssom: OOM recording the author origin's `@keyframes` names");
+        s->keyframes = grown;
+        s->keyframes_cap = cap;
+    }
+    for (i = 0; i < view->nkeyframes; i++) s->keyframes[s->nkeyframes++] = view->keyframes[i];
+    free(view->keyframes);
+    view->keyframes = NULL;
+    view->nkeyframes = 0;
 }
 
 /* The sheets hang off the root's wrapper, which belongs to the realm whose record owns the document. */
@@ -109,7 +133,7 @@ bool css_author_sheets_run(CssAuthorSheets *s, bool rests)
         JS_FreeValue(ctx, len);
     }
     for (; s->at < ns; s->at++) {
-        CssRuleCascadeSheet view = { NULL, NULL, 0, NULL, 0 };
+        CssRuleCascadeSheet view = { NULL, NULL, 0, NULL, 0, NULL, 0 };
         CssRuleCascadeStep step;
 
         if (s->walk == NULL) {
@@ -141,6 +165,7 @@ bool css_author_sheets_run(CssAuthorSheets *s, bool rests)
         s->walk = NULL;
         if (step == CSS_RULE_CASCADE_FAILED) continue;
         cas_take_registrations(s, &view);
+        cas_take_keyframes(s, &view);
         /* A sheet of `@layer a, b;` alone emits no rule and has already declared its layers. */
         if (view.text == NULL) { css_rule_cascade_sheet_free(&view); continue; }
         cas_push(s, s->at, view);
@@ -167,6 +192,8 @@ void css_author_sheets_free(CssAuthorSheets *s)
     for (i = 0; i < s->n; i++) css_rule_cascade_sheet_free(&s->v[i].view);
     for (i = 0; i < s->nregs; i++) css_property_registration_entry_free(&s->regs[i]);
     free(s->regs);
+    for (i = 0; i < s->nkeyframes; i++) free(s->keyframes[i]);
+    free(s->keyframes);
     free(s->v);
     css_layer_order_free(s->order);
     free(s);
@@ -207,6 +234,16 @@ bool css_author_sheets_registration(const CssAuthorSheets *s, const char *name, 
               "cssom: OOM copying a `@property` registration");
         return true;
     }
+    return false;
+}
+
+bool css_author_sheets_keyframes(const CssAuthorSheets *s, const char *name)
+{
+    uint32_t i;
+
+    DCHECK(s != NULL && s->sealed && name != NULL, "a `@keyframes` name was asked of no sheet set or an open one");
+    for (i = 0; i < s->nkeyframes; i++)
+        if (strcmp(s->keyframes[i], name) == 0) return true;
     return false;
 }
 

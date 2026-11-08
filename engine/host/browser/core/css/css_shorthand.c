@@ -7,6 +7,7 @@
 
 #include "check.h"
 #include "core/css/css_align.h"
+#include "core/css/css_animation_shorthand.h"
 #include "core/css/css_background_shorthand.h"
 #include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
@@ -1142,6 +1143,10 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
        row, exactly as CSS_SH_FONT is the seam for §2.7. */
     if (strcmp(shorthand, "background") == 0) return css_background_shorthand_component(value, longhand);
 
+    /* ---- CSS Animations 1 §4.9's `animation`, a comma-separated list of `<single-animation>`s whose
+       grammar core/css/css_animation_shorthand.h owns. */
+    if (strcmp(shorthand, "animation") == 0) return css_animation_shorthand_component(value, longhand);
+
     /* ---- css-grid-1 §7.4's `grid-template` and §7.8's `grid` --------------------------------------------- */
     if (strcmp(shorthand, "grid-template") == 0) return css_grid_template_component(false, value, longhand);
     if (strcmp(shorthand, "grid") == 0) return css_grid_template_component(true, value, longhand);
@@ -1447,6 +1452,8 @@ bool css_shorthand_validates_longhand(const char *longhand)
        lexbor's parser owns the colour's. The question is FORWARDED rather than answered here, because the list
        and the grammar behind it are one statement in one file. */
     if (css_background_shorthand_validates_longhand(longhand)) return true;
+    /* CSS Animations 1 §4's eight, none of which lexbor types: core/css/css_animation_shorthand.h's grammars. */
+    if (css_animation_shorthand_validates_longhand(longhand)) return true;
     /* css-align-3's six alignment longhands, whose grammar is core/css/css_align.h's. Lexbor carries no
        `justify-items` or `justify-self`, and parses css-flexbox-1 §8's narrower lines for the other four, so
        core/css/css_style_declaration.c asks this grammar ahead of lexbor's for all six. */
@@ -1488,6 +1495,8 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
     if (css_var_references(value)) return css_sh_strdup(value);
     if (css_background_shorthand_validates_longhand(longhand))
         return css_background_shorthand_longhand_value(longhand, value);
+    if (css_animation_shorthand_validates_longhand(longhand))
+        return css_animation_shorthand_longhand_value(longhand, value);
     DCHECK(css_shorthand_validates_longhand(longhand),
            "a longhand this component does not own the grammar of was routed through it — the predicate and "
            "this function are one list and have come apart, and the failure is silent in the direction that "
@@ -1605,6 +1614,8 @@ typedef enum {
                            — which is why its row still carries the per-longhand `initial` list that rule reads
                            — over an EXPANSION whose `none` is distributed across two terms rather than
                            assigned to one. See that section's block above `LH_LIST_STYLE` */
+    CSS_SH_ANIMATION,   /* CSS Animations 1 §4.9's `animation`, a list whose grammar is
+                           core/css/css_animation_shorthand.h's */
     CSS_SH_BACKGROUND,  /* css-backgrounds-3 §2.10's `background`, whose grammar is a LIST OF LAYERS and lives
                            in core/css/css_background_shorthand.h */
     CSS_SH_GRID_TEMPLATE,   /* css-grid-1 §7.4's `grid-template`, whose grammar is core/css/css_grid_template.h's */
@@ -1696,6 +1707,10 @@ static const CssShorthandRow SHORTHANDS[] = {
        carry. `10em auto` and the one-value box are the two places the two directions could disagree and not be
        noticed: the first is §2.9.1's always-two-values serialization, and the second is the rule that a single
        box is not the same fact as two equal ones. */
+    /* CSS Animations 1 §4.9: every term of one `<single-animation>`, each away from its own initial but the
+       delay, in the order the serialization writes them. */
+    { "animation",     CSS_ANIMATION_SHORTHAND_LONGHANDS, CSS_ANIMATION_SHORTHAND_N, CSS_SH_ANIMATION,
+      "1s linear 0s infinite alternate both paused spin", NULL, NULL },
     { "background",    CSS_BACKGROUND_SHORTHAND_LONGHANDS, CSS_BACKGROUND_SHORTHAND_N, CSS_SH_BACKGROUND,
       "url(chess.png) 40% 50% / 10em auto round fixed border-box gray", NULL, NULL },
     { "border",        LH_BORDER,        17, CSS_SH_BORDER,    "1px solid red", NULL, NULL },
@@ -2163,6 +2178,7 @@ char *css_shorthand_serialize_value(const char *shorthand, const char *const *va
     case CSS_SH_FONT:      return css_font_shorthand_value(values);
     case CSS_SH_TEXT_ALIGN: return css_sh_text_align_value(values);
     case CSS_SH_BACKGROUND: return css_background_shorthand_value(values);
+    case CSS_SH_ANIMATION:  return css_animation_shorthand_value(values);
     case CSS_SH_GRID_TEMPLATE: return css_grid_template_value(false, values);
     case CSS_SH_GRID:       return css_grid_template_value(true, values);
     default:
@@ -2958,6 +2974,9 @@ bool css_shorthand_complete_for(const char *longhand)
         "flex-direction", "flex-wrap", "flex-grow", "flex-shrink", "flex-basis",
         "background-image", "background-position", "background-size", "background-repeat",
         "background-attachment", "background-origin", "background-clip", "background-color",
+        /* CSS Animations 1 §4.9's `animation`, in the table above, is the only shorthand over these eight. */
+        "animation-duration", "animation-timing-function", "animation-delay", "animation-iteration-count",
+        "animation-direction", "animation-fill-mode", "animation-play-state", "animation-name",
         "baseline-source", "alignment-baseline", "baseline-shift",
         "text-align-all", "text-align-last",
         "font-size", "line-height", "font-family", "font-style", "font-weight", "font-stretch",
