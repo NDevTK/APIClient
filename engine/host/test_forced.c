@@ -1544,6 +1544,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/transform2d.h"
 #include "fixture/svgtransformable.h"
 #include "fixture/svgtransformattr.h"
+#include "fixture/transform3d.h"
 #include "fixture/fillwidth.h"
 #include "fixture/jsonlead.h"
 #include "fixture/owedsale.h"
@@ -2269,6 +2270,7 @@ TF_DOCS[] = {
     { "transform2d", HTML_TRANSFORM2D },
     { "svgtransformable", HTML_SVGTRANSFORMABLE },
     { "svgtransformattr", HTML_SVGTRANSFORMATTR },
+    { "transform3d", HTML_TRANSFORM3D },
     { "fillwidth", HTML_FILLWIDTH },
     { "jsonlead", HTML_JSONLEAD },
     { "startin", HTML_STARTIN },
@@ -21776,6 +21778,32 @@ TF_UNIT void probes_svgtransformattr(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `transform3d` document (fixture/transform3d.h): css-transforms-2 §6's 4x4 matrix, flattened
+   into each parent's plane, and §2.1's matrix3d() resolved value. */
+TF_UNIT void probes_transform3d(const char *js, Probe *tab, int *n) {
+    const char *t3_why = NULL; int t3_tt = 1;
+#define T3_IS(k, v) param_value_is(js, "/api/transform3d", k, v)
+    fold_row(&t3_tt, &t3_why, !!strstr(js, "\"/api/transform3d\""),
+             "NOT REACHED: no /api/transform3d record, so the document aborted before its fetch");
+    fold_row(&t3_tt, &t3_why, T3_IS("z", "10") && T3_IS("zt", "20"),
+             "css-transforms-2 §16: translate3d(10px, 20px, 30px) does not place a flat box at (10, 20)");
+    fold_row(&t3_tt, &t3_why, T3_IS("x", "10") && T3_IS("xh", "20") && T3_IS("xw", "40") &&
+                              T3_IS("y", "305") && T3_IS("yw", "10"),
+             "css-transforms-2 §16: rotateX(60deg) or rotateY(60deg) about the centre does not halve that extent");
+    fold_row(&t3_tt, &t3_why, T3_IS("p", "190") && T3_IS("pt", "-10") && T3_IS("pw", "40"),
+             "css-transforms-2 §16: perspective(100px) translateZ(50px) does not divide by w = 0.5");
+    fold_row(&t3_tt, &t3_why, T3_IS("fc", "110") && T3_IS("fch", "20"),
+             "css-transforms-2 §7: a flat parent's rotateX(60deg) does not map its translateZ(100px) child after "
+             "flattening it into the parent's plane");
+    fold_row(&t3_tt, &t3_why, T3_IS("zr", "matrix3d(1_0_0_0_0_1_0_0_0_0_1_0_10_20_30_1)"),
+             "css-transforms-2 §2.1: a 3D list does not resolve to one matrix3d() in column-major order");
+#undef T3_IS
+    const Probe rows[] = {
+        { "transform-3d-matrix", t3_tt, "/api/transform3d", SESS_EXPLORE, t3_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fillwidth` document (fixture/fillwidth.h): CSS 2.2 §9.4.2's line box width for a run that
    breaks, resolved over §10.1's containing block chain through a flex item's used main size. */
 TF_UNIT void probes_fillwidth(const char *js, Probe *tab, int *n) {
@@ -28086,6 +28114,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_transform2d(js, probes, &np);
     probes_svgtransformable(js, probes, &np);
     probes_svgtransformattr(js, probes, &np);
+    probes_transform3d(js, probes, &np);
     probes_fillwidth(js, probes, &np);
     probes_jsonlead(js, probes, &np);
     probes_owedsale(js, probes, &np);
