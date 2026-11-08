@@ -8068,6 +8068,47 @@ TF_UNIT void named_walk_on_selftest(JSContext *ctx)
            (unsigned long long)walked[0], (unsigned long long)walked[1]);
 }
 
+/* An insert's walks of the inserted subtree are engine work: an appendChild of a detached `<div>` holding 1,000
+   `<i>` into a connected parent is charged one THREAD_WORK_DOM_WALK unit per node by each of the name index's
+   upkeep, DOM §4.2.3 insert step 7.7's insertion steps, the walk collecting step 11's staticNodeList, and step
+   12's post-connection steps, the same under both schedules. The subtree is built by one program and inserted by
+   the next, in an inert document of the program's own, and the next reads no collection, so the charge holds
+   only the insert's walks. */
+static const char *TF_INSERT_WALK_SETUP_SRC =
+    "(function(){ var x = document.implementation.createHTMLDocument(''), d = x.createElement('div'), i;"
+    " for (i = 0; i < 1000; i++) d.appendChild(x.createElement('i'));"
+    " self.__tfInsertWalk = [x, d]; return 1; })()";
+static const char *TF_INSERT_WALK_SRC =
+    "(function(){ var x = self.__tfInsertWalk[0], d = self.__tfInsertWalk[1]; delete self.__tfInsertWalk;"
+    " x.body.appendChild(d); return d.parentNode === x.body && d.lastChild.nextSibling === null ? 1 : -1; })()";
+
+TF_UNIT void insert_walk_selftest(JSContext *ctx)
+{
+    static const JSFlowControlHooks *const SCHED[2] = { &TF_DIFF_DECLINE, &TF_DIFF_FORCE };
+    uint64_t charged[2];
+
+    for (int k = 0; k < 2; k++) {
+        ThreadWorkCensus before, now;
+        int susp, mach;
+        int32_t got;
+
+        got = tf_step_diff_run(ctx, TF_INSERT_WALK_SETUP_SRC, "insert-walk-setup", SCHED[k], &susp, &mach);
+        CHECK(got == 1, "the insert-walk fixture's detached subtree could not be built");
+        thread_work_census(&before);
+        got = tf_step_diff_run(ctx, TF_INSERT_WALK_SRC, "insert-walk", SCHED[k], &susp, &mach);
+        thread_work_census(&now);
+        CHECKF(got == 1, "an appendChild of a 1,001-node subtree into a connected parent answered %d (schedule %s)",
+               (int)got, k ? "forced" : "declined");
+        charged[k] = now.charged_input[THREAD_WORK_DOM_WALK] - before.charged_input[THREAD_WORK_DOM_WALK];
+    }
+    JS_SetFlowControlHooks(&TF_DIFF_NONE);
+    CHECKF(charged[0] >= 4 * 1001 && charged[1] == charged[0],
+           "an appendChild of a 1,001-node subtree was charged %llu DOM-walk nodes declined and %llu forced, not "
+           "at least 4,004 under both: a walk of the inserted subtree (the name index's upkeep, insert step 7.7, "
+           "step 11's collection, step 12) charged nothing, or a resume re-ran a parked walk",
+           (unsigned long long)charged[0], (unsigned long long)charged[1]);
+}
+
 /* DOM §4.2.10's live collections rest per node: the same reads of 300 detached elements answer the same under a
    schedule declining every offer and one taking every offer, and the walks are charged the same nodes under both,
    so a resume continues a parked walk rather than re-running it. `k3` is a `<b>`, so namedItem over the `<i>`
@@ -43792,6 +43833,8 @@ int main(int argc, char **argv) {
     named_walk_on_selftest(ctx);
     /* DOM §4.2.10's live collections rest per node and resume where they parked; needs the document. */
     collection_walk_selftest(ctx);
+    /* DOM §4.2.3 insert's walks of the inserted subtree are charged per node; needs the document. */
+    insert_walk_selftest(ctx);
     /* HTML §4.12.5.1.16's ROUND TRIP, immediately after the union arms and for the same two reasons: it needs
        a REALM and the DOCUMENT, which the block above establishes, and it must stand BEFORE the time-travel
        hooks below so its canvas and its bitmap belong to the pre-boot baseline rather than to whichever flow
