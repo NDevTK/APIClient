@@ -478,8 +478,8 @@ int decide_completion(const char *why, void **sib_blob);
    sibling standing past it on arm 1. A replay that recorded it returns the recorded arm with `*sib_blob` NULL and
    mints nothing, so a resumed parent does not re-mint the sibling its record already holds. */
 int decide_fork_arrival(const char *why, uint64_t what, void **sib_blob);
-/* The arm the running flow's recorded path holds for that arrival among the unlanded arrivals at its cursor, or -1
-   when it holds none there. A read: the slot is consumed by decide_fork_arrival or decide_arrival_taken. */
+/* The arm the running flow's recorded path holds for that arrival among the unlanded arrivals owed behind its cursor
+   or standing at it, or -1 when it holds none there. A read: the slot is consumed by decide_fork_arrival or decide_arrival_taken. */
 int decide_arrival_recorded(const char *why, uint64_t what);
 /* The running flow is that fork's sibling here (a drive building the call its seed minted it for): consumes the
    recorded arm 1, or past its record writes arm 1 as its own slot. */
@@ -513,7 +513,8 @@ void *decide_freeze_path(void);
    Requires a running flow. */
 void  decide_history_name(uint64_t *identity, int *ordinal);
 /* Whether the running flow's recorded path, from its cursor on, takes the completion `why` (decide_completion's
-   key) first at a slot past the cursor: an arrival the replay reaches before its record took it. */
+   key) first at a slot past the cursor: an arrival the replay reaches before its record took it. One owed behind
+   the cursor (passed over for a later question) is due, not later. */
 int   decide_completion_recorded_later(const char *why);
 void *decide_suspend(void);
 void  decide_resume(void *blob, JSValueConst fn);

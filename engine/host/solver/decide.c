@@ -13,6 +13,7 @@
 
 static void *decide_fork_blob(int cursor, int arm, uint32_t asked);   /* the sibling's hot state (below) */
 static int dec_replay(uint32_t asked);       /* the recorded arm at the cursor (below) */
+static int dec_owed_take(uint32_t asked);   /* an owed arrival consumed where it lands (below) */
 /* Nothing the run observed says which arm is the real one: decide_real_arm's answer for an example-free value,
    which dec_fork_here and decide_note_forced_arm read as "make no claim". Named once because three functions
    spell it, and decide_arm already answers -1 for "not concolic" and decide_value_arm for "not decided". */
@@ -61,6 +62,11 @@ static int g_c = 0;
    since the history was `g_mint_h`. Per flow, so it rides every blob a flow's decision state does. */
 static uint64_t g_mint_h = 0;
 static int g_mints = 0;
+/* The arrival slots below the cursor that have not landed, in recorded order: a replay passed over them to answer
+   a question recorded after them, and each is consumed where it lands (dec_owed_take). Per flow, so it rides every
+   blob; a cold resume starts at cursor 0 with none. */
+static int *g_owed = NULL;
+static int g_owed_n = 0, g_owed_cap = 0;
 static JSValue g_cur_fn = JS_UNDEFINED;   /* borrowed from the running Flow (alive for the run) */
 static int g_running = 0;
 
@@ -413,6 +419,7 @@ void decide_enter(JSContext *ctx, Flow *f) {
     g_c = 0;
     g_mint_h = 0;
     g_mints = 0;
+    g_owed_n = 0;
     g_cur_fn = f->fn;   /* borrowed */
     g_running = 1;
     concolic_clear_pins();   /* pins are per-flow: this run re-derives them as it replays its EQ gates */
@@ -433,6 +440,7 @@ void decide_free(void) {
     int i;
 
     dec_clear();
+    free(g_owed); g_owed = NULL; g_owed_n = g_owed_cap = 0;
     free(g_dec); g_dec = NULL;
     free(g_dec_k); g_dec_k = NULL;
     g_dec_cap = 0;   /* one capacity for both head buffers: dec_ensure grows them together */
@@ -931,10 +939,26 @@ void decide_refine_stats(long *asked, long *refined) {
    decide_resume restores and re-binds cur_fn. The cold tier rebuilds a parked flow into the same shape. A blob is
    a pointer at a segment and a cursor, O(1) whatever the vector's depth. Every arm a flow owes is a slot in its
    chain under the question it answers, so the chain and cursor are the whole of what crosses the cold tier. */
-typedef struct { DecSeg *seg; int c; uint64_t mint_h; int mints; } DecideBlob;
+typedef struct { DecSeg *seg; int c; uint64_t mint_h; int mints; int *owed; int owed_n; } DecideBlob;
 /* What every blob a fork or suspend takes from the running flow besides its chain: the mint count at its history,
-   which the sibling shares because it shares the history up to here. */
-static void dec_blob_take_mints(DecideBlob *b) { b->mint_h = g_mint_h; b->mints = g_mints; }
+   which the sibling shares because it shares the history up to here, and the arrivals it owes behind the cursor. */
+static void dec_blob_take_mints(DecideBlob *b) {
+    b->mint_h = g_mint_h; b->mints = g_mints;
+    b->owed_n = g_owed_n;
+    b->owed = g_owed_n ? reclaim_malloc((size_t)g_owed_n * sizeof *b->owed) : NULL;
+    CHECK(!g_owed_n || b->owed, "decide: OOM copying a flow's owed arrivals");
+    if (g_owed_n) memcpy(b->owed, g_owed, (size_t)g_owed_n * sizeof *b->owed);
+}
+/* Installs `n` owed arrival slots as the running flow's. */
+static void dec_owed_set(const int *owed, int n) {
+    if (n > g_owed_cap) {
+        g_owed = reclaim_realloc(g_owed, (size_t)n * sizeof *g_owed);
+        CHECK(g_owed, "decide: OOM growing a flow's owed arrivals");
+        g_owed_cap = n;
+    }
+    if (n) memcpy(g_owed, owed, (size_t)n * sizeof *g_owed);
+    g_owed_n = n;
+}
 void *decide_suspend(void) {
     DecideBlob *b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM suspend blob");
     b->seg = dec_freeze();   /* the blob owns the reference the freeze hands back */
@@ -956,10 +980,13 @@ void decide_resume(void *blob, JSValueConst fn) {
                           "running flow, whose count only grows from 0");
     g_mint_h = b->mint_h;
     g_mints = b->mints;
+    DCHECK(b->owed_n == 0 || b->owed[b->owed_n - 1] < g_c,
+           "a flow resumed owing an arrival slot at or past its cursor — only a slot passed over is owed");
+    dec_owed_set(b->owed, b->owed_n);
     g_cur_fn = fn;   /* borrowed from the resuming Flow */
     g_running = 1;
 }
-void decide_blob_free(void *blob) { DecideBlob *b = blob; if (b) { dec_seg_unref(b->seg); free(b); } }
+void decide_blob_free(void *blob) { DecideBlob *b = blob; if (b) { dec_seg_unref(b->seg); free(b->owed); free(b); } }
 
 /* The cold tier's read and write of this chain (decide.h says why the segments, not a flattened vector, cross).
    The pointers are opaque to the caller, which names a segment by a park-local ordinal it assigns. */
@@ -1051,6 +1078,8 @@ void *decide_blob_new(void *seg) {
     b->c = 0;
     b->mint_h = 0;
     b->mints = 0;
+    b->owed = NULL;
+    b->owed_n = 0;
     return b;
 }
 
@@ -1187,6 +1216,10 @@ int decide_completion_recorded_later(const char *why) {
     int i;
 
     DCHECK(g_running, "a completion's recorded slot was asked while no flow's decision state was loaded");
+    for (i = 0; i < g_owed_n; i++) {
+        (void)dec_at(g_owed[i], &k);
+        if (k == asked) return 0;
+    }
     for (i = g_c; i < dec_total(); i++) {
         (void)dec_at(i, &k);
         if (k == asked) return i > g_c;
@@ -1258,6 +1291,7 @@ static int dec_arrival_fork(const char *why, uint32_t asked, void **sib_blob) {
     DCHECK(g_running, "an arrival fork was asked while no flow's decision state was loaded");
     DCHECK(sib_blob != NULL, "an arrival fork was asked with nowhere to hand the sibling's decision state");
     *sib_blob = NULL;
+    if ((arm = dec_owed_take(asked)) >= 0) return arm;
     if (g_c < dec_total()) {
         arm = dec_replay(asked);
         if (arm >= 0) return arm;
@@ -1285,12 +1319,16 @@ int decide_fork_arrival(const char *why, uint64_t what, void **sib_blob) {
     return dec_arrival_fork(why, dec_arrival_hash(why, &what, sizeof what), sib_blob);
 }
 
-/* See decide.h. The scan is dec_slide_arrivals': the run of unlanded arrivals at the cursor. */
+/* See decide.h. The arrivals owed behind the cursor first, then dec_pass_arrivals' scan of the run at it. */
 int decide_arrival_recorded(const char *why, uint64_t what) {
     uint32_t asked = dec_arrival_hash(why, &what, sizeof what), k;
     int i, e;
 
     DCHECK(g_running, "an arrival's recorded arm was asked while no flow's decision state was loaded");
+    for (i = 0; i < g_owed_n; i++) {
+        e = dec_at(g_owed[i], &k);
+        if (k == asked) return e ? 1 : 0;
+    }
     for (i = g_c; i < dec_total(); i++) {
         e = dec_at(i, &k);
         if (k == asked) return e ? 1 : 0;
@@ -1310,6 +1348,7 @@ void decide_arrival_taken(const char *why, uint64_t what) {
     uint32_t asked = dec_arrival_hash(why, &what, sizeof what);
 
     DCHECK(g_running, "an arrival's sibling arm was taken while no flow's decision state was loaded");
+    if (dec_owed_take(asked) == 1) return;
     if (g_c < dec_total()) {
         int arm = dec_replay(asked);
 
@@ -1372,17 +1411,11 @@ int decide_value_arm(JSValueConst cond)
 }
 
 /* An arrival takes its recorded slot whenever it lands. When the slot at the cursor is an arrival that has not
-   landed and `asked` is recorded just past a run of such arrivals, move that slot to the cursor ahead of them, so
-   they stay owed in their recorded order and the asked slot is consumed next. Returns 0, changing nothing, when a
-   question of the program's own stands between (that is a divergence). The tail is copied once into a segment of
-   this flow's own over the prefix, as dec_leave_path copies. Priced slots are noted only once consumed, so none
-   stands at or above the cursor to move. */
-static int dec_slide_arrivals(uint32_t asked) {
-    int total = dec_total(), n = total - g_c, i, j, at, res = 1;
-    uint32_t *k;
-    signed char *e;
-    const DecSeg *t;
-    DecSeg *s;
+   landed and `asked` is recorded just past a run of such arrivals, the cursor passes over the run to the asked
+   slot, and the run is owed in place, in recorded order, so the record keeps every slot where it was recorded.
+   Returns 0, changing nothing, when a question of the program's own stands between (that is a divergence). */
+static int dec_pass_arrivals(uint32_t asked) {
+    int total = dec_total(), i, j;
 
     for (i = g_c; i < total; i++) {
         uint32_t ki;
@@ -1392,30 +1425,33 @@ static int dec_slide_arrivals(uint32_t asked) {
         if (!dec_key_is_arrival(ki)) return 0;
     }
     if (i == total) return 0;
-    DCHECK(i > g_c && g_dec_n == 0 && g_c < g_dec_below,
-           "an arrival slide was asked with the asked slot at the cursor, or with the cursor in the head");
-    k = reclaim_malloc((size_t)n * sizeof *k);
-    e = reclaim_malloc((size_t)n);
-    CHECK(k != NULL && e != NULL, "decide: OOM copying a recorded tail to move an arrival");
-    for (j = g_c, at = 1; j < total; j++) {
-        int o = j == i ? 0 : at++;
-
-        e[o] = (signed char)dec_at(j, &k[o]);
-        for (t = g_dec_base; t; t = t->base)
-            if (j >= t->below) { res &= t->residue; break; }
+    DCHECK(i > g_c, "an arrival pass was asked with the asked slot at the cursor");
+    for (j = g_c; j < i; j++) {
+        if (g_owed_n == g_owed_cap) {
+            g_owed_cap = g_owed_cap ? g_owed_cap * 2 : 8;
+            g_owed = reclaim_realloc(g_owed, (size_t)g_owed_cap * sizeof *g_owed);
+            CHECK(g_owed, "decide: OOM growing a flow's owed arrivals");
+        }
+        g_owed[g_owed_n++] = j;
     }
-    dec_cut_at_cursor();
-    s = dec_seg_alloc(n);
-    memcpy(s->e, e, (size_t)n);
-    memcpy(s->k, k, (size_t)n * sizeof *k);
-    free(k); free(e);
-    s->below = g_c;
-    s->base = g_dec_base;   /* takes the running flow's reference on the prefix */
-    s->residue = res;       /* every slot came from the park document, or the segment claims none did */
-    s->refcount = 1;
-    g_dec_base = s;
-    g_dec_below = g_c + n;
+    g_c = i;
     return 1;
+}
+
+/* The owed arrival slot recorded for `asked`, consumed where it lands: its arm, or -1 when none is owed. */
+static int dec_owed_take(uint32_t asked) {
+    int j, arm;
+    uint32_t k;
+
+    for (j = 0; j < g_owed_n; j++) {
+        arm = dec_at(g_owed[j], &k) ? 1 : 0;
+        if (k != asked) continue;
+        memmove(&g_owed[j], &g_owed[j + 1], (size_t)(g_owed_n - j - 1) * sizeof *g_owed);
+        g_owed_n--;
+        g_replay_hits++;
+        return arm;
+    }
+    return -1;
 }
 
 /* The recorded arm at the cursor, or -1 when the slot there answers a different question, in one descent of the
@@ -1429,9 +1465,9 @@ static int dec_replay(uint32_t asked) {
                               "slot there to answer with");
     arm = dec_at(g_c, &recorded) ? 1 : 0;
     if (recorded != asked) {
-        if (!dec_key_is_arrival(recorded) || !dec_slide_arrivals(asked)) return -1;
+        if (!dec_key_is_arrival(recorded) || !dec_pass_arrivals(asked)) return -1;
         arm = dec_at(g_c, &recorded) ? 1 : 0;
-        DCHECK(recorded == asked, "an arrival slide put a slot at the cursor that does not answer the question asked");
+        DCHECK(recorded == asked, "an arrival pass put the cursor at a slot that does not answer the question asked");
     }
     g_c++;
     /* Counted here, past the key comparison, because an arm consumed is exactly an arm whose recorded question the
