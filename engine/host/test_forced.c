@@ -38417,17 +38417,18 @@ TF_UNIT void stacking_individual_transform_selftest(JSContext *ctx)
 
 /* css-will-change-1 §2 "Hinting at Future Behavior: the will-change property": "If any non-initial value of a
    property would create a stacking context on the element, specifying that property in will-change must create
-   a stacking context on the element." Static boxes naming `transform`, `translate` and `contain`, and a
-   relative box naming `z-index`, form one; `color` and `auto` are the negative controls. */
+   a stacking context on the element." Static boxes naming `transform`, `translate`, `contain` and `position`,
+   and a relative box naming `z-index`, form one; `color` and `auto` are the negative controls. */
 TF_UNIT void stacking_will_change_selftest(JSContext *ctx)
 {
     static const char DOC[] = "<!DOCTYPE html><html><head></head><body>"
                               "<div style=\"will-change:transform\"></div><div style=\"will-change:translate\"></div>"
                               "<div style=\"will-change:contain\"></div>"
                               "<div style=\"position:relative;will-change:z-index\"></div>"
-                              "<div style=\"will-change:color\"></div><div style=\"will-change:auto\"></div>"
+                              "<div style=\"will-change:position\"></div><div style=\"will-change:color\"></div><div style=\"will-change:auto\"></div>"
                               "</body></html>";
-    static const char *const NAME[] = { "transform", "translate", "contain", "z-index", "color", "auto" };
+    static const char *const NAME[] = { "transform", "translate", "contain", "z-index", "position", "color",
+                                         "auto" };
     lxb_dom_element_t *root = lxb_dom_document_element(lxb_dom_interface_document(bp_scratch_document(ctx, DOC)));
     lxb_dom_node_t *box;
     LayoutJob *job;
@@ -38436,7 +38437,7 @@ TF_UNIT void stacking_will_change_selftest(JSContext *ctx)
     CHECK(root != NULL, "the will-change stacking document parsed with no root element");
     job = tf_job_enter();
     for (box = lxb_dom_interface_node(root)->first_child->next->first_child; box != NULL; box = box->next, i++) {
-        bool expect = i < 4;
+        bool expect = i < 5;
 
         CHECK(i < COUNTOF(NAME), "the will-change stacking document has more body children than it was written with");
         CHECKF(stacking_context_forms(lxb_dom_interface_element(box)) == expect,
