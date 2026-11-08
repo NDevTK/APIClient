@@ -22,6 +22,7 @@
 #include "core/layout/flow_position.h"
 #include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
+#include "core/layout/scroll_container.h"
 #include "core/layout/scrolling_area.h"
 #include "core/layout/used_value.h"
 
@@ -128,6 +129,27 @@ static bool sa_excluded(lxb_dom_element_t *el, lxb_dom_element_t *descendant)
        ITSELF is in the scrolling area, so the walk starts at the element's parent. */
     for (a = flat_tree_parent(lxb_dom_interface_node(el)); a != NULL; a = flat_tree_parent(a))
         if (a == cbn) return true;
+    return false;
+}
+
+/* Whether `d`'s box is clipped on this axis by a box below the walk root: css-overflow-3 §3.3 "Calculating the
+   Scrollable Overflow Area" takes each descendant's area "clipped to their overflow clip edge if overflow is not
+   visible or contain applies paint". A clip edge lies inside the clipping box's own border box, which is folded
+   already, so a clipped box adds nothing. The clips that apply are those on d's CSS 2.1 §10.1 containing block
+   chain, so a positioned box whose containing block is above the clipping box escapes it. Every link is an
+   ancestor of d, so a link that is not below the root is the root or above it, and so is every later one. */
+static bool sa_clipped(lxb_dom_element_t *root, lxb_dom_element_t *d, bool vertical)
+{
+    const lxb_dom_node_t *rn = lxb_dom_interface_node(root), *a;
+    lxb_dom_element_t *c = d;
+
+    while (!css_computed_keyword_is(c, "position", CSS_KEYWORD_FIXED)) {
+        c = used_value_containing_block_link(c).element;
+        if (c == NULL || c == root) return false;
+        for (a = flat_tree_parent(rn); a != NULL; a = flat_tree_parent(a))
+            if (a == lxb_dom_interface_node(c)) return false;
+        if (scroll_container_content_clip_axis_is(c, vertical)) return true;
+    }
     return false;
 }
 
@@ -482,8 +504,9 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                    inline box and everything else, asked here because §9.4.2 gives the first a SET of
                    border areas and no `width` or `height` to size one with. */
                 CssPx e;
-                bool contributes = true;
-                bool ready = sa_is_non_replaced_inline(d)
+                bool contributes = !sa_clipped(w->root, d, w->vertical);
+                bool ready = !contributes ? true
+                             : sa_is_non_replaced_inline(d)
                                  ? sa_inline_box_edge(d, w->vertical, w->ending_at_hi, &e)
                                  : sa_descendant_edge(d, w->vertical, w->ending_at_hi, &e, &contributes);
 
@@ -502,13 +525,14 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                contributes its own margin edge, folded above, and nothing inside it. A replaced element's content
                is "outside the scope of the CSS formatting model" (CSS 2.2 §3.1 "Definitions"), so nothing inside
                one is a CSS box to fold, walk root included (an `svg`'s children are laid out by SVG).
-               NAMED RESIDUAL. Not covered: a box clipped by `overflow` alone is descended into whole, so what it
-               clips is counted. Next: that descent keeps only the boxes whose containing-block chain leaves the
-               clipping box (a positioned box whose containing block is further up escapes the clip). How its
-               absence shows: an ancestor's scrollWidth or scrollHeight above Chrome's where a descendant with
-               `overflow` other than `visible` holds content past its padding edge. */
+               A box clipped by `overflow` alone is still descended into, so a positioned descendant that
+               escapes the clip is found, but its own line boxes and anonymous block boxes are clipped content
+               and are not folded (`sa_clipped` above for its own box). */
             if (replaced_element_is(d) || (n != root && (containment_layout(d) || containment_paint(d)))) {
                 descend = false;
+            } else if (n != root && (scroll_container_content_clip_axis_is(d, w->vertical) ||
+                                     sa_clipped(w->root, d, w->vertical))) {
+                /* Clipped content: nothing of d's own to fold, and the children are asked one by one. */
             } else {
                 if (w->stage == SA_STAGE_CONTEXT) {
                     bool context;

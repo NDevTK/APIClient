@@ -35,6 +35,11 @@ bool scroll_container_is(lxb_dom_element_t *el);
  * core/layout/used_value.h's `used_value_padding_edge_px`). */
 bool scroll_container_content_clip_is(lxb_dom_element_t *el);
 
+/* The same clip on one axis (`vertical` selects y). One axis can clip alone only with `clip` beside `visible`:
+   css-overflow-3 §3.1 "if the other axis specifies a scrollable value, a specified value of visible computes to
+   auto". */
+bool scroll_container_content_clip_axis_is(lxb_dom_element_t *el, bool vertical);
+
 /* css-overflow-3 §3.1.4 "Overflow Viewport Propagation": is `el` the one element per document whose overflow
  * was given to the viewport, so that its own used overflow is `visible` whatever it computed to?
  *

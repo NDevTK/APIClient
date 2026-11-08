@@ -106,8 +106,9 @@ bool scroll_container_is(lxb_dom_element_t *el)
     return sc_axis_value_is_scrollable(el, false) || sc_axis_value_is_scrollable(el, true);
 }
 
-/* CSSOM View's content clip; see scroll_container.h. Same preconditions as above, differing at `clip`. */
-bool scroll_container_content_clip_is(lxb_dom_element_t *el)
+/* CSSOM View's content clip on one axis; see scroll_container.h. Same preconditions as above, differing at
+   `clip`. */
+bool scroll_container_content_clip_axis_is(lxb_dom_element_t *el, bool vertical)
 {
     DCHECK(el != NULL, "CSSOM VIEW's content-clip question was asked with no element");
     /* A content clip is a box's; an element that generates none clips nothing. */
@@ -122,5 +123,10 @@ bool scroll_container_content_clip_is(lxb_dom_element_t *el)
        computed value would report a clip on the root or body of those pages. */
     if (scroll_container_propagates_overflow_to_viewport(el)) return false;
     if (!sc_overflow_applies(el)) return false;
-    return sc_axis_value_clips(el, false) || sc_axis_value_clips(el, true);
+    return sc_axis_value_clips(el, vertical);
+}
+
+bool scroll_container_content_clip_is(lxb_dom_element_t *el)
+{
+    return scroll_container_content_clip_axis_is(el, false) || scroll_container_content_clip_axis_is(el, true);
 }
