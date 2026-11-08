@@ -802,9 +802,21 @@ async function main() {
   };
   /* A refusal's words for this zone's decline records: the closed token's sentence, and the instance. */
   const askerRefusal = (e, refusal) => `${refusal.text}, as named by the engine of [${e.tag}]`;
-  /* The address each provisioned child was created at, by name: what a later create under that name is checked
-     against. */
+  /* The address each provisioned document was created or navigated at, by name: what a later announcement under
+     that name is checked against. */
   const createdAddress = new Map();
+  /* A create, swap or navigation announcing a name this zone already holds an instance for. solver/world.c's
+     world_mint_doc names a document by the history that created it, so every timeline replaying that history
+     announces the same name and the instance holding it serves them all; a second instance would give one
+     document two heaps, which SECURITY.md's one-instance-per-cluster rule forbids. At another address it is two
+     documents claiming one identity, and is refused. Answers whether the notice is settled here. */
+  const noticeNameHeld = (e, kind, role, name, address) => {
+    if (!holderOf(name)) return false;
+    if (createdAddress.get(name) !== address)
+      e.ready.push(decline(`${kind} ${name} at ${address} — ${askerRefusal(e,
+        ZONE.docRecordAskerRefusal(role, 'readdressed', name))} (${createdAddress.get(name)})`));
+    return true;
+  };
   /* HTML §7.2.2.4's opener each navigable may carry, by this zone's own record: written where the navigable's
      creation reaches this zone (a provisioned or joined document, or `navigable.open` for one the engine holds)
      as the creator or null, keyed by document name with the instance root it was recorded under. An engine's
@@ -1719,18 +1731,7 @@ async function main() {
                         'ancestor origins, HTML §7.1.5\'s creation sandboxing flag set, what the NAVIGATION ' +
                         'is evidence of, which browsing context group the navigable is in (`creator` or ' +
                         '`new`), whose act it is, whether its path chose a witness, §7.2.2.4\'s opener, and the policy');
-      /* A DOCUMENT THIS ZONE ALREADY HOLDS AN INSTANCE FOR IS NOT PROVISIONED TWICE, and that is not a guard
-         against a duplicate notice — it is what a REPLAYED document does, re-creating its child navigable and
-         re-announcing it under the same name (solver/world.c's world_mint_doc names a document by the history
-         that created it). A second instance would give one document two heaps, which SECURITY.md's
-         one-instance-per-cluster rule forbids. A create under a held name at ANOTHER address is two documents
-         claiming one identity, and is refused. */
-      if (holderOf(f[C.child])) {
-        if (createdAddress.get(f[C.child]) !== f[C.address])
-          e.ready.push(decline(`navigable.create ${f[C.child]} at ${f[C.address]} — ${askerRefusal(e,
-            ZONE.docRecordAskerRefusal('child', 'readdressed', f[C.child]))} (${createdAddress.get(f[C.child])})`));
-        return;
-      }
+      if (noticeNameHeld(e, 'navigable.create', 'child', f[C.child], f[C.address])) return;
       /* The group: HTML §7.3.1.7's noopener arm creates the navigable given a null opener, in a new browsing
          context group (§7.3.2.1); a child and an auxiliary navigable with an opener are in the creator's. In
          the creator's group the peer holds a WindowProxy for the creator, whose engine raised its own flag at
@@ -1838,7 +1839,7 @@ async function main() {
         throw new Error(`a navigable.swap notice was short of its fields: ${record} — the provenance is what the ` +
                         'navigation that caused the swap is EVIDENCE OF, taken off that navigation\'s own ' +
                         'load job (core/frame/browsing_context_group.c), and the load below is decided from it');
-      if (holderOf(f[P.document])) return;
+      if (noticeNameHeld(e, 'navigable.swap', 'document', f[P.document], f[P.address])) return;
       /* The issuing document's record and the navigable's (issuedRecords); a notice naming a document that is
          not this instance's is refused, as a request is. */
       const swapFrom = issuedRecords(e, f[P.issuer], f[P.document]);
@@ -1848,6 +1849,7 @@ async function main() {
       }
       /* AND IT IS THE SAME NAVIGATION'S WORD, which is what keeps a swap from being a door an address this
          zone declined at `document.fetch` could be fetched through one notice later. */
+      createdAddress.set(f[P.document], f[P.address]);
       const loaded = await provisionLoad(e, f, `navigable.swap ${f[P.document]}`, swapFrom.issuerDoc);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* NOT REFERENCED, WHICH IS THE ONE ARM WHERE "AN ENGINE NAMED IT" IS THE WRONG READING. §7.1.3.2 step
@@ -1878,7 +1880,7 @@ async function main() {
                         'new document\'s name, the address, the origin it computed, the navigation\'s ' +
                         'provenance, its drive mark, its witness mark and its issuing document ' +
                         '(core/frame/navigable.c), and the load below is decided from the last four');
-      if (holderOf(f[P.document])) return;
+      if (noticeNameHeld(e, 'navigable.navigate', 'document', f[P.document], f[P.address])) return;
       /* Every refusal below goes through refuseCreate: the navigating instance already holds a remote navigable
          over this name, so a read of it is declined with the reason rather than held. */
       const navFrom = issuedRecords(e, f[P.issuer], f[P.document]);
@@ -1897,6 +1899,7 @@ async function main() {
       const navOpener = ZONE.docRecordNavigableIdentity(f[P.opener]) === null ? null : allowed.opener;
       /* The peer holds a WindowProxy for its opener, a document of this instance, as for a create's opener. */
       if (navOpener !== null) e.referenced = 1;
+      createdAddress.set(f[P.document], f[P.address]);
       const loaded = await provisionLoad(e, f, `navigable.navigate ${f[P.document]}`, navFrom.issuerDoc);
       if (loaded.declined) { refuseCreate(e, f[P.document], loaded.declined); return; }
       const doc = childDoc(navFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
