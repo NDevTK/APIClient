@@ -57125,6 +57125,21 @@ const char *JS_ParkedFlowsUnforkable(JSContext *ctx)
     return parked_flows_answer(ctx, false);
 }
 
+const char *JS_ParkedFlowsOfUnforkable(void *parked)
+{
+    struct list_head *first = parked, *el;
+
+    if (!first) return NULL;
+    el = first;
+    do {
+        const char *why = flow_chain_answer(list_entry(el, JSAsyncFunctionState, park_link), false);
+
+        if (why) return why;
+        el = el->next;
+    } while (el != first);
+    return NULL;
+}
+
 /* Asked by the scheduler before it runs the page's code on a flow's behalf other than by resuming the chain. */
 const char *JS_FlowScriptForbidden(JSContext *ctx, JSValue *flow)
 {

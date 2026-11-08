@@ -918,11 +918,32 @@ static void flow_agent_switch(JSContext *ctx, Flow *f, int i)
     f->cur_agent = i;
 }
 
+/* Why the selected agent stands inside an operation the engine makes atomic (JSTrampStepDef.unforkable), in its
+   base or in its parks, which are the runtime's while `f` is switched in; NULL when it does not.
+   AN AGENT STANDING THERE KEEPS THE THREAD until the operation ends, so no agent off the forking chain is ever
+   inside one: a fork of the flow clones every other agent's base and parks (flow_agents_fork), and that clone
+   cannot wait the way a rung on the forking chain does. Each operation ends within its own agent's work, bounded
+   by its input: HTML §8.5.4's fragment parse at its placement (FRAG_DONE), its XML half at the end of the parse,
+   §7.4 step 14's Document creation at the end of the decoded entity; js_idl_args_unforkable only forwards.
+   Named residual. Not covered: those three are engine passes over page-grown input held as atomic sections,
+   where the design makes each a forkable step state like every other pass. Next diff builds: the fragment
+   parse's and the Document creation's parser state as step state a fork copies or re-derives, retiring their
+   unforkable reasons and this hold with them. Absence shows as: a page-sized innerHTML or document load during
+   which no other agent of its flow runs and every fork its flow owes waits for the end. */
+static const char *flow_agent_atomic(JSContext *ctx, const Flow *f)
+{
+    const FlowAgent *a = &f->agents[f->cur_agent];
+    const char *why = a->frame ? JS_FlowUnforkable(ctx, (JSValue *)a->frame) : NULL;
+
+    return why ? why : JS_ParkedFlowsUnforkable(ctx);
+}
+
 int flow_agent_next(JSContext *ctx, const Flow *f)
 {
     int best = 0;
 
     DCHECK(f->n_agents >= 1, "a flow with no agent was asked which agent runs next");
+    if (flow_agent_atomic(ctx, f)) return f->cur_agent;
     /* ECMA-262 §9.6 Agents executes each agent's steps independently of the others, so which runnable agent goes
        next is this scheduler's decision, charged in work: the runnable agent that has retired the least work while
        selected. The window agent is always a candidate, since its ladder decides for itself whether it has work;
@@ -950,6 +971,8 @@ void flow_select_agent(JSContext *ctx, Flow *f)
 int flow_select_other_agent(JSContext *ctx, Flow *f)
 {
     int best = -1;
+
+    if (flow_agent_atomic(ctx, f)) return 0;
 
     for (int i = 0; i < f->n_agents; i++)
         if (i != f->cur_agent && flow_agent_runnable_off(f, i) &&
@@ -1047,6 +1070,12 @@ void flow_agents_fork(JSContext *ctx, Flow *sib, const Flow *parent)
         sa->program_module = pa->program_module;
         sa->reporting = pa->reporting;   /* the running agent's frame too: the caller's clone is this frame */
         if (i == parent->cur_agent) continue;   /* the caller clones the running agent's base and parks */
+        DCHECKF(!(pa->frame && JS_FlowUnforkable(ctx, (JSValue *)pa->frame)) && !JS_ParkedFlowsOfUnforkable(pa->parked),
+                "a fork reached agent %d of its flow standing inside an atomic operation (%s) — "
+                "flow_agent_atomic keeps such an agent selected until the operation ends, so no agent off the "
+                "forking chain can be standing in one", i,
+                pa->frame && JS_FlowUnforkable(ctx, (JSValue *)pa->frame)
+                    ? JS_FlowUnforkable(ctx, (JSValue *)pa->frame) : JS_ParkedFlowsOfUnforkable(pa->parked));
         if (pa->frame) {
             sa->frame = JS_FlowClone(ctx, (JSValue *)pa->frame);
             CHECK(sa->frame != NULL, "flow: an agent's suspended base could not be cloned onto an arm — that "
