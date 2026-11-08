@@ -20,6 +20,9 @@
 #include "lexbor/html/html.h"
 #include "lexbor/html/interfaces/template_element.h"
 
+/* Lexbor's case-preserving interning, declared at its call site as Lexbor's own files do. */
+const lxb_tag_data_t *lxb_tag_append(lexbor_hash_t *hash, lxb_tag_id_t tag_id, const lxb_char_t *name, size_t length);
+
 typedef struct {
     char   *p;
     size_t n, cap;
@@ -173,6 +176,15 @@ static void run_case(buf_t *out, const char *data, size_t dlen, const char *cont
         ctx = lxb_dom_document_create_element(lxb_dom_interface_document(doc), (const lxb_char_t *) name,
                                               strlen(name), NULL);
         if (ctx != NULL) {
+            /* The context's local name as the corpus spells it: createElement lowercases, which is right for an
+               HTML element only, and `svg foreignObject` names the camelCase element HTML §13.2.6.5 treats as
+               an HTML integration point. */
+            if (ns != LXB_NS_HTML) {
+                const lxb_tag_data_t *t = lxb_tag_append(lxb_dom_interface_document(doc)->tags, LXB_TAG__UNDEF,
+                                                         (const lxb_char_t *) name, strlen(name));
+                if (t == NULL) { fprintf(stderr, "tc: the context name could not be interned\n"); exit(2); }
+                lxb_dom_interface_node(ctx)->local_name = t->tag_id;
+            }
             lxb_dom_interface_node(ctx)->ns = ns;
             root = lxb_html_document_parse_fragment(doc, ctx, (const lxb_char_t *) data, dlen);
         }
