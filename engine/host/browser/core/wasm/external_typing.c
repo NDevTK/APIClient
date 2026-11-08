@@ -13,8 +13,8 @@ static const WasmTypes *types_of(const WasmStore *s, const WasmStoreValType *t, 
                "a WebAssembly store type with no type space names a defined type");
         return any;
     }
-    DCHECK(t->types < s->n_types, "a WebAssembly store type's type space is past the store's");
-    return s->types[t->types];
+    DCHECK(t->types < s->types.n, "a WebAssembly store type's type space is past the store's");
+    return wasm_store_types(s, t->types);
 }
 
 /* §3.3.11 under §3.3.14 and §3.3.15: at least the import's minimum, and within its maximum when it has one;
@@ -42,10 +42,10 @@ WasmMatch wasm_extern_check_begin(WasmExternCheck *c, const WasmStore *s, const 
         const WasmTypes *ft;
         WasmValType a = { 0 }, b = { 0 };
 
-        DCHECK(addr < s->n_funcs, "a WebAssembly function import was given an address past the store's functions");
-        f = &s->funcs[addr];
-        DCHECK(f->types < s->n_types, "a WebAssembly function instance's type space is past the store's");
-        ft = s->types[f->types];
+        DCHECK(addr < s->funcs.n, "a WebAssembly function import was given an address past the store's functions");
+        f = wasm_store_func(s, addr);
+        DCHECK(f->types < s->types.n, "a WebAssembly function instance's type space is past the store's");
+        ft = wasm_store_types(s, f->types);
         a.code = b.code = WASM_TYPE_REF;
         a.heap_index = f->type;
         b.heap_index = im->index;
@@ -55,8 +55,8 @@ WasmMatch wasm_extern_check_begin(WasmExternCheck *c, const WasmStore *s, const 
         const WasmTableInstance *t;
         const WasmTypes *tt;
 
-        DCHECK(addr < s->n_tables, "a WebAssembly table import was given an address past the store's tables");
-        t = &s->tables[addr];
+        DCHECK(addr < s->tables.n, "a WebAssembly table import was given an address past the store's tables");
+        t = wasm_store_table(s, addr);
         tt = types_of(s, &t->elem, importer);
         if (!limits_le(t->type.addr64, t->size, t->type.has_max, t->type.max, &im->limits)) return WASM_MATCH_NO;
         return wasm_val_eq(tt, &t->elem.type, importer, &im->type) ? WASM_MATCH_YES : WASM_MATCH_NO;
@@ -65,8 +65,8 @@ WasmMatch wasm_extern_check_begin(WasmExternCheck *c, const WasmStore *s, const 
         const WasmGlobalInstance *g;
         const WasmTypes *gt;
 
-        DCHECK(addr < s->n_globals, "a WebAssembly global import was given an address past the store's globals");
-        g = &s->globals[addr];
+        DCHECK(addr < s->globals.n, "a WebAssembly global import was given an address past the store's globals");
+        g = wasm_store_global(s, addr);
         gt = types_of(s, &g->type, importer);
         if (g->mutable_ != im->mutable_) return WASM_MATCH_NO;
         if (g->mutable_) return wasm_val_eq(gt, &g->type.type, importer, &im->type) ? WASM_MATCH_YES : WASM_MATCH_NO;
@@ -75,8 +75,8 @@ WasmMatch wasm_extern_check_begin(WasmExternCheck *c, const WasmStore *s, const 
     case WASM_EXTERN_MEMORY: {
         WasmLimits t;
 
-        DCHECK(addr < s->n_mems, "a WebAssembly memory import was given an address past the store's memories");
-        wasm_memory_type(s->mems[addr], &t);
+        DCHECK(addr < s->mems.n, "a WebAssembly memory import was given an address past the store's memories");
+        wasm_memory_type(wasm_store_mem(s, addr), &t);
         return limits_le(t.addr64, t.min, t.has_max, t.max, &im->limits) ? WASM_MATCH_YES : WASM_MATCH_NO;
     }
     case WASM_EXTERN_TAG:

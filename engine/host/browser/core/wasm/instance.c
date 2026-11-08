@@ -169,8 +169,8 @@ static WasmExecStatus evaluate(WasmInstance *inst, WasmExpr e, WasmValue *out)
 /* The owner of memory `x` of the instance. */
 static JSValueConst memory(WasmInstance *inst, size_t x)
 {
-    DCHECKF(inst->mems[x] < inst->store->n_mems, "a WebAssembly instance's memory %zu has no store address", x);
-    return inst->store->mems[inst->mems[x]];
+    DCHECKF(inst->mems[x] < inst->store->mems.n, "a WebAssembly instance's memory %zu has no store address", x);
+    return wasm_store_mem(inst->store, inst->mems[x]);
 }
 
 static WasmExecStatus next(WasmInstance *inst, int phase)
@@ -183,9 +183,9 @@ static WasmExecStatus next(WasmInstance *inst, int phase)
 
 static WasmTableInstance *table(WasmInstance *inst, size_t x)
 {
-    DCHECKF(inst->tables[x] < inst->store->n_tables, "a WebAssembly instance's table %zu has no store address",
+    DCHECKF(inst->tables[x] < inst->store->tables.n, "a WebAssembly instance's table %zu has no store address",
             x);
-    return &inst->store->tables[inst->tables[x]];
+    return wasm_store_table(inst->store, inst->tables[x]);
 }
 
 /* The start function's status `st`: while it runs, the instance's; once it answers, the instantiation's end. */
@@ -234,7 +234,7 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
 
             st = evaluate(inst, e, &v);
             if (st != WASM_EXEC_DONE) return st;
-            s->globals[inst->globals[inst->imported_globals + inst->item]].value = v;
+            wasm_store_global(s, inst->globals[inst->imported_globals + inst->item])->value = v;
             return next(inst, I_GLOBALS);
         }
     case I_TABLES:
@@ -255,7 +255,7 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         WasmTableInstance *t = table(inst, inst->imported_tables + inst->item);
 
         if (inst->sub == t->size) return next(inst, I_TABLES);
-        t->elems[inst->sub++].lo = inst->offset;
+        wasm_table_elem(t, inst->sub++)->lo = inst->offset;
         JS_FlowRetireWork(1);
         return WASM_EXEC_MORE;
     }
@@ -270,7 +270,7 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
             return WASM_EXEC_MORE;
         }
         e = &m->elems[inst->item];
-        x = &s->elems[inst->elems[inst->item]];
+        x = wasm_store_elem(s, inst->elems[inst->item]);
         if (inst->sub == e->n_items) return next(inst, I_ELEMS);
         if (!e->exprs) {
             uint32_t f = m->elem_funcs[e->items + inst->sub];
@@ -282,7 +282,7 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         }
         st = evaluate(inst, m->elem_exprs[e->items + inst->sub], &v);
         if (st != WASM_EXEC_DONE) return st;
-        s->elems[inst->elems[inst->item]].refs[inst->sub++] = v;
+        wasm_store_elem(s, inst->elems[inst->item])->refs[inst->sub++] = v;
         return WASM_EXEC_MORE;
     }
     case I_ACTIVE: {
@@ -298,7 +298,7 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         e = &m->elems[inst->item];
         if (e->mode == WASM_SEGMENT_PASSIVE) return next(inst, I_ACTIVE);
         if (e->mode == WASM_SEGMENT_DECLARATIVE) {
-            s->elems[inst->elems[inst->item]].n = 0;
+            wasm_store_elem(s, inst->elems[inst->item])->n = 0;
             return next(inst, I_ACTIVE);
         }
         st = evaluate(inst, e->offset, &v);
@@ -311,13 +311,13 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
     }
     case I_ACTIVE_COPY: {
         const WasmElem *e = &m->elems[inst->item];
-        WasmElemInstance *x = &s->elems[inst->elems[inst->item]];
+        WasmElemInstance *x = wasm_store_elem(s, inst->elems[inst->item]);
 
         if (inst->sub == e->n_items) {
             x->n = 0;
             return next(inst, I_ACTIVE);
         }
-        table(inst, e->table)->elems[inst->offset + inst->sub] = x->refs[inst->sub];
+        *wasm_table_elem(table(inst, e->table), inst->offset + inst->sub) = x->refs[inst->sub];
         inst->sub++;
         JS_FlowRetireWork(1);
         return WASM_EXEC_MORE;
@@ -335,21 +335,21 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         DCHECK(d->mode == WASM_SEGMENT_ACTIVE, "a decoded WebAssembly data segment is neither passive nor active");
         st = evaluate(inst, d->offset, &v);
         if (st != WASM_EXEC_DONE) return st;
-        if (!wasm_memory_holds(memory(inst, d->memory), v.lo, s->datas[inst->datas[inst->item]].n))
+        if (!wasm_memory_holds(memory(inst, d->memory), v.lo, wasm_store_data(s, inst->datas[inst->item])->n))
             return WASM_EXEC_TRAP_MEMORY_BOUNDS;
         inst->offset = v.lo;
         inst->phase = I_DATA_COPY;
         return WASM_EXEC_MORE;
     }
     case I_DATA_COPY: {
-        WasmDataInstance *x = &s->datas[inst->datas[inst->item]];
+        WasmDataInstance *x = wasm_store_data(s, inst->datas[inst->item]);
         uint8_t byte;
 
         if (inst->sub == x->n) {
             x->n = 0;
             return next(inst, I_DATA);
         }
-        byte = s->instances[x->inst]->bytes[x->offset + inst->sub];
+        byte = wasm_store_instance(s, x->inst)->bytes[x->offset + inst->sub];
         CHECK(wasm_memory_store(memory(inst, m->datas[inst->item].memory), inst->offset + inst->sub, 1, &byte),
               "a WebAssembly data segment's byte fell outside the bounds its memory.init checked");
         inst->sub++;

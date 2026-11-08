@@ -71,7 +71,7 @@ static WasmFrame *frame(WasmInterpreter *it)
 /* The current frame's instance, and its module, bytes and side table. */
 static WasmInstance *INST(WasmInterpreter *it)
 {
-    return it->store->instances[frame(it)->inst];
+    return wasm_store_instance(it->store, frame(it)->inst);
 }
 #define IM(it) (INST(it)->module)
 #define IB(it) (INST(it)->bytes)
@@ -89,10 +89,10 @@ static WasmExecStatus push_frame(WasmInterpreter *it, size_t func, size_t return
     WasmFrame *f;
     size_t n, i;
 
-    DCHECK(func < it->store->n_funcs, "a WebAssembly call names a function address past the store's");
-    fi = &it->store->funcs[func];
+    DCHECK(func < it->store->funcs.n, "a WebAssembly call names a function address past the store's");
+    fi = wasm_store_func(it->store, func);
     if (fi->is_host) {
-        t = &it->store->types[fi->types]->module->types[fi->type];
+        t = &wasm_store_types(it->store, fi->types)->module->types[fi->type];
         DCHECK(it->n_vals >= t->n_params, "a validated WebAssembly call has fewer operands than its parameters");
         it->host.pending = true;
         it->host.func = func;
@@ -101,7 +101,7 @@ static WasmExecStatus push_frame(WasmInterpreter *it, size_t func, size_t return
         it->pc = return_pc;
         return WASM_EXEC_HOST_CALL;
     }
-    m = it->store->instances[fi->inst]->module;
+    m = wasm_store_instance(it->store, fi->inst)->module;
     c = &m->codes[fi->code];
     t = &m->types[m->func_types[fi->code]];
     DCHECK(it->n_vals >= t->n_params, "a validated WebAssembly call has fewer operands than its parameters");
@@ -144,7 +144,7 @@ static size_t func_addr(WasmInterpreter *it, uint64_t x)
 {
     size_t a = INST(it)->funcs[x];
 
-    DCHECKF(a < it->store->n_funcs, "a WebAssembly instance's function %llu has no store address",
+    DCHECKF(a < it->store->funcs.n, "a WebAssembly instance's function %llu has no store address",
             (unsigned long long)x);
     return a;
 }
@@ -185,8 +185,8 @@ WasmExecStatus wasm_interpreter_begin(WasmInterpreter *it, WasmInstance *inst, s
     begin(it, inst);
     DCHECKF(func < inst->imported_funcs + inst->module->n_codes, "a WebAssembly invocation names function %zu, "
             "past the instance's %zu", func, inst->imported_funcs + inst->module->n_codes);
-    fi = &inst->store->funcs[inst->funcs[func]];
-    t = &inst->store->types[fi->types]->module->types[fi->type];
+    fi = wasm_store_func(inst->store, inst->funcs[func]);
+    t = &wasm_store_types(inst->store, fi->types)->module->types[fi->type];
     DCHECKF(n_args == t->n_params, "a WebAssembly invocation passed %zu arguments to a function of %zu "
             "parameters", n_args, t->n_params);
     it->n_results = (uint32_t)t->n_results;
@@ -566,9 +566,9 @@ static WasmExecStatus global(WasmInterpreter *it, uint32_t op, uint32_t x)
 {
     size_t a = INST(it)->globals[x];
 
-    DCHECKF(a < it->store->n_globals, "a WebAssembly instance's global %u has no store address", x);
-    if (op == 0x23) return push(it, it->store->globals[a].value.lo) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
-    it->store->globals[a].value.lo = pop(it);
+    DCHECKF(a < it->store->globals.n, "a WebAssembly instance's global %u has no store address", x);
+    if (op == 0x23) return push(it, wasm_store_global(it->store, a)->value.lo) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
+    wasm_store_global(it->store, a)->value.lo = pop(it);
     return WASM_EXEC_MORE;
 }
 
@@ -576,12 +576,12 @@ static WasmExecStatus global(WasmInterpreter *it, uint32_t op, uint32_t x)
    its arguments replace the caller's frame and the callee returns to the caller's caller. */
 static WasmExecStatus call(WasmInterpreter *it, size_t func, bool tail)
 {
-    const WasmFuncInstance *fi = &it->store->funcs[func];
+    const WasmFuncInstance *fi = wasm_store_func(it->store, func);
     size_t return_pc = it->pc;
 
     if (tail) {
         WasmFrame *f = frame(it);
-        size_t n = it->store->types[fi->types]->module->types[fi->type].n_params;
+        size_t n = wasm_store_types(it->store, fi->types)->module->types[fi->type].n_params;
 
         DCHECK(it->n_vals >= f->val_base + n, "a validated WebAssembly return_call has fewer operands than "
                                               "its callee's parameters");
@@ -600,14 +600,14 @@ static size_t table_addr(WasmInterpreter *it, uint64_t x)
 {
     size_t a = INST(it)->tables[x];
 
-    DCHECKF(a < it->store->n_tables, "a WebAssembly instance's table %llu has no store address",
+    DCHECKF(a < it->store->tables.n, "a WebAssembly instance's table %llu has no store address",
             (unsigned long long)x);
     return a;
 }
 
 static WasmTableInstance *table_of(WasmInterpreter *it, uint64_t x)
 {
-    return &it->store->tables[table_addr(it, x)];
+    return wasm_store_table(it->store, table_addr(it, x));
 }
 
 /* §4.6.5's call_indirect and return_call_indirect (type, then table): the element at the operand's index must
@@ -625,10 +625,10 @@ static WasmExecStatus call_indirect(WasmInterpreter *it, const WasmInstruction *
 
     it->trap_index = i;
     if (i >= t->size) return WASM_EXEC_TRAP_UNDEFINED_ELEMENT;
-    if (t->elems[i].lo == 0) return WASM_EXEC_TRAP_UNINITIALIZED;
-    f = t->elems[i].lo - 1;
-    fi = &it->store->funcs[f];
-    callee = it->store->types[fi->types];
+    if (wasm_table_elem(t, i)->lo == 0) return WASM_EXEC_TRAP_UNINITIALIZED;
+    f = wasm_table_elem(t, i)->lo - 1;
+    fi = wasm_store_func(it->store, f);
+    callee = wasm_store_types(it->store, fi->types);
     a.code = b.code = WASM_TYPE_REF;
     a.heap_index = fi->type;
     b.heap_index = in->index[0];
@@ -650,10 +650,10 @@ static WasmExecStatus table_access(WasmInterpreter *it, const WasmInstruction *i
 
     if (i >= t->size) return WASM_EXEC_TRAP_TABLE_BOUNDS;
     if (in->opcode == 0x26) {
-        t->elems[i].lo = r;
+        wasm_table_elem(t, i)->lo = r;
         return WASM_EXEC_MORE;
     }
-    return push(it, t->elems[i].lo) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
+    return push(it, wasm_table_elem(t, i)->lo) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
 }
 
 /* §4.6.7's table.size, table.grow, elem.drop, and table.fill, table.copy and table.init, whose bounds are
@@ -668,7 +668,7 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
 
     switch (in->opcode) {
     case 13:
-        it->store->elems[INST(it)->elems[in->index[0]]].n = 0;
+        wasm_store_elem(it->store, INST(it)->elems[in->index[0]])->n = 0;
         return WASM_EXEC_MORE;
     case 16:
         return push(it, table_of(it, in->index[0])->size) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
@@ -681,7 +681,7 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
         b->ref.lo = pop(it);
         bound = t->type.addr64 ? UINT64_MAX : UINT32_MAX;
         if (n > bound - t->size || (t->type.has_max && t->size + n > t->type.max)
-            || t->size + n > SIZE_MAX / sizeof *t->elems)
+            || t->size + n > SIZE_MAX / sizeof(WasmValue))
             return push(it, bound) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
         it->choice.kind = WASM_CHOICE_TABLE_GROW;
         it->choice.addr = table_addr(it, in->index[0]);
@@ -715,7 +715,7 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
     case 12:
         /* table.init's immediates are the element segment, then the table. */
         t = table_of(it, in->index[1]);
-        e = &it->store->elems[INST(it)->elems[in->index[0]]];
+        e = wasm_store_elem(it->store, INST(it)->elems[in->index[0]]);
         n = pop(it);
         s = pop(it);
         d = pop(it);
@@ -737,14 +737,14 @@ static size_t mem_addr(WasmInterpreter *it, uint64_t x)
 {
     size_t a = INST(it)->mems[x];
 
-    DCHECKF(a < it->store->n_mems, "a WebAssembly instance's memory %llu has no store address",
+    DCHECKF(a < it->store->mems.n, "a WebAssembly instance's memory %llu has no store address",
             (unsigned long long)x);
     return a;
 }
 
 static JSValueConst mem_of(WasmInterpreter *it, uint64_t x)
 {
-    return it->store->mems[mem_addr(it, x)];
+    return wasm_store_mem(it->store, mem_addr(it, x));
 }
 
 /* -1 of a memory's or table's address type (§4.6.8's signed^-1_|at|(-1)). */
@@ -814,20 +814,20 @@ static WasmExecStatus memory_bulk(WasmInterpreter *it, const WasmInstruction *in
     size_t to, from = 0;
 
     if (op == 9) {
-        it->store->datas[INST(it)->datas[in->index[0]]].n = 0;
+        wasm_store_data(it->store, INST(it)->datas[in->index[0]])->n = 0;
         return WASM_EXEC_MORE;
     }
     n = pop(it);
     s = pop(it);
     d = pop(it);
     to = mem_addr(it, in->index[op == 8 ? 1 : 0]);
-    if (!wasm_memory_holds(it->store->mems[to], d, n)) return WASM_EXEC_TRAP_MEMORY_BOUNDS;
+    if (!wasm_memory_holds(wasm_store_mem(it->store, to), d, n)) return WASM_EXEC_TRAP_MEMORY_BOUNDS;
     if (op == 10) {
         from = mem_addr(it, in->index[1]);
-        if (!wasm_memory_holds(it->store->mems[from], s, n)) return WASM_EXEC_TRAP_MEMORY_BOUNDS;
+        if (!wasm_memory_holds(wasm_store_mem(it->store, from), s, n)) return WASM_EXEC_TRAP_MEMORY_BOUNDS;
     } else if (op == 8) {
         from = INST(it)->datas[in->index[0]];
-        data = &it->store->datas[from];
+        data = wasm_store_data(it->store, from);
         if (s > data->n || n > data->n - s) return WASM_EXEC_TRAP_MEMORY_BOUNDS;
     } else {
         DCHECKF(op == 11, "0xFC %u is not a memory instruction", op);
@@ -848,33 +848,26 @@ WasmExecStatus wasm_interpreter_choose(WasmInterpreter *it, bool example)
     WasmChoice c = it->choice;
     WasmTableInstance *t;
     WasmBulk *b = &it->bulk;
-    WasmValue *grown;
 
     DCHECK(c.kind == WASM_CHOICE_TABLE_GROW || c.kind == WASM_CHOICE_MEMORY_GROW, "a WebAssembly choice was made "
            "with none pending");
     it->choice.kind = 0;
     if (c.kind == WASM_CHOICE_MEMORY_GROW) {
-        JSValueConst mem = it->store->mems[c.addr];
+        JSValueConst mem = wasm_store_mem(it->store, c.addr);
         WasmLimits type;
 
         wasm_memory_type(mem, &type);
         return push(it, example ? wasm_memory_grow(mem, c.n) : minus_one(type.addr64)) ? WASM_EXEC_MORE
                                                                                        : WASM_EXEC_NO_ROOM;
     }
-    t = &it->store->tables[c.addr];
+    t = wasm_store_table(it->store, c.addr);
     if (!example) return push(it, t->type.addr64 ? UINT64_MAX : UINT32_MAX) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
-    if (t->size + c.n > t->cap) {
-        grown = realloc(t->elems, (size_t)(t->size + c.n ? t->size + c.n : 1) * sizeof *t->elems);
-        CHECK(grown != NULL, "a WebAssembly table could not grow: out of memory");
-        t->elems = grown;
-        t->cap = t->size + c.n;
-    }
     if (!push(it, t->size)) return WASM_EXEC_NO_ROOM;
     b->op = 15;
     b->to = c.addr;
     b->d = t->size;
     b->n = c.n;
-    t->size += c.n;
+    wasm_table_grow(t, c.n);
     return WASM_EXEC_MORE;
 }
 
@@ -895,34 +888,35 @@ static WasmExecStatus bulk_step(WasmInterpreter *it)
 
     switch (b->op) {
     case 15: case 17:
-        st->tables[b->to].elems[b->d++] = b->ref;
+        *wasm_table_elem(wasm_store_table(st, b->to), b->d++) = b->ref;
         break;
     case 14:
-        st->tables[b->to].elems[b->d + k] = st->tables[b->from].elems[b->s + k];
+        *wasm_table_elem(wasm_store_table(st, b->to), b->d + k) = *wasm_table_elem(wasm_store_table(st, b->from),
+                                                                                  b->s + k);
         if (k == 0) {
             b->d++;
             b->s++;
         }
         break;
     case 12:
-        st->tables[b->to].elems[b->d++] = st->elems[b->from].refs[b->s++];
+        *wasm_table_elem(wasm_store_table(st, b->to), b->d++) = wasm_store_elem(st, b->from)->refs[b->s++];
         break;
     case 11:
-        bulk_byte(st->mems[b->to], b->d++, (uint8_t)b->ref.lo);
+        bulk_byte(wasm_store_mem(st, b->to), b->d++, (uint8_t)b->ref.lo);
         break;
     case 10:
-        CHECK(wasm_memory_load(st->mems[b->from], b->s + k, 1, &byte),
+        CHECK(wasm_memory_load(wasm_store_mem(st, b->from), b->s + k, 1, &byte),
               "a WebAssembly memory.copy byte fell outside its checked bounds");
-        bulk_byte(st->mems[b->to], b->d + k, byte);
+        bulk_byte(wasm_store_mem(st, b->to), b->d + k, byte);
         if (k == 0) {
             b->d++;
             b->s++;
         }
         break;
     case 8: {
-        const WasmDataInstance *x = &st->datas[b->from];
+        const WasmDataInstance *x = wasm_store_data(st, b->from);
 
-        bulk_byte(st->mems[b->to], b->d++, st->instances[x->inst]->bytes[x->offset + b->s++]);
+        bulk_byte(wasm_store_mem(st, b->to), b->d++, wasm_store_instance(st, x->inst)->bytes[x->offset + b->s++]);
         break;
     }
     default:
