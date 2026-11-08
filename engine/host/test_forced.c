@@ -8245,6 +8245,54 @@ TF_UNIT void flow_graph_closure_selftest(void)
     JS_FreeRuntime(rt);
 }
 
+/* @GRAPHRT over an Error's call sites, on a runtime of its own: an Error thrown from a nested function above the
+   floor parks its frames as CallSite records in its stack slot. The Error is written, rebuilt and written again;
+   the bytes must agree, and the rebuilt Error's rendered `stack` must be the original's. */
+TF_UNIT void flow_graph_callsite_selftest(void)
+{
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx;
+    JSValue g, err, back[1], v;
+    JSFlowGraph *g1, *g2;
+    const uint8_t *b1, *b2;
+    size_t n1, n2;
+    int32_t got;
+    int same;
+
+    CHECK(rt != NULL, "the call-site graph witness could not make a runtime");
+    JS_SetGCThreshold(rt, (size_t)-1);
+    ctx = JS_NewContext(rt);
+    CHECK(ctx != NULL, "the call-site graph witness could not make a context");
+    JS_SetFlowGen(5);
+    err = tf_graph_program(ctx, "(function outer() { try { (function inner() { throw new Error('x'); })(); }"
+                                " catch (e) { return e; } })()");
+    CHECK(JS_IsError(err), "the call-site graph witness's program did not return its Error");
+    g1 = JS_FlowGraphWrite(ctx, &err, 1, 2);
+    JS_SetFlowGen(9);
+    CHECK(JS_FlowGraphRead(ctx, g1, back) == 0, "the call-site graph witness could not rebuild its graph");
+    g2 = JS_FlowGraphWrite(ctx, back, 1, 2);
+    n1 = JS_FlowGraphBytes(g1, &b1); n2 = JS_FlowGraphBytes(g2, &b2);
+    same = n1 == n2 && !memcmp(b1, b2, n1);
+    printf("@GRAPHRT {\"callSiteBytes\":%zu,\"identical\":%d}\n", n1, same);
+    CHECK(same, "a rebuilt graph holding an Error's call sites did not write the same bytes as its original");
+    g = JS_GetGlobalObject(ctx);
+    CHECK(JS_SetPropertyStr(ctx, g, "rebuilt", JS_DupValue(ctx, back[0])) >= 0 &&
+          JS_SetPropertyStr(ctx, g, "original", JS_DupValue(ctx, err)) >= 0,
+          "the call-site graph witness could not name its Errors");
+    v = tf_graph_program(ctx, "rebuilt.stack === original.stack && rebuilt.stack.indexOf('inner') >= 0 ? 1 : 0");
+    JS_ToInt32(ctx, &got, v);
+    JS_FreeValue(ctx, v);
+    CHECK(got == 1, "a rebuilt Error renders a different stack than its original, or one that names no frame");
+    JS_FlowGraphFree(ctx, g1);
+    JS_FlowGraphFree(ctx, g2);
+    JS_FreeValue(ctx, back[0]);
+    JS_FreeValue(ctx, err);
+    JS_FreeValue(ctx, g);
+    JS_SetFlowGen(0);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+}
+
 TF_UNIT void concat_keyed_selftest(JSContext *ctx)
 {
     int susp_off = 0, mach_off = 0, susp_on = 0, mach_on = 0;
@@ -44325,6 +44373,7 @@ int main(int argc, char **argv) {
     gc_cycle_step_selftest();
     flow_graph_selftest();
     flow_graph_closure_selftest();
+    flow_graph_callsite_selftest();
     malloc_accounting_selftest();
     concolic_bound_selftest();
     /* AFTER the two digest primitives and for their reason: this one stands on FIPS 197's cipher
