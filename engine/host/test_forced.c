@@ -1737,6 +1737,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/tworoot.h"
 #include "fixture/msgimgload.h"
 #include "fixture/getiterfork.h"
+#include "fixture/flexscroll.h"
 #include "fixture/xwinfwd.h"
 #include "fixture/msgprefix.h"
 #include "fixture/prefixjoin.h"
@@ -2533,6 +2534,7 @@ TF_DOCS[] = {
     { "strsearch", HTML_STRSEARCH },
     { "rxsearch", HTML_RXSEARCH },
     { "getiterfork", HTML_GETITERFORK },
+    { "flexscroll", HTML_FLEXSCROLL },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -20451,6 +20453,19 @@ TF_UNIT void probes_getiterfork(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `flexscroll` document (fixture/flexscroll.h): the script after window.scrollTo() runs, so the
+   scrolling-area measurement laid out the unstretched column-flex heading under its resting drive. */
+TF_UNIT void probes_flexscroll(const char *js, Probe *tab, int *n) {
+    const char *fs_why = NULL;
+    int fs_tt = 1;
+    fold_row(&fs_tt, &fs_why, !!strstr(js, "\"/api/fxs-scrolled\""),
+             "NOT REACHED: there is no /api/fxs-scrolled record, so the script never ran past window.scrollTo()");
+    const Probe rows[] = {
+        { "fxs-after-scroll", fs_tt, "fxsAfterScroll", SESS_EXPLORE, fs_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `uriclass` document (fixture/uriclass.h): an encoded unknown holds only the units Encode
    produces, so a RegExp over a unit outside them is decided, and one over a unit inside them forks. */
 TF_UNIT void probes_uriclass(const char *js, Probe *tab, int *n) {
@@ -29745,6 +29760,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_tworoot(js, probes, &np);
     probes_msgimgload(js, probes, &np);
     probes_getiterfork(js, probes, &np);
+    probes_flexscroll(js, probes, &np);
     probes_xwinfwd(js, probes, &np);
     probes_msgprefix(js, probes, &np);
     probes_prefixjoin(js, probes, &np);
