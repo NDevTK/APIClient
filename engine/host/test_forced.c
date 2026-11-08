@@ -38415,6 +38415,39 @@ TF_UNIT void stacking_individual_transform_selftest(JSContext *ctx)
     printf("@STACK individual-transforms ok=1\n");
 }
 
+/* css-will-change-1 §2 "Hinting at Future Behavior: the will-change property": "If any non-initial value of a
+   property would create a stacking context on the element, specifying that property in will-change must create
+   a stacking context on the element." Static boxes naming `transform`, `translate` and `contain`, and a
+   relative box naming `z-index`, form one; `color` and `auto` are the negative controls. */
+TF_UNIT void stacking_will_change_selftest(JSContext *ctx)
+{
+    static const char DOC[] = "<!DOCTYPE html><html><head></head><body>"
+                              "<div style=\"will-change:transform\"></div><div style=\"will-change:translate\"></div>"
+                              "<div style=\"will-change:contain\"></div>"
+                              "<div style=\"position:relative;will-change:z-index\"></div>"
+                              "<div style=\"will-change:color\"></div><div style=\"will-change:auto\"></div>"
+                              "</body></html>";
+    static const char *const NAME[] = { "transform", "translate", "contain", "z-index", "color", "auto" };
+    lxb_dom_element_t *root = lxb_dom_document_element(lxb_dom_interface_document(bp_scratch_document(ctx, DOC)));
+    lxb_dom_node_t *box;
+    LayoutJob *job;
+    size_t i = 0;
+
+    CHECK(root != NULL, "the will-change stacking document parsed with no root element");
+    job = tf_job_enter();
+    for (box = lxb_dom_interface_node(root)->first_child->next->first_child; box != NULL; box = box->next, i++) {
+        bool expect = i < 4;
+
+        CHECK(i < COUNTOF(NAME), "the will-change stacking document has more body children than it was written with");
+        CHECKF(stacking_context_forms(lxb_dom_interface_element(box)) == expect,
+               "css-will-change-1 §2: a box whose will-change names `%s` %s a stacking context", NAME[i],
+               expect ? "does not form" : "forms");
+    }
+    CHECK(i == COUNTOF(NAME), "the will-change stacking document has fewer body children than it was written with");
+    tf_job_leave(job);
+    printf("@STACK will-change ok=1\n");
+}
+
 /* `<p>` WITH AN INLINE BOX IN IT, BUILT INTO THE FIXTURE'S OWN ACTIVE DOCUMENT AND TAKEN OUT AGAIN — the
    same borrow `tf_pt_paint` above makes, through the same two BASELINE-WRITE entries and for the reason that
    function's banner now states: a host-time write into the presented tree may not go through the capturing
@@ -43003,6 +43036,8 @@ int main(int argc, char **argv) {
     box_paint_scratch_selftest(ctx);
     /* css-transforms-2 §5's stacking contexts, over a document this file writes. */
     stacking_individual_transform_selftest(ctx);
+    /* and css-will-change-1 §2's, over another. */
+    stacking_will_change_selftest(ctx);
     /* AND THE SUB-LIST INSIDE ONE OF THOSE OFFERS — CSS 2.1 §E.2's step 7.2.1, over the boxes in a line box
        rather than over the block that establishes it. It uses `box_paint_text_selftest`'s document and NOT
        the scratch helper the two above use, because a line box cannot be measured on a document that is no
