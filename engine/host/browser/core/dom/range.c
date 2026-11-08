@@ -33,6 +33,7 @@
 #include "core/dom/document.h"
 #include "core/dom/element_view.h"
 #include "core/dom/node.h"
+#include "core/dom/node_insert.h"
 #include "core/dom/range.h"
 #include "core/geometry/dom_rect.h"
 #include "core/geometry/dom_rect_list.h"
@@ -935,25 +936,35 @@ static void range_collapse_point(lxb_dom_node_t *sn, lxb_dom_node_t *en, uint32_
 #define RX_STAGES(X) \
     X(RX_ENTER,     "DOM §5.5 extract steps 1-4.1 / clone the contents steps 1-4.1 (the fragment, the collapsed " \
                     "range, and — both ends in one CharacterData node — a clone of the start node)") \
-    X(RX_ENTER_CLONED, "DOM §5.5 extract steps 4.2-4.5 / clone the contents steps 4.2-4.4 (the clone's data, " \
-                    "appending it to the fragment, and — extracting — emptying what it took)") \
+    X(RX_ENTER_CLONED, "DOM §5.5 extract steps 4.2-4.3 / clone the contents steps 4.2-4.3 (the clone's data; " \
+                    "append it to fragment)") \
+    X(RX_ENTER_APPENDED, "DOM §5.5 extract steps 4.4-4.5 / clone the contents step 4.4 (extracting, emptying " \
+                    "what it took; return fragment)") \
     X(RX_LOCATE,    "DOM §5.5 extract steps 5-15 / clone the contents steps 5-11 (the common ancestor, the two " \
                     "partially contained children, the contained children, the doctype check — and, extracting " \
                     "only, where the range lands)") \
     X(RX_FIRST,     "DOM §5.5 extract steps 16.1 and 17.1 / clone the contents steps 12.1 and 13.1 (a clone of " \
                     "the first partially contained child)") \
-    X(RX_FIRST_CLONED, "DOM §5.5 extract steps 16.2-16.4 and 17.2-17.3 / clone the contents steps 12.2-12.3 " \
-                    "and 13.2-13.3 (the clone's data, or the subrange whose fragment it receives)") \
+    X(RX_FIRST_CLONED, "DOM §5.5 extract steps 16.2-16.3 and 17.2 / clone the contents steps 12.2-12.3 and " \
+                    "13.2 (the clone's data; append the clone to fragment)") \
+    X(RX_FIRST_APPENDED, "DOM §5.5 extract steps 16.4 and 17.3-17.4 / clone the contents steps 13.3-13.4 " \
+                    "(extracting, emptying what it took; or the subrange whose fragment the clone receives)") \
     X(RX_CONTAINED, "DOM §5.5 extract step 18 / clone the contents step 14.1 (one contained child per step: " \
                     "extract APPENDS it, clone the contents clones it with subtree set to true)") \
     X(RX_CONTAINED_CLONED, "DOM §5.5 clone the contents step 14.2 (append the cloned contained child to " \
                     "fragment)") \
     X(RX_LAST,      "DOM §5.5 extract steps 19.1 and 20.1 / clone the contents steps 15.1 and 16.1 (a clone of " \
                     "the last partially contained child)") \
-    X(RX_LAST_CLONED, "DOM §5.5 extract steps 19.2-19.4 and 20.2-20.3 / clone the contents steps 15.2-15.3 " \
-                    "and 16.2-16.3 (the clone's data, or the subrange whose fragment it receives)") \
+    X(RX_LAST_CLONED, "DOM §5.5 extract steps 19.2-19.3 and 20.2 / clone the contents steps 15.2-15.3 and " \
+                    "16.2 (the clone's data; append the clone to fragment)") \
+    X(RX_LAST_APPENDED, "DOM §5.5 extract steps 19.4 and 20.3-20.4 / clone the contents steps 16.3-16.4 " \
+                    "(extracting, emptying what it took; or the subrange whose fragment the clone receives)") \
     X(RX_LEAVE,     "DOM §5.5 extract step 21 / clone the contents step 17 (return fragment — a subrange's " \
                     "fragment is appended to its clone on the way out)") \
+    X(RX_LEFT,      "DOM §5.5 extract steps 17.5 and 20.5 / clone the contents steps 13.5 and 16.5 (subfragment " \
+                    "is appended to clone: the parent range resumes)") \
+    NODE_INSERT_ALGO_STAGES(X, RX_IN, "DOM §5.5 extract / clone the contents: append to fragment or clone → " \
+                    "DOM §4.2.3 pre-insert step 4") \
     NODE_CLONE_ALGO_STAGES(X, RX_CLONE, "DOM §5.5 extract / clone the contents: `a clone of` a boundary node " \
                     "or a contained child")
 /* SURROUNDCONTENTS' STEP 3 IS `extract this`, SO ITS STAGES ARE THE EXTRACTION'S — declared here, in ITS
@@ -966,16 +977,22 @@ static void range_collapse_point(lxb_dom_node_t *sn, lxb_dom_node_t *en, uint32_
     X(RS_CHECK,   "DOM §5.5 surroundContents steps 1-2 (the partially contained non-Text node, and what " \
                   "newParent may be)") \
     X(RS_X_ENTER,     "DOM §5.5 surroundContents step 3 → extract steps 1-4.1") \
-    X(RS_X_ENTER_CLONED, "DOM §5.5 surroundContents step 3 → extract steps 4.2-4.5") \
+    X(RS_X_ENTER_CLONED, "DOM §5.5 surroundContents step 3 → extract steps 4.2-4.3") \
+    X(RS_X_ENTER_APPENDED, "DOM §5.5 surroundContents step 3 → extract steps 4.4-4.5") \
     X(RS_X_LOCATE,    "DOM §5.5 surroundContents step 3 → extract steps 5-15") \
     X(RS_X_FIRST,     "DOM §5.5 surroundContents step 3 → extract steps 16.1 and 17.1") \
-    X(RS_X_FIRST_CLONED, "DOM §5.5 surroundContents step 3 → extract steps 16.2-16.4 and 17.2-17.3") \
+    X(RS_X_FIRST_CLONED, "DOM §5.5 surroundContents step 3 → extract steps 16.2-16.3 and 17.2") \
+    X(RS_X_FIRST_APPENDED, "DOM §5.5 surroundContents step 3 → extract steps 16.4 and 17.3-17.4") \
     X(RS_X_CONTAINED, "DOM §5.5 surroundContents step 3 → extract step 18, one contained child per step") \
     X(RS_X_CONTAINED_CLONED, "DOM §5.5 surroundContents step 3 → extract step 18 (an extraction MOVES a " \
                   "contained child, so this stage is the one its clone-the-contents twin rests at)") \
     X(RS_X_LAST,      "DOM §5.5 surroundContents step 3 → extract steps 19.1 and 20.1") \
-    X(RS_X_LAST_CLONED, "DOM §5.5 surroundContents step 3 → extract steps 19.2-19.4 and 20.2-20.3") \
+    X(RS_X_LAST_CLONED, "DOM §5.5 surroundContents step 3 → extract steps 19.2-19.3 and 20.2") \
+    X(RS_X_LAST_APPENDED, "DOM §5.5 surroundContents step 3 → extract steps 19.4 and 20.3-20.4") \
     X(RS_X_LEAVE,     "DOM §5.5 surroundContents step 3 → extract step 21") \
+    X(RS_X_LEFT,      "DOM §5.5 surroundContents step 3 → extract steps 17.5 and 20.5") \
+    NODE_INSERT_ALGO_STAGES(X, RS_X_IN, "DOM §5.5 surroundContents step 3 → extract: append → DOM §4.2.3 " \
+                  "pre-insert step 4") \
     NODE_CLONE_ALGO_STAGES(X, RS_X_CLONE, "DOM §5.5 surroundContents step 3 → extract: `a clone of` a " \
                   "partially contained boundary node") \
     X(RS_WRAP,    "DOM §5.5 surroundContents steps 4-7 (empty newParent, insert it, append the fragment, and " \
@@ -992,6 +1009,9 @@ enum { IDL_STEP_STAGE_BASE(RS_STAGES) RS_STAGES(JS_STEP_STAGE_ENUM) };
 _Static_assert(RS_X_CLONE_LEAVE - RS_X_ENTER == RX_CLONE_LEAVE - RX_ENTER,
                "surroundContents' copy of the extraction's stage block is not the same length as the "
                "extraction's own — one of the two lists gained a stage the other did not");
+_Static_assert(RS_X_IN_TAKE - RS_X_ENTER == RX_IN_TAKE - RX_ENTER,
+               "surroundContents' copy of the extraction's insert block does not start where the extraction's own "
+               "does — rx_append computes the block's base from RX_IN_TAKE for both callers");
 static const char *const RX_STEPS[] = { RX_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 /* WHICH OF THE TWO ALGORITHMS ONE BODY IS RUNNING. Spelled in full because §4.4's own algorithm now
@@ -1024,6 +1044,7 @@ typedef struct RxState {
        every site here starts a clone and resumes at the stage that consumes it, so a second can only begin
        once the first has handed its copy back. */
     NodeCloneState nc;
+    NodeInsertState in;   /* the "append" in flight, one at a time like the clone */
 } RxState;
 
 static void rx_frame_visit(JSContext *ctx, void *elem, JSStepVisit *v)
@@ -1037,6 +1058,7 @@ static void rx_visit(JSContext *ctx, void *st, JSStepVisit *v)
     RxState *s = st;
     v->array(ctx, (void **)&s->f, sizeof(RxFrame), s->sp, s->cap, rx_frame_visit);
     node_clone_visit_state(ctx, &s->nc, v);   /* the delegated algorithm's own allocation is its to declare */
+    node_insert_visit(ctx, &s->in, v);
 }
 
 /* THE RUNTIME'S ALLOCATOR, BECAUSE THE DECLARATION'S IS — see rstr_append. `v->array` copies this stack with
@@ -1077,6 +1099,14 @@ static void rx_contained_add(JSContext *ctx, RxFrame *f, lxb_dom_node_t *n)
    it took bytes from. Everything else is one algorithm. */
 /* `base` is where this caller's copy of the stage block starts; the phase is the offset into it. */
 #define RXS(x) (base + ((x) - RX_ENTER))
+/* §5.5's "append node to parent": DOM §4.2.3 pre-insert, in this caller's insert block, resuming at `after`. */
+static int rx_append(JSContext *ctx, JSStepHdr *hdr, RxState *s, lxb_dom_node_t *node, lxb_dom_node_t *parent,
+                     int base, int after)
+{
+    if (!node_pre_insert_start(ctx, hdr, &s->in, node, parent, NULL, RXS(RX_IN_TAKE), after)) return JS_STEP_ABRUPT;
+    return JS_STEP_YIELD;
+}
+
 static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base, JSValue *presult)
 {
     RxFrame *f;
@@ -1102,6 +1132,8 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
                "are the LAST of this member's, so there is nothing above them to resume into");
         return node_clone_run(ctx, hdr, &s->nc, RXS(RX_CLONE_ROOT));
     }
+    if (hdr->stage >= RXS(RX_IN_TAKE) && hdr->stage < RXS(RX_IN_TAKE) + NODE_INSERT_PHASE_N)
+        return node_insert_run(ctx, hdr, &s->in, RXS(RX_IN_TAKE));
 
     f = &s->f[s->sp - 1];
 
@@ -1120,9 +1152,11 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
         hdr->stage = RXS(RX_LOCATE);
         return JS_STEP_YIELD;
 
-    case RX_ENTER_CLONED:                                                     /* STEPS 4.2-4.4 */
+    case RX_ENTER_CLONED:                                                     /* STEPS 4.2-4.3 */
         range_clone_data(s->nc.copy, f->sn, f->so, f->eo);
-        node_insert_at(f->frag, s->nc.copy, NULL);
+        return rx_append(ctx, hdr, s, s->nc.copy, f->frag, base, RXS(RX_ENTER_APPENDED));
+
+    case RX_ENTER_APPENDED:
         /* Extract's step 4.4 only: the bytes the fragment now holds leave the original. Cloning the contents
            has no such step, which is the whole of the difference `move` names. */
         if (move) range_delete_data(ctx, f->sn, f->so, f->eo - f->so);
@@ -1173,19 +1207,22 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
         return JS_STEP_YIELD;
 
     case RX_FIRST_CLONED:
-        hdr->stage = RXS(RX_CONTAINED);
-        if (node_is_chardata_kind(f->first_pcc)) {                            /* STEPS 16.2-16.4 */
-            uint32_t len = node_length(f->sn);
+        if (node_is_chardata_kind(f->first_pcc)) {                            /* STEPS 16.2-16.3 */
             DCHECK(f->first_pcc == f->sn, "§5.5's note says a CharacterData first partially contained child IS "
                                           "the original start node, and this one is not");
-            range_clone_data(s->nc.copy, f->sn, f->so, len);
-            node_insert_at(f->frag, s->nc.copy, NULL);
+            range_clone_data(s->nc.copy, f->sn, f->so, node_length(f->sn));
+        }
+        return rx_append(ctx, hdr, s, s->nc.copy, f->frag, base, RXS(RX_FIRST_APPENDED));   /* STEP 17.2 */
+
+    case RX_FIRST_APPENDED:
+        hdr->stage = RXS(RX_CONTAINED);
+        if (node_is_chardata_kind(f->first_pcc)) {
+            uint32_t len = node_length(f->sn);
             if (move) range_delete_data(ctx, f->sn, f->so, len - f->so);      /* extract's step 16.4 only */
             return JS_STEP_YIELD;
         }
-        {                                                                     /* STEPS 17.2-17.3 */
+        {                                                                     /* STEPS 17.3-17.4 */
             RxFrame *sub;
-            node_insert_at(f->frag, s->nc.copy, NULL);
             sub = rx_push(ctx, s);
             f = &s->f[s->sp - 2];   /* rx_push may have moved the array */
             sub->sn = f->sn;
@@ -1205,7 +1242,7 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
             /* MOVING one is `append`, which pre-inserts and therefore REMOVES it from the tree first — and
                that removal runs the live-range pre-remove steps, which is how the range the caller still holds
                keeps up. */
-            if (move) { node_insert_at(f->frag, c, NULL); return JS_STEP_YIELD; }
+            if (move) return rx_append(ctx, hdr, s, c, f->frag, base, RXS(RX_CONTAINED));
             /* CLONING THE CONTENTS instead says "a clone of contained child with subtree set to true", which is
                §4.4's algorithm and nothing this file may re-derive: a copy made here would carry neither the
                cloning steps HTML defines for the elements in that subtree nor their clonable shadow roots. */
@@ -1216,9 +1253,7 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
     case RX_CONTAINED_CLONED:                                                 /* STEP 14.2 */
         DCHECK(!move, "extract's step 18 APPENDS a contained child and clones nothing — an extraction resumed "
                       "at the clone-the-contents step means the two algorithms' one body took the wrong arm");
-        node_insert_at(f->frag, s->nc.copy, NULL);
-        hdr->stage = RXS(RX_CONTAINED);
-        return JS_STEP_YIELD;
+        return rx_append(ctx, hdr, s, s->nc.copy, f->frag, base, RXS(RX_CONTAINED));
 
     case RX_LAST:
         if (f->last_pcc) {                                         /* STEPS 19.1 and 20.1: `a clone of` it */
@@ -1229,18 +1264,21 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
         return JS_STEP_YIELD;
 
     case RX_LAST_CLONED:
-        hdr->stage = RXS(RX_LEAVE);
-        if (node_is_chardata_kind(f->last_pcc)) {                             /* STEPS 19.2-19.4 */
+        if (node_is_chardata_kind(f->last_pcc)) {                             /* STEPS 19.2-19.3 */
             DCHECK(f->last_pcc == f->en, "§5.5's note says a CharacterData last partially contained child IS "
                                          "the original end node, and this one is not");
             range_clone_data(s->nc.copy, f->en, 0, f->eo);
-            node_insert_at(f->frag, s->nc.copy, NULL);
+        }
+        return rx_append(ctx, hdr, s, s->nc.copy, f->frag, base, RXS(RX_LAST_APPENDED));    /* STEP 20.2 */
+
+    case RX_LAST_APPENDED:
+        hdr->stage = RXS(RX_LEAVE);
+        if (node_is_chardata_kind(f->last_pcc)) {
             if (move) range_delete_data(ctx, f->en, 0, f->eo);                /* extract's step 19.4 only */
             return JS_STEP_YIELD;
         }
-        {                                                                     /* STEPS 20.2-20.3 */
+        {                                                                     /* STEPS 20.3-20.4 */
             RxFrame *sub;
-            node_insert_at(f->frag, s->nc.copy, NULL);
             sub = rx_push(ctx, s);
             f = &s->f[s->sp - 2];
             sub->sn = f->last_pcc;
@@ -1253,15 +1291,17 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
         }
         return JS_STEP_YIELD;
 
-    default:
-        DCHECK(hdr->stage == RXS(RX_LEAVE), "§5.5's extract resumed into a stage it does not have");
+    case RX_LEAVE:
         if (s->sp == 1) {                                                     /* STEP 21 */
             *presult = node_wrap(ctx, f->frag);
             return JS_STEP_DONE;
         }
         /* "Append subfragment to clone" — the caller's line, run here because this is where the subfragment
            is finished. The fragment itself is left empty and unreferenced, which is what appending one does. */
-        node_insert_at(f->into, f->frag, NULL);
+        return rx_append(ctx, hdr, s, f->frag, f->into, base, RXS(RX_LEFT));
+
+    default:
+        DCHECK(hdr->stage == RXS(RX_LEFT), "§5.5's extract resumed into a stage it does not have");
         hdr->stage = f->after;
         js_free(ctx, f->contained);   /* the allocator rx_contained_add grew it with, and the one v->buf uses */
         f->contained = NULL;
@@ -1282,11 +1322,17 @@ static int rx_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     return rx_run(ctx, hdr, st, idl_step_magic(hdr) == RX_EXTRACT, RX_ENTER, presult);
 }
 
+static const char *rx_script_forbidden(int stage, const void *st)
+{
+    (void)st;
+    return node_insert_script_forbidden(stage, RX_IN_TAKE);
+}
+
 /* No release: the frame stack, each frame's contained-children list and the clone's own level stack are all
    rx_visit's, and the teardown discharges that one list. */
 static const IdlStepDecl RANGE_EXTRACT = { rx_step, sizeof(RxState), rx_visit, NULL,
                                            "DOM §5.5 extract a live range / clone the contents of a live range",
-                                           RX_STEPS };
+                                           RX_STEPS, .script_forbidden = rx_script_forbidden };
 
 /* ---- deleteContents ------------------------------------------------------------------------------------- */
 
@@ -1537,8 +1583,15 @@ static int rs_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     return JS_STEP_DONE;
 }
 
+static const char *rs_script_forbidden(int stage, const void *st)
+{
+    (void)st;
+    return node_insert_script_forbidden(stage, RS_X_IN_TAKE);
+}
+
 static const IdlStepDecl RANGE_SURROUND = { rs_step, sizeof(RsState), rs_visit, NULL,
-                                            "DOM §5.5 Range.surroundContents(newParent)", RS_STEPS };
+                                            "DOM §5.5 Range.surroundContents(newParent)", RS_STEPS,
+                                            .script_forbidden = rs_script_forbidden };
 
 /* ---- HTML §8.5.7 "The createContextualFragment() method" -------------------------------------------------
  *
