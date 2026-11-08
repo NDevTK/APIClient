@@ -34,6 +34,7 @@
 #include "core/events/current_event.h"
 #include "core/events/event_target.h"
 #include "core/events/message_port.h"
+#include "core/wasm/linear_memory.h"
 #include "core/workers/worker.h"
 #include "core/workers/worker_global_scope.h"
 #include "core/events/report_exception.h"
@@ -293,6 +294,7 @@ static void d_observable(JSContext *c, const PlatformAgent *a) { (void)a; observ
 static void d_dom_rect(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_init(c); }
 static void d_path_2d(JSContext *c, const PlatformAgent *a) { (void)a; path_2d_init(c); }
 static void d_image_data(JSContext *c, const PlatformAgent *a) { (void)a; image_data_init(c); }
+static void d_wasm_memory(JSContext *c, const PlatformAgent *a) { (void)a; wasm_memory_init(c); }
 static void d_canvas_ctx2d(JSContext *c, const PlatformAgent *a)
 { (void)a; canvas_rendering_context_2d_init(c); }
 static void d_dom_rect_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_list_init(c); }
@@ -545,6 +547,7 @@ static void r_dom_string_list(JSRuntime *rt) { dom_string_list_free(rt); }
 static void r_dom_rect(JSRuntime *rt) { (void)rt; dom_rect_free(); }
 static void r_path_2d(JSRuntime *rt) { (void)rt; path_2d_free(); }
 static void r_image_data(JSRuntime *rt) { (void)rt; image_data_free(); }
+static void r_wasm_memory(JSRuntime *rt) { (void)rt; wasm_memory_free(); }
 static void r_canvas_ctx2d(JSRuntime *rt) { canvas_rendering_context_2d_free(rt); }
 /* Rows whose releases a pairing check cannot tell from empty ones: a row with no release and a component that
    declared nothing agree whether it holds nothing or everything. These hold Indexed Database §4.7's IDBKeyRange
@@ -981,6 +984,9 @@ static const PlatformComponent PLATFORM[] = {
     /* HTML §8.11.1 "The ImageData interface", `[Exposed=(Window,Worker)]`: no document half. It inherits from no
        interface (IDL_PROTO_OBJECT), so its position is free; it sits with the canvas rows. */
     { "image_data",          d_image_data,          NULL,        r_image_data },
+    /* WebAssembly Core §4.2.9's memory instance, an internal class with no interface and no realm half: the
+       per-flow linear memory JS API §5.3's Memory object will reference. */
+    { "wasm_memory",         d_wasm_memory,         NULL,        r_wasm_memory },
     /* HTML §4.12.5.1 "The 2D rendering context", after `image_data`: §4.12.5.1.16's `getImageData` mints an
        ImageData through core/canvas/image_data.h, which reads the class that row declares. `getContext` is a
        member on HTMLCanvasElement, declared with the element interfaces, so this row installs only a realm
