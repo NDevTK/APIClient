@@ -92,13 +92,12 @@ void css_transform_matrix_map(CssTransformMatrix m, CssPx x, CssPx y, CssPx *out
     *out_x = css_tm_add(css_tm_add(css_tm_mul(m.a, x), css_tm_mul(m.c, y)), m.e);
     *out_y = css_tm_add(css_tm_add(css_tm_mul(m.b, x), css_tm_mul(m.d, y)), m.f);
     w = css_tm_add(css_tm_add(css_tm_mul(m.p, x), css_tm_mul(m.q, y)), m.s);
-    if (css_tm_is(w, 1.0)) return;
-    if (!(w.px > 0.0)) {
-        DFAIL("css-transforms-2 §4.2 \"Processing of Perspective-Transformed Boxes\": a point mapped to w <= 0, "
-              "behind the viewer. BUILD that section's clipping of the box to the w > 0 half-space before its "
-              "corners are divided");
-        return;
-    }
+    /* css-transforms-2 §4.2 "Processing of Perspective-Transformed Boxes" maps a corner at w = 0 to (x ⋅ n,
+       y ⋅ n) for "an implementation-dependent value" n, and cuts the w < 0 part out of the rendered polygon.
+       A client rectangle takes Chromium's mapping (ui/gfx/geometry/transform.cc, Transform::MapPointInternal):
+       it divides only by a normal w other than 1, so n is 1 at w = 0 and a corner behind the viewer is divided
+       by its negative w, uncut. */
+    if (css_tm_is(w, 1.0) || !isnormal(w.px)) return;
     *out_x = css_px_div(*out_x, w);
     *out_y = css_px_div(*out_y, w);
 }

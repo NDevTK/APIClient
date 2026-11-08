@@ -80,7 +80,8 @@ CssTransformMatrix css_transform_matrix_multiply(CssTransformMatrix outer, CssTr
 /* §2's "post-multiply the transformation matrix TM of the element by p local. The result is the mapped point p
    parent". The two out-parameters carry the UNION of the point's environment facts and the matrix's
    translation's, which core/css/css_length.h's arithmetic assembles — a `translate(10vw)` applied to a border
-   area derived from the initial containing block is one function of that block and not two numbers. */
+   area derived from the initial containing block is one function of that block and not two numbers. The
+   projective divide is Chromium's for a client rectangle: by w only where w is normal and not 1. */
 void css_transform_matrix_map(CssTransformMatrix m, CssPx x, CssPx y, CssPx *out_x, CssPx *out_y);
 
 /* §2's CURRENT TRANSFORMATION MATRIX — "From the perspective of the user an element effectively accumulates
