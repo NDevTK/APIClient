@@ -352,6 +352,20 @@ static CssTransformMatrix3d css_tm_of_list(const CssTransformList *list, const C
     return out;
 }
 
+CssTransformMatrix3d css_transform_list_matrix3d(const CssTransformList *list)
+{
+    size_t i, k;
+
+    DCHECK(list != NULL, "a transform list's matrix was asked of no list");
+    for (i = 0; i < list->n; i++)
+        for (k = 0; k < CSS_TF_LENGTH_MAX; k++)
+            DCHECK(list->fn[i].length[k].kind != CSS_LENGTH_PERCENTAGE &&
+                       list->fn[i].length[k].kind != CSS_LENGTH_CALCULATED,
+                   "a transform list with a percentage reached the matrix that has no reference box to resolve it "
+                   "against; the caller refuses one first");
+    return css_tm_of_list(list, NULL);
+}
+
 /* Whether a 4x4 maps every point by its translation alone: its upper-left 3x3 the identity and its projective
    row 0 0 0 1. Then T(A)·M·T(−A) is M for every A, so the origin and the position are not read. */
 static bool css_tm4_is_translation(const CssTransformMatrix3d *m)

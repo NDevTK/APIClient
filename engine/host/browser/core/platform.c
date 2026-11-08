@@ -74,6 +74,9 @@
 #include "core/frame/window.h"
 #include "core/frame/window_message.h"
 #include "core/frame/window_proxy.h"
+#include "core/geometry/dom_matrix.h"
+#include "core/geometry/dom_point.h"
+#include "core/geometry/dom_quad.h"
 #include "core/geometry/dom_rect.h"
 #include "core/intersection_observer/intersection_observer.h"
 #include "core/geometry/dom_rect_list.h"
@@ -294,6 +297,9 @@ static void d_fetch(JSContext *c, const PlatformAgent *a) { (void)a; fetch_init(
 static void d_abort(JSContext *c, const PlatformAgent *a) { (void)a; abort_init(c); }
 static void d_observable(JSContext *c, const PlatformAgent *a) { (void)a; observable_init(c); }
 static void d_dom_rect(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_init(c); }
+static void d_dom_point(JSContext *c, const PlatformAgent *a) { (void)a; dom_point_init(c); }
+static void d_dom_matrix(JSContext *c, const PlatformAgent *a) { (void)a; dom_matrix_init(c); }
+static void d_dom_quad(JSContext *c, const PlatformAgent *a) { (void)a; dom_quad_init(c); }
 static void d_path_2d(JSContext *c, const PlatformAgent *a) { (void)a; path_2d_init(c); }
 static void d_image_data(JSContext *c, const PlatformAgent *a) { (void)a; image_data_init(c); }
 static void d_wasm_memory(JSContext *c, const PlatformAgent *a) { (void)a; wasm_memory_init(c); }
@@ -549,6 +555,9 @@ static void r_iframe(JSRuntime *rt) { iframe_free(rt); }
 static void r_dom_rect_list(JSRuntime *rt) { dom_rect_list_free(rt); }
 static void r_dom_string_list(JSRuntime *rt) { dom_string_list_free(rt); }
 static void r_dom_rect(JSRuntime *rt) { (void)rt; dom_rect_free(); }
+static void r_dom_point(JSRuntime *rt) { (void)rt; dom_point_free(); }
+static void r_dom_matrix(JSRuntime *rt) { (void)rt; dom_matrix_free(); }
+static void r_dom_quad(JSRuntime *rt) { (void)rt; dom_quad_free(); }
 static void r_path_2d(JSRuntime *rt) { (void)rt; path_2d_free(); }
 static void r_image_data(JSRuntime *rt) { (void)rt; image_data_free(); }
 static void r_wasm_memory(JSRuntime *rt) { (void)rt; wasm_memory_free(); }
@@ -982,6 +991,12 @@ static const PlatformComponent PLATFORM[] = {
        per-document column. browser/idl_exposure.h states each exposure set from the corpus. */
     { "dom_rect",            d_dom_rect,            NULL,        r_dom_rect },
     { "dom_rect_list",       d_dom_rect_list,       i_dom_rect_list, r_dom_rect_list },
+    /* Geometry Interfaces §2 "The DOMPoint interfaces", §6 "The DOMMatrix interfaces" and §5 "The DOMQuad
+       interface", each `[Exposed=(Window,Worker)]`: no document half; each realm intrinsic places its interface
+       objects. */
+    { "dom_point",           d_dom_point,           NULL,        r_dom_point },
+    { "dom_matrix",          d_dom_matrix,          NULL,        r_dom_matrix },
+    { "dom_quad",            d_dom_quad,            NULL,        r_dom_quad },
     /* HTML §4.12.5.1.7 "Path2D objects", with §4.12.5.1.6 "Building paths"'s CanvasPath mixin. §4.12.5.1.7
        declares `Path2D` `[Exposed=(Window,Worker)]`: no document half. It inherits from no interface
        (browser/idl_inheritance.h records IDL_PROTO_OBJECT), so its position is free; it sits beside the geometry
@@ -1221,6 +1236,9 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "PageRevealEvent",       "page_reveal" },
     { "AbortController",       "abort" },
     { "DOMRect",               "dom_rect" },
+    { "DOMPoint",              "dom_point" },
+    { "DOMMatrix",             "dom_matrix" },
+    { "DOMQuad",               "dom_quad" },
     { "DOMRectList",           "dom_rect_list" },
     { "Path2D",                "path_2d" },
     { "ImageData",             "image_data" },

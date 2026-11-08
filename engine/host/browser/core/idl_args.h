@@ -158,6 +158,15 @@ typedef enum {
        the unknown, matching the spec's "a single unsigned long value is treated as a sequence of a single
        value". */
     IDL_UNSIGNED_LONG_OR_SEQUENCE,
+    /* `sequence<unrestricted double>` — §3.2.21 with §3.2.8 unrestricted double as the element conversion:
+       ToNumber, a rest point per element, refusing nothing; unknown external input crosses as itself, as it
+       does at an `unrestricted double` position. Reached through the union below. */
+    IDL_SEQUENCE_UNRESTRICTED_DOUBLE,
+    /* `(DOMString or sequence<unrestricted double>)` — Geometry Interfaces §6.3's matrix constructors. The
+       same step 11.2 read as the unions above: a callable @@iterator takes the sequence, every other value
+       step 15's string arm (`new DOMMatrix(matrix)` stringifies the matrix). Unknown input crosses, and the
+       body decides from it. */
+    IDL_DOMSTRING_OR_SEQUENCE_UNRESTRICTED_DOUBLE,
     /* `sequence<I>`, I an interface (HTML's `GetHTMLOptions.shadowRoots`). The protocol parks per element; the
        element conversion is Web IDL §3.2.15 Interface types' brand test, which runs no page code. The interface
        is named by idl_iface_brand / idl_iface_narrow, as for IDL_INTERFACE. */
@@ -495,6 +504,7 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
     case IDL_SEQUENCE_ENUM:
     case IDL_SEQUENCE_DOUBLE:
     case IDL_SEQUENCE_UNSIGNED_LONG:
+    case IDL_SEQUENCE_UNRESTRICTED_DOUBLE:
     case IDL_SEQUENCE_USVSTRING:
     case IDL_SEQUENCE_INTERFACE:
     case IDL_SEQUENCE_INTERFACE_NULLABLE:
@@ -506,6 +516,7 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        as the arm block's comment in idl_args.c states. */
     case IDL_DOUBLE_OR_SEQUENCE:
     case IDL_UNSIGNED_LONG_OR_SEQUENCE:
+    case IDL_DOMSTRING_OR_SEQUENCE_UNRESTRICTED_DOUBLE:
     case IDL_STRING_UNLESS_CALLABLE:
     case IDL_STRING_UNLESS_IFACE:
     case IDL_DOUBLE_UNLESS_IFACE:
@@ -862,6 +873,12 @@ int  idl_method_id_ext(JSContext *ctx, const IdlArgType *types, int nargs, bool 
    passes a static), so the pool keeps the pointer. */
 int  idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
                         const IdlDictMember *members, int nmembers, IdlBody body, int magic);
+
+/* idl_method_id_dict for a member whose every dictionary argument is the one dictionary type `members` lists
+   (Geometry Interfaces §5's `DOMQuad(p1, p2, p3, p4)`, four DOMPointInit). Arguments convert left to right and
+   each walk is taken before the next starts, so the positions share the member names. */
+int  idl_method_id_dicts(JSContext *ctx, const IdlArgType *types, int nargs,
+                         const IdlDictMember *members, int nmembers, IdlBody body, int magic);
 
 /* A member whose algorithm runs the page's code after its arguments are converted (HTML's
    customElements.define reads the static `observedAttributes` getter and converts it). A plain body cannot:

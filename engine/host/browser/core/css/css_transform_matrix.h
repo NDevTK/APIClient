@@ -48,6 +48,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
+#include "core/css/css_transform_function.h"
 
 /* The flattened 3x3: §12's six parameters in §12's own order (a = m11, b = m12, c = m21, d = m22, e = m41,
    f = m42) and the projective row p = m14, q = m24, s = m44, so a point maps to ((a x + c y + e) / w,
@@ -83,6 +84,11 @@ CssTransformMatrix css_transform_matrix_multiply(CssTransformMatrix outer, CssTr
    area derived from the initial containing block is one function of that block and not two numbers. The
    projective divide is Chromium's for a client rectangle: by w only where w is normal and not 1. */
 void css_transform_matrix_map(CssTransformMatrix m, CssPx x, CssPx y, CssPx *out_x, CssPx *out_y);
+
+/* §2's matrix of `list` with no reference box, every function post-multiplied left to right: Geometry Interfaces
+   §6.2's "Transform all <transform-function>s to 4x4 abstract matrices". Every length must be absolute (asserted;
+   an unwritten length is a zeroed absolute one). */
+CssTransformMatrix3d css_transform_list_matrix3d(const CssTransformList *list);
 
 /* §2's CURRENT TRANSFORMATION MATRIX — "From the perspective of the user an element effectively accumulates
    all the transform properties of its ancestors as well as any local transform applied to it", computed as

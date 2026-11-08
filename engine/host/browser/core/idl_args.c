@@ -5295,6 +5295,15 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             if (r < 0) return JS_STEP_ABRUPT;
         }
 
+        /* §3.2.25 over `(DOMString or sequence<unrestricted double>)`: the same step 11.2 read, the sequence
+           arm's elements §3.2.8 unrestricted double and the flat arm step 15's DOMString. */
+        if (t == IDL_DOMSTRING_OR_SEQUENCE_UNRESTRICTED_DOUBLE) {
+            r = idl_union_seq_arm(ctx, &s->hdr, &s->dw.lvl, &s->dw.lvl.uni_phase, a, &cb_result, &t,
+                                  IDL_SEQUENCE_UNRESTRICTED_DOUBLE, IDL_DOMSTRING, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
+        }
+
         /* §3.6 STEP 12 OVER TWO ENTRIES STEP 4 REMOVED NEITHER OF — a `sequence<object>` against an
            `optional StructuredSerializeOptions options = {}` at the same index, which is what
            HTML §9.4.4 Message ports' `MessagePort.postMessage` declares. The row above can decide its split
@@ -5845,7 +5854,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            already obtained, never a second read. */
         if (t == IDL_SEQUENCE_BLOBPART || t == IDL_SEQUENCE_INTERFACE || t == IDL_SEQUENCE_OBJECT ||
             t == IDL_SEQUENCE_DOMSTRING || t == IDL_SEQUENCE_DOUBLE || t == IDL_SEQUENCE_ENUM ||
-            t == IDL_SEQUENCE_UNSIGNED_LONG) {
+            t == IDL_SEQUENCE_UNSIGNED_LONG || t == IDL_SEQUENCE_UNRESTRICTED_DOUBLE) {
             if (!JS_IsObject(a)) {
                 JS_FreeValue(ctx, cb_result);
                 JS_ThrowTypeError(ctx, "the sequence argument is not an object");
@@ -5944,6 +5953,28 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                    no refusal at all and `[Infinity, -1]` is « 0, 4294967295 ». Writing `isfinite` here — the
                    line directly above, which is the natural thing to copy — would be a TypeError the standard
                    does not have, on the one element shape a page is most likely to reach it with. */
+                /* §3.2.8 `unrestricted double` AS AN ELEMENT CONVERSION: the same ToNumber request with no
+                   refusal, and an unknown element crossing as itself, as it does at an argument position. */
+                if (t == IDL_SEQUENCE_UNRESTRICTED_DOUBLE) {
+                    double d = 0.0;
+
+                    DCHECK(s->dw.lvl.seq_phase == 2, "the sequence conversion resumed at a phase it never parks in");
+                    if (concolic_is(s->dw.lvl.seq.value)) {
+                        JS_FreeValue(ctx, cb_result);
+                        cb_result = JS_UNDEFINED;
+                        JS_SetPropertyUint32(ctx, s->dw.lvl.seq_list, s->dw.lvl.seq_n++,
+                                             JS_DupValue(ctx, s->dw.lvl.seq.value));
+                        s->dw.lvl.seq_phase = 1;
+                        continue;
+                    }
+                    r = step_todouble_run(ctx, &s->hdr, s->dw.lvl.seq.value, cb_result, &d, out_cb, out_argc);
+                    cb_result = JS_UNDEFINED;
+                    if (r > 0) return r;
+                    if (r < 0) return JS_STEP_ABRUPT;
+                    JS_SetPropertyUint32(ctx, s->dw.lvl.seq_list, s->dw.lvl.seq_n++, JS_NewFloat64(ctx, d));
+                    s->dw.lvl.seq_phase = 1;
+                    continue;
+                }
                 if (t == IDL_SEQUENCE_UNSIGNED_LONG) {
                     double d = 0.0;
 
@@ -6660,7 +6691,7 @@ int idl_method_id_ext(JSContext *ctx, const IdlArgType *types, int nargs, bool v
    conversions are done", and exactly one of them is given. */
 static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
                              const IdlDictMember *members, int nmembers, IdlBody body,
-                             const IdlStepDecl *decl, int magic)
+                             const IdlStepDecl *decl, int magic, bool one_dictionary_type)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
     int idx, k;
@@ -6774,7 +6805,7 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
            refused that member for a collision no call can have — and counting them WITHOUT this paragraph
            would have let a genuine second dictionary through on a member with no split, which is why the bound
            is stated per entry rather than simply raised. */
-        DCHECK(ndict >= 1 && ndict <= (idl_member(idx)->distinguishing >= 0 ? 2 : 1),
+        DCHECK(ndict >= 1 && (one_dictionary_type || ndict <= (idl_member(idx)->distinguishing >= 0 ? 2 : 1)),
                "a member declared dictionary members but not exactly one dictionary argument per overload "
                "entry — the conversion cursor is per-member and Web IDL converts arguments left to right, so a "
                "second dictionary REACHABLE IN THE SAME CALL would read the first's names. A member with no "
@@ -6889,7 +6920,13 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
 int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
                        const IdlDictMember *members, int nmembers, IdlBody body, int magic)
 {
-    return idl_method_id_all(ctx, types, nargs, members, nmembers, body, NULL, magic);
+    return idl_method_id_all(ctx, types, nargs, members, nmembers, body, NULL, magic, false);
+}
+
+int idl_method_id_dicts(JSContext *ctx, const IdlArgType *types, int nargs,
+                        const IdlDictMember *members, int nmembers, IdlBody body, int magic)
+{
+    return idl_method_id_all(ctx, types, nargs, members, nmembers, body, NULL, magic, true);
 }
 
 int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
@@ -6904,7 +6941,7 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
     DCHECK(decl != NULL,
            "an IDL member was declared as a step machine with no declaration — the state size, the ownership "
            "list and the stages all come off it, so there is nothing to build a machine out of");
-    return idl_method_id_all(ctx, types, nargs, members, nmembers, NULL, decl, magic);
+    return idl_method_id_all(ctx, types, nargs, members, nmembers, NULL, decl, magic, false);
 }
 
 /* A SETTER THAT NAMES THE LAST DECLARATION MAY ONLY BE CALLED FROM A DECLARATION. All three of these
