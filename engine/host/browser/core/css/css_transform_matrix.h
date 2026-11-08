@@ -17,11 +17,8 @@
  * built at one of those three call sites is a second answer to one question, and §2's own arithmetic is
  * exactly the place two answers drift.
  *
- * css-transforms-1 §3.2 IS NOT THIS ALGORITHM AND MAY NOT BE SUBSTITUTED FOR IT, which is the one thing a
- * reader arriving from the crash this component replaced must not carry forward. THE RUN THAT STOOD IN THAT
- * CRASH, shown here as a spelling and not quoted as a standard's, named `§3.2 "Resolved value of transform"'s
- * reduction of a list to one 4x4` as what a client rectangle waits on. css-transforms-1 §3.2's three steps
- * are "Let transform be a 4x4 matrix initialized to the identity matrix", "Post-multiply all
+ * css-transforms-1 §3.2 "Resolved value of transform" IS NOT THIS ALGORITHM AND MAY NOT BE SUBSTITUTED FOR IT.
+ * Its three steps are "Let transform be a 4x4 matrix initialized to the identity matrix", "Post-multiply all
  * <transform-function>s in <transform-list> to transform" and "Serialize transform to a matrix function" —
  * THE PRODUCT ALONE, with no transform-origin anywhere in it, because a resolved value is what
  * `getComputedStyle(el).transform` reports and the origin is a separate resolved-value special case beside it.
