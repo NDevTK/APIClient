@@ -8097,6 +8097,56 @@ static const char *TF_CONCAT_SRC =
     "   h = (h * 31 + a[i]) % 1000003; }"
     " return ok ? h : -1; })()";
 
+/* @GRAPHRT over a source read's Concolic record: an object holding the unknown twice is written, rebuilt and
+   written again, and the rebuilt value must be one object, write the same bytes, and answer the original's shape,
+   injection source, delivery root, identity and example. The value is minted above the generation floor, so the
+   writer owes it a body. */
+TF_UNIT void flow_graph_concolic_selftest(JSContext *ctx)
+{
+    JSValue r, c, back[1], v, w;
+    JSFlowGraph *g1, *g2;
+    const uint8_t *b1, *b2;
+    size_t n1, n2;
+    int same;
+
+    JS_SetFlowGen(5);
+    r = JS_NewObject(ctx);
+    c = concolic_new(ctx, "{graph}", "{graph}", CONCOLIC_WHOSE_WORLD, JS_NewString(ctx, "ex"));
+    CHECK(!JS_IsException(r) && concolic_is(c) && JS_SetPropertyStr(ctx, r, "c", JS_DupValue(ctx, c)) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "again", JS_DupValue(ctx, c)) >= 0,
+          "the Concolic graph witness could not build its graph");
+    g1 = JS_FlowGraphWrite(ctx, &r, 1, 2);
+    JS_SetFlowGen(9);
+    CHECK(JS_FlowGraphRead(ctx, g1, back) == 0, "the Concolic graph witness could not rebuild its graph");
+    g2 = JS_FlowGraphWrite(ctx, back, 1, 2);
+    n1 = JS_FlowGraphBytes(g1, &b1); n2 = JS_FlowGraphBytes(g2, &b2);
+    same = n1 == n2 && !memcmp(b1, b2, n1);
+    printf("@GRAPHRT {\"concolicBytes\":%zu,\"identical\":%d}\n", n1, same);
+    CHECK(same, "a rebuilt graph holding a Concolic value did not write the same bytes as its original");
+    v = JS_GetPropertyStr(ctx, back[0], "c");
+    w = JS_GetPropertyStr(ctx, back[0], "again");
+    CHECK(JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(w) && JS_VALUE_GET_PTR(v) != JS_VALUE_GET_PTR(c) && concolic_is(v),
+          "a rebuilt Concolic value is not one new Concolic object named by both properties");
+    CHECK(!strcmp(concolic_shape_c(v), concolic_shape_c(c)) && !strcmp(concolic_src_c(v), concolic_src_c(c)) &&
+          !strcmp(concolic_root_c(v), concolic_root_c(c)) && !strcmp(concolic_ident_c(v), concolic_ident_c(c)),
+          "a rebuilt Concolic value answers a different shape, source, root or identity than its original");
+    JS_FreeValue(ctx, w);
+    w = concolic_example(ctx, v);
+    {
+        const char *ex = JS_ToCString(ctx, w);
+        CHECK(ex && !strcmp(ex, "ex"), "a rebuilt Concolic value lost its example");
+        JS_FreeCString(ctx, ex);
+    }
+    JS_FreeValue(ctx, w);
+    JS_FreeValue(ctx, v);
+    JS_FlowGraphFree(ctx, g1);
+    JS_FlowGraphFree(ctx, g2);
+    JS_FreeValue(ctx, back[0]);
+    JS_FreeValue(ctx, c);
+    JS_FreeValue(ctx, r);
+    JS_SetFlowGen(0);   /* the host's own time is baseline, as engine_sched_slice leaves it */
+}
+
 TF_UNIT void concat_keyed_selftest(JSContext *ctx)
 {
     int susp_off = 0, mach_off = 0, susp_on = 0, mach_on = 0;
@@ -44161,6 +44211,7 @@ int main(int argc, char **argv) {
     flow_job_selftest(ctx);         /* §8.1.7's two queues, §7.5.10 step 5, and the fork's copy-on-nothing */
     sort_merge_selftest(ctx);       /* 23.1.3.30.1 step 4 rests per element, and both schedules agree */
     module_link_fork_selftest();    /* §16.2.1.6.1.2 Link ( ) cloned mid-walk finishes in each world */
+    flow_graph_concolic_selftest(ctx);   /* a parked graph carries a Concolic record */
     concat_keyed_selftest(ctx);     /* §23.1.3.2's keyed walk rests per request, declaring no yield of its own */
 #if APICLIENT_DEV && !defined(__EMSCRIPTEN__)
     nested_entry_selftest(ctx);     /* a C activation entering the engine is named; the leaf dispatch is not */
