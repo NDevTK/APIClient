@@ -150,6 +150,11 @@ typedef enum JSErrorEnum {
     JS_INTERNAL_ERROR,
     JS_AGGREGATE_ERROR,
     JS_SUPPRESSED_ERROR,
+    /* WebAssembly JS API §5.10 Error Objects: NativeError-structured, per realm like the ones above, and on the
+       WebAssembly namespace rather than the global object. */
+    JS_WASM_COMPILE_ERROR,
+    JS_WASM_LINK_ERROR,
+    JS_WASM_RUNTIME_ERROR,
 
     JS_NATIVE_ERROR_COUNT, /* number of different NativeError objects */
     JS_PLAIN_ERROR = JS_NATIVE_ERROR_COUNT
@@ -1006,6 +1011,7 @@ struct JSContext {
     JSValue promise_ctor;
     JSValue native_error_proto[JS_NATIVE_ERROR_COUNT];
     JSValue error_ctor;
+    JSValue wasm_error_ctor[3];   /* JS_WASM_COMPILE_ERROR, _LINK_ and _RUNTIME_'s constructors, by that order */
     /* THE OUT-OF-MEMORY ERROR IS BUILT ONCE, WHILE THERE IS STILL MEMORY. Constructing it at the moment of
        failure is a recursion with a real trigger: the constructor allocates the object, its message string and
        its shape, each of those can fail, and each failure calls JS_ThrowOutOfMemory again. Upstream stops that
@@ -5324,6 +5330,7 @@ JSContext *JS_NewContextRaw(JSRuntime *rt)
     ctx->async_from_sync_next = JS_NULL;
     ctx->promise_ctor = JS_NULL;
     ctx->error_ctor = JS_NULL;
+    for (i = 0; i < 3; i++) ctx->wasm_error_ctor[i] = JS_NULL;
     ctx->oom_error = JS_UNDEFINED;
     ctx->error_back_trace = JS_UNDEFINED;
     ctx->pending_close_iters = NULL;
@@ -5556,6 +5563,7 @@ static void JS_MarkContext(JSRuntime *rt, JSContext *ctx,
         JS_MarkValue(rt, ctx->native_error_proto[i], mark_func);
     }
     JS_MarkValue(rt, ctx->error_ctor, mark_func);
+    for (i = 0; i < 3; i++) JS_MarkValue(rt, ctx->wasm_error_ctor[i], mark_func);
     JS_MarkValue(rt, ctx->oom_error, mark_func);
     JS_MarkValue(rt, ctx->error_back_trace, mark_func);
     JS_MarkValue(rt, ctx->error_prepare_stack, mark_func);
@@ -5658,6 +5666,7 @@ static void js_context_release_refs(JSRuntime *rt, JSContext *ctx)
         JS_FreeValue(ctx, ctx->native_error_proto[i]);
     }
     JS_FreeValue(ctx, ctx->error_ctor);
+    for (i = 0; i < 3; i++) JS_FreeValue(ctx, ctx->wasm_error_ctor[i]);
     DCHECK(ctx->pending_import_cap == NULL, "a parked import capability outlived its context");
     DCHECK(JS_IsUndefined(ctx->module_load_pending),
            "a module load parked on a source promise that nothing ever took — the loader called "
@@ -13737,6 +13746,12 @@ static void build_backtrace(JSContext *ctx, JSValueConst error_val,
     rt->in_build_stack_trace = false;
 }
 
+JSValue JS_GetWasmErrorConstructor(JSContext *ctx, int kind)
+{
+    assert(kind >= 0 && kind < 3);
+    return js_dup(ctx->wasm_error_ctor[kind]);
+}
+
 JSValue JS_NewError(JSContext *ctx)
 {
     JSValue obj = JS_NewObjectClass(ctx, JS_CLASS_ERROR);
@@ -13824,6 +13839,9 @@ JS_ThrowError(JSContext *ctx, JSErrorEnum error_num,
 }
 
 #define JS_ERROR_MAP(X)     \
+    X(WasmCompile, WASM_COMPILE) \
+    X(WasmLink, WASM_LINK)       \
+    X(WasmRuntime, WASM_RUNTIME) \
     X(Eval, EVAL)           \
     X(Internal, INTERNAL)   \
     X(Plain, PLAIN)         \
@@ -96135,10 +96153,11 @@ static const char *const js_error_ctor_steps[];
                          .steps = js_error_ctor_steps },
 static const JSTrampStepDef js_error_ctor_defs[JS_PLAIN_ERROR + 1] = {
     ERRCTOR_DEF(0) ERRCTOR_DEF(1) ERRCTOR_DEF(2) ERRCTOR_DEF(3) ERRCTOR_DEF(4)
-    ERRCTOR_DEF(5) ERRCTOR_DEF(6) ERRCTOR_DEF(7) ERRCTOR_DEF(8) ERRCTOR_DEF(JS_PLAIN_ERROR)
+    ERRCTOR_DEF(5) ERRCTOR_DEF(6) ERRCTOR_DEF(7) ERRCTOR_DEF(8) ERRCTOR_DEF(9) ERRCTOR_DEF(10) ERRCTOR_DEF(11)
+    ERRCTOR_DEF(JS_PLAIN_ERROR)
 };
 #undef ERRCTOR_DEF
-_Static_assert(JS_PLAIN_ERROR == 9, "the error-constructor definition block is written out per kind");
+_Static_assert(JS_PLAIN_ERROR == 12, "the error-constructor definition block is written out per kind");
 static int js_array_iter_next_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
 static JSValue js_array_iter_next_fini(JSContext *ctx, void *st, bool take_result);
 static void js_array_iter_next_visit(JSContext *ctx, void *st, JSStepVisit *v);
@@ -99179,7 +99198,8 @@ static const JSTrampStepDef *const js_tramp_step_defs[STEPDEF_COUNT] = {
     [STEPDEF_ARRAY_ITER_NEXT] = &js_array_iter_next_def,
 #define ERRCTOR_ROW(k) [STEPDEF_ERROR_CTOR_BASE + (k)] = &js_error_ctor_defs[k],
     ERRCTOR_ROW(0) ERRCTOR_ROW(1) ERRCTOR_ROW(2) ERRCTOR_ROW(3) ERRCTOR_ROW(4)
-    ERRCTOR_ROW(5) ERRCTOR_ROW(6) ERRCTOR_ROW(7) ERRCTOR_ROW(8) ERRCTOR_ROW(JS_PLAIN_ERROR)
+    ERRCTOR_ROW(5) ERRCTOR_ROW(6) ERRCTOR_ROW(7) ERRCTOR_ROW(8) ERRCTOR_ROW(9) ERRCTOR_ROW(10) ERRCTOR_ROW(11)
+    ERRCTOR_ROW(JS_PLAIN_ERROR)
 #undef ERRCTOR_ROW
     [STEPDEF_REGEXP_EXEC]     = &js_regexp_exec_def,
     [STEPDEF_REGEXP_TEST]     = &js_re_test_def,
@@ -126048,7 +126068,7 @@ static const char * const native_error_name[JS_NATIVE_ERROR_COUNT] = {
     "EvalError", "RangeError", "ReferenceError",
     "SyntaxError", "TypeError", "URIError",
     "InternalError", "AggregateError",
-    "SuppressedError",
+    "SuppressedError", "CompileError", "LinkError", "RuntimeError",
 };
 
 /* Minimum amount of objects to be able to compile code and display
@@ -126238,6 +126258,13 @@ int JS_AddIntrinsicBaseObjects(JSContext *ctx)
                                     ctx->error_ctor, 0);
         if (JS_IsException(func_obj))
             return -1;
+        if (i >= JS_WASM_COMPILE_ERROR) {
+            /* WebAssembly JS API §5.10: the namespace defines these (JS_GetWasmErrorConstructor), not the global. */
+            if (JS_SetConstructor(ctx, func_obj, ctx->native_error_proto[i]) < 0)
+                return -1;
+            ctx->wasm_error_ctor[i - JS_WASM_COMPILE_ERROR] = func_obj;
+            continue;
+        }
         JS_NewGlobalCConstructor2(ctx, func_obj, native_error_name[i],
                                   ctx->native_error_proto[i]);
     }

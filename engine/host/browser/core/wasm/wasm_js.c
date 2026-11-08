@@ -66,10 +66,16 @@ static JSValue instantiate_fini(JSContext *ctx, void *st, bool take_result)
     return r;
 }
 
-/* A refusal or trap of the core, thrown. */
-static int instantiate_throw(JSContext *ctx, const char *what, const char *message)
+/* The core's answer `st` other than DONE, thrown as JS API §5 "instantiate the core of a WebAssembly module"
+   step 3 and §5.6 step 10 map it (§5.10's error objects): a link failure a LinkError, a trap a RuntimeError,
+   storage the page's sizes ask for and cannot be had a RangeError (the out-of-memory case the step names). */
+static int instantiate_throw(JSContext *ctx, WasmExecStatus st, const char *message)
 {
-    JS_ThrowTypeError(ctx, "WebAssembly %s: %s", what, message);
+    DCHECK(st != WASM_EXEC_DONE && st != WASM_EXEC_MORE && st != WASM_EXEC_FORK && st != WASM_EXEC_HOST_CALL,
+           "a WebAssembly answer that is no failure was thrown");
+    if (st == WASM_EXEC_LINK_INCOMPATIBLE) JS_ThrowWasmLinkError(ctx, "%s", message);
+    else if (st == WASM_EXEC_NO_ROOM) JS_ThrowRangeError(ctx, "WebAssembly: %s", message);
+    else JS_ThrowWasmRuntimeError(ctx, "%s", message);
     return JS_STEP_ABRUPT;
 }
 
@@ -101,14 +107,15 @@ static int instantiate_after(JSContext *ctx, InstantiateState *s, WasmExecStatus
     if (st == WASM_EXEC_HOST_CALL) {
         DFAIL("a WebAssembly start function called a host function; build JS API §5's run a host function as a "
               "step_call_run of the import");
-        return instantiate_throw(ctx, "instantiation", "a host function call is not built");
+        JS_ThrowTypeError(ctx, "WebAssembly: a host function call is not built");
+        return JS_STEP_ABRUPT;
     }
     if (st != WASM_EXEC_DONE) {
         char m[160];
 
         wasm_interpreter_message(&s->run.start, st, m, sizeof m);
-        return instantiate_throw(ctx, "instantiation", st == WASM_EXEC_LINK_INCOMPATIBLE
-                                                           ? "incompatible import type" : m);
+        return instantiate_throw(ctx, st, st == WASM_EXEC_LINK_INCOMPATIBLE ? "incompatible import type"
+                                          : st == WASM_EXEC_NO_ROOM ? "out of memory" : m);
     }
     s->result = JS_NewInt64(ctx, (int64_t)s->run.addr);
     return JS_STEP_DONE;
@@ -155,8 +162,10 @@ static int instantiate_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             return JS_STEP_YIELD;
         }
         if (c != WASM_COMPILE_DONE) {
+            /* §5.1 Module(bytes) step 3: a module that does not compile is a CompileError. */
             wasm_module_record_message(r, m, sizeof m);
-            return instantiate_throw(ctx, "compile", m);
+            JS_ThrowWasmCompileError(ctx, "%s", m);
+            return JS_STEP_ABRUPT;
         }
         s->hdr.stage = INST_IMPORTS;
         return JS_STEP_YIELD;
@@ -170,7 +179,7 @@ static int instantiate_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         }
         if (wasm_instantiation_begin(&s->run, store, &r->d.module, r->bytes, wasm_module_validator_side_table(&r->v),
                                      &r->v.ctx.types, NULL, 0, s->record) != WASM_EXEC_MORE)
-            return instantiate_throw(ctx, "instantiation", "out of memory");
+            return instantiate_throw(ctx, WASM_EXEC_NO_ROOM, "out of memory");
         s->running = true;
         s->hdr.stage = INST_INSTANTIATE;
         return JS_STEP_YIELD;

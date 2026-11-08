@@ -1,11 +1,11 @@
 /* The WebAssembly JavaScript Interface's machines over the core (module_record.h, instance.h, interpreter.h),
  * each a host step machine (quickjs-step.h) that rests at every step of the core's own machines, charged as
  * engine work, and forks where the core leaves an outcome to the environment (§4.7.1's growtable and growmem).
+ * Refusals and traps throw §5.10's CompileError, LinkError and RuntimeError, the realm's (quickjs.h).
  * Named residual. Not covered: the WebAssembly namespace and its interface objects; a module with imports (JS
- * API §5 "read the imports"); a host call from the start function; §5.10's CompileError, LinkError and
- * RuntimeError, for which a TypeError stands. Next diff builds: the namespace with "read the imports" and the
- * error classes. Absence shows as: `typeof WebAssembly` is "undefined"; a module with an import throws a
- * TypeError; a refused or trapping module throws a TypeError naming the reference interpreter's message. */
+ * API §5 "read the imports"); a host call from the start function. Next diff builds: the namespace with "read
+ * the imports". Absence shows as: `typeof WebAssembly` is "undefined"; a module with an import throws a
+ * TypeError. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_WASM_JS_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_WASM_JS_H
 

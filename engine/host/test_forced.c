@@ -2079,6 +2079,14 @@ static const char *HTML_COLD =
     "var wim = wasmInstanceMemory(wis, wia, 0);"
     "fetch('/api/winst/g?v=' + wasmMemoryLoad(wim, 0) + '.' + wasmMemoryLoad(wim, 65536));"
     "</script>"
+    /* JS API §5.10's error objects: a module of an unknown binary version is a CompileError, a start function's
+       unreachable a RuntimeError, each an Error by its prototype chain. */
+    "<script>"
+    "function werr(b) { try { wasmInstantiator(wasmStoreNew())(new Uint8Array(b)); return 'none'; }"
+    " catch (e) { return e.name + '.' + (e instanceof Error) + '.' + (e instanceof TypeError); } }"
+    "fetch('/api/werr/g?v=' + werr([0,97,115,109,2,0,0,0]) + '_' + werr([0,97,115,109,1,0,0,0,1,4,1,96,0,0,3,2,"
+    "1,0,8,1,0,10,5,1,3,0,0,11]));"
+    "</script>"
     /* AND ONE EXTERNAL SCRIPT THIS FIXTURE'S ZONE REFUSES TO ASK FOR, WHICH IS THE ONE CURSOR THIS ENGINE
        CANNOT PASS AND THEREFORE THE FIRST HALF OF `park-remoteop`. That row asks whether a flow parked
        ACROSS a cross-agent operation resumes, and it reads 0 for a reason no peer and no second instance
@@ -28578,6 +28586,17 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
                                                                                           "255.-1")
              == param_value_count(js, "/api/winst/g", "v"),
              "an arm read a memory other than its outcome's: a /api/winst/g value is neither 1.0 nor 255.-1");
+    /* The error objects row: each refusal reached JS as its own class, an Error and not a TypeError. */
+    const char *werr_why = NULL;
+    int werr_ok = 1;
+    fold_row(&werr_ok, &werr_why, param_value_count(js, "/api/werr/g", "v") > 0,
+             "no arm reached the WebAssembly error read-back: there is no /api/werr/g record");
+    fold_row(&werr_ok, &werr_why,
+             param_value_count_of(js, "/api/werr/g", "v", "CompileError.true.false_RuntimeError.true.false")
+             == param_value_count(js, "/api/werr/g", "v"),
+             "a WebAssembly refusal or trap reached JavaScript as another class: a /api/werr/g value is not "
+             "CompileError.true.false_RuntimeError.true.false, so core/wasm/wasm_js.c threw other than JS API "
+             "§5.10's CompileError (an unknown binary version) or RuntimeError (unreachable in a start function)");
     const Probe rows[] = {
         /* THE TWO COLD SESSIONS. Their key is the @S sink whose candidate sessions are what makes a park write
            a 'c' record at all, so the row still names a statement of the document it runs over; the SESSION is
@@ -28658,6 +28677,7 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
         { WSTORE[5].name, wstore_ok[5], "wasmStoreOp", SESS_PARK, wstore_why[5] },
         { "winst-park", winst_ok, "wasmInstantiator", SESS_PARK, winst_why },
         { "winst-resume", winst_ok, "wasmInstantiator", SESS_RESUME, winst_why },
+        { "werr-park", werr_ok, "werr(", SESS_PARK, werr_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
