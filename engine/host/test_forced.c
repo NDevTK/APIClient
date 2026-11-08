@@ -1616,6 +1616,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/dommatrix.h"
 #include "fixture/preserve3d.h"
 #include "fixture/fillwidth.h"
+#include "fixture/flatshadow.h"
 #include "fixture/jsonlead.h"
 #include "fixture/owedsale.h"
 #include "fixture/startin.h"
@@ -2372,6 +2373,7 @@ TF_DOCS[] = {
     { "dommatrix", HTML_DOMMATRIX },
     { "preserve3d", HTML_PRESERVE3D },
     { "fillwidth", HTML_FILLWIDTH },
+    { "flatshadow", HTML_FLATSHADOW },
     { "jsonlead", HTML_JSONLEAD },
     { "startin", HTML_STARTIN },
     { "staticinline", HTML_STATICINLINE },
@@ -23164,6 +23166,28 @@ TF_UNIT void probes_fillwidth(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `flatshadow` document (fixture/flatshadow.h): CSS Scoping's flat tree under layout, a shadow
+   tree's box and a slotted light child read back through getBoundingClientRect. */
+TF_UNIT void probes_flatshadow(const char *js, Probe *tab, int *n) {
+    const char *fs_why = NULL; int fs_tt = 1;
+    fold_row(&fs_tt, &fs_why, !!strstr(js, "\"/api/flatshadow\""),
+             "NOT REACHED: no /api/flatshadow record, so the document aborted before its fetch");
+    fold_row(&fs_tt, &fs_why, param_value_is(js, "/api/flatshadow", "px", "7") &&
+                              param_value_is(js, "/api/flatshadow", "pw", "1273") &&
+                              param_value_is(js, "/api/flatshadow", "py", "0"),
+             "CSS Scoping's flat tree: the shadow tree's #fsPad is not the host's first block child, at (7, 0) and "
+             "1273px wide");
+    fold_row(&fs_tt, &fs_why, param_value_is(js, "/api/flatshadow", "sx", "12") &&
+                              param_value_is(js, "/api/flatshadow", "sy", "13") &&
+                              param_value_is(js, "/api/flatshadow", "sw", "17"),
+             "CSS Scoping's flat tree: the slotted #fsSlotted is not laid out as its slot's child, at (12, 13) and "
+             "17px wide");
+    const Probe rows[] = {
+        { "flat-shadow", fs_tt, "/api/flatshadow", SESS_EXPLORE, fs_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `jsonlead` document (fixture/jsonlead.h): ECMAScript §25.5.2 JSON.parse over a JSON text
    derived from an attacker source. */
 TF_UNIT void probes_jsonlead(const char *js, Probe *tab, int *n) {
@@ -29517,6 +29541,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_dommatrix(js, probes, &np);
     probes_preserve3d(js, probes, &np);
     probes_fillwidth(js, probes, &np);
+    probes_flatshadow(js, probes, &np);
     probes_jsonlead(js, probes, &np);
     probes_owedsale(js, probes, &np);
     probes_startin(js, probes, &np);
