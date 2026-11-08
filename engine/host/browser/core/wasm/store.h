@@ -12,6 +12,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "core/wasm/matching.h"
 #include "core/wasm/wasm_module.h"
 
 typedef struct WasmInstance WasmInstance;
@@ -23,18 +24,35 @@ typedef struct {
 } WasmValue;
 
 /* §4.2.7's function instance: a defined function of module instance `inst` (its code entry `code`), or a host
-   function the embedder numbers `host`. */
+   function the embedder numbers `host`; either way its type is index `type` of the store's type space `types`. */
 typedef struct {
     bool is_host;
     size_t inst, code;
     uint32_t host;
+    size_t types, type;
 } WasmFuncInstance;
 
-/* §4.2.8's table instance: `size` references, `type` its §5.3.13 limits. */
+/* A value type as the store holds it: a concrete heap type is an index into the store's type space `types`,
+   SIZE_MAX for a type that names no defined type (a host's abstract one). */
+typedef struct {
+    WasmValType type;
+    size_t types;
+} WasmStoreValType;
+
+/* §4.2.10's global instance: its §4.2.2 global type and its value. */
+typedef struct {
+    WasmValue value;
+    WasmStoreValType type;
+    bool mutable_;
+} WasmGlobalInstance;
+
+/* §4.2.8's table instance: `size` references of type `elem`, `type` its §5.3.13 limits as declared (§4.5.2's
+   external type takes `size` as the minimum). */
 typedef struct {
     WasmValue *elems;
     uint64_t size, cap;
     WasmLimits type;
+    WasmStoreValType elem;
 } WasmTableInstance;
 
 /* §4.2.12's element instance: its references, none once dropped. */
@@ -46,7 +64,7 @@ typedef struct {
 typedef struct {
     WasmFuncInstance *funcs;
     size_t n_funcs, cap_funcs;
-    WasmValue *globals;          /* §4.2.10's global instances, by their values */
+    WasmGlobalInstance *globals;
     size_t n_globals, cap_globals;
     WasmTableInstance *tables;
     size_t n_tables, cap_tables;
@@ -54,15 +72,18 @@ typedef struct {
     size_t n_elems, cap_elems;
     WasmInstance **instances;    /* borrowed: the module instances, by address */
     size_t n_instances, cap_instances;
+    const WasmTypes **types;     /* borrowed: the type spaces store types index, each a module's (§4.2.6's types) */
+    size_t n_types, cap_types;
 } WasmStore;
 
 void wasm_store_init(WasmStore *s);
 /* Append an instance and answer its address (SIZE_MAX for a table or segment whose storage cannot be had). */
 size_t wasm_store_add_func(WasmStore *s, WasmFuncInstance f);
-size_t wasm_store_add_global(WasmStore *s, WasmValue v);
-size_t wasm_store_add_table(WasmStore *s, const WasmLimits *type);
+size_t wasm_store_add_global(WasmStore *s, WasmGlobalInstance g);
+size_t wasm_store_add_table(WasmStore *s, const WasmLimits *type, WasmStoreValType elem);
 size_t wasm_store_add_elem(WasmStore *s, uint64_t n);
 size_t wasm_store_add_instance(WasmStore *s, WasmInstance *inst);
+size_t wasm_store_add_types(WasmStore *s, const WasmTypes *types);
 /* Release every instance's storage; the module instances are their owners'. */
 void wasm_store_free(WasmStore *s);
 

@@ -6106,6 +6106,187 @@ static size_t wasm_export_index(const WasmModule *m, const uint8_t *bytes, WasmE
     CHECK_FAIL("a WebAssembly selftest module lacks an export its row names");
 }
 
+/* f3268fa9's interpreter/host/spectest.ml as a host in one store: its print functions (types from
+ * WASM_SPECTEST_TYPES), its constant globals of 666 and 666.6, and its two tables of 10 to 20 null funcrefs. */
+typedef struct {
+    WasmModuleDecoder d;
+    WasmModuleValidator v;
+    size_t funcs[7], globals[4], table, table64;
+} WasmSpectest;
+
+static const char *const WASM_SPECTEST_FUNCS[7] = {
+    "print", "print_i32", "print_i64", "print_f32", "print_f64", "print_i32_f32", "print_f64_f64"
+};
+static const char *const WASM_SPECTEST_GLOBALS[4] = { "global_i32", "global_i64", "global_f32", "global_f64" };
+
+static void wasm_spectest_begin(WasmSpectest *h, WasmStore *s)
+{
+    static const uint8_t codes[4] = { WASM_TYPE_I32, WASM_TYPE_I64, WASM_TYPE_F32, WASM_TYPE_F64 };
+    static const uint64_t bits[4] = { 666, 666, 0x4426A666u, 0x4084D4CCCCCCCCCDull };
+    WasmStoreValType funcref = { { WASM_TYPE_REF, true, WASM_HEAP_FUNC, 0 }, SIZE_MAX };
+    WasmLimits limits = { false, true, 10, 20 };
+    size_t types, k;
+
+    wasm_module_decoder_init(&h->d, (const uint8_t *)WASM_SPECTEST_TYPES, WASM_SPECTEST_TYPES_LEN);
+    CHECK(wasm_module_decoder_run(&h->d) == WASM_DECODE_DONE, "the spectest host's types do not decode");
+    wasm_module_validator_init(&h->v, wasm_module_decoder_module(&h->d), (const uint8_t *)WASM_SPECTEST_TYPES,
+                               wasm_agent_types());
+    CHECK(wasm_module_validator_run(&h->v) == WASM_VALIDATE_DONE, "the spectest host's types are invalid");
+    types = wasm_store_add_types(s, &h->v.ctx.types);
+    for (k = 0; k < 7; k++) {
+        WasmFuncInstance f = { true, SIZE_MAX, SIZE_MAX, (uint32_t)k, types, k };
+
+        h->funcs[k] = wasm_store_add_func(s, f);
+    }
+    for (k = 0; k < 4; k++) {
+        WasmGlobalInstance g = { { bits[k], 0 }, { { codes[k], false, 0, 0 }, SIZE_MAX }, false };
+
+        h->globals[k] = wasm_store_add_global(s, g);
+    }
+    h->table = wasm_store_add_table(s, &limits, funcref);
+    limits.addr64 = true;
+    h->table64 = wasm_store_add_table(s, &limits, funcref);
+    CHECK(h->table != SIZE_MAX && h->table64 != SIZE_MAX, "the spectest host's tables could not be allocated");
+}
+
+static void wasm_spectest_free(WasmSpectest *h)
+{
+    wasm_module_validator_free(&h->v);
+    wasm_module_decoder_free(&h->d);
+}
+
+static bool wasm_name_is(const uint8_t *bytes, size_t offset, size_t size, const char *name)
+{
+    return size == strlen(name) && memcmp(bytes + offset, name, size) == 0;
+}
+
+/* The store address import `im` of a module (its bytes `bytes`) names: spectest's, or the export of its kind and
+   name of the instance `insts[k]` registered as `names[k]`. SIZE_MAX when there is none, the reference
+   interpreter's "unknown import". */
+static size_t wasm_resolve_import(const WasmSpectest *h, const char *const *names, const WasmInstance *const *insts,
+                                  size_t n, const uint8_t *bytes, const WasmImport *im)
+{
+    size_t k, e;
+
+    if (wasm_name_is(bytes, im->module_offset, im->module_size, "spectest")) {
+        CHECKF(im->kind != WASM_EXTERN_MEMORY, "the spectest memory is not built in the wasm selftests");
+        for (k = 0; k < 7 && im->kind == WASM_EXTERN_FUNC; k++)
+            if (wasm_name_is(bytes, im->name_offset, im->name_size, WASM_SPECTEST_FUNCS[k])) return h->funcs[k];
+        for (k = 0; k < 4 && im->kind == WASM_EXTERN_GLOBAL; k++)
+            if (wasm_name_is(bytes, im->name_offset, im->name_size, WASM_SPECTEST_GLOBALS[k])) return h->globals[k];
+        if (im->kind == WASM_EXTERN_TABLE && wasm_name_is(bytes, im->name_offset, im->name_size, "table"))
+            return h->table;
+        if (im->kind == WASM_EXTERN_TABLE && wasm_name_is(bytes, im->name_offset, im->name_size, "table64"))
+            return h->table64;
+        return SIZE_MAX;
+    }
+    for (k = 0; k < n; k++) {
+        const WasmModule *m = insts[k]->module;
+
+        if (!wasm_name_is(bytes, im->module_offset, im->module_size, names[k])) continue;
+        for (e = 0; e < m->n_exports; e++) {
+            const WasmExport *x = &m->exports[e];
+
+            if (x->kind != im->kind || x->name_size != im->name_size
+                || memcmp(insts[k]->bytes + x->name_offset, bytes + im->name_offset, im->name_size) != 0)
+                continue;
+            if (x->kind == WASM_EXTERN_FUNC) return insts[k]->funcs[x->index];
+            if (x->kind == WASM_EXTERN_GLOBAL) return insts[k]->globals[x->index];
+            if (x->kind == WASM_EXTERN_TABLE) return insts[k]->tables[x->index];
+            CHECK_FAIL("a WebAssembly memory or tag export is not built in the wasm selftests");
+        }
+    }
+    return SIZE_MAX;
+}
+
+/* Every import of `m` resolved into `externs` (calloc'd, the caller frees), which must all exist. */
+static size_t *wasm_resolve_imports(const WasmSpectest *h, const char *const *names,
+                                    const WasmInstance *const *insts, size_t n, const WasmModule *m,
+                                    const uint8_t *bytes)
+{
+    size_t *externs = calloc(m->n_imports + 1, sizeof *externs), i;
+
+    CHECK(externs != NULL, "the wasm selftests' import list could not be allocated");
+    for (i = 0; i < m->n_imports; i++) {
+        externs[i] = wasm_resolve_import(h, names, insts, n, bytes, &m->imports[i]);
+        CHECKF(externs[i] != SIZE_MAX, "a WebAssembly selftest module's import %zu names nothing (unknown import)",
+               i);
+    }
+    return externs;
+}
+
+/* WASM_LINK_ROWS: each importer linked against one exporter "e" in one store. */
+static void wasm_link_selftest(void)
+{
+    const uint8_t *eb = (const uint8_t *)WASM_LINK_EXPORTER;
+    const char *const names[1] = { "e" };
+    const WasmInstance *insts[1];
+    WasmModuleDecoder ed;
+    WasmModuleValidator ev;
+    WasmInstance e;
+    WasmSpectest host;
+    WasmStore store;
+    WasmExecStatus st;
+    size_t i;
+
+    wasm_store_init(&store);
+    wasm_spectest_begin(&host, &store);
+    wasm_module_decoder_init(&ed, eb, WASM_LINK_EXPORTER_LEN);
+    CHECK(wasm_module_decoder_run(&ed) == WASM_DECODE_DONE, "the link rows' exporter does not decode");
+    wasm_module_validator_init(&ev, &ed.module, eb, wasm_agent_types());
+    CHECK(wasm_module_validator_run(&ev) == WASM_VALIDATE_DONE, "the link rows' exporter is invalid");
+    st = wasm_instance_begin(&e, &store, &ed.module, eb, wasm_module_validator_side_table(&ev), &ev.ctx.types,
+                             NULL, 0);
+    while (st == WASM_EXEC_MORE) st = wasm_instance_step(&e);
+    CHECK(st == WASM_EXEC_DONE, "the link rows' exporter did not instantiate");
+    insts[0] = &e;
+    for (i = 0; i < COUNTOF(WASM_LINK_ROWS); i++) {
+        const WasmLinkRow *row = &WASM_LINK_ROWS[i];
+        const uint8_t *bytes = (const uint8_t *)row->bytes;
+        WasmModuleDecoder d;
+        WasmModuleValidator v;
+        WasmInstance inst;
+        WasmInterpreter it;
+        size_t *externs;
+
+        wasm_module_decoder_init(&d, bytes, row->len);
+        CHECKF(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the link row %s does not decode", row->src);
+        wasm_module_validator_init(&v, &d.module, bytes, wasm_agent_types());
+        CHECKF(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the link row %s is invalid", row->src);
+        externs = wasm_resolve_imports(&host, names, insts, 1, &d.module, bytes);
+        st = wasm_instance_begin(&inst, &store, &d.module, bytes, wasm_module_validator_side_table(&v),
+                                 &v.ctx.types, externs, d.module.n_imports);
+        while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst);
+        CHECKF(row->linked ? st == WASM_EXEC_DONE : st == WASM_EXEC_LINK_INCOMPATIBLE,
+               "the link row %s answered %s; it %s", row->src, st == WASM_EXEC_DONE ? "linked"
+               : wasm_exec_status_message(st), row->linked ? "links" : "is \"incompatible import type\"");
+        for (size_t k = 0; row->linked && k < 2; k++) {
+            const char *name = k == 0 ? row->run : row->then;
+            WasmInstance *in = k == 0 ? &inst : &e;
+            uint32_t want = k == 0 ? row->result : row->then_result;
+
+            if (name == NULL) continue;
+            st = wasm_interpreter_begin(&it, in, wasm_export_index(in->module, in->bytes, WASM_EXTERN_FUNC, name),
+                                        NULL, 0);
+            while (st == WASM_EXEC_MORE) st = wasm_interpreter_step(&it);
+            CHECKF(st == WASM_EXEC_DONE && it.n_vals == 1 && it.vals[0].lo == want,
+                   "the link row %s: %s answered %s with %zu values, the first %llu; the row expects %u", row->src,
+                   name, st == WASM_EXEC_DONE ? "a return" : wasm_exec_status_message(st), it.n_vals,
+                   it.n_vals ? (unsigned long long)it.vals[0].lo : 0ull, want);
+            wasm_interpreter_free(&it);
+        }
+        free(externs);
+        wasm_instance_free(&inst);
+        wasm_module_validator_free(&v);
+        wasm_module_decoder_free(&d);
+    }
+    wasm_instance_free(&e);
+    wasm_module_validator_free(&ev);
+    wasm_module_decoder_free(&ed);
+    wasm_spectest_free(&host);
+    wasm_store_free(&store);
+}
+
 /* WASM_CROSS_INSTANCE_ROWS: a call_indirect in one instance of a function of another module's instance, its type
  * checked across the two modules by their registry's identities. */
 static void wasm_cross_instance_selftest(void)
@@ -6127,7 +6308,7 @@ static void wasm_cross_instance_selftest(void)
         wasm_module_validator_init(&v[k], wasm_module_decoder_module(&d[k]), bytes[k], wasm_agent_types());
         CHECKF(wasm_module_validator_run(&v[k]) == WASM_VALIDATE_DONE, "cross-instance module %zu is invalid", k);
         st = wasm_instance_begin(&inst[k], &store, wasm_module_decoder_module(&d[k]), bytes[k],
-                                 wasm_module_validator_side_table(&v[k]), &v[k].ctx.types);
+                                 wasm_module_validator_side_table(&v[k]), &v[k].ctx.types, NULL, 0);
         while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst[k]);
         CHECKF(st == WASM_EXEC_DONE, "cross-instance module %zu's instantiation answered \"%s\"", k,
                wasm_exec_status_message(st));
@@ -6166,13 +6347,14 @@ static void wasm_cross_instance_selftest(void)
  * export found by name; each instance's commands run in order on an instance of their own, each retiring one
  * unit of work per step it counts, and again on two more instances, one step of each in turn, which must answer
  * as the first did. A grow's choice runs its example arm, the success the testsuite asserts.
- * fixture/wasm_valid.h's WASM_INVOKE_ROWS and WASM_CROSS_INSTANCE_ROWS come first: what the testsuite's rows in
- * scope do not reach. */
+ * fixture/wasm_valid.h's WASM_CROSS_INSTANCE_ROWS, WASM_LINK_ROWS and WASM_INVOKE_ROWS come first: what the
+ * testsuite's rows in scope do not reach. A module's imports are the spectest host's. */
 TF_UNIT void wasm_interpreter_selftest(void)
 {
     size_t i = 0;
 
     wasm_cross_instance_selftest();
+    wasm_link_selftest();
     for (i = 0; i < COUNTOF(WASM_INVOKE_ROWS); i++) {
         const WasmInvokeRow *row = &WASM_INVOKE_ROWS[i];
         const uint8_t *bytes = (const uint8_t *)row->bytes;
@@ -6195,7 +6377,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
         CHECKF(func != SIZE_MAX, "the invoke row %s has no export %s", row->src, row->export_name);
         wasm_store_init(&store);
         st = wasm_instance_begin(&inst, &store, &d.module, bytes, wasm_module_validator_side_table(&v),
-                                 &v.ctx.types);
+                                 &v.ctx.types, NULL, 0);
         while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst);
         CHECKF(st == WASM_EXEC_DONE, "%s: the instantiation answered \"%s\"", row->src, wasm_exec_status_message(st));
         st = wasm_interpreter_begin(&it, &inst, func, NULL, 0);
@@ -6220,8 +6402,9 @@ TF_UNIT void wasm_interpreter_selftest(void)
         const WasmModule *m;
         const WasmSideTable *side;
         WasmStore store;
+        WasmSpectest host;
         WasmInstance inst[3];
-        size_t j, n, k;
+        size_t j, n, k, *externs;
 
         for (n = i; n < COUNTOF(WASM_EXEC_ROWS) && WASM_EXEC_ROWS[n].instance == WASM_EXEC_ROWS[i].instance; n++) {}
         wasm_module_decoder_init(&d, bytes, mod->len);
@@ -6232,11 +6415,14 @@ TF_UNIT void wasm_interpreter_selftest(void)
         CHECKF(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the module of %s is invalid",
                WASM_EXEC_ROWS[i].src);
         side = wasm_module_validator_side_table(&v);
-        /* Three instances of the module in one store: one runs the script's commands alone, two run them
-           stepped in turn. */
+        /* Three instances of the module in one store with the spectest host: one runs the script's commands
+           alone, two run them stepped in turn. */
         wasm_store_init(&store);
+        wasm_spectest_begin(&host, &store);
+        externs = wasm_resolve_imports(&host, NULL, NULL, 0, m, bytes);
         for (k = 0; k < 3; k++) {
-            WasmExecStatus st = wasm_instance_begin(&inst[k], &store, m, bytes, side, &v.ctx.types);
+            WasmExecStatus st = wasm_instance_begin(&inst[k], &store, m, bytes, side, &v.ctx.types, externs,
+                                                    m->n_imports);
 
             while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst[k]);
             CHECKF(st == WASM_EXEC_DONE, "the instantiation for %s answered \"%s\"", WASM_EXEC_ROWS[i].src,
@@ -6281,6 +6467,8 @@ TF_UNIT void wasm_interpreter_selftest(void)
             free(args);
         }
         for (k = 0; k < 3; k++) wasm_instance_free(&inst[k]);
+        free(externs);
+        wasm_spectest_free(&host);
         wasm_store_free(&store);
         wasm_module_validator_free(&v);
         wasm_module_decoder_free(&d);

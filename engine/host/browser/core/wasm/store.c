@@ -33,17 +33,17 @@ size_t wasm_store_add_func(WasmStore *s, WasmFuncInstance f)
     return s->n_funcs++;
 }
 
-size_t wasm_store_add_global(WasmStore *s, WasmValue v)
+size_t wasm_store_add_global(WasmStore *s, WasmGlobalInstance g)
 {
     room((void **)&s->globals, &s->cap_globals, s->n_globals, sizeof *s->globals);
-    s->globals[s->n_globals] = v;
+    s->globals[s->n_globals] = g;
     return s->n_globals++;
 }
 
 /* §4.7.1's alloctable: `min` null references, calloc's zeros; an initializer's other value is instance.c's to
    fill. The count is the page's input, so storage that cannot be had answers SIZE_MAX (JS API §5's RangeError),
    never a CHECK. */
-size_t wasm_store_add_table(WasmStore *s, const WasmLimits *type)
+size_t wasm_store_add_table(WasmStore *s, const WasmLimits *type, WasmStoreValType elem)
 {
     WasmTableInstance *t;
     WasmValue *elems;
@@ -55,6 +55,7 @@ size_t wasm_store_add_table(WasmStore *s, const WasmLimits *type)
     t = &s->tables[s->n_tables];
     memset(t, 0, sizeof *t);
     t->type = *type;
+    t->elem = elem;
     t->elems = elems;
     t->size = t->cap = type->min;
     return s->n_tables++;
@@ -82,6 +83,16 @@ size_t wasm_store_add_instance(WasmStore *s, WasmInstance *inst)
     return s->n_instances++;
 }
 
+size_t wasm_store_add_types(WasmStore *s, const WasmTypes *types)
+{
+    DCHECK(types != NULL && types->registry != NULL, "a WebAssembly type space was added with no registry");
+    DCHECK(s->n_types == 0 || s->types[0]->registry == types->registry,
+           "a WebAssembly store's type spaces use two type registries");
+    room((void **)&s->types, &s->cap_types, s->n_types, sizeof *s->types);
+    s->types[s->n_types] = types;
+    return s->n_types++;
+}
+
 void wasm_store_free(WasmStore *s)
 {
     size_t i;
@@ -94,5 +105,6 @@ void wasm_store_free(WasmStore *s)
     free(s->tables);
     free(s->elems);
     free(s->instances);
+    free(s->types);
     memset(s, 0, sizeof *s);
 }

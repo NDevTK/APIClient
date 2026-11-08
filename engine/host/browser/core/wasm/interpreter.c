@@ -130,13 +130,13 @@ static WasmExecStatus pop_frame(WasmInterpreter *it)
     return it->n_frames == 0 ? WASM_EXEC_DONE : WASM_EXEC_MORE;
 }
 
-/* The store address of function `x` of the current instance; an import not yet resolved is a host call. */
+/* The store address of function `x` of the current instance, an import's resolved by instantiation. */
 static size_t func_addr(WasmInterpreter *it, uint64_t x)
 {
     size_t a = INST(it)->funcs[x];
 
-    CHECKF(a != SIZE_MAX, "the WebAssembly call of imported function %llu is not built in interpreter.c (a host "
-           "call)", (unsigned long long)x);
+    DCHECKF(a < it->store->n_funcs, "a WebAssembly instance's function %llu has no store address",
+            (unsigned long long)x);
     return a;
 }
 
@@ -555,10 +555,9 @@ static WasmExecStatus global(WasmInterpreter *it, uint32_t op, uint32_t x)
 {
     size_t a = INST(it)->globals[x];
 
-    CHECKF(a != SIZE_MAX, "the WebAssembly global.get or global.set of imported global %u is not built in "
-           "interpreter.c (a host global)", x);
-    if (op == 0x23) return push(it, it->store->globals[a].lo) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
-    it->store->globals[a].lo = pop(it);
+    DCHECKF(a < it->store->n_globals, "a WebAssembly instance's global %u has no store address", x);
+    if (op == 0x23) return push(it, it->store->globals[a].value.lo) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
+    it->store->globals[a].value.lo = pop(it);
     return WASM_EXEC_MORE;
 }
 
@@ -571,8 +570,7 @@ static WasmExecStatus call(WasmInterpreter *it, size_t func, bool tail)
 
     if (tail) {
         WasmFrame *f = frame(it);
-        const WasmModule *cm = it->store->instances[fi->inst]->module;
-        size_t n = cm->types[cm->func_types[fi->code]].n_params;
+        size_t n = it->store->types[fi->types]->module->types[fi->type].n_params;
 
         CHECKF(!fi->is_host, "the WebAssembly tail call of host function %u is not built in interpreter.c",
                fi->host);
@@ -593,8 +591,8 @@ static size_t table_addr(WasmInterpreter *it, uint64_t x)
 {
     size_t a = INST(it)->tables[x];
 
-    CHECKF(a != SIZE_MAX, "the WebAssembly access of imported table %llu is not built in interpreter.c (a host "
-           "table)", (unsigned long long)x);
+    DCHECKF(a < it->store->n_tables, "a WebAssembly instance's table %llu has no store address",
+            (unsigned long long)x);
     return a;
 }
 
@@ -611,7 +609,7 @@ static WasmExecStatus call_indirect(WasmInterpreter *it, const WasmInstruction *
     WasmTableInstance *t = table_of(it, in->index[1]);
     uint64_t i = pop(it), f;
     const WasmFuncInstance *fi;
-    const WasmInstance *callee;
+    const WasmTypes *callee;
     WasmClimb climb;
     WasmValType a = { 0 }, b = { 0 };
     WasmMatch le;
@@ -621,17 +619,15 @@ static WasmExecStatus call_indirect(WasmInterpreter *it, const WasmInstruction *
     if (t->elems[i].lo == 0) return WASM_EXEC_TRAP_UNINITIALIZED;
     f = t->elems[i].lo - 1;
     fi = &it->store->funcs[f];
-    CHECKF(!fi->is_host, "the WebAssembly call_indirect of host function %u is not built in interpreter.c",
-           fi->host);
-    callee = it->store->instances[fi->inst];
+    callee = it->store->types[fi->types];
     a.code = b.code = WASM_TYPE_REF;
-    a.heap_index = callee->module->func_types[fi->code];
+    a.heap_index = fi->type;
     b.heap_index = in->index[0];
-    le = wasm_heap_le(callee->types, &a, INST(it)->types, &b, &climb);
+    le = wasm_heap_le(callee, &a, INST(it)->types, &b, &climb);
     while (le == WASM_MATCH_CLIMB) {
         JS_FlowRetireWork(1);
         it->retired++;
-        le = wasm_climb(callee->types, &climb);
+        le = wasm_climb(callee, &climb);
     }
     if (le != WASM_MATCH_YES) return WASM_EXEC_TRAP_INDIRECT_TYPE;
     return call(it, (size_t)f, in->opcode == 0x13);
@@ -940,6 +936,7 @@ const char *wasm_exec_status_message(WasmExecStatus st)
     case WASM_EXEC_TRAP_NULL_FUNCTION:  return "null function reference";
     case WASM_EXEC_TRAP_NULL_REFERENCE: return "null reference";
     case WASM_EXEC_NO_ROOM:             return "call stack exhausted";
+    case WASM_EXEC_LINK_INCOMPATIBLE:   return "incompatible import type";
     }
     CHECK_FAIL("a WebAssembly execution status interpreter.c does not define");
 }

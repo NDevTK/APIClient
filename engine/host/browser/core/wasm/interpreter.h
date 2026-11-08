@@ -9,10 +9,10 @@
  * NaN is the positive canonical NaN, and bit operations (abs, neg, copysign, reinterpret) keep bits.
  * The page's bytes have been decoded and validated, so an instruction the validator accepted that this file
  * does not execute is this codebase's gap (CHECK_FAIL), never a refusal.
- * Named residual. Not covered: host calls and host globals and tables (imports), memory (§4.6.8), and the
- * vector, exception and aggregate instructions and the references other than functions'. Next diff builds:
- * import resolution. Absence shows
- * as: invoking a function that reaches one of them stops the process at the CHECK_FAIL naming its opcode. */
+ * Named residual. Not covered: calls of host functions, memory (§4.6.8), and the vector, exception and
+ * aggregate instructions and the references other than functions'. Next diff builds: host function calls.
+ * Absence shows as: invoking a function that reaches one of them stops the process at the CHECK_FAIL naming
+ * it. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 
@@ -39,7 +39,8 @@ typedef enum {
     WASM_EXEC_TRAP_INDIRECT_TYPE,     /* §4.6.5: call_indirect's function does not match the expected type */
     WASM_EXEC_TRAP_NULL_FUNCTION,     /* §4.6.5: call_ref of the null reference */
     WASM_EXEC_TRAP_NULL_REFERENCE,    /* §4.6.9: ref.as_non_null of the null reference */
-    WASM_EXEC_NO_ROOM                 /* a stack or the locals could not be allocated (§7.2's resource exhaustion) */
+    WASM_EXEC_NO_ROOM,                /* a stack or the locals could not be allocated (§7.2's resource exhaustion) */
+    WASM_EXEC_LINK_INCOMPATIBLE       /* §4.7.2: an import's external value is not valid with its type (§4.5.2) */
 } WasmExecStatus;
 
 /* A label of §4.2.17's stack: a block, loop or if (its side table `entry`), or the function's own. `height` is
