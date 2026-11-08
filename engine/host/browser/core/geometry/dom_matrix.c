@@ -604,14 +604,13 @@ static int dm_from_init(JSContext *ctx, JSValueConst init, JSValue m[16], bool *
 
 /* ---- §6.3 creation --------------------------------------------------------------------------------------- */
 
-/* A sequence of 6 or 16 elements (§6.3's "create a 2d matrix" and "create a 3d matrix"), or a TypeError. */
-static JSValue dm_from_list(JSContext *ctx, int which, JSValueConst list)
+/* A list of `len` elements, 6 or 16 (§6.3's "create a 2d matrix" and "create a 3d matrix"), or a TypeError. The
+   list is the converted sequence or the typed array a static was given; neither element read runs page code. */
+static JSValue dm_from_list(JSContext *ctx, int which, JSValueConst list, int64_t len)
 {
     JSValue m[16], six[6];
-    int64_t len = 0;
     int k;
 
-    if (JS_GetLength(ctx, list, &len) < 0) return JS_EXCEPTION;
     if (len != 6 && len != 16)
         return JS_ThrowTypeError(ctx, "a matrix sequence has %lld elements; §6.3 takes 6 or 16", (long long)len);
     if (len == 6) {
@@ -643,7 +642,13 @@ static JSValue js_dm_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
         if (dm_parse_value(ctx, init, m, &two_d) < 0) return JS_EXCEPTION;
         return dm_alloc(ctx, magic, m, two_d);
     }
-    return dm_from_list(ctx, magic, init);
+    {
+        int64_t len = 0;
+
+        /* The converted sequence is an Array this file's IDL conversion built, whose `length` is data. */
+        if (JS_GetLength(ctx, init, &len) < 0) return JS_EXCEPTION;
+        return dm_from_list(ctx, magic, init, len);
+    }
 }
 
 static JSValue js_dm_from_matrix(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -660,9 +665,17 @@ static JSValue js_dm_from_matrix(JSContext *ctx, JSValueConst this_val, int argc
    one, otherwise a TypeError. */
 static JSValue js_dm_from_array(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    size_t offset = 0, bytes = 0, per = 0;
+    JSValue buf;
+
     (void)this_val;
     DCHECK(argc > 0, "fromFloat32Array ran with no argument; its one argument is required");
-    return dm_from_list(ctx, magic, argv[0]);
+    /* The element count from the view's own slots: `length` is a prototype getter a page can replace. */
+    buf = JS_GetTypedArrayBuffer(ctx, argv[0], &offset, &bytes, &per);
+    if (JS_IsException(buf)) return buf;
+    JS_FreeValue(ctx, buf);
+    DCHECK(per > 0, "a Float32Array or Float64Array reported no element size");
+    return dm_from_list(ctx, magic, argv[0], (int64_t)(bytes / per));
 }
 
 /* ---- §6.4 attributes ------------------------------------------------------------------------------------- */
