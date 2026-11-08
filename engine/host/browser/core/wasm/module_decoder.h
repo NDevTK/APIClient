@@ -1,18 +1,17 @@
 /* WebAssembly Core Specification (Release 3.0) §5.5 "Modules": the binary format's preamble and its sequence of
  * sections, decoded as a step machine over a complete byte sequence.
- *
  * One step reads one production instance: the §5.5.17 preamble, one §5.5.2 section header (with a custom
  * section's name length or a list's count), one code point of a §5.2.4 name, one item of §5.5.4's type section
- * (a §5.3.8 rectype or subtype head, a supertype index, a §5.3.7 composite head, a value type or a field), or
- * one §5.5.5 import's name length or external type. The caller owns how many steps a rest covers; the whole
- * state is the WasmModuleDecoder.
+ * (a §5.3.8 rectype or subtype head, a supertype index, a §5.3.7 composite head, a value type or a field), one
+ * §5.5.5 import's name length or external type, or one §5.5.6 function's type index. The caller owns how many
+ * steps a rest covers; the whole state is the WasmModuleDecoder.
  * The bytes are input: every malformed encoding is a WasmDecodeStatus refusal, never an assert. A refusal names
  * the production that failed with the reference interpreter's message, which the spec testsuite matches.
- *
- * Named residual. Not covered: the contents of the sections after the import section (§5.5.6-§5.5.16) and
+ * Named residual. Not covered: the contents of the sections after the function section (§5.5.7-§5.5.16) and
  * §5.5.17's function/code and data count agreements; such a section is delimited and not decoded. Next diff
- * builds: §5.5.6's function section, then one section per diff. Absence shows as: a module whose type and import
- * sections and framing are well formed but whose later contents are malformed is answered WASM_DECODE_DONE. */
+ * builds: §5.4's instructions for §5.4.10's constant expressions, which the table, global, element and data
+ * sections hold. Absence shows as: a module whose type, import and function sections and framing are well formed
+ * but whose later contents are malformed is answered WASM_DECODE_DONE. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_MODULE_DECODER_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_MODULE_DECODER_H
 

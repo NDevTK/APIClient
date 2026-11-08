@@ -91,6 +91,8 @@ typedef struct {
     size_t n_type_indices, cap_type_indices;
     WasmImport *imports;
     size_t n_imports, cap_imports;
+    uint32_t *func_types;   /* §5.5.6: each defined function's type index, in function index order */
+    size_t n_func_types, cap_func_types;
 } WasmModule;
 
 /* Release every pool. Idempotent. */

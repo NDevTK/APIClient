@@ -25,6 +25,7 @@ enum {
     PH_IMPORT,         /* §5.5.5: the next import's module name, or the section's end */
     PH_IMPORT_NAME,    /* its item name */
     PH_IMPORT_DESC,    /* its §5.3.14 external type */
+    PH_FUNCTION,       /* §5.5.6: the next function's type index, or the section's end */
     PH_FINISHED
 };
 
@@ -220,10 +221,10 @@ static WasmDecodeStatus read_section(WasmModuleDecoder *d)
         d->phase = PH_TYPE;
         return WASM_DECODE_MORE;
     }
-    if (id == WASM_SECTION_IMPORT) {
+    if (id == WASM_SECTION_IMPORT || id == WASM_SECTION_FUNCTION) {
         st = read_list_length(d, &d->items_left);
         if (st != WASM_DECODE_DONE) return st;
-        d->phase = PH_IMPORT;
+        d->phase = id == WASM_SECTION_IMPORT ? PH_IMPORT : PH_FUNCTION;
         return WASM_DECODE_MORE;
     }
     if (id != WASM_SECTION_CUSTOM) {
@@ -626,6 +627,22 @@ static WasmDecodeStatus read_import_desc(WasmModuleDecoder *d)
     return WASM_DECODE_MORE;
 }
 
+/* §5.5.6's funcsec is list(typeidx): one function's type index. */
+static WasmDecodeStatus read_function(WasmModuleDecoder *d)
+{
+    WasmModule *m = &d->module;
+    WasmDecodeStatus st;
+    uint32_t x;
+
+    if (d->items_left == 0) return end_section(d);
+    d->items_left--;
+    st = read_u32(d, &x);
+    if (st != WASM_DECODE_DONE) return st;
+    if (!POOL_ROOM(m->func_types, m->n_func_types, m->cap_func_types)) return WASM_DECODE_NO_ROOM;
+    m->func_types[m->n_func_types++] = x;
+    return WASM_DECODE_MORE;
+}
+
 WasmDecodeStatus wasm_module_decoder_step(WasmModuleDecoder *d)
 {
     WasmDecodeStatus st;
@@ -649,6 +666,7 @@ WasmDecodeStatus wasm_module_decoder_step(WasmModuleDecoder *d)
     case PH_IMPORT:   st = read_import(d); break;
     case PH_IMPORT_NAME: st = read_import_name(d); break;
     case PH_IMPORT_DESC: st = read_import_desc(d); break;
+    case PH_FUNCTION: st = read_function(d); break;
     default:
         CHECK_FAIL("a WebAssembly decode stands in a phase this file does not define");
     }
