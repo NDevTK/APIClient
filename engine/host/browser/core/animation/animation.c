@@ -1110,11 +1110,22 @@ bool animation_current_iteration(JSContext *ctx, JSValueConst animation, double 
 
 bool animation_replaceable(JSContext *ctx, JSValueConst animation)
 {
-    JSValue slots = animation_slots(ctx, animation), effect = sget(ctx, slots, "effect");
-    bool r = !JS_IsNull(effect) && an_play_state(ctx, slots) == AN_FINISHED &&
-             sint(ctx, slots, "replace") != AN_REPLACE_REMOVED;
+    JSValue slots = animation_slots(ctx, animation), effect = sget(ctx, slots, "effect"), tl = an_timeline(ctx, slots), target;
+    double active;
+    bool r;
 
-    /* §5.5.2's remaining conditions (in effect, has an effect target) are asked by the caller that models them. */
+    /* §5.5.2's conditions in its order. Every timeline here is a document timeline, which §4.3.1 makes
+       monotonically increasing, so "associated with a monotonically increasing timeline" is having one. */
+    DCHECK(JS_IsNull(tl) || animation_timeline_is(ctx, tl), "an animation's timeline slot holds no AnimationTimeline");
+    r = !css_animations_has_owning_element(ctx, animation) && an_play_state(ctx, slots) == AN_FINISHED &&
+        sint(ctx, slots, "replace") != AN_REPLACE_REMOVED && !JS_IsNull(tl) && !JS_IsNull(effect) &&
+        animation_active_time(ctx, animation, false, &active);
+    if (r) {
+        target = JS_GetPropertyStr(ctx, effect, "target");
+        r = JS_IsObject(target);
+        JS_FreeValue(ctx, target);
+    }
+    JS_FreeValue(ctx, tl);
     JS_FreeValue(ctx, effect);
     JS_FreeValue(ctx, slots);
     return r;

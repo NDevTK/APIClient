@@ -39,6 +39,8 @@ bool css_animations_is(JSContext *ctx, JSValueConst v);
    timeline's Document with the owning element as target. Nothing for an animation with no owning element. */
 void css_animations_frame_events(JSContext *ctx, JSValueConst animation);
 
+/* CSS Animations Level 2 §2.1: does `animation` have an owning element now? */
+bool css_animations_has_owning_element(JSContext *ctx, JSValueConst animation);
 /* CSS Animations Level 2 §2.2: is `animation` ordered as a CSS animation with an owning element (or, canceled
    and not since played, by the owning element it was canceled off)? */
 bool css_animations_owned(JSContext *ctx, JSValueConst animation);

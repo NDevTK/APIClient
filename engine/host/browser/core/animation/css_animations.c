@@ -529,6 +529,15 @@ bool css_animations_is(JSContext *ctx, JSValueConst v)
     return is;
 }
 
+bool css_animations_has_owning_element(JSContext *ctx, JSValueConst animation)
+{
+    JSValue o = ca_slot(ctx, animation, "owner");
+    bool has = JS_IsObject(o);
+
+    JS_FreeValue(ctx, o);
+    return has;
+}
+
 bool css_animations_owned(JSContext *ctx, JSValueConst animation)
 {
     bool canceled;
