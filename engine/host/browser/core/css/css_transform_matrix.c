@@ -302,8 +302,8 @@ static CssTransformMatrix3d css_tm_of_function(const CssTransformFunction *fn, c
         if (len > 0.0 && isfinite(len))
             out = css_tm4_rotation(n[0] / len, n[1] / len, n[2] / len, css_tm_angle_deg(fn, 0));
         break;
-    /* css-transforms-1 §12's skew: m21 = tan(alpha) and m12 = tan(beta); §7.1: "If the second parameter is
-       not provided, it has a zero value." */
+    /* css-transforms-1 §12's skew: m21 = tan(alpha) and m12 = tan(beta); css-transforms-1 §7.1: "If the
+       second parameter is not provided, it has a zero value." */
     case CSS_TF_SKEW:
         out.m[0][1] = css_px(css_tm_tan(css_tm_angle_deg(fn, 0)));
         if (fn->argc > 1) out.m[1][0] = css_px(css_tm_tan(css_tm_angle_deg(fn, 1)));
@@ -319,9 +319,9 @@ static CssTransformMatrix3d css_tm_of_function(const CssTransformFunction *fn, c
         for (c = 0; c < 4; c++)
             for (r = 0; r < 4; r++) out.m[r][c] = css_px(n[c * 4 + r]);
         break;
-    /* §16: m34 = −1/d; "If the parameter d is none it is treated as infinity (and the resulting matrix is the
-       identity matrix)", and css-transforms-2 §12.2: "If the depth value is less than 1px, it must be treated
-       as 1px". */
+    /* css-transforms-2 §16: m34 = −1/d; "If the parameter d is none it is treated as infinity (and the
+       resulting matrix is the identity matrix)", and css-transforms-2 §12.2: "If the depth value is less than
+       1px, it must be treated as 1px". */
     case CSS_TF_PERSPECTIVE:
         if (!fn->perspective_none) {
             CssPx d = css_tm_length_px(&fn->length[0], NULL);
