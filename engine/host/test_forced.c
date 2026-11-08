@@ -3650,12 +3650,13 @@ TF_UNIT void malloc_accounting_selftest(void)
    generation 0: a root with every value kind the writer has a body for, a symbol value and a symbol key, a
    deleted slot, an integer key, a non-writable property, two references to one non-extensible object, a self
    cycle, and an array naming both the shared object and the baseline one. The rebuilt roots must be new objects that keep every identity
-   relation, resolve the baseline object to itself, and write the same bytes and anchors again. */
+   relation, resolve the baseline object to itself, and write the same bytes and anchors again. Two more arrays:
+   a sparse one (elements as ordinary properties, a frozen length) and a dense one holding a named property. */
 TF_UNIT void flow_graph_selftest(void)
 {
     JSRuntime *rt = JS_NewRuntime();
     JSContext *ctx;
-    JSValue base, sym, r, x, arr, roots[2], back[2], v, w;
+    JSValue base, sym, r, x, arr, sparse, extra, roots[2], back[2], v, w;
     JSAtom symkey;
     JSFlowGraph *g1, *g2;
     const uint8_t *b1, *b2;
@@ -3675,6 +3676,8 @@ TF_UNIT void flow_graph_selftest(void)
     r = JS_NewObject(ctx);
     x = JS_NewObject(ctx);
     arr = JS_NewArray(ctx);
+    sparse = JS_NewArray(ctx);
+    extra = JS_NewArray(ctx);
     CHECK(JS_SetPropertyStr(ctx, x, "v", JS_NewInt32(ctx, 7)) >= 0 && JS_PreventExtensions(ctx, x) >= 0 &&
           JS_SetPropertyStr(ctx, r, "i", JS_NewInt32(ctx, 1)) >= 0 &&
           JS_SetPropertyStr(ctx, r, "d", JS_NewFloat64(ctx, 3.5)) >= 0 &&
@@ -3696,8 +3699,24 @@ TF_UNIT void flow_graph_selftest(void)
           JS_SetPropertyUint32(ctx, arr, 1, JS_NewString(ctx, "two")) >= 0 &&
           JS_SetPropertyUint32(ctx, arr, 2, JS_DupValue(ctx, x)) >= 0 &&
           JS_SetPropertyUint32(ctx, arr, 3, JS_DupValue(ctx, base)) >= 0 &&
-          JS_SetPropertyStr(ctx, r, "arr", arr) >= 0,
+          JS_SetPropertyStr(ctx, r, "arr", arr) >= 0 &&
+          JS_SetPropertyUint32(ctx, sparse, 0, JS_NewInt32(ctx, 1)) >= 0 &&
+          JS_SetPropertyUint32(ctx, sparse, 1000, JS_DupValue(ctx, x)) >= 0 &&
+          JS_SetPropertyStr(ctx, sparse, "tag", JS_NewString(ctx, "sp")) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "sparse", sparse) >= 0 &&
+          JS_SetPropertyUint32(ctx, extra, 0, JS_NewString(ctx, "e0")) >= 0 &&
+          JS_SetPropertyUint32(ctx, extra, 1, JS_NewInt32(ctx, 2)) >= 0 &&
+          JS_SetPropertyStr(ctx, extra, "named", JS_DupValue(ctx, x)) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "extra", extra) >= 0,
           "the flow graph's witness could not build its graph");
+    {
+        JSValue sp = JS_GetPropertyStr(ctx, r, "sparse");
+        JSAtom len = JS_NewAtom(ctx, "length");
+        CHECK(JS_DefinePropertyValue(ctx, sp, len, JS_NewInt32(ctx, 2000), JS_PROP_HAS_WRITABLE) >= 0,
+              "the flow graph's witness could not freeze a sparse array's length");
+        JS_FreeAtom(ctx, len);
+        JS_FreeValue(ctx, sp);
+    }
     {
         JSAtom gone = JS_NewAtom(ctx, "gone");
         CHECK(JS_DeleteProperty(ctx, r, gone, 0) > 0, "the flow graph's witness could not delete a property");
@@ -3740,6 +3759,30 @@ TF_UNIT void flow_graph_selftest(void)
     CHECK(JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(sym) && JS_VALUE_GET_TAG(w) == JS_TAG_INT && JS_VALUE_GET_INT(w) == 11,
           "a rebuilt graph lost a symbol: a symbol value is not the original symbol, or a symbol-keyed property is gone");
     JS_FreeValue(ctx, v); JS_FreeValue(ctx, w);
+    {
+        JSValue sp = JS_GetPropertyStr(ctx, back[0], "sparse"), ex = JS_GetPropertyStr(ctx, back[0], "extra");
+        JSValue e1000 = JS_GetPropertyUint32(ctx, sp, 1000), len = JS_GetPropertyStr(ctx, sp, "length");
+        JSValue named = JS_GetPropertyStr(ctx, ex, "named"), e1 = JS_GetPropertyUint32(ctx, ex, 1);
+        int32_t n = -1, one = -1;
+
+        JS_ToInt32(ctx, &n, len);
+        JS_ToInt32(ctx, &one, e1);
+        CHECK(JS_IsArray(sp) && JS_IsArray(ex) &&
+              JS_VALUE_GET_PTR(e1000) == JS_VALUE_GET_PTR(back[1]) && n == 2000 &&
+              JS_VALUE_GET_PTR(named) == JS_VALUE_GET_PTR(back[1]) && one == 2,
+              "a rebuilt array lost its kind, a sparse element, its length or a named property");
+        {
+            JSPropertyDescriptor d;
+            JSAtom la = JS_NewAtom(ctx, "length");
+            int has = JS_GetOwnPropertyNoUserCode(ctx, &d, sp, la);
+
+            CHECK(has == 1 && !(d.flags & JS_PROP_WRITABLE), "a rebuilt sparse array's frozen length became writable");
+            JS_FreeValue(ctx, d.value); JS_FreeValue(ctx, d.getter); JS_FreeValue(ctx, d.setter);
+            JS_FreeAtom(ctx, la);
+        }
+        JS_FreeValue(ctx, len); JS_FreeValue(ctx, e1000); JS_FreeValue(ctx, named); JS_FreeValue(ctx, e1);
+        JS_FreeValue(ctx, sp); JS_FreeValue(ctx, ex);
+    }
     JS_FlowGraphFree(ctx, g1);
     JS_FlowGraphFree(ctx, g2);
     JS_SetFlowGen(0);
