@@ -56511,13 +56511,18 @@ enum { FG_PLAIN = 1, FG_ARRAY = 2 };
 /* A parked graph this writer cannot write whole would resume as a different heap, so the release build stops
    too; the dev build's DCHECK above each use names what to build. */
 #define FG_NO_WRITER() CHECK_FAIL("flow graph: a parked graph holds a value or object no writer can write")
+enum { FG_GAP_CLASS = 1, FG_GAP_TAG, FG_GAP_SYMBOL_KEY, FG_GAP_PROP_KIND, FG_GAP_SPARSE_ARRAY, FG_GAP_WEAK };
 typedef struct { const void *k; uint32_t v; } FGSlot;
 typedef struct { FGSlot *s; size_t cap, n; } FGMap;
 typedef struct { uint8_t *b; size_t len, cap; } FGBuf;
+/* What a survey found no writer for: a class, a value tag, or one of the FG_GAP_* shapes, with its count. */
+typedef struct { int what, id; uint32_t n; } FGGap;
 struct JSFlowGraph {
     FGBuf bytes;
     JSValue *anchors;
-    uint32_t n_anchors, n_roots;
+    uint32_t n_anchors, n_roots, n_objs;
+    FGGap *gaps;
+    uint32_t n_gaps;
 };
 
 static void *fg_grow(void *p, size_t n)
@@ -56564,34 +56569,32 @@ static void fg_u32(FGBuf *b, uint32_t v) { fg_put(b, &v, 4); }
 
 /* Strings are written by content: a string's identity is not observable, so two equal strings are one entry,
    and a rebuilt graph writes the same bytes whichever JSString each value or key resolved to. */
-typedef struct { JSString *p; uint32_t h, v; } FGStr;
+typedef struct { const uint8_t *u; uint32_t len, h, v; uint8_t wide; } FGStr;
 typedef struct { FGStr *s; size_t cap, n; } FGStrMap;
-static bool fg_str_eq(JSString *a, JSString *b)
-{
-    return a->len == b->len && a->is_wide_char == b->is_wide_char &&
-           !memcmp(strv(a), strv(b), (size_t)a->len << a->is_wide_char);
-}
-static bool fg_str_get(const FGStrMap *m, JSString *p, uint32_t h, uint32_t *v)
+static bool fg_str_get(const FGStrMap *m, const FGStr *k, uint32_t *v)
 {
     if (!m->cap) return false;
-    for (size_t i = h & (m->cap - 1); m->s[i].p; i = (i + 1) & (m->cap - 1))
-        if (m->s[i].h == h && fg_str_eq(m->s[i].p, p)) { *v = m->s[i].v; return true; }
+    for (size_t i = k->h & (m->cap - 1); m->s[i].u; i = (i + 1) & (m->cap - 1)) {
+        const FGStr *e = &m->s[i];
+        if (e->h == k->h && e->len == k->len && e->wide == k->wide &&
+            !memcmp(e->u, k->u, (size_t)k->len << k->wide)) { *v = e->v; return true; }
+    }
     return false;
 }
-static void fg_str_put(FGStrMap *m, JSString *p, uint32_t h, uint32_t v)
+static void fg_str_put(FGStrMap *m, const FGStr *k)
 {
     size_t i;
     if ((m->n + 1) * 2 > m->cap) {
         FGStrMap g = { NULL, m->cap ? m->cap * 2 : 256, 0 };
         g.s = calloc(g.cap, sizeof *g.s);
         CHECK(g.s != NULL, "flow graph: OOM growing the string table");
-        for (size_t k = 0; k < m->cap; k++)
-            if (m->s[k].p) fg_str_put(&g, m->s[k].p, m->s[k].h, m->s[k].v);
+        for (size_t j = 0; j < m->cap; j++)
+            if (m->s[j].u) fg_str_put(&g, &m->s[j]);
         (free)(m->s);
         *m = g;
     }
-    for (i = h & (m->cap - 1); m->s[i].p; i = (i + 1) & (m->cap - 1)) ;
-    m->s[i].p = p; m->s[i].h = h; m->s[i].v = v; m->n++;
+    for (i = k->h & (m->cap - 1); m->s[i].u; i = (i + 1) & (m->cap - 1)) ;
+    m->s[i] = *k; m->n++;
 }
 
 typedef struct {
@@ -56600,24 +56603,67 @@ typedef struct {
     JSFlowGraph *g;
     FGMap objs, anch;
     FGStrMap strs;
-    JSValue *held;      /* flattened ropes the string table names, released with the writer */
+    uint8_t **held;     /* host copies of flattened ropes the string table names, freed with the writer */
     uint32_t n_held;
+    bool survey;        /* record a case no writer has (JS_FlowGraphSurvey) rather than stopping on it */
     JSObject **order;
     uint32_t n_order, cap_order;
     uint32_t n_strs;
     uint8_t *kinds;
 } FGWriter;
 
-/* A string by content, once per string: 'S' and its units the first time, 's' and its index after. */
-static void fg_string(FGWriter *w, FGBuf *out, JSString *p)
+/* A survey's record of a case with no writer, and the placeholder that marks the graph unreadable. */
+static void fg_gap(FGWriter *w, FGBuf *out, int what, int id)
 {
-    uint32_t i, h = hash_string(p, (uint32_t)p->is_wide_char * 0x9E3779B9u + 1);
-    if (fg_str_get(&w->strs, p, h, &i)) { fg_u8(out, 's'); fg_u32(out, i); return; }
-    fg_str_put(&w->strs, p, h, w->n_strs++);
+    JSFlowGraph *g = w->g;
+    uint32_t i;
+
+    DCHECK(w->survey, "flow graph: a gap was recorded by a strict write — the strict write stops instead");
+    fg_u8(out, 'X');
+    for (i = 0; i < g->n_gaps; i++)
+        if (g->gaps[i].what == what && g->gaps[i].id == id) { g->gaps[i].n++; return; }
+    g->gaps = fg_grow(g->gaps, sizeof *g->gaps * (g->n_gaps + 1));
+    g->gaps[g->n_gaps].what = what; g->gaps[g->n_gaps].id = id; g->gaps[g->n_gaps].n = 1;
+    g->n_gaps++;
+}
+
+/* A string by content, once per string: 'S' and its units the first time, 's' and its index after. `u` stays
+   valid until the write ends: a JSString the graph's values hold, or a rope's host copy in `held`. */
+static void fg_units(FGWriter *w, FGBuf *out, const void *u, uint32_t len, uint8_t wide)
+{
+    FGStr k = { u, len, 2166136261u, 0, wide };
+    const uint8_t *b = u;
+    for (size_t i = 0; i < ((size_t)len << wide); i++) k.h = (k.h ^ b[i]) * 16777619u;
+    k.h ^= wide;
+    if (fg_str_get(&w->strs, &k, &k.v)) { fg_u8(out, 's'); fg_u32(out, k.v); return; }
+    k.v = w->n_strs++;
+    fg_str_put(&w->strs, &k);
     fg_u8(out, 'S');
-    fg_u32(out, p->len);
-    fg_u8(out, p->is_wide_char);
-    fg_put(out, strv(p), (size_t)p->len << p->is_wide_char);
+    fg_u32(out, len);
+    fg_u8(out, wide);
+    fg_put(out, u, (size_t)len << wide);
+}
+static void fg_string(FGWriter *w, FGBuf *out, JSString *p) { fg_units(w, out, strv(p), p->len, p->is_wide_char); }
+
+/* A rope's units copied into `dst` from `at`, in host memory: the write must not allocate in the runtime, which
+   at a sale stands at its memory floor. A rope's depth is the engine's own bound on how it builds them. */
+static uint32_t fg_rope_copy(JSValueConst v, uint8_t *dst, uint32_t at, uint8_t wide)
+{
+    if (JS_VALUE_GET_TAG(v) == JS_TAG_STRING_ROPE) {
+        JSStringRope *r = JS_VALUE_GET_PTR(v);
+        at = fg_rope_copy(r->left, dst, at, wide);
+        return fg_rope_copy(r->right, dst, at, wide);
+    }
+    {
+        JSString *p = JS_VALUE_GET_STRING(v);
+        if (wide == p->is_wide_char) {
+            memcpy(dst + ((size_t)at << wide), strv(p), (size_t)p->len << wide);
+        } else {   /* an 8-bit leaf in a wide rope */
+            const uint8_t *s8 = strv(p);
+            for (uint32_t i = 0; i < p->len; i++) { uint16_t c = s8[i]; memcpy(dst + ((size_t)(at + i) << 1), &c, 2); }
+        }
+        return at + p->len;
+    }
 }
 
 static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
@@ -56630,11 +56676,13 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
     case JS_TAG_FLOAT64: { double d = JS_VALUE_GET_FLOAT64(v); fg_u8(out, 'D'); fg_put(out, &d, 8); return; }
     case JS_TAG_STRING: fg_string(w, out, JS_VALUE_GET_STRING(v)); return;
     case JS_TAG_STRING_ROPE: {
-        JSValue flat = js_linearize_string_rope(w->ctx, v);
-        CHECK(!JS_IsException(flat), "flow graph: OOM flattening a rope a parked graph holds");
-        fg_string(w, out, JS_VALUE_GET_STRING(flat));
+        JSStringRope *r = JS_VALUE_GET_PTR(v);
+        uint8_t *u = fg_grow(NULL, ((size_t)r->len << r->is_wide_char) + 1);
+        uint32_t got = fg_rope_copy(v, u, 0, r->is_wide_char);
+        CHECK(got == r->len, "flow graph: a rope's leaves do not add up to the length it records");
+        fg_units(w, out, u, r->len, r->is_wide_char);
         w->held = fg_grow(w->held, sizeof *w->held * (w->n_held + 1));
-        w->held[w->n_held++] = flat;   /* the string table names it until the write ends */
+        w->held[w->n_held++] = u;
         return;
     }
     case JS_TAG_OBJECT: {
@@ -56653,6 +56701,7 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
         }
         if (!fg_map_get(&w->objs, p, &i)) {
             uint8_t kind = p->class_id == JS_CLASS_OBJECT ? FG_PLAIN : p->class_id == JS_CLASS_ARRAY ? FG_ARRAY : 0;
+            if (kind == 0 && w->survey) { fg_gap(w, out, FG_GAP_CLASS, p->class_id); return; }
             if (kind == 0) {
                 DCHECKF(false, "flow graph: a private object of class %d is on a parked graph and has no writer — give "
                        "its class a body here and in JS_FlowGraphRead", (int)p->class_id);
@@ -56672,6 +56721,7 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
         return;
     }
     default:
+        if (w->survey) { fg_gap(w, out, FG_GAP_TAG, JS_VALUE_GET_TAG(v)); return; }
         DCHECKF(false, "flow graph: a value of tag %d is on a parked graph and has no writer", (int)JS_VALUE_GET_TAG(v));
         FG_NO_WRITER();
     }
@@ -56683,6 +56733,7 @@ static void fg_key(FGWriter *w, FGBuf *out, JSAtom atom)
     JSAtomStruct *a;
     if (__JS_AtomIsTaggedInt(atom)) { fg_u8(out, 'k'); fg_u32(out, __JS_AtomToUInt32(atom)); return; }
     a = w->ctx->rt->atom_array[atom];
+    if (a->atom_type != JS_ATOM_TYPE_STRING && w->survey) { fg_gap(w, out, FG_GAP_SYMBOL_KEY, a->atom_type); return; }
     if (a->atom_type != JS_ATOM_TYPE_STRING) {
         DCHECKF(false, "flow graph: a private object on a parked graph is keyed by a symbol (atom type %d), and a "
                "symbol has no writer — give it an identity here and in JS_FlowGraphRead", (int)a->atom_type);
@@ -56701,18 +56752,17 @@ static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
     JSShape *sh = p->shape;
     JSShapeProperty *prs = get_shape_prop(sh);
 
-    if (p->first_weak_ref) {
-
-        DCHECK(false, "flow graph: a private object on a parked graph is a weak key or a weak target, so a rebuilt object "
-
-               "would not be the one its collection or reference names — give weak identity a writer");
-
+    if (p->first_weak_ref && w->survey) {
+        fg_gap(w, out, FG_GAP_WEAK, p->class_id);   /* the body is still written: the gap marks it unreadable */
+    } else if (p->first_weak_ref) {
+        DCHECK(false, "flow graph: a private object on a parked graph is a weak key or a weak target, so a rebuilt "
+               "object would not be the one its collection or reference names — give weak identity a writer");
         FG_NO_WRITER();
-
     }
     if (sh->proto) fg_value(w, out, JS_MKPTR(JS_TAG_OBJECT, sh->proto)); else fg_u8(out, 'N');
     fg_u8(out, p->extensible);
     if (w->kinds[id] == FG_ARRAY) {
+        if ((!p->fast_array || sh->prop_count != 1) && w->survey) { fg_gap(w, out, FG_GAP_SPARSE_ARRAY, 0); return; }
         if (!p->fast_array || sh->prop_count != 1) {
             DCHECK(false, "flow graph: a private array on a parked graph is sparse or has own properties beside its "
                    "length, which have no writer yet");
@@ -56730,6 +56780,10 @@ static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
     }
     for (int i = 0; i < sh->prop_count; i++, prs++) {
         if (prs->atom == JS_ATOM_NULL) continue;
+        if ((prs->flags & JS_PROP_TMASK) && w->survey) {
+            fg_gap(w, out, FG_GAP_PROP_KIND, (int)(prs->flags & JS_PROP_TMASK));
+            continue;
+        }
         if (prs->flags & JS_PROP_TMASK) {
             DCHECKF(false, "flow graph: a private object on a parked graph holds a property of kind %d (an accessor, a "
                    "variable reference or a lazy initializer), which has no writer yet", (int)(prs->flags & JS_PROP_TMASK));
@@ -56741,26 +56795,65 @@ static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
     }
 }
 
-JSFlowGraph *JS_FlowGraphWrite(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor)
+static JSFlowGraph *fg_write(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor, bool survey)
 {
     FGWriter w = { 0 };
     FGBuf rbuf = { 0 }, bbuf = { 0 };
     JSFlowGraph *g = calloc(1, sizeof *g);
 
     CHECK(g != NULL, "flow graph: OOM allocating a serialized graph");
-    w.ctx = ctx; w.floor = floor; w.g = g;
+    w.ctx = ctx; w.floor = floor; w.g = g; w.survey = survey;
     for (int i = 0; i < n; i++) fg_value(&w, &rbuf, roots[i]);
     for (uint32_t i = 0; i < w.n_order; i++) fg_body(&w, &bbuf, i);
     g->n_roots = (uint32_t)n;
+    g->n_objs = w.n_order;
     fg_u32(&g->bytes, w.n_order);
     if (w.n_order) fg_put(&g->bytes, w.kinds, w.n_order);
     fg_u32(&g->bytes, (uint32_t)n);
     if (rbuf.len) fg_put(&g->bytes, rbuf.b, rbuf.len);
     if (bbuf.len) fg_put(&g->bytes, bbuf.b, bbuf.len);
     (free)(rbuf.b); (free)(bbuf.b); (free)(w.order); (free)(w.kinds);
-    for (uint32_t i = 0; i < w.n_held; i++) JS_FreeValue(ctx, w.held[i]);
+    for (uint32_t i = 0; i < w.n_held; i++) (free)(w.held[i]);
     (free)(w.held); (free)(w.objs.s); (free)(w.strs.s); (free)(w.anch.s);
     return g;
+}
+
+JSFlowGraph *JS_FlowGraphWrite(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor)
+{
+    return fg_write(ctx, roots, n, floor, false);
+}
+
+JSFlowGraph *JS_FlowGraphSurvey(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor)
+{
+    return fg_write(ctx, roots, n, floor, true);
+}
+
+uint32_t JS_FlowGraphObjects(const JSFlowGraph *g) { return g->n_objs; }
+
+uint32_t JS_FlowGraphGaps(const JSFlowGraph *g, uint32_t i, int *what, int *id, uint32_t *n)
+{
+    if (i < g->n_gaps) { *what = g->gaps[i].what; *id = g->gaps[i].id; *n = g->gaps[i].n; }
+    return g->n_gaps;
+}
+
+void JS_FlowGraphGapName(JSContext *ctx, int what, int id, char *buf, size_t cap)
+{
+    char name[ATOM_GET_STR_BUF_SIZE];
+
+    switch (what) {
+    case FG_GAP_CLASS:
+    case FG_GAP_WEAK:
+        DCHECK(id >= 0 && (uint32_t)id < ctx->rt->class_count, "flow graph: a gap names a class this runtime has not");
+        snprintf(buf, cap, "%s %s", what == FG_GAP_CLASS ? "class" : "weak",
+                 JS_AtomGetStr(ctx, name, sizeof name, ctx->rt->class_array[id].class_name));
+        return;
+    case FG_GAP_TAG:          snprintf(buf, cap, "tag %d", id); return;
+    case FG_GAP_SYMBOL_KEY:   snprintf(buf, cap, "symbolKey %d", id); return;
+    case FG_GAP_PROP_KIND:    snprintf(buf, cap, "propKind %d", id >> 4); return;
+    case FG_GAP_SPARSE_ARRAY: snprintf(buf, cap, "sparseArray"); return;
+    }
+    DCHECKF(false, "flow graph: a gap of kind %d has no name", what);
+    snprintf(buf, cap, "?");
 }
 
 typedef struct {
@@ -56860,6 +56953,8 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
     const uint8_t *kinds;
     uint32_t n;
 
+    CHECK(g->n_gaps == 0, "flow graph: a survey's graph was handed to the reader — it holds placeholders for what no "
+                          "writer could write, so it is not a graph");
     r.ctx = ctx; r.g = g;
     r.p = g->bytes.b; r.end = g->bytes.b + g->bytes.len;
     r.n_objs = fg_r32(&r);
@@ -56912,6 +57007,7 @@ uint32_t JS_FlowGraphAnchors(const JSFlowGraph *g, const JSValue **anchors) { *a
 void JS_FlowGraphFree(JSContext *ctx, JSFlowGraph *g)
 {
     for (uint32_t i = 0; i < g->n_anchors; i++) JS_FreeValue(ctx, g->anchors[i]);
+    (free)(g->gaps);
     (free)(g->anchors); (free)(g->bytes.b); (free)(g);
 }
 

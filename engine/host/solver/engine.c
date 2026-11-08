@@ -11878,7 +11878,55 @@ static int sale_log2(double v) {
     while (v >= 2.0 && b < SALE_HIST - 1) { v /= 2.0; b++; }
     return b;
 }
-static void sale_reach_val(JSValueConst v, void *arg) { (void)arg; JS_FlowReachValue(v); }
+/* The sold member's value roots, gathered for the graph survey as the reach walk is fed them: borrowed, alive for
+   the length of the census. */
+typedef struct { JSValueConst *v; size_t n, cap; } SaleRoots;
+static void sale_root(SaleRoots *r, JSValueConst v) {
+    if (r->n == r->cap) {
+        JSValueConst *g = realloc(r->v, sizeof *g * (r->cap = r->cap ? r->cap * 2 : 64));
+        CHECK(g != NULL, "engine: OOM gathering a sold member's roots for the graph survey");
+        r->v = g;
+    }
+    r->v[r->n++] = v;
+}
+static void sale_reach_val(JSValueConst v, void *arg) { JS_FlowReachValue(v); sale_root(arg, v); }
+
+/* WHAT THE PRIVATE-GRAPH WRITER COULD WRITE OF EACH SOLD MEMBER — JS_FlowGraphSurvey over its value roots (its
+   function, register, queues, agents' jobs and programs, and its delta's flow-side values; not yet its frames).
+   Each gap is one case the writer has no body for, counted per reference and per sale, by name. */
+typedef struct { int what, id; long refs, sales; } SaleGap;
+static struct { long sales, complete; double bytes, objs, anchors; SaleGap *gap; int n_gap; } g_sale_graph;
+
+static void sale_graph_take(const Flow *f, const SaleRoots *roots) {
+    JSFlowGraph *g = JS_FlowGraphSurvey(g_sess_ctx, roots->v, (int)roots->n,
+                                        f->delta ? cow_delta_fork_gen(f->delta) : 0);
+    const uint8_t *bytes;
+    const JSValue *anchors;
+    int what, id;
+    uint32_t refs, n_gaps = JS_FlowGraphGaps(g, 0, &what, &id, &refs);
+
+    g_sale_graph.sales++;
+    g_sale_graph.complete += n_gaps == 0;
+    g_sale_graph.bytes += (double)JS_FlowGraphBytes(g, &bytes);
+    g_sale_graph.objs += JS_FlowGraphObjects(g);
+    g_sale_graph.anchors += JS_FlowGraphAnchors(g, &anchors);
+    for (uint32_t i = 0; i < n_gaps; i++) {
+        int k;
+        JS_FlowGraphGaps(g, i, &what, &id, &refs);
+        for (k = 0; k < g_sale_graph.n_gap; k++)
+            if (g_sale_graph.gap[k].what == what && g_sale_graph.gap[k].id == id) break;
+        if (k == g_sale_graph.n_gap) {
+            SaleGap *grown = realloc(g_sale_graph.gap, sizeof *grown * (size_t)(k + 1));
+            CHECK(grown != NULL, "engine: OOM growing the graph survey's gap table");
+            g_sale_graph.gap = grown;
+            g_sale_graph.gap[k] = (SaleGap){ what, id, 0, 0 };
+            g_sale_graph.n_gap++;
+        }
+        g_sale_graph.gap[k].refs += refs;
+        g_sale_graph.gap[k].sales++;
+    }
+    JS_FlowGraphFree(g_sess_ctx, g);
+}
 
 static void engine_sale_census_take(const Flow *f) {
     CowSerialCensus hc;
@@ -11886,25 +11934,28 @@ static void engine_sale_census_take(const Flow *f) {
     JSFlowReach r;
     int64_t work = 0;
     long full, own, framed = 0;
+    SaleRoots roots = { 0 };
 
     for (int i = 0; i < f->n_agents; i++) work += (int64_t)f->agents[i].work;
     JS_FlowReachBegin(g_sess_ctx, f->delta ? cow_delta_fork_gen(f->delta) : 0);
-    JS_FlowReachValue(f->fn);
-    JS_FlowReachValue(f->pending);
-    JS_FlowReachValue(f->deliver_q);
-    JS_FlowReachValue(f->deliver_world_q);
-    JS_FlowReachValue(f->perform_q);
-    JS_FlowReachValue(f->orphan_claim_fn);
+    sale_reach_val(f->fn, &roots);
+    sale_reach_val(f->pending, &roots);
+    sale_reach_val(f->deliver_q, &roots);
+    sale_reach_val(f->deliver_world_q, &roots);
+    sale_reach_val(f->perform_q, &roots);
+    sale_reach_val(f->orphan_claim_fn, &roots);
     JS_FlowReachParked(f->parked);
     for (int i = 0; i < f->n_agents; i++) {
-        JS_FlowReachValue(f->agents[i].jobs);
-        JS_FlowReachValue(f->agents[i].program);
+        sale_reach_val(f->agents[i].jobs, &roots);
+        sale_reach_val(f->agents[i].program, &roots);
         if (f->agents[i].frame) { framed = 1; JS_FlowReachFrame(f->agents[i].frame); }
         JS_FlowReachParked(f->agents[i].parked);
     }
     memset(&hc, 0, sizeof hc);
-    if (f->delta) cow_delta_serial_census(f->delta, sale_reach_val, NULL, &hc);
+    if (f->delta) cow_delta_serial_census(f->delta, sale_reach_val, &roots, &hc);
     JS_FlowReachEnd(&r);
+    sale_graph_take(f, &roots);
+    free(roots.v);
     dom_cow_serial_census(f->dom, f->dom_n, f->dom_base, &dc);
 
     own = (hc.head + f->dom_n) * SALE_ENTRY_BYTES + r.priv_bytes + r.priv_string_bytes + dc.head_bytes
@@ -11946,7 +11997,7 @@ static int sale_hist_json(char *b, size_t cap, const char *name, const long *h) 
 }
 
 char *engine_sale_census_json(void) {
-    size_t cap = 8192;
+    size_t cap = 16384;
     char *b = malloc(cap);
     int n;
     long g0o, g0b, bo, bb;
@@ -11981,6 +12032,19 @@ char *engine_sale_census_json(void) {
     n += sale_hist_json(b + n, cap - (size_t)n, "hOwn", g_sale_census.h_own);
     n += snprintf(b + n, cap - (size_t)n, ",");
     n += sale_hist_json(b + n, cap - (size_t)n, "hRatio", g_sale_census.h_ratio);
+    n += snprintf(b + n, cap - (size_t)n, ",\"graphSales\":%ld,\"graphComplete\":%ld,\"graphBytes\":%.0f,"
+                  "\"graphObjs\":%.0f,\"graphAnchors\":%.0f", g_sale_graph.sales, g_sale_graph.complete,
+                  g_sale_graph.bytes, g_sale_graph.objs, g_sale_graph.anchors);
+    for (int pass = 0; pass < 2; pass++) {
+        n += snprintf(b + n, cap - (size_t)n, pass ? ",\"graphGapSales\":{" : ",\"graphGapRefs\":{");
+        for (int k = 0; k < g_sale_graph.n_gap && (size_t)n < cap; k++) {
+            char name[96];
+            JS_FlowGraphGapName(g_sess_ctx, g_sale_graph.gap[k].what, g_sale_graph.gap[k].id, name, sizeof name);
+            n += snprintf(b + n, cap - (size_t)n, "%s\"%s\":%ld", k ? "," : "", name,
+                          pass ? g_sale_graph.gap[k].sales : g_sale_graph.gap[k].refs);
+        }
+        n += snprintf(b + n, cap - (size_t)n, "}");
+    }
     n += snprintf(b + n, cap - (size_t)n, "}");
     CHECK((size_t)n < cap, "engine: the sale census outgrew its buffer");
     return b;

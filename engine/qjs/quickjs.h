@@ -3685,6 +3685,13 @@ JS_EXTERN int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *ro
 JS_EXTERN size_t JS_FlowGraphBytes(const JSFlowGraph *g, const uint8_t **bytes);
 JS_EXTERN uint32_t JS_FlowGraphAnchors(const JSFlowGraph *g, const JSValue **anchors);
 JS_EXTERN void JS_FlowGraphFree(JSContext *ctx, JSFlowGraph *g);
+/* The same walk where a case has no writer yet is recorded rather than stopped on: a class, a value tag, a symbol
+   key, an accessor-like property, a sparse array, a weak key or target. Its graph is a census of the writer's
+   gaps and of the bytes and anchors written around them; JS_FlowGraphRead refuses it. */
+JS_EXTERN JSFlowGraph *JS_FlowGraphSurvey(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor);
+JS_EXTERN uint32_t JS_FlowGraphObjects(const JSFlowGraph *g);
+JS_EXTERN uint32_t JS_FlowGraphGaps(const JSFlowGraph *g, uint32_t i, int *what, int *id, uint32_t *n);
+JS_EXTERN void JS_FlowGraphGapName(JSContext *ctx, int what, int id, char *buf, size_t cap);
 /* Why a SUSPENDED flow (or the runtime's parked set) cannot be forked at this instant, or NULL: the first step
    machine on its chain whose JSTrampStepDef.unforkable answers. A fork that may wait asks this before cloning
    and waits for the operation to end; a clone of a flow that answers non-NULL aborts. */
