@@ -22,7 +22,9 @@
 #include "fixture/wasm_binary.h"    /* hand-built binary rows for that decoder */
 #include "core/wasm/module_validator.h" /* WebAssembly Core §3.5's module validation */
 #include "core/wasm/linear_memory.h" /* WebAssembly Core §4.2.9's per-flow memory */
+#include "core/wasm/interpreter.h" /* WebAssembly Core §4.6's interpreter core */
 #include "fixture/wasm_valid.h"     /* the rows that validator answers */
+#include "fixture/wasm_exec.h"      /* the testsuite's assert_return and assert_trap rows the interpreter answers */
 #include "core/image/image_header.h" /* css-images-3 §4.1's natural dimensions — cross-checked by @PNGDEC */
 #include "core/xml/xml_char.h"   /* XML §2.2/§2.3[3]/§2.11 — the layer every XML production reads through */
 #include "core/xml/xml_ref.h"    /* XML §4.1's [66]/[68] and §4.6's five predefined entities */
@@ -6023,6 +6025,117 @@ TF_UNIT void wasm_module_validator_selftest(void)
         wasm_module_validator_free(&alone[i]);
         wasm_module_validator_free(&together[i]);
         wasm_module_decoder_free(&dec[i]);
+    }
+}
+
+/* One assert_return or assert_trap row's answer, held to the assertion: the trap's message by prefix, or each
+ * result by type and bits, a `nan:canonical` result as a NaN whose payload is canonical (either sign) and a
+ * `nan:arithmetic` one as a NaN whose payload's top bit is set (§4.3.3's canonical and arithmetic NaNs). */
+static void wasm_exec_check(const WasmExecRow *row, const WasmInterpreter *it, WasmExecStatus st)
+{
+    const char *msg = wasm_exec_status_message(st);
+    uint32_t k;
+
+    if (row->trap != NULL) {
+        CHECKF(st != WASM_EXEC_DONE && st != WASM_EXEC_MORE && strncmp(msg, row->trap, strlen(row->trap)) == 0,
+               "the WebAssembly invocation %s answered %s; the testsuite expects the trap \"%s\"", row->src,
+               st == WASM_EXEC_DONE ? "a return" : msg, row->trap);
+        return;
+    }
+    CHECKF(st == WASM_EXEC_DONE, "the WebAssembly invocation %s trapped with \"%s\"", row->src, msg);
+    CHECKF(it->n_vals == row->n_results, "the WebAssembly invocation %s returned %zu values, not %u", row->src,
+           it->n_vals, row->n_results);
+    for (k = 0; k < row->n_results; k++) {
+        const WasmExecValue *e = &WASM_EXEC_VALUES[row->results + k];
+        bool f32 = e->type == 0x7D, i32 = e->type == 0x7F;
+        uint64_t got = it->vals[k].lo, frac = f32 ? 0x7FFFFFull : 0xFFFFFFFFFFFFFull;
+        uint64_t exp = f32 ? 0x7F800000ull : 0x7FF0000000000000ull, quiet = f32 ? 0x400000ull : 0x8000000000000ull;
+
+        CHECKF((f32 || i32) ? got <= UINT32_MAX : true, "%s: result %u is wider than its type", row->src, k);
+        if (e->match == 0)
+            CHECKF(got == e->bits, "%s: result %u is 0x%llx, not 0x%llx", row->src, k, (unsigned long long)got,
+                   (unsigned long long)e->bits);
+        else
+            CHECKF((got & exp) == exp && (e->match == 1 ? (got & frac) == quiet : (got & quiet) != 0),
+                   "%s: result %u is 0x%llx, not %s NaN", row->src, k, (unsigned long long)got,
+                   e->match == 1 ? "a canonical" : "an arithmetic");
+    }
+}
+
+/* WebAssembly Core §4.6's interpreter core (core/wasm/interpreter.h) against the testsuite's rows over its
+ * subset (fixture/wasm_exec.h). Each row's module is decoded and validated (the side table is validation's), the
+ * export found by name, and the invocation run alone, retiring one unit of work per step it counts; then the
+ * rows of each module are run again all at once, one step each in turn, and must answer as they did alone. */
+TF_UNIT void wasm_interpreter_selftest(void)
+{
+    size_t i = 0;
+
+    while (i < COUNTOF(WASM_EXEC_ROWS)) {
+        const WasmTestsuiteRow *mod = &WASM_TESTSUITE_ROWS[WASM_EXEC_ROWS[i].module];
+        const uint8_t *bytes = (const uint8_t *)mod->bytes;
+        WasmModuleDecoder d;
+        WasmModuleValidator v;
+        const WasmModule *m;
+        WasmInterpreter *its;
+        WasmExecStatus *sts;
+        size_t j, n, live;
+
+        for (n = i; n < COUNTOF(WASM_EXEC_ROWS) && WASM_EXEC_ROWS[n].module == WASM_EXEC_ROWS[i].module; n++) {}
+        wasm_module_decoder_init(&d, bytes, mod->len);
+        CHECKF(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the module of %s does not decode",
+               WASM_EXEC_ROWS[i].src);
+        m = wasm_module_decoder_module(&d);
+        wasm_module_validator_init(&v, m, bytes);
+        CHECKF(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the module of %s is invalid",
+               WASM_EXEC_ROWS[i].src);
+        its = calloc(n - i, sizeof *its);
+        sts = calloc(n - i, sizeof *sts);
+        CHECK(its != NULL && sts != NULL, "the interpreter selftest's invocations could not be allocated");
+        for (j = i; j < n; j++) {
+            const WasmExecRow *row = &WASM_EXEC_ROWS[j];
+            WasmValue *args = calloc(row->n_args + 1, sizeof *args);
+            WasmInterpreter alone;
+            WasmExecStatus st;
+            size_t e, func = SIZE_MAX;
+            uint64_t before;
+            uint32_t k;
+
+            for (e = 0; e < m->n_exports; e++)
+                if (m->exports[e].kind == WASM_EXTERN_FUNC && m->exports[e].name_size == row->export_len
+                    && memcmp(bytes + m->exports[e].name_offset, row->export_name, row->export_len) == 0)
+                    func = m->exports[e].index;
+            CHECKF(func != SIZE_MAX && args != NULL, "%s: no function export of its name", row->src);
+            for (k = 0; k < row->n_args; k++) args[k].lo = WASM_EXEC_VALUES[row->args + k].bits;
+            before = JS_FlowPeekRetiredWork();
+            st = wasm_interpreter_begin(&alone, m, bytes, wasm_module_validator_side_table(&v), func, args,
+                                        row->n_args);
+            while (st == WASM_EXEC_MORE) st = wasm_interpreter_step(&alone);
+            CHECKF(JS_FlowPeekRetiredWork() - before == alone.retired && alone.retired > 0,
+                   "%s: the interpreter retired %llu units of work for %llu instructions", row->src,
+                   (unsigned long long)(JS_FlowPeekRetiredWork() - before), (unsigned long long)alone.retired);
+            wasm_exec_check(row, &alone, st);
+            wasm_interpreter_free(&alone);
+            sts[j - i] = wasm_interpreter_begin(&its[j - i], m, bytes, wasm_module_validator_side_table(&v), func,
+                                                args, row->n_args);
+            free(args);
+        }
+        do {
+            live = 0;
+            for (j = i; j < n; j++) {
+                if (sts[j - i] != WASM_EXEC_MORE) continue;
+                sts[j - i] = wasm_interpreter_step(&its[j - i]);
+                live++;
+            }
+        } while (live > 0);
+        for (j = i; j < n; j++) {
+            wasm_exec_check(&WASM_EXEC_ROWS[j], &its[j - i], sts[j - i]);
+            wasm_interpreter_free(&its[j - i]);
+        }
+        free(its);
+        free(sts);
+        wasm_module_validator_free(&v);
+        wasm_module_decoder_free(&d);
+        i = n;
     }
 }
 
@@ -41667,6 +41780,7 @@ int main(int argc, char **argv) {
     png_decode_selftest();
     wasm_module_decoder_selftest();   /* WebAssembly Core §5.5's framing, a primitive with no in-flow caller yet */
     wasm_module_validator_selftest(); /* §3.5's module validation over that decoder's output, after it */
+    wasm_interpreter_selftest();      /* §4.6's interpreter over that validator's side tables, after it */
     /* @IMGMARK — the IMAGE mark that turns that decoder's output into ink, AFTER it and for the reason its
        own banner gives: this row's operand is png_decode's output. */
     display_image_mark_selftest();
