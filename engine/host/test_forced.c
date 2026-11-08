@@ -5360,10 +5360,11 @@ TF_UNIT void png_decode_selftest(void)
  * step each in turn, so a decode that kept state outside its WasmModuleDecoder, or answered differently for
  * where it rested, disagrees with itself. A refusal is held to the testsuite's message, so a decoder refusing
  * for the wrong production fails as surely as one that accepts. */
-static void wasm_binary_check(const char *src, const char *expect, WasmDecodeStatus st)
+static void wasm_binary_check(const char *src, const char *expect, const WasmModuleDecoder *d, WasmDecodeStatus st)
 {
-    const char *got = wasm_decode_status_message(st);
+    char got[256];
 
+    wasm_module_decoder_message(d, st, got, sizeof got);
     CHECKF(st != WASM_DECODE_MORE, "the WebAssembly decode of %s returned MORE from wasm_module_decoder_run", src);
     if (expect == NULL) {
         CHECKF(st == WASM_DECODE_DONE, "the WebAssembly module %s was refused with \"%s\"", src, got);
@@ -5511,6 +5512,25 @@ static void wasm_func_text(const WasmModule *m, char *buf, size_t cap)
     wasm_text_put(buf, cap, &at, "]");
 }
 
+/* §5.5.13's code entries as fixture/wasm_binary.h renders them: per entry `locals[<count> <type>,...] body
+   <bytes of its expr before the final 0x0B>`, joined by "; ". */
+static void wasm_code_text(const WasmModule *m, char *buf, size_t cap)
+{
+    size_t at = 0, i, k;
+
+    buf[0] = '\0';
+    for (i = 0; i < m->n_codes; i++) {
+        const WasmCode *c = &m->codes[i];
+
+        wasm_text_put(buf, cap, &at, "%slocals[", i ? "; " : "");
+        for (k = 0; k < c->n_locals; k++) {
+            wasm_text_put(buf, cap, &at, "%s%u ", k ? "," : "", (unsigned)m->locals[c->locals + k].count);
+            wasm_val_text(buf, cap, &at, &m->locals[c->locals + k].type);
+        }
+        wasm_text_put(buf, cap, &at, "] body %zu", c->body_size);
+    }
+}
+
 TF_UNIT void wasm_module_decoder_selftest(void)
 {
     enum { NR = sizeof WASM_BINARY_ROWS / sizeof WASM_BINARY_ROWS[0],
@@ -5522,7 +5542,7 @@ TF_UNIT void wasm_module_decoder_selftest(void)
     for (i = 0; i < NR; i++) {
         wasm_module_decoder_init(&alone[i], (const uint8_t *)WASM_BINARY_ROWS[i].bytes, WASM_BINARY_ROWS[i].len);
         st_alone[i] = wasm_module_decoder_run(&alone[i]);
-        wasm_binary_check(WASM_BINARY_ROWS[i].src, WASM_BINARY_ROWS[i].expect, st_alone[i]);
+        wasm_binary_check(WASM_BINARY_ROWS[i].src, WASM_BINARY_ROWS[i].expect, &alone[i], st_alone[i]);
         wasm_module_decoder_init(&together[i], (const uint8_t *)WASM_BINARY_ROWS[i].bytes,
                                  WASM_BINARY_ROWS[i].len);
         st_together[i] = WASM_DECODE_MORE;
@@ -5532,7 +5552,7 @@ TF_UNIT void wasm_module_decoder_selftest(void)
 
         wasm_module_decoder_init(&d, (const uint8_t *)WASM_BINARY_ORDER_ROWS[i].bytes,
                                  WASM_BINARY_ORDER_ROWS[i].len);
-        wasm_binary_check(WASM_BINARY_ORDER_ROWS[i].src, WASM_BINARY_ORDER_ROWS[i].expect,
+        wasm_binary_check(WASM_BINARY_ORDER_ROWS[i].src, WASM_BINARY_ORDER_ROWS[i].expect, &d,
                           wasm_module_decoder_run(&d));
         wasm_module_decoder_free(&d);
     }
@@ -5541,7 +5561,7 @@ TF_UNIT void wasm_module_decoder_selftest(void)
         WasmModuleDecoder d;
 
         wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
-        wasm_binary_check(row->src, row->expect, wasm_module_decoder_run(&d));
+        wasm_binary_check(row->src, row->expect, &d, wasm_module_decoder_run(&d));
         wasm_module_decoder_free(&d);
     }
     for (i = 0; i < COUNTOF(WASM_TYPE_ROWS); i++) {
@@ -5550,9 +5570,29 @@ TF_UNIT void wasm_module_decoder_selftest(void)
         WasmModuleDecoder d;
 
         wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
-        wasm_binary_check(row->src, NULL, wasm_module_decoder_run(&d));
+        wasm_binary_check(row->src, NULL, &d, wasm_module_decoder_run(&d));
         wasm_type_text(wasm_module_decoder_module(&d), text, sizeof text);
         CHECKF(strcmp(text, row->text) == 0, "the WebAssembly module %s decoded its types as \"%s\"; they are "
+                                              "\"%s\"", row->src, text, row->text);
+        wasm_module_decoder_free(&d);
+    }
+    for (i = 0; i < COUNTOF(WASM_CODE_MALFORMED_ROWS); i++) {
+        const WasmBinaryRow *row = &WASM_CODE_MALFORMED_ROWS[i];
+        WasmModuleDecoder d;
+
+        wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
+        wasm_binary_check(row->src, row->expect, &d, wasm_module_decoder_run(&d));
+        wasm_module_decoder_free(&d);
+    }
+    for (i = 0; i < COUNTOF(WASM_CODE_ROWS); i++) {
+        const WasmTextRow *row = &WASM_CODE_ROWS[i];
+        static char text[4096];
+        WasmModuleDecoder d;
+
+        wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
+        wasm_binary_check(row->src, NULL, &d, wasm_module_decoder_run(&d));
+        wasm_code_text(wasm_module_decoder_module(&d), text, sizeof text);
+        CHECKF(strcmp(text, row->text) == 0, "the WebAssembly module %s decoded its code as \"%s\"; it is "
                                               "\"%s\"", row->src, text, row->text);
         wasm_module_decoder_free(&d);
     }
@@ -5561,7 +5601,7 @@ TF_UNIT void wasm_module_decoder_selftest(void)
         WasmModuleDecoder d;
 
         wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
-        wasm_binary_check(row->src, row->expect, wasm_module_decoder_run(&d));
+        wasm_binary_check(row->src, row->expect, &d, wasm_module_decoder_run(&d));
         wasm_module_decoder_free(&d);
     }
     for (i = 0; i < COUNTOF(WASM_FUNCTION_ROWS); i++) {
@@ -5570,7 +5610,7 @@ TF_UNIT void wasm_module_decoder_selftest(void)
         WasmModuleDecoder d;
 
         wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
-        wasm_binary_check(row->src, NULL, wasm_module_decoder_run(&d));
+        wasm_binary_check(row->src, NULL, &d, wasm_module_decoder_run(&d));
         wasm_func_text(wasm_module_decoder_module(&d), text, sizeof text);
         CHECKF(strcmp(text, row->text) == 0, "the WebAssembly module %s decoded its functions as \"%s\"; they "
                                               "are \"%s\"", row->src, text, row->text);
@@ -5581,7 +5621,7 @@ TF_UNIT void wasm_module_decoder_selftest(void)
         WasmModuleDecoder d;
 
         wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
-        wasm_binary_check(row->src, row->expect, wasm_module_decoder_run(&d));
+        wasm_binary_check(row->src, row->expect, &d, wasm_module_decoder_run(&d));
         wasm_module_decoder_free(&d);
     }
     for (i = 0; i < COUNTOF(WASM_IMPORT_ROWS); i++) {
@@ -5590,7 +5630,7 @@ TF_UNIT void wasm_module_decoder_selftest(void)
         WasmModuleDecoder d;
 
         wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
-        wasm_binary_check(row->src, NULL, wasm_module_decoder_run(&d));
+        wasm_binary_check(row->src, NULL, &d, wasm_module_decoder_run(&d));
         wasm_import_text(wasm_module_decoder_module(&d), (const uint8_t *)row->bytes, text, sizeof text);
         CHECKF(strcmp(text, row->text) == 0, "the WebAssembly module %s decoded its imports as \"%s\"; they are "
                                               "\"%s\"", row->src, text, row->text);
@@ -5635,7 +5675,7 @@ TF_UNIT void wasm_module_decoder_selftest(void)
         WasmModuleDecoder d;
 
         wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
-        wasm_binary_check(row->src, NULL, wasm_module_decoder_run(&d));
+        wasm_binary_check(row->src, NULL, &d, wasm_module_decoder_run(&d));
         CHECKF(wasm_module_decoder_section_count(&d) == row->n_sections,
                "the WebAssembly module %s decoded to %zu sections; it has %zu", row->src,
                wasm_module_decoder_section_count(&d), row->n_sections);
