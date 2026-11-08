@@ -1447,6 +1447,16 @@ bool box_paint_next_element(BoxPaintWalk *w, lxb_dom_element_t **el)
     return true;
 }
 
+bool box_paint_next_ask(BoxPaintWalk *w)
+{
+    bool establishes;
+
+    DCHECK(w != NULL && w->ok, "CSS 2.1 §E.2's next offer's producers were asked of a painter that stopped");
+    if (!bp_hold_next(w)) return true;
+    if (w->step != PAINT_STEP_LINE_BOXES) return true;
+    return block_flow_establishes_inline_context_ask(w->el, &establishes);
+}
+
 bool box_paint_step(BoxPaintWalk *w)
 {
     DCHECK(w != NULL && w->ok, "CSS 2.1 §E.2's painter was stepped after it stopped");

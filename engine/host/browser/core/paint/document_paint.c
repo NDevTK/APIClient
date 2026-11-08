@@ -157,7 +157,7 @@ bool document_paint_ready(DocumentPaintFrame *f)
     if (f->walk == NULL || !box_paint_next_element(f->walk, &el)) return true;
     rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
     layout_job_drive_begin_resting(&d);
-    ready = element_view_client_rects_ask(el, &d);
+    ready = element_view_client_rects_ask(el, &d) && box_paint_next_ask(f->walk);
     layout_job_drive_end(&d);
     rest_unit_end();
     return ready;
