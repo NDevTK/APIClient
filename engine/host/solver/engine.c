@@ -7013,9 +7013,10 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
            "arranged work, and a sibling forked mid-call would carry a half-finished expression");
 
     /* HTML §7.3.3 "Fully active documents": a body of a document this timeline destroyed (the page a fresh open
-       replaced) is code no event of that document will ever call, so the take retires it. The walk marked it
-       entered in this timeline only, and a timeline where that document lives still takes it. */
-    if (!document_fully_active(JS_GetFunctionRealm(ctx, t.fn))) {
+       replaced) is code no event of that document will ever call, so the take retires it, and a worker's body
+       goes with its owner's. The walk marked it entered in this timeline only, and a timeline where that
+       document lives still takes it. */
+    if (!document_realm_actively_needed(JS_GetFunctionRealm(ctx, t.fn))) {
         JS_FreeValue(ctx, t.fn);
         return ORPHAN_STEP_RETIRED;
     }

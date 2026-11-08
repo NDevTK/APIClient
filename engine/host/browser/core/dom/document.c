@@ -4137,6 +4137,12 @@ JSValueConst document_window_proxy(JSContext *ctx)
  * flow. The Observable standard asks it to open §2.1's next/error/complete/addTeardown, §2.2.1's subscribe and §3's
  * when(), and re-asks it in §2.1's close-a-subscription before every teardown, since "each teardown could result in
  * the above Document becoming inactive". */
+bool document_realm_actively_needed(JSContext *ctx)
+{
+    if (!doc_of(ctx)) return document_realm_actively_needed(worker_env_of(ctx)->owner);
+    return document_fully_active(ctx);
+}
+
 bool document_fully_active(JSContext *ctx)
 {
     Document *d = doc_here(ctx);

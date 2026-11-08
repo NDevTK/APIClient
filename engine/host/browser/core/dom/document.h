@@ -222,6 +222,11 @@ JSValueConst document_window_proxy(JSContext *ctx);
    flag. */
 bool document_fully_active(JSContext *ctx);
 
+/* Whether this realm's code still has a live owner: a Document realm's is its Document being fully active (HTML
+   §7.3.3), and a dedicated worker realm's is its owner's own answer, HTML §10.2.3 "The worker's lifetime"'s
+   actively needed over an owner set of one. */
+bool document_realm_actively_needed(JSContext *ctx);
+
 /* THIS REALM'S `document` OBJECT. BORROWED. §4.8.5's `contentDocument` for a SAME-ORIGIN child answers with
    exactly this object out of the child's realm — the two documents are one agent, so it is a pointer and not
    a message. */
