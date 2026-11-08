@@ -18,7 +18,8 @@
 #include "core/image/inflate.h"  /* RFC 1951 DEFLATE and RFC 1950's zlib framing — @PNG */
 #include "core/image/png_decode.h" /* PNG §5.3's chunks through PNG §9.2's filters to RGBA — @PNGDEC */
 #include "core/wasm/module_decoder.h" /* WebAssembly Core §5.5's preamble and sections */
-#include "fixture/wasm_binary.h"    /* the spec testsuite's binary rows that decoder answers */
+#include "fixture/wasm_testsuite.h" /* the spec testsuite's binary rows, converted by its reference interpreter */
+#include "fixture/wasm_binary.h"    /* hand-built binary rows for that decoder */
 #include "core/wasm/module_validator.h" /* WebAssembly Core §3.5's module validation */
 #include "fixture/wasm_valid.h"     /* the rows that validator answers */
 #include "core/image/image_header.h" /* css-images-3 §4.1's natural dimensions — cross-checked by @PNGDEC */
@@ -5616,18 +5617,20 @@ static void wasm_segment_text(const WasmModule *m, const uint8_t *bytes, char *b
 
 TF_UNIT void wasm_module_decoder_selftest(void)
 {
-    enum { NR = sizeof WASM_BINARY_ROWS / sizeof WASM_BINARY_ROWS[0],
+    enum { NR = sizeof WASM_TESTSUITE_ROWS / sizeof WASM_TESTSUITE_ROWS[0],
            NO = sizeof WASM_BINARY_ORDER_ROWS / sizeof WASM_BINARY_ORDER_ROWS[0] };
     static WasmModuleDecoder alone[NR], together[NR];
     WasmDecodeStatus st_alone[NR], st_together[NR];
     size_t i, k, live;
 
     for (i = 0; i < NR; i++) {
-        wasm_module_decoder_init(&alone[i], (const uint8_t *)WASM_BINARY_ROWS[i].bytes, WASM_BINARY_ROWS[i].len);
+        const WasmTestsuiteRow *row = &WASM_TESTSUITE_ROWS[i];
+
+        wasm_module_decoder_init(&alone[i], (const uint8_t *)row->bytes, row->len);
         st_alone[i] = wasm_module_decoder_run(&alone[i]);
-        wasm_binary_check(WASM_BINARY_ROWS[i].src, WASM_BINARY_ROWS[i].expect, &alone[i], st_alone[i]);
-        wasm_module_decoder_init(&together[i], (const uint8_t *)WASM_BINARY_ROWS[i].bytes,
-                                 WASM_BINARY_ROWS[i].len);
+        /* An invalid row is a well-formed module: it decodes, and its refusal is the validator's. */
+        wasm_binary_check(row->src, row->kind == WASM_ROW_MALFORMED ? row->expect : NULL, &alone[i], st_alone[i]);
+        wasm_module_decoder_init(&together[i], (const uint8_t *)row->bytes, row->len);
         st_together[i] = WASM_DECODE_MORE;
     }
     for (i = 0; i < NO; i++) {
@@ -5752,13 +5755,13 @@ TF_UNIT void wasm_module_decoder_selftest(void)
 
         CHECKF(st_together[i] == st_alone[i] && together[i].n_sections == alone[i].n_sections,
                "the WebAssembly binary %s decoded differently stepped among the others than alone",
-               WASM_BINARY_ROWS[i].src);
+               WASM_TESTSUITE_ROWS[i].src);
         if (st_alone[i] == WASM_DECODE_DONE) {
             wasm_type_text(wasm_module_decoder_module(&alone[i]), text_alone, sizeof text_alone);
             wasm_type_text(wasm_module_decoder_module(&together[i]), text_together, sizeof text_together);
             CHECKF(strcmp(text_alone, text_together) == 0,
                    "the WebAssembly binary %s decoded different types stepped among the others than alone",
-                   WASM_BINARY_ROWS[i].src);
+                   WASM_TESTSUITE_ROWS[i].src);
         }
         for (k = 0; k < alone[i].n_sections; k++) {
             const WasmSection *t = wasm_module_decoder_section(&together[i], k);
@@ -5767,7 +5770,7 @@ TF_UNIT void wasm_module_decoder_selftest(void)
             CHECKF(t->id == a->id && t->offset == a->offset && t->size == a->size
                        && t->name_offset == a->name_offset && t->name_size == a->name_size,
                    "section %zu of the WebAssembly binary %s differs between the two drives", k,
-                   WASM_BINARY_ROWS[i].src);
+                   WASM_TESTSUITE_ROWS[i].src);
         }
         wasm_module_decoder_free(&alone[i]);
         wasm_module_decoder_free(&together[i]);
@@ -5796,10 +5799,38 @@ TF_UNIT void wasm_module_decoder_selftest(void)
     }
 }
 
-/* WebAssembly Core §3.5 "Modules"' validation (core/wasm/module_validator.h) over fixture/wasm_valid.h's rows:
- * each decodes, and its validation answers the row's verdict with valid.ml's message. Every row is validated
- * alone and then all at once, one step each in turn, so a validation that kept state outside its
- * WasmModuleValidator disagrees with itself. */
+/* WebAssembly Core §3.5 "Modules"' validation (core/wasm/module_validator.h). Every testsuite module validates,
+ * every in-scope invalid row is refused with its message, and an out-of-scope one, if refused, is refused with
+ * its message too. fixture/wasm_valid.h's rows are then validated alone and all at once, one step each in turn,
+ * so a validation that kept state outside its WasmModuleValidator disagrees with itself. */
+static void wasm_testsuite_validate(void)
+{
+    char got[512];
+    size_t i;
+
+    for (i = 0; i < COUNTOF(WASM_TESTSUITE_ROWS); i++) {
+        const WasmTestsuiteRow *row = &WASM_TESTSUITE_ROWS[i];
+        WasmModuleDecoder d;
+        WasmModuleValidator v;
+        WasmValidateStatus st;
+
+        if (row->kind == WASM_ROW_MALFORMED) continue;
+        wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
+        CHECKF(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the testsuite module %s does not decode", row->src);
+        wasm_module_validator_init(&v, wasm_module_decoder_module(&d), (const uint8_t *)row->bytes);
+        st = wasm_module_validator_run(&v);
+        wasm_module_validator_message(&v, st, got, sizeof got);
+        if (row->kind == WASM_ROW_MODULE)
+            CHECKF(st == WASM_VALIDATE_DONE, "the valid testsuite module %s was refused with \"%s\"", row->src, got);
+        else if (row->in_scope || st != WASM_VALIDATE_DONE)
+            CHECKF(st != WASM_VALIDATE_DONE && strncmp(got, row->expect, strlen(row->expect)) == 0,
+                   "the invalid testsuite module %s was answered \"%s\"; it is \"%s\"", row->src,
+                   st == WASM_VALIDATE_DONE ? "valid" : got, row->expect);
+        wasm_module_validator_free(&v);
+        wasm_module_decoder_free(&d);
+    }
+}
+
 TF_UNIT void wasm_module_validator_selftest(void)
 {
     enum { NV = sizeof WASM_VALIDATE_ROWS / sizeof WASM_VALIDATE_ROWS[0] };
@@ -5809,6 +5840,7 @@ TF_UNIT void wasm_module_validator_selftest(void)
     char got[512], other[512];
     size_t i, live;
 
+    wasm_testsuite_validate();
     for (i = 0; i < NV; i++) {
         const WasmBinaryRow *row = &WASM_VALIDATE_ROWS[i];
         WasmDecodeStatus ds;
