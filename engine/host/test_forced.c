@@ -6083,6 +6083,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
         const uint8_t *bytes = (const uint8_t *)row->bytes;
         WasmModuleDecoder d;
         WasmModuleValidator v;
+        WasmStore store;
         WasmInstance inst;
         WasmInterpreter it;
         WasmExecStatus st;
@@ -6097,7 +6098,9 @@ TF_UNIT void wasm_interpreter_selftest(void)
                 && memcmp(bytes + d.module.exports[e].name_offset, row->export_name, strlen(row->export_name)) == 0)
                 func = d.module.exports[e].index;
         CHECKF(func != SIZE_MAX, "the invoke row %s has no export %s", row->src, row->export_name);
-        st = wasm_instance_begin(&inst, &d.module, bytes, wasm_module_validator_side_table(&v), &v.ctx.types);
+        wasm_store_init(&store);
+        st = wasm_instance_begin(&inst, &store, &d.module, bytes, wasm_module_validator_side_table(&v),
+                                 &v.ctx.types);
         while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst);
         CHECKF(st == WASM_EXEC_DONE, "%s: the instantiation answered \"%s\"", row->src, wasm_exec_status_message(st));
         st = wasm_interpreter_begin(&it, &inst, func, NULL, 0);
@@ -6109,6 +6112,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
                it.n_vals ? (unsigned long long)it.vals[0].lo : 0ull, row->result);
         wasm_interpreter_free(&it);
         wasm_instance_free(&inst);
+        wasm_store_free(&store);
         wasm_module_validator_free(&v);
         wasm_module_decoder_free(&d);
     }
@@ -6120,6 +6124,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
         WasmModuleValidator v;
         const WasmModule *m;
         const WasmSideTable *side;
+        WasmStore store;
         WasmInstance inst[3];
         size_t j, n, k;
 
@@ -6132,9 +6137,11 @@ TF_UNIT void wasm_interpreter_selftest(void)
         CHECKF(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the module of %s is invalid",
                WASM_EXEC_ROWS[i].src);
         side = wasm_module_validator_side_table(&v);
-        /* Three instances of the module: one runs the script's commands alone, two run them stepped in turn. */
+        /* Three instances of the module in one store: one runs the script's commands alone, two run them
+           stepped in turn. */
+        wasm_store_init(&store);
         for (k = 0; k < 3; k++) {
-            WasmExecStatus st = wasm_instance_begin(&inst[k], m, bytes, side, &v.ctx.types);
+            WasmExecStatus st = wasm_instance_begin(&inst[k], &store, m, bytes, side, &v.ctx.types);
 
             while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst[k]);
             CHECKF(st == WASM_EXEC_DONE, "the instantiation for %s answered \"%s\"", WASM_EXEC_ROWS[i].src,
@@ -6179,6 +6186,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
             free(args);
         }
         for (k = 0; k < 3; k++) wasm_instance_free(&inst[k]);
+        wasm_store_free(&store);
         wasm_module_validator_free(&v);
         wasm_module_decoder_free(&d);
         i = n;

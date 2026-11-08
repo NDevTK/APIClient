@@ -9,10 +9,10 @@
  * NaN is the positive canonical NaN, and bit operations (abs, neg, copysign, reinterpret) keep bits.
  * The page's bytes have been decoded and validated, so an instruction the validator accepted that this file
  * does not execute is this codebase's gap (CHECK_FAIL), never a refusal.
- * Named residual. Not covered: host calls and host globals and tables (imports), memory (§4.6.8), and the
- * vector, exception and aggregate instructions and the references other than functions'. Next diff builds:
- * imports. Absence shows as: invoking a function that reaches one
- * of them stops the process at the CHECK_FAIL naming its opcode. */
+ * Named residual. Not covered: host calls and host globals and tables (imports), a call_indirect of another
+ * instance's function (the store's cross-module type identity), memory (§4.6.8), and the vector, exception and
+ * aggregate instructions and the references other than functions'. Next diff builds: imports. Absence shows
+ * as: invoking a function that reaches one of them stops the process at the CHECK_FAIL naming its opcode. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 
@@ -21,13 +21,9 @@
 #include <stdint.h>
 
 #include "core/wasm/code_validator.h"
+#include "core/wasm/store.h"
 #include "core/wasm/wasm_module.h"
 
-/* A value's bits: a number in `lo` (an i32 or f32 zero-extended), a vector in both halves, a function
-   reference in `lo` as its function index plus one, 0 the null reference. */
-typedef struct {
-    uint64_t lo, hi;
-} WasmValue;
 
 typedef enum {
     WASM_EXEC_DONE = 0,               /* the function returned; its results are the stack */
@@ -61,6 +57,7 @@ typedef struct {
    for the invocation's own frame), its locals (owned), and where its operands and labels begin on the
    interpreter's stacks. */
 typedef struct {
+    size_t inst;                 /* the module instance's store address */
     size_t code, end;
     size_t return_pc;
     WasmValue *locals;
@@ -69,10 +66,8 @@ typedef struct {
     uint32_t n_results;
 } WasmFrame;
 
-typedef struct WasmInstance WasmInstance;
-
 /* A bulk table instruction in progress, one element a step (§4.6.7's recursive table.fill, table.copy and
-   table.init): its opcode, its tables or segment, and its operands left. */
+   table.init): its opcode, its tables' or segment's store addresses, and its operands left. */
 typedef struct {
     uint32_t op;
     size_t table, from;
@@ -86,16 +81,12 @@ typedef struct {
 enum { WASM_CHOICE_TABLE_GROW = 1 };
 typedef struct {
     uint8_t kind;
-    size_t table;
+    size_t table;                /* the table's store address */
     uint64_t n;
 } WasmChoice;
 
 typedef struct {
-    WasmInstance *inst;          /* borrowed, and the module, bytes and side table it holds */
-    const WasmModule *module;
-    const uint8_t *bytes;
-    const WasmSideTable *side;
-    size_t imported_globals, imported_tables;
+    WasmStore *store;            /* borrowed: every frame's instance is the store's, by its address */
     WasmBulk bulk;
     WasmChoice choice;
     size_t pc;                   /* the current frame's next instruction */

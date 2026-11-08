@@ -17,20 +17,53 @@ static size_t imported(const WasmModule *m, WasmExternKind kind)
     return n;
 }
 
-WasmExecStatus wasm_instance_begin(WasmInstance *inst, const WasmModule *m, const uint8_t *bytes,
+WasmExecStatus wasm_instance_begin(WasmInstance *inst, WasmStore *store, const WasmModule *m, const uint8_t *bytes,
                                    const WasmSideTable *side, const WasmTypes *types)
 {
-    DCHECK(inst != NULL && m != NULL && bytes != NULL && side != NULL && types != NULL,
+    WasmValue zero = { 0, 0 };
+    size_t i, n_funcs, n_globals, n_tables;
+
+    DCHECK(inst != NULL && store != NULL && m != NULL && bytes != NULL && side != NULL && types != NULL,
            "a WebAssembly instantiation began without its module");
     memset(inst, 0, sizeof *inst);
+    inst->store = store;
     inst->module = m;
     inst->bytes = bytes;
     inst->side = side;
     inst->types = types;
-    inst->globals = calloc(m->n_globals ? m->n_globals : 1, sizeof *inst->globals);
-    inst->tables = calloc(m->n_tables ? m->n_tables : 1, sizeof *inst->tables);
-    inst->elems = calloc(m->n_elems ? m->n_elems : 1, sizeof *inst->elems);
-    if (inst->globals == NULL || inst->tables == NULL || inst->elems == NULL) return WASM_EXEC_NO_ROOM;
+    inst->imported_funcs = imported(m, WASM_EXTERN_FUNC);
+    inst->imported_globals = imported(m, WASM_EXTERN_GLOBAL);
+    inst->imported_tables = imported(m, WASM_EXTERN_TABLE);
+    n_funcs = inst->imported_funcs + m->n_func_types;
+    n_globals = inst->imported_globals + m->n_globals;
+    n_tables = inst->imported_tables + m->n_tables;
+    inst->funcs = malloc((n_funcs + 1) * sizeof *inst->funcs);
+    inst->globals = malloc((n_globals + 1) * sizeof *inst->globals);
+    inst->tables = malloc((n_tables + 1) * sizeof *inst->tables);
+    inst->elems = malloc((m->n_elems + 1) * sizeof *inst->elems);
+    CHECK(inst->funcs && inst->globals && inst->tables && inst->elems,
+          "a WebAssembly instance's index spaces could not be allocated: out of memory");
+    /* §4.7.1's allocmodule: the defined entities get addresses; the imports' wait for their external values. */
+    inst->addr = wasm_store_add_instance(store, inst);
+    for (i = 0; i < n_funcs; i++) {
+        WasmFuncInstance f = { false, inst->addr, i - inst->imported_funcs, 0 };
+
+        inst->funcs[i] = i < inst->imported_funcs ? SIZE_MAX : wasm_store_add_func(store, f);
+    }
+    for (i = 0; i < n_globals; i++)
+        inst->globals[i] = i < inst->imported_globals ? SIZE_MAX : wasm_store_add_global(store, zero);
+    for (i = 0; i < n_tables; i++) {
+        if (i < inst->imported_tables) {
+            inst->tables[i] = SIZE_MAX;
+            continue;
+        }
+        inst->tables[i] = wasm_store_add_table(store, &m->tables[i - inst->imported_tables].limits);
+        if (inst->tables[i] == SIZE_MAX) return WASM_EXEC_NO_ROOM;
+    }
+    for (i = 0; i < m->n_elems; i++) {
+        inst->elems[i] = wasm_store_add_elem(store, m->elems[i].n_items);
+        if (inst->elems[i] == SIZE_MAX) return WASM_EXEC_NO_ROOM;
+    }
     inst->phase = I_GLOBALS;
     return WASM_EXEC_MORE;
 }
@@ -64,9 +97,16 @@ static WasmExecStatus next(WasmInstance *inst, int phase)
     return WASM_EXEC_MORE;
 }
 
+static WasmTableInstance *table(WasmInstance *inst, size_t x)
+{
+    DCHECK(inst->tables[x] != SIZE_MAX, "a WebAssembly instantiation reached an unresolved imported table");
+    return &inst->store->tables[inst->tables[x]];
+}
+
 WasmExecStatus wasm_instance_step(WasmInstance *inst)
 {
     const WasmModule *m = inst->module;
+    WasmStore *s = inst->store;
     WasmExecStatus st;
     WasmValue v = { 0, 0 };
 
@@ -79,25 +119,17 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         } else {
             WasmExpr e = { m->globals[inst->item].init_offset, m->globals[inst->item].init_size };
 
-            st = evaluate(inst, e, &inst->globals[inst->item]);
-            return st == WASM_EXEC_DONE ? next(inst, I_GLOBALS) : st;
+            st = evaluate(inst, e, &v);
+            if (st != WASM_EXEC_DONE) return st;
+            s->globals[inst->globals[inst->imported_globals + inst->item]] = v;
+            return next(inst, I_GLOBALS);
         }
-    case I_TABLES: {
-        /* §4.7.1's alloctable: min references of the initializer's value; ref.null's is 0, calloc's zero. */
-        WasmTableInstance *t;
-
+    case I_TABLES:
+        /* A table's initializer: ref.null's 0 is the store's calloc'd zero; another value fills its table. */
         if (inst->item == m->n_tables) {
             inst->item = 0;
             inst->phase = I_ELEMS;
             return WASM_EXEC_MORE;
-        }
-        t = &inst->tables[inst->item];
-        if (t->elems == NULL) {
-            t->type = m->tables[inst->item].limits;
-            if (t->type.min > SIZE_MAX / sizeof *t->elems) return WASM_EXEC_NO_ROOM;
-            t->elems = calloc(t->type.min ? (size_t)t->type.min : 1, sizeof *t->elems);
-            if (t->elems == NULL) return WASM_EXEC_NO_ROOM;
-            t->size = t->cap = t->type.min;
         }
         if (!m->tables[inst->item].has_init) return next(inst, I_TABLES);
         st = evaluate(inst, m->tables[inst->item].init, &v);
@@ -106,9 +138,8 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         inst->offset = v.lo;   /* I_TABLE_FILL's reference */
         inst->phase = I_TABLE_FILL;
         return WASM_EXEC_MORE;
-    }
     case I_TABLE_FILL: {
-        WasmTableInstance *t = &inst->tables[inst->item];
+        WasmTableInstance *t = table(inst, inst->imported_tables + inst->item);
 
         if (inst->sub == t->size) return next(inst, I_TABLES);
         t->elems[inst->sub++].lo = inst->offset;
@@ -126,28 +157,26 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
             return WASM_EXEC_MORE;
         }
         e = &m->elems[inst->item];
-        x = &inst->elems[inst->item];
-        if (x->refs == NULL) {
-            x->refs = calloc(e->n_items ? e->n_items : 1, sizeof *x->refs);
-            if (x->refs == NULL) return WASM_EXEC_NO_ROOM;
-            x->n = e->n_items;
-        }
+        x = &s->elems[inst->elems[inst->item]];
         if (inst->sub == e->n_items) return next(inst, I_ELEMS);
         if (!e->exprs) {
-            x->refs[inst->sub].lo = (uint64_t)m->elem_funcs[e->items + inst->sub] + 1;
+            uint32_t f = m->elem_funcs[e->items + inst->sub];
+
+            DCHECK(inst->funcs[f] != SIZE_MAX, "a WebAssembly element segment names an unresolved imported function");
+            x->refs[inst->sub].lo = (uint64_t)inst->funcs[f] + 1;
             inst->sub++;
             JS_FlowRetireWork(1);
             return WASM_EXEC_MORE;
         }
-        st = evaluate(inst, m->elem_exprs[e->items + inst->sub], &x->refs[inst->sub]);
-        if (st == WASM_EXEC_DONE) inst->sub++;
-        return st == WASM_EXEC_DONE ? WASM_EXEC_MORE : st;
+        st = evaluate(inst, m->elem_exprs[e->items + inst->sub], &v);
+        if (st != WASM_EXEC_DONE) return st;
+        s->elems[inst->elems[inst->item]].refs[inst->sub++] = v;
+        return WASM_EXEC_MORE;
     }
     case I_ACTIVE: {
         /* §4.7.2 steps for an active segment: table.init over all of it at its offset, then elem.drop; a
            declarative one is dropped. */
         const WasmElem *e;
-        size_t table;
 
         if (inst->item == m->n_elems) {
             inst->phase = I_DONE;
@@ -156,15 +185,14 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         e = &m->elems[inst->item];
         if (e->mode == WASM_SEGMENT_PASSIVE) return next(inst, I_ACTIVE);
         if (e->mode == WASM_SEGMENT_DECLARATIVE) {
-            inst->elems[inst->item].n = 0;
+            s->elems[inst->elems[inst->item]].n = 0;
             return next(inst, I_ACTIVE);
         }
         st = evaluate(inst, e->offset, &v);
         if (st != WASM_EXEC_DONE) return st;
-        CHECKF(e->table >= imported(m, WASM_EXTERN_TABLE), "an active element segment of imported table %u is not "
-               "built in instance.c", e->table);
-        table = e->table - imported(m, WASM_EXTERN_TABLE);
-        if (v.lo > inst->tables[table].size || e->n_items > inst->tables[table].size - v.lo)
+        CHECKF(inst->tables[e->table] != SIZE_MAX, "an active element segment of unresolved imported table %u is "
+               "not built in instance.c", e->table);
+        if (v.lo > table(inst, e->table)->size || e->n_items > table(inst, e->table)->size - v.lo)
             return WASM_EXEC_TRAP_TABLE_BOUNDS;
         inst->offset = v.lo;
         inst->phase = I_ACTIVE_COPY;
@@ -172,13 +200,13 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
     }
     case I_ACTIVE_COPY: {
         const WasmElem *e = &m->elems[inst->item];
-        WasmTableInstance *t = &inst->tables[e->table - imported(m, WASM_EXTERN_TABLE)];
+        WasmElemInstance *x = &s->elems[inst->elems[inst->item]];
 
         if (inst->sub == e->n_items) {
-            inst->elems[inst->item].n = 0;
+            x->n = 0;
             return next(inst, I_ACTIVE);
         }
-        t->elems[inst->offset + inst->sub] = inst->elems[inst->item].refs[inst->sub];
+        table(inst, e->table)->elems[inst->offset + inst->sub] = x->refs[inst->sub];
         inst->sub++;
         JS_FlowRetireWork(1);
         return WASM_EXEC_MORE;
@@ -190,14 +218,11 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
 
 void wasm_instance_free(WasmInstance *inst)
 {
-    size_t i;
-
     DCHECK(inst != NULL, "a WebAssembly instance was freed with no instance");
     if (inst->evaluating) wasm_interpreter_free(&inst->init);
-    for (i = 0; inst->tables != NULL && i < inst->module->n_tables; i++) free(inst->tables[i].elems);
-    for (i = 0; inst->elems != NULL && i < inst->module->n_elems; i++) free(inst->elems[i].refs);
+    free(inst->funcs);
+    free(inst->globals);
     free(inst->tables);
     free(inst->elems);
-    free(inst->globals);
     memset(inst, 0, sizeof *inst);
 }
