@@ -5,11 +5,7 @@
  * program of stack operations; each later step runs one element of one operation: pops one operand and matches
  * it against what the rule expects (one supertype of §3.3.10's walk a step), pushes one result, or restores one
  * local's initialization. The order of the checks inside an instruction is valid.ml's check_instr, so a
- * refusal carries its message; a type mismatch names the one operand it is about.
- * Named residual. Not covered: §3.5.13's declared function references (a ref.func in a function body of a
- * function no other part of the module references). Next diff builds: the module's set of declared functions
- * and its check at ref.func. Absence shows as: a module whose only fault is such a ref.func is answered
- * WASM_VALIDATE_DONE. */
+ * refusal carries its message; a type mismatch names the one operand it is about. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_CODE_VALIDATOR_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_CODE_VALIDATOR_H
 

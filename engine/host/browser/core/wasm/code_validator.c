@@ -856,8 +856,12 @@ static WasmValidateStatus type_one(WasmCodeValidator *cv, const WasmInstruction 
         op_push1(cv, in->opcode == 0xD1 ? val(WASM_TYPE_I32) : ref(false, a.heap, a.heap_index));
         break;
     case 0xD2:
+        /* A constant expression's ref.func is itself part of C.refs; a body's must find its function there. */
         st = func(cv, in->index[0], &t, &type);
         if (st != WASM_VALIDATE_DONE) return st;
+        if (cv->constant) wasm_context_declare(cv->ctx, in->index[0]);
+        else if (!wasm_context_declared(cv->ctx, in->index[0]))
+            return refuse(cv, WASM_VALIDATE_UNDECLARED_FUNC, in->index[0]);
         op_push1(cv, def_ref(false, type));
         break;
     case 0xD3:

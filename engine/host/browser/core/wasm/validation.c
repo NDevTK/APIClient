@@ -57,6 +57,18 @@ const WasmValType *wasm_context_global(const WasmContext *c, size_t x, bool *mut
     return &g->type;
 }
 
+bool wasm_context_declared(const WasmContext *c, size_t x)
+{
+    DCHECKF(x < c->n_funcs, "a WebAssembly function %zu was asked of C.refs past the %zu functions", x, c->n_funcs);
+    return (c->declared[x / 8] >> (x % 8)) & 1;
+}
+
+void wasm_context_declare(const WasmContext *c, size_t x)
+{
+    DCHECKF(x < c->n_funcs, "a WebAssembly function %zu was added to C.refs past the %zu functions", x, c->n_funcs);
+    c->declared[x / 8] |= (uint8_t)(1u << (x % 8));
+}
+
 uint32_t wasm_context_tag(const WasmContext *c, size_t x)
 {
     size_t i = imported(c, WASM_EXTERN_TAG, x, c->n_tags);

@@ -44,12 +44,15 @@ typedef enum {
     WASM_VALIDATE_NOT_DEFAULTABLE,    /* §3.4.7: a _default allocation of a type with a non-defaultable field */
     WASM_VALIDATE_NOT_NUMERIC,        /* §3.4.7: a data segment into an array of references */
     WASM_VALIDATE_ARRAY_TYPES,        /* §3.4.7: array.copy between arrays whose fields do not match */
+    WASM_VALIDATE_UNDECLARED_FUNC,    /* §3.4.6: a body's ref.func of a function §3.5.13's C.refs lacks */
     WASM_VALIDATE_NO_ROOM             /* a table the validator keeps could not be allocated; its size is the input's */
 } WasmValidateStatus;
 
 /* §3.1.6's context over a decoded module: its types with their identity, and each index space's size with,
    per imported item of each WasmExternKind, its import's index (filled as validation passes the imports). The
-   module validator owns the arrays; `bytes` is the decoded module's. */
+   module validator owns the arrays; `bytes` is the decoded module's. C.refs is every function the module
+   references outside function bodies and the start function: by export, by element segment, and by ref.func
+   in a constant expression (marked as the code validator types each). */
 typedef struct {
     WasmTypes types;
     const uint8_t *bytes;
@@ -57,6 +60,7 @@ typedef struct {
     size_t *imports[5];
     size_t n_imported[5];
     bool imports_passed;
+    uint8_t *declared;      /* §3.5.13's C.refs: a bit per function index, set before any body is validated */
 } WasmContext;
 
 /* The index space entries, for an index below the space's size whose imports have been passed: a function's
@@ -67,5 +71,7 @@ const WasmValType *wasm_context_table(const WasmContext *c, size_t x, const Wasm
 const WasmLimits *wasm_context_memory(const WasmContext *c, size_t x);
 const WasmValType *wasm_context_global(const WasmContext *c, size_t x, bool *mutable_);
 uint32_t wasm_context_tag(const WasmContext *c, size_t x);
+bool wasm_context_declared(const WasmContext *c, size_t x);
+void wasm_context_declare(const WasmContext *c, size_t x);
 
 #endif

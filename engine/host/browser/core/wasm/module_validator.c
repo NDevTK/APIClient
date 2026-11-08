@@ -10,11 +10,11 @@
 #include "core/wasm/matching.h"
 
 /* The phases, in valid.ml's check_module order: each rec group's subtypes, then their supertype conditions;
-   imports, tags, functions, memories, tables, globals, data, elements; the start function; exports, then the
-   disjointness of their names. */
+   imports, tags, functions, memories, tables, globals, data, elements; the exported functions into C.refs;
+   the function bodies; the start function; exports, then the disjointness of their names. */
 enum {
     PH_ALLOC = 0, PH_TYPES, PH_CANON, PH_TYPES_SUPER, PH_CLIMB, PH_IMPORTS, PH_TAGS, PH_FUNCS, PH_MEMORIES, PH_TABLES,
-    PH_GLOBALS, PH_DATAS, PH_ELEMS, PH_CODES, PH_CODE, PH_START, PH_EXPORTS, PH_NAMES, PH_FINISHED
+    PH_GLOBALS, PH_DATAS, PH_ELEMS, PH_DECLARED, PH_CODES, PH_CODE, PH_START, PH_EXPORTS, PH_NAMES, PH_FINISHED
 };
 
 void wasm_module_validator_init(WasmModuleValidator *v, const WasmModule *m, const uint8_t *bytes)
@@ -55,12 +55,13 @@ static WasmValidateStatus allocate(WasmModuleValidator *v)
         v->ctx.imports[k] = calloc(v->ctx.n_imported[k] + 1, sizeof *v->ctx.imports[k]);
         if (v->ctx.imports[k] == NULL) return WASM_VALIDATE_NO_ROOM;
     }
+    v->ctx.declared = calloc(v->ctx.n_funcs / 8 + 1, 1);
     v->group_canon = calloc(n, sizeof *v->group_canon);
     v->canon_off = calloc(n, sizeof *v->canon_off);
     v->canon_len = calloc(n, sizeof *v->canon_len);
     v->canon_hash = calloc(n, sizeof *v->canon_hash);
     v->canon_table = calloc(cap, sizeof *v->canon_table);
-    if (!v->group_canon || !v->canon_off || !v->canon_len || !v->canon_hash || !v->canon_table)
+    if (!v->ctx.declared || !v->group_canon || !v->canon_off || !v->canon_len || !v->canon_hash || !v->canon_table)
         return WASM_VALIDATE_NO_ROOM;
     v->cap_canon_table = cap;
     v->ctx.types.group_canon = v->group_canon;
@@ -470,7 +471,7 @@ static WasmValidateStatus check_elem(WasmModuleValidator *v)
     WasmValidateStatus st;
     size_t k;
 
-    if (list_done(v, m->n_elems, PH_CODES)) return WASM_VALIDATE_MORE;
+    if (list_done(v, m->n_elems, PH_DECLARED)) return WASM_VALIDATE_MORE;
     e = &m->elems[v->item];
     if (v->sub == 0) {
         st = check_val_type(v, &e->type, m->n_types);
@@ -486,6 +487,7 @@ static WasmValidateStatus check_elem(WasmModuleValidator *v)
         if (e->exprs) return begin_const(v, m->elem_exprs[e->items + k], &e->type, v->ctx.n_globals);
         x = m->elem_funcs[e->items + k];
         if (x >= v->ctx.n_funcs) return unknown(v, "function", x);
+        wasm_context_declare(&v->ctx, x);
         f.code = WASM_TYPE_REF;
         f.heap_index = wasm_context_func(&v->ctx, x);
         mismatch(v, &e->type, &f);
@@ -506,6 +508,17 @@ static WasmValidateStatus check_elem(WasmModuleValidator *v)
         at.code = l->addr64 ? WASM_TYPE_I64 : WASM_TYPE_I32;
         return begin_const(v, e->offset, &at, v->ctx.n_globals);
     }
+}
+
+/* §3.5.13's C.refs, its exported functions, one export a step (an export's index is checked in PH_EXPORTS). */
+static WasmValidateStatus declare_export(WasmModuleValidator *v)
+{
+    const WasmExport *e;
+
+    if (list_done(v, v->module->n_exports, PH_CODES)) return WASM_VALIDATE_MORE;
+    e = &v->module->exports[v->item++];
+    if (e->kind == WASM_EXTERN_FUNC && e->index < v->ctx.n_funcs) wasm_context_declare(&v->ctx, e->index);
+    return WASM_VALIDATE_MORE;
 }
 
 /* §3.5.6: each function body, by the code validator. */
@@ -642,6 +655,9 @@ WasmValidateStatus wasm_module_validator_step(WasmModuleValidator *v)
         break;
     case PH_TYPES_SUPER:
         st = check_type_super(v);
+        break;
+    case PH_DECLARED:
+        st = declare_export(v);
         break;
     case PH_CODES:
         st = check_code(v);
@@ -788,6 +804,9 @@ void wasm_module_validator_message(const WasmModuleValidator *v, WasmValidateSta
         return;
     case WASM_VALIDATE_NOT_NUMERIC: snprintf(buf, cap, "array type is not numeric or vector"); return;
     case WASM_VALIDATE_ARRAY_TYPES: snprintf(buf, cap, "array types do not match"); return;
+    case WASM_VALIDATE_UNDECLARED_FUNC:
+        snprintf(buf, cap, "undeclared function reference %llu", (unsigned long long)v->index);
+        return;
     case WASM_VALIDATE_NO_ROOM: snprintf(buf, cap, "out of memory"); return;
     }
     CHECK_FAIL("a WebAssembly validation status this file does not define");
@@ -806,6 +825,7 @@ void wasm_module_validator_free(WasmModuleValidator *v)
     free(v->canon_hash);
     free(v->canon_table);
     for (k = 0; k <= WASM_EXTERN_TAG; k++) free(v->ctx.imports[k]);
+    free(v->ctx.declared);
     wasm_code_validator_free(&v->code);
     memset(v, 0, sizeof *v);
 }
