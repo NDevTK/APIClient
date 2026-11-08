@@ -1367,6 +1367,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/srcdoc.h"
 #include "fixture/messaging.h"
 #include "fixture/worker.h"
+#include "fixture/linkfork.h"
 #include "fixture/orphan.h"
 #include "fixture/rejection.h"
 #include "fixture/navigator.h"
@@ -2085,6 +2086,7 @@ TF_DOCS[] = {
     { "srcdoc", HTML_SRCDOC },
     { "messaging", HTML_MESSAGING },
     { "worker", HTML_WORKER },
+    { "linkfork", HTML_LINKFORK },
     { "orphan", HTML_ORPHAN },
     { "rejection", HTML_REJECTION },
     { "navigator", HTML_NAVIGATOR },
@@ -15657,6 +15659,26 @@ TF_UNIT void probes_modules(const char *js, Probe *tab, int *n) {
 /* The rows of the `messaging` document. */
 /* The rows of the `worker` document: HTML §10.2.6.3 dedicated workers. Each is read off undriven records, the
    page's own `onmessage` running on a delivered message rather than an orphan drive of it. */
+/* The rows of the `linkfork` document (fixture/linkfork.h): in a flow the page forks while its worker links, an
+   arm links the good chain to its full depth and takes §16.2.1.6.1.2 Link ( ) step 4 on the bad one's
+   SyntaxError in its own world. */
+TF_UNIT void probes_linkfork(const char *js, Probe *tab, int *n) {
+    const char *lf_why = NULL; int lf_tt = 1;
+    fold_row(&lf_tt, &lf_why, !!strstr(js, "\"/api/lfarm\""),
+             "NOT REACHED: no arm took a fragment literal, so the page forked nothing while the worker linked");
+    fold_row(&lf_tt, &lf_why, !!strstr(js, "\"/api/lkfork\""),
+             "NOT REACHED: no arm received both of the worker's outcomes");
+    fold_row(&lf_tt, &lf_why, param_value_is(js, "/api/lkfork", "ok", "2000"),
+             "16.2.1.6.1.2: no arm linked and evaluated the whole 2000-module chain after the forks");
+    fold_row(&lf_tt, &lf_why, param_value_is(js, "/api/lkfork", "bad", "SyntaxError"),
+             "16.2.1.6.1.2 step 4: the chain whose deepest import names a missing binding did not reject with a "
+             "SyntaxError");
+    const Probe rows[] = {
+        { "link-fork-arms", lf_tt, "/api/lkfork", SESS_EXPLORE, lf_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 TF_UNIT void probes_worker(const char *js, Probe *tab, int *n) {
     const char *papa_why = NULL, *pdf_why = NULL, *mod_why = NULL, *err_why = NULL;
     int papa = 1, pdf = 1, mod = 1, err = 1;
@@ -28633,6 +28655,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_modules(js, probes, &np);
     probes_messaging(js, probes, &np);
     probes_worker(js, probes, &np);
+    probes_linkfork(js, probes, &np);
     probes_xdmulti(js, probes, &np);
     probes_orphan(js, probes, &np);
     probes_min(js, probes, &np);
