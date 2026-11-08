@@ -296,6 +296,9 @@ void dom_point_install_realm(JSContext *ctx)
 
         idl_define_global_property_reference(ctx, global, "DOMPointReadOnly", ro_ctor);
         idl_define_global_property_reference(ctx, global, "DOMPoint", ctor);
+        /* §2's IDL declares `LegacyWindowAlias=SVGPoint`, and §10.2 SVG defines SVGPoint "as aliases to
+           DOMPoint". Chrome 155.0.8059.84 keeps SVGPoint a separate interface (`SVGPoint !== DOMPoint`); this
+           follows the spec. */
         idl_define_legacy_window_alias(ctx, global, "SVGPoint", alias);
     }
     JS_FreeValue(ctx, global);

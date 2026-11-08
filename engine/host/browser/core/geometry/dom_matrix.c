@@ -1234,6 +1234,11 @@ void dom_matrix_install_realm(JSContext *ctx)
 
         idl_define_global_property_reference(ctx, global, "DOMMatrixReadOnly", ro_ctor);
         idl_define_global_property_reference(ctx, global, "DOMMatrix", ctor);
+        /* §6's IDL declares `LegacyWindowAlias=(SVGMatrix,WebKitCSSMatrix)`, and §10.2 SVG reads "Earlier
+           revisions of SVG defined SVGPoint, SVGRect, SVGMatrix, which are defined in this specifications as
+           aliases to DOMPoint, DOMRect, DOMMatrix, respectively." Chrome 155.0.8059.84 keeps SVGMatrix a
+           separate interface (`SVGMatrix !== DOMMatrix`, while `WebKitCSSMatrix === DOMMatrix`); this follows
+           the spec. */
         idl_define_legacy_window_alias(ctx, global, "SVGMatrix", svg);
         idl_define_legacy_window_alias(ctx, global, "WebKitCSSMatrix", webkit);
     }
