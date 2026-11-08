@@ -1,43 +1,24 @@
 /* WebAssembly Core Specification (Release 3.0) §3.5 "Modules": validation of a decoded WasmModule against the
- * contexts §3.1.6 builds from it, as a step machine. It runs after core/wasm/module_decoder.h answered DONE and
- * reads that WasmModule and its bytes; it owns nothing but its own name set.
+ * context §3.1.6 builds from it (validation.h), as a step machine. It runs after core/wasm/module_decoder.h
+ * answered DONE and reads that WasmModule and its bytes.
  * One step checks one item: a supertype or value type of a §5.3.8 type, one token of a rec group's identity, one
  * field or value type of §3.3's matching or one supertype climbed, an import, tag, function, memory, table,
- * global, data or element segment, the start function, or an export. The order is interpreter/valid/valid.ml's
- * check_module, so a refusal carries that validator's message.
+ * global, data or element segment (each constant expression in it and each of its items), the start function,
+ * or an export; a function body or constant expression is the code validator's (code_validator.h), stepped
+ * here. The order is interpreter/valid/valid.ml's check_module, so a refusal carries that validator's message.
  * Type identity is §3.3.10's closed defined type: a rec group's types are equal to another's when the groups are
  * token for token equal with references into the group relative and references out of it by identity, so each
- * group gets a canonical id and a type is (its group's id, its index in the group).
- * Named residual. Not covered: §3.4's instructions (function bodies and every constant expression, with
- * §3.4.13's constness) and §3.5.13's declared function references. Next diff builds: §3.4's instructions by
- * §7.6's algorithm. Absence shows as: a module whose only fault is an ill-typed instruction or a non-constant
- * initializer is answered WASM_VALIDATE_DONE. */
+ * group gets a canonical id and a type is (its group's id, its index in the group). */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_MODULE_VALIDATOR_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_MODULE_VALIDATOR_H
 
 #include <stddef.h>
 #include <stdint.h>
 
+#include "core/wasm/code_validator.h"
 #include "core/wasm/matching.h"
+#include "core/wasm/validation.h"
 #include "core/wasm/wasm_module.h"
-
-typedef enum {
-    WASM_VALIDATE_DONE = 0,
-    WASM_VALIDATE_MORE,
-    WASM_VALIDATE_UNKNOWN_INDEX,      /* §3.1.6: an index past its context's list ("unknown <space> <index>") */
-    WASM_VALIDATE_NOT_FUNCTION,       /* a type index that must name a function type names another */
-    WASM_VALIDATE_MULTIPLE_SUPERS,    /* §3.2.11: a subtype with more than one supertype */
-    WASM_VALIDATE_FORWARD_SUPER,      /* §3.2.11: a supertype index not below its subtype's */
-    WASM_VALIDATE_FINAL_SUPER,        /* §3.2.11: a supertype that is final */
-    WASM_VALIDATE_LIMITS_RANGE,       /* §3.2.12: a memory's or table's bound past its range */
-    WASM_VALIDATE_LIMITS_ORDER,       /* §3.2.12: a minimum above its maximum */
-    WASM_VALIDATE_TAG_RESULT,         /* §3.2.13: a tag type with results */
-    WASM_VALIDATE_START_TYPE,         /* §3.5.10: a start function with parameters or results */
-    WASM_VALIDATE_DUPLICATE_EXPORT,   /* §3.5.13: two exports of one name (nm* disjoint) */
-    WASM_VALIDATE_SUB_MISMATCH,       /* §3.2.11: a subtype's composite type does not match its supertype's */
-    WASM_VALIDATE_ELEM_MISMATCH,      /* §3.5.9: an active segment's type does not match its table's */
-    WASM_VALIDATE_NO_ROOM             /* a table the validator keeps could not be allocated; its size is the input's */
-} WasmValidateStatus;
 
 /* The validation's whole state. `module` and `bytes` are borrowed and outlive it. */
 typedef struct {
@@ -45,7 +26,6 @@ typedef struct {
     const uint8_t *bytes;
     int phase;
     size_t item, sub;           /* the item being checked, and the position inside it */
-    size_t n_funcs, n_tables, n_memories, n_globals, n_tags;   /* the index spaces, imports first */
     size_t *names;              /* the export name set: open addressing over export indices plus one */
     size_t cap_names;
     const char *space;          /* for WASM_VALIDATE_UNKNOWN_INDEX: the index space and the index */
@@ -60,12 +40,13 @@ typedef struct {
     size_t n_canon;
     size_t *canon_table;        /* open addressing over canonical ids plus one, keyed by hash */
     size_t cap_canon_table, probe, compare;   /* PH_CANON: the slot probed and the token compared */
-    WasmTypes types;            /* §3.3's matching over the module and group_canon */
     WasmClimb climb;            /* PH_CLIMB: §3.3.10's supertype walk, and where it continues */
     int climb_return;
     WasmValidateStatus climb_fail;
-    size_t *table_imports;      /* per imported table: its import's index, filled as PH_IMPORTS passes it */
-    size_t n_table_imports;
+    WasmContext ctx;            /* §3.1.6's context; its import arrays are owned here */
+    size_t passed[5];           /* PH_IMPORTS: the imports of each kind passed so far */
+    WasmCodeValidator code;     /* PH_CODE: the expr being validated, and the phase it returns to */
+    int code_return;
 } WasmModuleValidator;
 
 void wasm_module_validator_init(WasmModuleValidator *v, const WasmModule *m, const uint8_t *bytes);

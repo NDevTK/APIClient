@@ -14,7 +14,7 @@
    disjointness of their names. */
 enum {
     PH_ALLOC = 0, PH_TYPES, PH_CANON, PH_TYPES_SUPER, PH_CLIMB, PH_IMPORTS, PH_TAGS, PH_FUNCS, PH_MEMORIES, PH_TABLES,
-    PH_GLOBALS, PH_DATAS, PH_ELEMS, PH_START, PH_EXPORTS, PH_NAMES, PH_FINISHED
+    PH_GLOBALS, PH_DATAS, PH_ELEMS, PH_CODES, PH_CODE, PH_START, PH_EXPORTS, PH_NAMES, PH_FINISHED
 };
 
 void wasm_module_validator_init(WasmModuleValidator *v, const WasmModule *m, const uint8_t *bytes)
@@ -26,19 +26,18 @@ void wasm_module_validator_init(WasmModuleValidator *v, const WasmModule *m, con
     v->module = m;
     v->bytes = bytes;
     for (i = 0; i < m->n_imports; i++) {
-        switch (m->imports[i].kind) {
-        case WASM_EXTERN_FUNC: v->n_funcs++; break;
-        case WASM_EXTERN_TABLE: v->n_tables++; break;
-        case WASM_EXTERN_MEMORY: v->n_memories++; break;
-        case WASM_EXTERN_GLOBAL: v->n_globals++; break;
-        case WASM_EXTERN_TAG: v->n_tags++; break;
-        }
+        CHECK(m->imports[i].kind <= WASM_EXTERN_TAG, "a decoded WebAssembly import has a kind module_decoder.h "
+                                                     "does not produce");
+        v->ctx.n_imported[m->imports[i].kind]++;
     }
-    v->n_funcs += m->n_func_types;
-    v->n_tables += m->n_tables;
-    v->n_memories += m->n_memories;
-    v->n_globals += m->n_globals;
-    v->n_tags += m->n_tags;
+    v->ctx.types.module = m;
+    v->ctx.bytes = bytes;
+    v->ctx.n_funcs = v->ctx.n_imported[WASM_EXTERN_FUNC] + m->n_func_types;
+    v->ctx.n_tables = v->ctx.n_imported[WASM_EXTERN_TABLE] + m->n_tables;
+    v->ctx.n_memories = v->ctx.n_imported[WASM_EXTERN_MEMORY] + m->n_memories;
+    v->ctx.n_globals = v->ctx.n_imported[WASM_EXTERN_GLOBAL] + m->n_globals;
+    v->ctx.n_tags = v->ctx.n_imported[WASM_EXTERN_TAG] + m->n_tags;
+    wasm_code_validator_init(&v->code, &v->ctx);
     v->phase = PH_ALLOC;
 }
 
@@ -46,23 +45,25 @@ void wasm_module_validator_init(WasmModuleValidator *v, const WasmModule *m, con
    those ids at most half full. Their size is the input's, so a failed allocation is the NO_ROOM refusal. */
 static WasmValidateStatus allocate(WasmModuleValidator *v)
 {
-    size_t n = v->module->n_types ? v->module->n_types : 1, cap = 8;
+    size_t n = v->module->n_types ? v->module->n_types : 1, cap = 8, k;
 
     while (cap < 2 * n) {
         if (cap > SIZE_MAX / 4 / sizeof(size_t)) return WASM_VALIDATE_NO_ROOM;
         cap *= 2;
     }
-    v->table_imports = calloc(v->n_tables - v->module->n_tables + 1, sizeof *v->table_imports);
+    for (k = 0; k <= WASM_EXTERN_TAG; k++) {
+        v->ctx.imports[k] = calloc(v->ctx.n_imported[k] + 1, sizeof *v->ctx.imports[k]);
+        if (v->ctx.imports[k] == NULL) return WASM_VALIDATE_NO_ROOM;
+    }
     v->group_canon = calloc(n, sizeof *v->group_canon);
     v->canon_off = calloc(n, sizeof *v->canon_off);
     v->canon_len = calloc(n, sizeof *v->canon_len);
     v->canon_hash = calloc(n, sizeof *v->canon_hash);
     v->canon_table = calloc(cap, sizeof *v->canon_table);
-    if (!v->table_imports || !v->group_canon || !v->canon_off || !v->canon_len || !v->canon_hash || !v->canon_table)
+    if (!v->group_canon || !v->canon_off || !v->canon_len || !v->canon_hash || !v->canon_table)
         return WASM_VALIDATE_NO_ROOM;
     v->cap_canon_table = cap;
-    v->types.module = v->module;
-    v->types.group_canon = v->group_canon;
+    v->ctx.types.group_canon = v->group_canon;
     v->phase = PH_TYPES;
     return WASM_VALIDATE_MORE;
 }
@@ -194,7 +195,7 @@ static WasmValidateStatus match_step(WasmModuleValidator *v, WasmMatch le, int b
 /* §3.3.10's walk: one supertype a step until the walk stands on the target's identity or runs out. */
 static WasmValidateStatus climb_step(WasmModuleValidator *v)
 {
-    WasmMatch le = wasm_climb(&v->types, &v->climb);
+    WasmMatch le = wasm_climb(&v->ctx.types, &v->climb);
 
     if (le == WASM_MATCH_NO) return v->climb_fail;
     if (le == WASM_MATCH_YES) {
@@ -324,13 +325,13 @@ static WasmValidateStatus check_type_super(WasmModuleValidator *v)
     }
     k = v->sub - 1;
     if (t->kind != WASM_COMP_FUNC)
-        return match_step(v, wasm_field_le(&v->types, &m->fields[t->fields + k], &m->fields[s->fields + k], &v->climb),
-                          PH_TYPES_SUPER, WASM_VALIDATE_SUB_MISMATCH);
+        return match_step(v, wasm_field_le(&v->ctx.types, &m->fields[t->fields + k], &m->fields[s->fields + k],
+                                           &v->climb), PH_TYPES_SUPER, WASM_VALIDATE_SUB_MISMATCH);
     if (k < t->n_params)   /* parameters are contravariant */
-        return match_step(v, wasm_val_le(&v->types, &m->val_types[s->params + k], &m->val_types[t->params + k],
+        return match_step(v, wasm_val_le(&v->ctx.types, &m->val_types[s->params + k], &m->val_types[t->params + k],
                                          &v->climb), PH_TYPES_SUPER, WASM_VALIDATE_SUB_MISMATCH);
     k -= t->n_params;
-    return match_step(v, wasm_val_le(&v->types, &m->val_types[t->results + k], &m->val_types[s->results + k],
+    return match_step(v, wasm_val_le(&v->ctx.types, &m->val_types[t->results + k], &m->val_types[s->results + k],
                                      &v->climb), PH_TYPES_SUPER, WASM_VALIDATE_SUB_MISMATCH);
 }
 
@@ -351,7 +352,7 @@ static WasmValidateStatus check_import(WasmModuleValidator *v, const WasmImport 
 static WasmValidateStatus check_export(WasmModuleValidator *v, const WasmExport *e)
 {
     static const char *const SPACE[] = { "function", "table", "memory", "global", "tag" };
-    size_t n[] = { v->n_funcs, v->n_tables, v->n_memories, v->n_globals, v->n_tags };
+    size_t n[] = { v->ctx.n_funcs, v->ctx.n_tables, v->ctx.n_memories, v->ctx.n_globals, v->ctx.n_tags };
 
     CHECK(e->kind <= WASM_EXTERN_TAG, "a decoded WebAssembly export has a kind module_decoder.h does not produce");
     return e->index < n[e->kind] ? WASM_VALIDATE_DONE : unknown(v, SPACE[e->kind], e->index);
@@ -401,15 +402,51 @@ static WasmValidateStatus check_name(WasmModuleValidator *v)
     return WASM_VALIDATE_MORE;
 }
 
-/* Table `x`'s element type: an imported table's, then a defined one's. */
 static const WasmValType *table_type(const WasmModuleValidator *v, size_t x)
 {
-    size_t imported = v->n_tables - v->module->n_tables;
+    return wasm_context_table(&v->ctx, x, NULL);
+}
 
-    DCHECK(x < v->n_tables && v->n_table_imports == imported, "a WebAssembly table's type was asked before its "
-                                                               "imports were read, or past the tables");
-    if (x < imported) return &v->module->imports[v->table_imports[x]].type;
-    return &v->module->tables[x - imported].type;
+/* Validate constant expression `e` of type `t` (§3.4.13), which reads the globals below `visible`; the current
+   phase continues at its next sub-step once it holds. */
+static WasmValidateStatus begin_const(WasmModuleValidator *v, WasmExpr e, const WasmValType *t, size_t visible)
+{
+    wasm_code_validator_begin_const(&v->code, e, t, visible);
+    v->code_return = v->phase;
+    v->phase = PH_CODE;
+    return WASM_VALIDATE_MORE;
+}
+
+static WasmValidateStatus code_step(WasmModuleValidator *v)
+{
+    WasmValidateStatus st = wasm_code_validator_step(&v->code);
+
+    if (st == WASM_VALIDATE_MORE) return st;
+    if (st == WASM_VALIDATE_DONE) {
+        v->phase = v->code_return;
+        v->sub++;
+        return WASM_VALIDATE_MORE;
+    }
+    v->space = v->code.space;
+    v->index = v->code.index;
+    return st;
+}
+
+/* A module-level type mismatch, named as the code validator names its own. */
+static WasmValidateStatus mismatch(WasmModuleValidator *v, const WasmValType *want, const WasmValType *got)
+{
+    v->code.want = *want;
+    v->code.got = *got;
+    v->code.has_got = true;
+    return WASM_VALIDATE_TYPE_MISMATCH;
+}
+
+/* The finished sub-steps of the current item: the next item begins. */
+static WasmValidateStatus next_item(WasmModuleValidator *v)
+{
+    v->sub = 0;
+    v->item++;
+    return WASM_VALIDATE_MORE;
 }
 
 /* Move to `next` when the current list of `n` items is done; otherwise answer whether v->item may be checked. */
@@ -421,6 +458,67 @@ static bool list_done(WasmModuleValidator *v, size_t n, int next)
     return true;
 }
 
+/* §3.5.9, one sub-step each: the segment's reference type (sub 0); each item (sub 1 to n), a constant
+   expression of that type or a function index whose (ref $t) matches it; for an active segment, its table and
+   the match of the segment's type to the table's (sub n + 1), then its offset, a constant of the table's
+   address type (sub n + 2). */
+static WasmValidateStatus check_elem(WasmModuleValidator *v)
+{
+    const WasmModule *m = v->module;
+    const WasmElem *e;
+    const WasmLimits *l;
+    WasmValidateStatus st;
+    size_t k;
+
+    if (list_done(v, m->n_elems, PH_CODES)) return WASM_VALIDATE_MORE;
+    e = &m->elems[v->item];
+    if (v->sub == 0) {
+        st = check_val_type(v, &e->type, m->n_types);
+        if (st != WASM_VALIDATE_DONE) return st;
+        v->sub = 1;
+        return WASM_VALIDATE_MORE;
+    }
+    k = v->sub - 1;
+    if (k < e->n_items) {
+        WasmValType f = { 0 };
+        uint32_t x;
+
+        if (e->exprs) return begin_const(v, m->elem_exprs[e->items + k], &e->type, v->ctx.n_globals);
+        x = m->elem_funcs[e->items + k];
+        if (x >= v->ctx.n_funcs) return unknown(v, "function", x);
+        f.code = WASM_TYPE_REF;
+        f.heap_index = wasm_context_func(&v->ctx, x);
+        mismatch(v, &e->type, &f);
+        return match_step(v, wasm_val_le(&v->ctx.types, &f, &e->type, &v->climb), PH_ELEMS,
+                          WASM_VALIDATE_TYPE_MISMATCH);
+    }
+    if (e->mode != WASM_SEGMENT_ACTIVE || k == e->n_items + 2) return next_item(v);
+    if (k == e->n_items) {
+        if (e->table >= v->ctx.n_tables) return unknown(v, "table", e->table);
+        v->index = v->item;
+        return match_step(v, wasm_val_le(&v->ctx.types, &e->type, table_type(v, e->table), &v->climb), PH_ELEMS,
+                          WASM_VALIDATE_ELEM_MISMATCH);
+    }
+    {
+        WasmValType at = { 0 };
+
+        wasm_context_table(&v->ctx, e->table, &l);
+        at.code = l->addr64 ? WASM_TYPE_I64 : WASM_TYPE_I32;
+        return begin_const(v, e->offset, &at, v->ctx.n_globals);
+    }
+}
+
+/* §3.5.6: each function body, by the code validator. */
+static WasmValidateStatus check_code(WasmModuleValidator *v)
+{
+    if (list_done(v, v->module->n_codes, PH_START)) return WASM_VALIDATE_MORE;
+    if (v->sub > 0) return next_item(v);
+    wasm_code_validator_begin_body(&v->code, v->item);
+    v->code_return = PH_CODES;
+    v->phase = PH_CODE;
+    return WASM_VALIDATE_MORE;
+}
+
 static WasmValidateStatus step_list(WasmModuleValidator *v)
 {
     const WasmModule *m = v->module;
@@ -429,9 +527,12 @@ static WasmValidateStatus step_list(WasmModuleValidator *v)
 
     switch (v->phase) {
     case PH_IMPORTS:
-        if (list_done(v, m->n_imports, PH_TAGS)) return WASM_VALIDATE_MORE;
+        if (list_done(v, m->n_imports, PH_TAGS)) {
+            v->ctx.imports_passed = true;
+            return WASM_VALIDATE_MORE;
+        }
         st = check_import(v, &m->imports[i]);
-        if (m->imports[i].kind == WASM_EXTERN_TABLE) v->table_imports[v->n_table_imports++] = i;
+        v->ctx.imports[m->imports[i].kind][v->passed[m->imports[i].kind]++] = i;
         break;
     case PH_TAGS:
         if (list_done(v, m->n_tags, PH_FUNCS)) return WASM_VALIDATE_MORE;
@@ -446,36 +547,48 @@ static WasmValidateStatus step_list(WasmModuleValidator *v)
         st = check_limits(v, &m->memories[i], true);
         break;
     case PH_TABLES:
+        /* §3.5.5: the table type, then its initializer, which reads only the imported globals (valid.ml's
+           check_table runs before any global is defined). A table without one is initialized by ref.null of its
+           heap type, which a non-nullable table refuses. */
         if (list_done(v, m->n_tables, PH_GLOBALS)) return WASM_VALIDATE_MORE;
-        st = check_table_type(v, &m->tables[i].type, &m->tables[i].limits);
-        break;
-    case PH_GLOBALS:
-        if (list_done(v, m->n_globals, PH_DATAS)) return WASM_VALIDATE_MORE;
-        st = check_val_type(v, &m->globals[i].type, m->n_types);
-        break;
-    case PH_DATAS:
-        /* §3.5.8: an active segment's memory exists. */
-        if (list_done(v, m->n_datas, PH_ELEMS)) return WASM_VALIDATE_MORE;
-        if (m->datas[i].mode == WASM_SEGMENT_ACTIVE && m->datas[i].memory >= v->n_memories)
-            st = unknown(v, "memory", m->datas[i].memory);
-        break;
-    case PH_ELEMS:
-        /* §3.5.9: the segment's reference type is valid, and an active segment's table exists and its element type
-           matches the segment's (v->sub is 1 once it has). */
-        if (list_done(v, m->n_elems, PH_START)) return WASM_VALIDATE_MORE;
         if (v->sub == 0) {
-            st = check_val_type(v, &m->elems[i].type, m->n_types);
+            st = check_table_type(v, &m->tables[i].type, &m->tables[i].limits);
             if (st != WASM_VALIDATE_DONE) return st;
-            if (m->elems[i].mode == WASM_SEGMENT_ACTIVE) {
-                if (m->elems[i].table >= v->n_tables) return unknown(v, "table", m->elems[i].table);
-                v->index = i;
-                return match_step(v, wasm_val_le(&v->types, &m->elems[i].type, table_type(v, m->elems[i].table),
-                                                 &v->climb), PH_ELEMS, WASM_VALIDATE_ELEM_MISMATCH);
+            v->sub = 1;
+            if (m->tables[i].has_init)
+                return begin_const(v, m->tables[i].init, &m->tables[i].type, v->ctx.n_imported[WASM_EXTERN_GLOBAL]);
+            if (!m->tables[i].type.nullable) {
+                WasmValType null = m->tables[i].type;
+
+                null.nullable = true;
+                return mismatch(v, &m->tables[i].type, &null);
             }
         }
-        v->sub = 0;
-        v->item++;
-        return WASM_VALIDATE_MORE;
+        return next_item(v);
+    case PH_GLOBALS:
+        /* §3.5.3: the global type, then its initializer, which reads the imported globals and those before it. */
+        if (list_done(v, m->n_globals, PH_DATAS)) return WASM_VALIDATE_MORE;
+        if (v->sub == 0) {
+            WasmExpr init = { m->globals[i].init_offset, m->globals[i].init_size };
+
+            st = check_val_type(v, &m->globals[i].type, m->n_types);
+            if (st != WASM_VALIDATE_DONE) return st;
+            return begin_const(v, init, &m->globals[i].type, v->ctx.n_imported[WASM_EXTERN_GLOBAL] + i);
+        }
+        return next_item(v);
+    case PH_DATAS:
+        /* §3.5.8: an active segment's memory exists, and its offset is a constant of the memory's address type. */
+        if (list_done(v, m->n_datas, PH_ELEMS)) return WASM_VALIDATE_MORE;
+        if (v->sub == 0 && m->datas[i].mode == WASM_SEGMENT_ACTIVE) {
+            WasmValType at = { 0 };
+
+            if (m->datas[i].memory >= v->ctx.n_memories) return unknown(v, "memory", m->datas[i].memory);
+            at.code = wasm_context_memory(&v->ctx, m->datas[i].memory)->addr64 ? WASM_TYPE_I64 : WASM_TYPE_I32;
+            return begin_const(v, m->datas[i].offset, &at, v->ctx.n_globals);
+        }
+        return next_item(v);
+    case PH_ELEMS:
+        return check_elem(v);
     case PH_EXPORTS:
         if (list_done(v, m->n_exports, PH_NAMES)) return WASM_VALIDATE_MORE;
         st = check_export(v, &m->exports[i]);
@@ -491,17 +604,13 @@ static WasmValidateStatus step_list(WasmModuleValidator *v)
 static WasmValidateStatus check_start(WasmModuleValidator *v)
 {
     const WasmModule *m = v->module;
-    size_t x = m->start, i, k = 0;
-    uint32_t type = 0;
+    size_t x = m->start;
+    uint32_t type;
 
     v->phase = PH_EXPORTS;
     if (!m->has_start) return WASM_VALIDATE_MORE;
-    if (x >= v->n_funcs) return unknown(v, "function", x);
-    for (i = 0; i < m->n_imports; i++) {
-        if (m->imports[i].kind != WASM_EXTERN_FUNC) continue;
-        if (k++ == x) type = m->imports[i].index;
-    }
-    if (x >= k) type = m->func_types[x - k];
+    if (x >= v->ctx.n_funcs) return unknown(v, "function", x);
+    type = wasm_context_func(&v->ctx, x);
     if (m->types[type].n_params != 0 || m->types[type].n_results != 0) return WASM_VALIDATE_START_TYPE;
     return WASM_VALIDATE_MORE;
 }
@@ -534,6 +643,12 @@ WasmValidateStatus wasm_module_validator_step(WasmModuleValidator *v)
     case PH_TYPES_SUPER:
         st = check_type_super(v);
         break;
+    case PH_CODES:
+        st = check_code(v);
+        break;
+    case PH_CODE:
+        st = code_step(v);
+        break;
     case PH_START:
         st = check_start(v);
         break;
@@ -565,6 +680,34 @@ static void ref_text(const WasmValType *t, char *buf, size_t cap)
 
     if (t->heap != 0) snprintf(buf, cap, "(ref %s%s)", t->nullable ? "null " : "", HEAP[t->heap - WASM_HEAP_EXN]);
     else snprintf(buf, cap, "(ref %s%u)", t->nullable ? "null " : "", (unsigned)t->heap_index);
+}
+
+/* valid.ml's string_of_valtype, and the empty result type for an operand the stack does not have. */
+static void val_text(const WasmValType *t, bool present, char *buf, size_t cap)
+{
+    char r[64];
+
+    if (!present) {
+        snprintf(buf, cap, "[]");
+        return;
+    }
+    switch (t->code) {
+    case WASM_TYPE_I32: snprintf(buf, cap, "[i32]"); return;
+    case WASM_TYPE_I64: snprintf(buf, cap, "[i64]"); return;
+    case WASM_TYPE_F32: snprintf(buf, cap, "[f32]"); return;
+    case WASM_TYPE_F64: snprintf(buf, cap, "[f64]"); return;
+    case WASM_TYPE_V128: snprintf(buf, cap, "[v128]"); return;
+    case WASM_TYPE_I8: snprintf(buf, cap, "[i8]"); return;
+    case WASM_TYPE_I16: snprintf(buf, cap, "[i16]"); return;
+    case WASM_TYPE_REF:
+        if (t->heap == 0 || (t->heap >= WASM_HEAP_EXN && t->heap <= WASM_HEAP_NOEXN)) ref_text(t, r, sizeof r);
+        else snprintf(r, sizeof r, "(ref %sbot)", t->nullable ? "null " : "");
+        snprintf(buf, cap, "[%s]", r);
+        return;
+    default:
+        snprintf(buf, cap, "[bot]");
+        return;
+    }
 }
 
 void wasm_module_validator_message(const WasmModuleValidator *v, WasmValidateStatus st, char *buf, size_t cap)
@@ -615,6 +758,36 @@ void wasm_module_validator_message(const WasmModuleValidator *v, WasmValidateSta
         snprintf(buf, cap, "type mismatch: element segment's type %s does not match table's element type %s", a, b);
         return;
     }
+    case WASM_VALIDATE_TYPE_MISMATCH: {
+        char a[80], b[80];
+
+        val_text(&v->code.want, v->code.want.code != 0, a, sizeof a);
+        val_text(&v->code.got, v->code.has_got, b, sizeof b);
+        snprintf(buf, cap, "type mismatch: instruction requires %s but stack has %s", a, b);
+        return;
+    }
+    case WASM_VALIDATE_NOT_CONSTANT: snprintf(buf, cap, "constant expression required"); return;
+    case WASM_VALIDATE_UNINITIALIZED_LOCAL: snprintf(buf, cap, "uninitialized local"); return;
+    case WASM_VALIDATE_IMMUTABLE_GLOBAL: snprintf(buf, cap, "immutable global"); return;
+    case WASM_VALIDATE_ALIGNMENT: snprintf(buf, cap, "alignment must not be larger than natural"); return;
+    case WASM_VALIDATE_OFFSET_RANGE: snprintf(buf, cap, "offset out of range"); return;
+    case WASM_VALIDATE_LANE_INDEX: snprintf(buf, cap, "invalid lane index"); return;
+    case WASM_VALIDATE_SELECT_ARITY:
+        snprintf(buf, cap, "invalid result arity other than 1 is not (yet) allowed");
+        return;
+    case WASM_VALIDATE_NOT_STRUCT:
+        snprintf(buf, cap, "non-structure type %llu", (unsigned long long)v->index);
+        return;
+    case WASM_VALIDATE_NOT_ARRAY: snprintf(buf, cap, "non-array type %llu", (unsigned long long)v->index); return;
+    case WASM_VALIDATE_FIELD_PACKED: snprintf(buf, cap, "field is %s", v->index ? "packed" : "unpacked"); return;
+    case WASM_VALIDATE_ARRAY_PACKED: snprintf(buf, cap, "array is %s", v->index ? "packed" : "unpacked"); return;
+    case WASM_VALIDATE_IMMUTABLE_FIELD: snprintf(buf, cap, "immutable field"); return;
+    case WASM_VALIDATE_IMMUTABLE_ARRAY: snprintf(buf, cap, "immutable array"); return;
+    case WASM_VALIDATE_NOT_DEFAULTABLE:
+        snprintf(buf, cap, "%s type is not defaultable", v->index ? "array" : "field");
+        return;
+    case WASM_VALIDATE_NOT_NUMERIC: snprintf(buf, cap, "array type is not numeric or vector"); return;
+    case WASM_VALIDATE_ARRAY_TYPES: snprintf(buf, cap, "array types do not match"); return;
     case WASM_VALIDATE_NO_ROOM: snprintf(buf, cap, "out of memory"); return;
     }
     CHECK_FAIL("a WebAssembly validation status this file does not define");
@@ -622,6 +795,8 @@ void wasm_module_validator_message(const WasmModuleValidator *v, WasmValidateSta
 
 void wasm_module_validator_free(WasmModuleValidator *v)
 {
+    size_t k;
+
     DCHECK(v != NULL, "a WebAssembly validation was freed with no validator");
     free(v->names);
     free(v->group_canon);
@@ -630,6 +805,7 @@ void wasm_module_validator_free(WasmModuleValidator *v)
     free(v->canon_len);
     free(v->canon_hash);
     free(v->canon_table);
-    free(v->table_imports);
+    for (k = 0; k <= WASM_EXTERN_TAG; k++) free(v->ctx.imports[k]);
+    wasm_code_validator_free(&v->code);
     memset(v, 0, sizeof *v);
 }
