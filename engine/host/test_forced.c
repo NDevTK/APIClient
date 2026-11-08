@@ -1471,6 +1471,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/keydomainwalk.h"
 #include "fixture/removerest.h"
 #include "fixture/slotrest.h"
+#include "fixture/insertrest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2212,6 +2213,7 @@ TF_DOCS[] = {
     { "keydomainwalk", HTML_KEYDOMAINWALK },
     { "removerest", HTML_REMOVEREST },
     { "slotrest", HTML_SLOTREST },
+    { "insertrest", HTML_INSERTREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -17288,6 +17290,39 @@ TF_UNIT void probes_slotrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `insertrest` document (fixture/insertrest.h). appendchild-rests: the appending arm's appendChild
+   of a detached box of 100,002 elements rests inside the call (`sliceOverrunGapWork` under one quantum), and the
+   arm then reads the box in the target whole and both names present. appendchild-sibling-tree: the sibling arm,
+   which can run while the first is parked mid-insert, reads the box detached and both names absent from the
+   document's name index. */
+TF_UNIT void probes_insertrest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1, kt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/ir-done", "p", "1") && param_value_is(js, "/api/ir-done", "c", "100002"),
+             "NOT REACHED: no /api/ir-done?p=1&c=100002 record, so the insert did not finish with the box whole in "
+             "the target");
+    fold_row(&tt, &why, param_value_is(js, "/api/ir-done", "n", "1") && param_value_is(js, "/api/ir-done", "w", "1"),
+             "the appending arm did not find the inserted box's named elements: the name index missed an element "
+             "the insert put in the document tree");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: an appendChild of 100,002 elements "
+             "ran a walk of its subtree to completion inside the call instead of resting per node");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/ir-kept", "p", "1") && param_value_is(js, "/api/ir-kept", "c", "100002"),
+             "NOT REACHED: no /api/ir-kept?p=1&c=100002 record, so the sibling arm did not read the box detached "
+             "with its children");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/ir-kept", "n", "1") && param_value_is(js, "/api/ir-kept", "w", "1"),
+             "the sibling arm found the detached box's named elements: the appending arm's name-index upkeep "
+             "reached a flow whose tree does not hold them");
+    const Probe rows[] = {
+        { "appendchild-rests", tt, "irBox", SESS_EXPLORE, why },
+        { "appendchild-sibling-tree", kt, "irBox", SESS_EXPLORE, kwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The row of the `keydomainwalk` document (fixture/keydomainwalk.h): 200 unknown-key reads of a Document and a
    WindowProxy over 2,000 unnamed elements charge no walk of them. */
 static long kdw_census(const char *js, const char *key);
@@ -29286,6 +29321,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_keydomainwalk(js, probes, &np);
     probes_removerest(js, probes, &np);
     probes_slotrest(js, probes, &np);
+    probes_insertrest(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
