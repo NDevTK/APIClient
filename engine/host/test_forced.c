@@ -1531,6 +1531,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/htmlrest.h"
 #include "fixture/htmlclearrest.h"
 #include "fixture/rangerest.h"
+#include "fixture/rangeinsertrest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2309,6 +2310,7 @@ TF_DOCS[] = {
     { "htmlrest", HTML_HTMLREST },
     { "htmlclearrest", HTML_HTMLCLEARREST },
     { "rangerest", HTML_RANGEREST },
+    { "rangeinsertrest", HTML_RANGEINSERTREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -18123,6 +18125,45 @@ TF_UNIT void probes_rangerest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rangeinsertrest` document (fixture/rangeinsertrest.h). range-insertnode-rests: the inserting
+   arm's insertNode of the box of 100,002 elements at offset 2 of the target's Text node rests inside the call
+   (`sliceOverrunGapWork` under one quantum), and the arm then reads the box whole between the two halves of the
+   split ("ab", "cd"), the collapsed range's end after it and both names present. range-insertnode-sibling-tree:
+   the sibling arm reads the box in place and the target's one Text node. */
+TF_UNIT void probes_rangeinsertrest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1, kt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/ri-done", "p", "1") && param_value_is(js, "/api/ri-done", "c", "100002"),
+             "NOT REACHED: no /api/ri-done?p=1&c=100002 record, so the insert did not finish with the box whole in "
+             "the target");
+    fold_row(&tt, &why, param_value_is(js, "/api/ri-done", "s", "ab-cd") && param_value_is(js, "/api/ri-done", "l", "3"),
+             "DOM §5.5 insert a node into a live range steps 7 and 12: the box is not between the two halves of the "
+             "split Text node");
+    fold_row(&tt, &why, param_value_is(js, "/api/ri-done", "e", "1"),
+             "DOM §5.5 insert a node into a live range step 13: the collapsed range's end is not after the box");
+    fold_row(&tt, &why, param_value_is(js, "/api/ri-done", "n", "1") && param_value_is(js, "/api/ri-done", "w", "1"),
+             "the inserting arm did not find the box's named elements: the name index missed an element the insert "
+             "put back in the document tree");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: an insertNode of 100,002 elements "
+             "moved them inside one step instead of resting per node");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/ri-kept", "p", "1") && param_value_is(js, "/api/ri-kept", "c", "100002") &&
+             param_value_is(js, "/api/ri-kept", "t", "1"),
+             "NOT REACHED: no /api/ri-kept?p=1&c=100002&t=1 record, so the sibling arm did not read the box in place "
+             "and the target unsplit");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/ri-kept", "n", "1") && param_value_is(js, "/api/ri-kept", "w", "1"),
+             "the sibling arm did not find the box's named elements: the inserting arm's name-index upkeep reached a "
+             "flow whose tree still holds them");
+    const Probe rows[] = {
+        { "range-insertnode-rests", tt, "riBox", SESS_EXPLORE, why },
+        { "range-insertnode-sibling-tree", kt, "riBox", SESS_EXPLORE, kwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `mixinrest` document (fixture/mixinrest.h). mixin-<k>-rests, for append (ap), replaceWith (rw)
    and replaceChildren (rc): the arm's call with the box of 100,002 elements and a string rests inside itself
    (`sliceOverrunGapWork` under one quantum, a fact of the whole document), and the arm then reads the box in the
@@ -30480,6 +30521,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_htmlrest(js, probes, &np);
     probes_htmlclearrest(js, probes, &np);
     probes_rangerest(js, probes, &np);
+    probes_rangeinsertrest(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
