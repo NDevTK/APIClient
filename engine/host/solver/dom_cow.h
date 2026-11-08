@@ -53,6 +53,9 @@ void dom_cow_set_cdata_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *node, con
    carry CollectionIndexCache. Monotonic, so it can only over-invalidate. */
 uint64_t dom_cow_version(void);
 
+/* Whether a delta entry is being restored (a context switch's unapply or apply) — tree writes no flow performs. */
+bool dom_cow_restoring(void);
+
 /* The DOM-mutation CHOKEPOINT — capture-then-mutate ATOMICALLY, in ONE call. A browser component mutates the
    tree ONLY through these, never through raw lxb_dom_* mutators + a separate capture, so a DOM write cannot
    bypass time-travel capture (the browser engineer's "one place to reason about"). This is the fork-free answer

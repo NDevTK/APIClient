@@ -2586,7 +2586,14 @@ void dom_cow_remove_baseline(lxb_dom_node_t *node) {
  * which walks the document down to the deepest segment that actually survives. ONE path, exercised by every
  * flow that finishes rather than only by an eviction no test reaches. */
 /* per-entry UNAPPLY (flow -> parked): stash the flow's value/taint into cur, restore the baseline. */
-static void dom_unapply_entry(DomUndo *u) {
+/* Depth of a delta entry being restored (unapply or apply): the tree writes it makes are the scheduler's switch,
+   not any flow's act, so work they cause is charged to no flow. */
+static int g_dom_restoring;
+bool dom_cow_restoring(void) { return g_dom_restoring > 0; }
+
+static void dom_unapply_entry_body(DomUndo *u);
+static void dom_unapply_entry(DomUndo *u) { g_dom_restoring++; dom_unapply_entry_body(u); g_dom_restoring--; }
+static void dom_unapply_entry_body(DomUndo *u) {
     g_dom_version++;
     if (u->kind == 0) {
         if (u->slot == ATTR_SLOT_ATTRIBUTE) {
@@ -2656,7 +2663,9 @@ static void dom_unapply_entry(DomUndo *u) {
     }
 }
 /* per-entry APPLY (parked -> flow): restore the flow's value/taint over the baseline. */
-static void dom_apply_entry(DomUndo *u) {
+static void dom_apply_entry_body(DomUndo *u);
+static void dom_apply_entry(DomUndo *u) { g_dom_restoring++; dom_apply_entry_body(u); g_dom_restoring--; }
+static void dom_apply_entry_body(DomUndo *u) {
     g_dom_version++;
     if (u->kind == 0) {
         if (u->slot == ATTR_SLOT_ATTRIBUTE) {

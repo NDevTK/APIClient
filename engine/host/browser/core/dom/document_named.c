@@ -3,12 +3,10 @@
  * partial interface Document`, so a named property shadows an interface member (`<img name=getElementById>`).
  * Answers come from the running flow's tree in tree order, attributes read at the walk; a [[Get]], [[HasProperty]]
  * or [[GetOwnProperty]] walks as a step machine (dn_step) over the shared resting walk (core/dom/named_walk.h).
- * A name no element's id or name carries is answered by the document's name index (core/dom/document_name_index.h)
- * with no walk: it is not a supported property name, which is Web IDL §3.9.7's visibility step 1, and every
- * `document.<member>` read is one.
- * Named residual: not covered — a name the index holds still walks to decide the element type and order. Next
- * diff builds the index's per-name element list in tree order, as Blink's named-item map keeps it. Absence shows
- * as host work per `document.x` of a carried name growing with the tree. */
+ * The candidates are the elements the document's name index (core/dom/document_name_index.h) lists for the name
+ * in tree order, since a named element carries it as an id or name: a name none carries is no supported
+ * property name with no visit (Web IDL §3.9.7's visibility step 1, which every `document.<member>` read asks),
+ * and a carried one visits only its carriers. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -120,15 +118,18 @@ static lxb_dom_node_t *dn_document(JSValueConst obj)
 }
 
 /* §3.1.7's "list of named elements with the name name that are in a document tree with the Document as their
-   root", counted to two: the first in `*first`. */
+   root", counted to two over the elements the name index lists for `name` (a named element carries it as an
+   id or name): the first in `*first`. */
 static int dn_count(lxb_dom_node_t *doc, const char *name, size_t n, lxb_dom_node_t **first)
 {
+    lxb_dom_element_t *const *els;
+    size_t k = document_name_index_list(doc, name, n, &els);
     int c = 0;
 
     *first = NULL;
-    for (lxb_dom_node_t *e = named_walk_successor(doc, doc); e && c < 2; e = named_walk_successor(e, doc))
-        if (document_named_element_is(lxb_dom_interface_element(e), name, n)) {
-            if (!c) *first = e;
+    for (size_t i = 0; i < k && c < 2; i++)
+        if ((i == 0 || els[i - 1] != els[i]) && document_named_element_is(els[i], name, n)) {
+            if (!c) *first = lxb_dom_interface_node(els[i]);
             c++;
         }
     return c;
@@ -204,7 +205,10 @@ static int dn_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     doc = dn_document(argv[0]);
     name = JS_ToCStringLen(ctx, &n, argv[1]);
     if (!name) return JS_STEP_ABRUPT;
-    if (named_walk_next(ctx, s, doc, dn_is, name, n, NULL)) { JS_FreeCString(ctx, name); return JS_STEP_YIELD; }
+    if (named_walk_next_indexed(ctx, s, doc, doc, dn_is, name, n, NULL)) {
+        JS_FreeCString(ctx, name);
+        return JS_STEP_YIELD;
+    }
     if (op == 1) *presult = JS_NewBool(ctx, s->count > 0);
     else *presult = dn_value_of(ctx, argv[0], name, s->first, s->count);
     JS_FreeCString(ctx, name);

@@ -17,10 +17,12 @@
    asker's, borrowed (the form whose named properties are asked, or NULL). */
 typedef bool (*NamedWalkIs)(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_t n, const void *ud);
 
-/* A walk's resume point, kept in a step machine's state: the element last visited and the first two matches.
-   Zeroed means not started. Nodes only, so a step state holding one needs no visit. */
+/* A walk's resume point, kept in a step machine's state: the element last visited (or, for an indexed walk, the
+   position in the name's element list) and the first two matches. Zeroed means not started. Nodes and a count
+   only, so a step state holding one needs no visit. */
 typedef struct {
     lxb_dom_node_t *root, *cursor, *first;
+    size_t pos;
     int count;
 } NamedWalk;
 
@@ -32,6 +34,14 @@ lxb_dom_node_t *named_walk_successor(lxb_dom_node_t *n, lxb_dom_node_t *root);
    root it began with, asserted on every call. */
 bool named_walk_next(JSContext *ctx, NamedWalk *w, lxb_dom_node_t *root, NamedWalkIs is, const char *name,
                      size_t n, const void *ud);
+
+/* The same walk over only the elements `doc`'s name index lists for `name`, in tree order, within `root`'s
+   subtree (`root` is `doc` or a connected node of its tree): one listed element per call, charged as one visited
+   element. For a rule `is` that matches an element only by an `id` or `name` value equal to `name`, the answer is
+   the tree walk's, at the cost of the elements carrying the name. The list is the tree's function, so a resume
+   in the same world continues at the same element. */
+bool named_walk_next_indexed(JSContext *ctx, NamedWalk *w, lxb_dom_node_t *doc, lxb_dom_node_t *root,
+                             NamedWalkIs is, const char *name, size_t n, const void *ud);
 
 /* Whether any of the `k` names a named-element rule gives `el` (`v[i]`, `len[i]` bytes) lies in the domain of the
    unknown String key `key` (concolic_key_domain_holds). Every name is asserted to be one the rule's own lookup

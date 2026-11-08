@@ -919,6 +919,16 @@ static JSValue win_named_value_of(JSContext *ctx, const char *name, lxb_dom_node
     return v;
 }
 
+/* The node of this realm's associated Document, whose name index lists §7.2.2.3's candidates: a named element
+   carries its name as an id or name. */
+static lxb_dom_node_t *win_document_node(JSContext *ctx)
+{
+    lxb_dom_document_t *doc = document_associated(ctx);
+
+    DCHECK(doc != NULL, "§7.2.2.3's lookup ran in a realm with no associated Document");
+    return lxb_dom_interface_node(doc);
+}
+
 /* Whether String key `prop` is no supported property name of HTML §7.2.2.3, decided without a walk: no child
    navigable has it as its target name, the document's name index holds no element id or name of it, and no
    connected region of unknown markup could parse an element that does (each region forks in the step). */
@@ -1061,7 +1071,9 @@ static int win_named_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         s->phase = root ? WN_OUTSIDE : WN_REGION;
     }
     if (s->phase == WN_OUTSIDE) {
-        if (named_walk_next(ctx, &s->walk, root, win_named_outside_is, name, n, NULL)) goto rest;
+        if (named_walk_next_indexed(ctx, &s->walk, win_document_node(ctx), root, win_named_outside_is, name, n,
+                                    NULL))
+            goto rest;
         if (s->walk.count) {
             s->phase = WN_VALUE;
             if (unknown_markup_count(ctx) == 0) goto value;
@@ -1082,7 +1094,8 @@ static int win_named_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         if (s->phase == WN_REGION) {
             if (!concolic_example_present(markup)) {
                 s->real = JS_OUTCOME_REAL_UNSTATED;
-            } else if (named_walk_next(ctx, &s->walk, region, win_named_is, name, n, NULL)) {
+            } else if (named_walk_next_indexed(ctx, &s->walk, win_document_node(ctx), region, win_named_is, name,
+                                               n, NULL)) {
                 JS_FreeValue(ctx, markup);
                 goto rest;
             } else {
@@ -1105,7 +1118,7 @@ static int win_named_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         goto answer;
     }
     DCHECK(s->phase == WN_VALUE && root != NULL, "§7.2.2.3's lookup left its phases with no name found");
-    if (named_walk_next(ctx, &s->walk, root, win_named_is, name, n, NULL)) goto rest;
+    if (named_walk_next_indexed(ctx, &s->walk, win_document_node(ctx), root, win_named_is, name, n, NULL)) goto rest;
 value:
     v = win_named_value_of(ctx, name, s->walk.first, s->walk.count);
     goto answer;

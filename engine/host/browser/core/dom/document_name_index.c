@@ -16,12 +16,18 @@
 
 #include "check.h"
 #include "core/dom/document_name_index.h"
+#include "core/timing/thread_work.h"
+#include "solver/dom_cow.h"   /* whether a write is a context switch's restore */
 
 typedef struct {
     char    *key;      /* owned; NULL for an empty slot */
     size_t   len;
     uint64_t hash;
-    uint32_t count;    /* elements in the tree carrying the value; 0 keeps the slot for reuse */
+    /* The elements in the tree carrying the value, one entry per attribute that carries it, in tree order (an
+       element whose id and name both carry it holds two adjacent entries); owned. An empty list keeps the slot
+       for reuse. */
+    lxb_dom_element_t **els;
+    size_t   count, cap;
 } DniSlot;
 
 typedef struct DniMap {
@@ -33,6 +39,9 @@ typedef struct DniMap {
 
 static bool g_installed;
 static DniMap *g_maps;
+/* Nodes the current observer call stepped over (its subtree's and its tree-order comparisons'), charged as
+   DOM-walk work when the call returns: one charge per call, so a call's rounding does not grow with its steps. */
+static uint64_t g_steps;
 
 static uint64_t dni_hash(const char *k, size_t n)
 {
@@ -68,9 +77,52 @@ static void dni_grow(DniMap *m)
     free(old);
 }
 
-/* Count `n` bytes of `v` into `m` by `delta`. */
-static void dni_map_adjust(DniMap *m, const lxb_char_t *v, size_t n, int delta)
+/* Whether connected node `a` precedes connected node `b` of the same document tree in tree order (DOM §4.2.1
+   "Document tree"'s preorder, depth-first traversal). An ancestor precedes its descendants; siblings are ordered
+   by a scan out from `a` in both directions, which costs their distance. */
+static bool dni_precedes(lxb_dom_node_t *a, lxb_dom_node_t *b)
 {
+    int da = 0, db = 0;
+
+    if (a == b) return false;
+    for (lxb_dom_node_t *x = a; x->parent; x = x->parent) da++;
+    for (lxb_dom_node_t *x = b; x->parent; x = x->parent) db++;
+    g_steps += (uint64_t)da + (uint64_t)db;
+    for (; da > db; da--) { a = a->parent; if (a == b) return false; }
+    for (; db > da; db--) { b = b->parent; if (b == a) return true; }
+    while (a->parent != b->parent) { a = a->parent; b = b->parent; }
+    DCHECK(a->parent != NULL, "two elements of one name index are in no common tree");
+    for (lxb_dom_node_t *x = a->next, *y = a->prev; x || y; x = x ? x->next : NULL, y = y ? y->prev : NULL) {
+        g_steps++;
+        if (x == b) return true;
+        if (y == b) return false;
+    }
+    DFAIL("two siblings of one parent were not found on its child list from either side");
+    return false;
+}
+
+/* The first position in `s`'s list whose element does not precede `el`. */
+static size_t dni_lower_bound(const DniSlot *s, lxb_dom_element_t *el)
+{
+    size_t lo = 0, hi = s->count;
+
+    if (s->count && dni_precedes(lxb_dom_interface_node(s->els[s->count - 1]), lxb_dom_interface_node(el)))
+        return s->count;   /* a parse appends in tree order */
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+
+        if (dni_precedes(lxb_dom_interface_node(s->els[mid]), lxb_dom_interface_node(el))) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
+}
+
+/* Enter `el` into `m`'s list for the `n` bytes of `v` (delta +1) or take one entry of it out (delta -1). The list's
+   order is a function of the tree, so a resumed walk's position in it names the same element. */
+static void dni_map_adjust(DniMap *m, const lxb_char_t *v, size_t n, lxb_dom_element_t *el, int delta)
+{
+    size_t at;
+
     uint64_t h = dni_hash((const char *)v, n);
     DniSlot *s;
 
@@ -89,14 +141,30 @@ static void dni_map_adjust(DniMap *m, const lxb_char_t *v, size_t n, int delta)
     DCHECK(delta > 0 || s->count > 0, "a value left a document's name index more times than it entered: a tree or "
                                       "attribute write reached the tree through a primitive the observer does "
                                       "not see");
-    s->count += delta;
+    at = dni_lower_bound(s, el);
+    if (delta > 0) {
+        if (s->count == s->cap) {
+            s->cap = s->cap ? s->cap * 2 : 2;
+            s->els = realloc(s->els, s->cap * sizeof *s->els);
+            CHECK(s->els != NULL, "dom-name-index-oom: a name's element list could not grow");
+        }
+        memmove(&s->els[at + 1], &s->els[at], (s->count - at) * sizeof *s->els);
+        s->els[at] = el;
+        s->count++;
+        return;
+    }
+    DCHECK(at < s->count && s->els[at] == el,
+           "an element left a name's list it is not on: a tree or attribute write reached the tree through a "
+           "primitive lexbor's tree observer does not see");
+    memmove(&s->els[at], &s->els[at + 1], (s->count - at - 1) * sizeof *s->els);
+    s->count--;
 }
 
-static void dni_adjust(lxb_dom_document_t *doc, const lxb_char_t *v, size_t n, int delta)
+static void dni_adjust(lxb_dom_document_t *doc, const lxb_char_t *v, size_t n, lxb_dom_element_t *el, int delta)
 {
     DCHECK(doc->name_index != NULL, "a document's tree changed and its name index was never made: the document "
                                     "was initialised before the index was lexbor's tree observer");
-    dni_map_adjust(doc->name_index, v, n, delta);
+    dni_map_adjust(doc->name_index, v, n, el, delta);
 }
 
 /* The document whose document tree `n` is in, or NULL: the root of its parent chain is a document that holds
@@ -104,10 +172,11 @@ static void dni_adjust(lxb_dom_document_t *doc, const lxb_char_t *v, size_t n, i
 static lxb_dom_document_t *dni_tree_document(lxb_dom_node_t *n)
 {
     for (; n->parent != NULL; n = n->parent) {
+        g_steps++;
         if (n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT) {
             lxb_dom_node_t *c = n->parent->first_child;
 
-            while (c != NULL && c != n) c = c->next;
+            while (c != NULL && c != n) { g_steps++; c = c->next; }
             return c != NULL ? lxb_dom_interface_document(n->parent) : NULL;
         }
     }
@@ -137,7 +206,19 @@ static void dni_element(lxb_dom_document_t *doc, lxb_dom_element_t *el, int delt
     size_t n;
 
     for (lxb_dom_attr_t *a = el->first_attr; a != NULL; a = a->next)
-        if (dni_value(a, &v, &n)) dni_adjust(doc, v, n, delta);
+        if (dni_value(a, &v, &n)) dni_adjust(doc, v, n, el, delta);
+}
+
+/* The current call's steps, charged as THREAD_WORK_DOM_WALK unless a context switch's delta restore made the
+   write, which is no flow's act.
+   Named residual. Not covered: the upkeep runs inside the tree write's primitive, charged but not resting, so an
+   inserted subtree's walk or a long sibling scan holds the thread. Next: the DOM's insert and remove algorithms
+   as step machines resting per node, which this upkeep then joins. Absence shows as a flow's slice overrun
+   inside a tree write with DOM-walk work charged across it. */
+static void dni_charge(void)
+{
+    if (g_steps && !dom_cow_restoring()) thread_work_charge(THREAD_WORK_DOM_WALK, g_steps);
+    g_steps = 0;
 }
 
 /* Every element of `root`'s inclusive subtree, in tree order. */
@@ -147,6 +228,7 @@ static void dni_subtree(lxb_dom_node_t *root, int delta)
 
     if (doc == NULL) return;
     for (lxb_dom_node_t *n = root; n != NULL;) {
+        g_steps++;
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) dni_element(doc, lxb_dom_interface_element(n), delta);
         if (n->first_child != NULL) { n = n->first_child; continue; }
         while (n != root && n->next == NULL) n = n->parent;
@@ -154,8 +236,8 @@ static void dni_subtree(lxb_dom_node_t *root, int delta)
     }
 }
 
-static void dni_inserted(lxb_dom_node_t *node) { dni_subtree(node, +1); }
-static void dni_removing(lxb_dom_node_t *node) { if (node->parent != NULL) dni_subtree(node, -1); }
+static void dni_inserted(lxb_dom_node_t *node) { dni_subtree(node, +1); dni_charge(); }
+static void dni_removing(lxb_dom_node_t *node) { if (node->parent != NULL) dni_subtree(node, -1); dni_charge(); }
 
 static void dni_attr(lxb_dom_element_t *el, lxb_dom_attr_t *a, int delta)
 {
@@ -165,15 +247,15 @@ static void dni_attr(lxb_dom_element_t *el, lxb_dom_attr_t *a, int delta)
 
     if (!dni_value(a, &v, &n)) return;
     doc = dni_tree_document(lxb_dom_interface_node(el));
-    if (doc != NULL) dni_adjust(doc, v, n, delta);
+    if (doc != NULL) dni_adjust(doc, v, n, el, delta);
 }
 
-static void dni_attr_added(lxb_dom_element_t *el, lxb_dom_attr_t *a) { dni_attr(el, a, +1); }
-static void dni_attr_removing(lxb_dom_element_t *el, lxb_dom_attr_t *a) { dni_attr(el, a, -1); }
+static void dni_attr_added(lxb_dom_element_t *el, lxb_dom_attr_t *a) { dni_attr(el, a, +1); dni_charge(); }
+static void dni_attr_removing(lxb_dom_element_t *el, lxb_dom_attr_t *a) { dni_attr(el, a, -1); dni_charge(); }
 
 static void dni_map_free(DniMap *m)
 {
-    for (size_t i = 0; i < m->cap; i++) free(m->slots[i].key);
+    for (size_t i = 0; i < m->cap; i++) { free(m->slots[i].key); free(m->slots[i].els); }
     free(m->slots);
     free(m);
 }
@@ -215,24 +297,36 @@ void document_name_index_install(void)
     g_installed = true;
 }
 
-bool document_name_index_holds(lxb_dom_node_t *doc, const char *name, size_t n)
+size_t document_name_index_list(lxb_dom_node_t *doc, const char *name, size_t n, lxb_dom_element_t *const **out)
 {
     DniMap *m;
     DniSlot *s;
 
     DCHECK(g_installed, "a document's name index was asked before it was installed as lexbor's tree observer");
-    DCHECK(doc != NULL && doc->type == LXB_DOM_NODE_TYPE_DOCUMENT, "a name index was asked of no document");
+    DCHECK(doc != NULL && doc->type == LXB_DOM_NODE_TYPE_DOCUMENT && out != NULL,
+           "a name index was asked of no document, or with nowhere to put its list");
     m = lxb_dom_interface_document(doc)->name_index;
     DCHECK(m != NULL, "a document's name index was asked and the document has none: it was initialised before the "
                       "index was lexbor's tree observer");
-    if (n == 0 || m->cap == 0) return false;   /* a map holds slots only once a value entered it */
+    *out = NULL;
+    if (n == 0 || m->cap == 0) return 0;   /* a map holds slots only once a value entered it */
     s = dni_find(m, name, n, dni_hash(name, n));
-    return s->key != NULL && s->count > 0;
+    if (s->key == NULL) return 0;
+    *out = s->els;
+    return s->count;
+}
+
+bool document_name_index_holds(lxb_dom_node_t *doc, const char *name, size_t n)
+{
+    lxb_dom_element_t *const *els;
+
+    return document_name_index_list(doc, name, n, &els) > 0;
 }
 
 #if APICLIENT_DEV
-/* Whether every value `a` counts is counted the same in `b`. */
-static const DniSlot *dni_first_unequal(const DniMap *a, const DniMap *b, uint32_t *other)
+/* The first value whose list in `a` is not the same list, in the same order, in `b`; its length in `b` at
+   `*other`. */
+static const DniSlot *dni_first_unequal(const DniMap *a, const DniMap *b, size_t *other)
 {
     for (size_t i = 0; i < a->cap; i++) {
         const DniSlot *s = &a->slots[i], *t;
@@ -240,7 +334,7 @@ static const DniSlot *dni_first_unequal(const DniMap *a, const DniMap *b, uint32
         if (s->key == NULL || s->count == 0) continue;
         t = b->cap ? dni_find((DniMap *)b, s->key, s->len, s->hash) : NULL;
         *other = (t != NULL && t->key != NULL) ? t->count : 0;
-        if (*other != s->count) return s;
+        if (*other != s->count || memcmp(s->els, t->els, s->count * sizeof *s->els) != 0) return s;
     }
     return NULL;
 }
@@ -254,7 +348,7 @@ void document_name_index_verify_all_at(const char *file, int line)
         lxb_dom_node_t *root = lxb_dom_interface_node(m->doc);
         DniMap re = { 0 };
         const DniSlot *s;
-        uint32_t other = 0;
+        size_t other = 0;
         bool in_index;
 
         /* The recount: every element below the document node is in its document tree. */
@@ -264,7 +358,7 @@ void document_name_index_verify_all_at(const char *file, int line)
                 size_t vl;
 
                 for (lxb_dom_attr_t *a = lxb_dom_interface_element(n)->first_attr; a != NULL; a = a->next)
-                    if (dni_value(a, &v, &vl)) dni_map_adjust(&re, v, vl, +1);
+                    if (dni_value(a, &v, &vl)) dni_map_adjust(&re, v, vl, lxb_dom_interface_element(n), +1);
             }
             if (n->first_child != NULL) { n = n->first_child; continue; }
             while (n != root && n->next == NULL) n = n->parent;
@@ -273,13 +367,15 @@ void document_name_index_verify_all_at(const char *file, int line)
         in_index = (s = dni_first_unequal(m, &re, &other)) != NULL;
         if (!in_index) s = dni_first_unequal(&re, m, &other);
         DCHECKF(s == NULL,
-                "%s:%d: a document's name index disagrees with its tree at `%.*s`: the %s counts %u and the %s "
-                "%u, so a tree or attribute write reached the tree through a primitive lexbor's tree observer "
-                "does not see", file, line, s ? (int)s->len : 0, s ? s->key : "", in_index ? "index" : "tree",
-                s ? s->count : 0u, in_index ? "tree" : "index", other);
-        for (size_t i = 0; i < re.cap; i++) free(re.slots[i].key);
+                "%s:%d: a document's name index disagrees with its tree at `%.*s`: the %s lists %zu elements and "
+                "the %s %zu, or both list them in another order, so a tree or attribute write reached the tree "
+                "through a primitive lexbor's tree observer does not see", file, line, s ? (int)s->len : 0,
+                s ? s->key : "", in_index ? "index" : "tree", s ? s->count : (size_t)0, in_index ? "tree" : "index",
+                other);
+        for (size_t i = 0; i < re.cap; i++) { free(re.slots[i].key); free(re.slots[i].els); }
         free(re.slots);
     }
+    g_steps = 0;   /* the recount's comparisons are a dev check, charged to no flow */
 #else
     (void)file; (void)line;
 #endif
