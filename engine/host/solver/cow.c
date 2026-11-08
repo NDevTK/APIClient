@@ -1686,6 +1686,12 @@ void cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *re
        compile-time constant cost O(1) instead of quadratic in the layout's length. It is correct and it is
        not the cost; those are different claims and only the second was wrong. */
     if (rec != site->checked) {
+    /* Having a layout and being capturable are two questions: a layout with owned pointers is for the runtime's
+       release, mark and graph writer, and a byte copy of it would alias every pointer it owns. */
+    DCHECKF(rec->n_fields == 0,
+            "a record whose layout owns %d pointer field(s) reached the byte capture at %s:%d — the copy would "
+            "alias them and the restore free them twice; capturing such a record is unbuilt",
+            rec->n_fields, file, line);
     for (int vi = 0; vi < rec->n_val; vi++) {
         DCHECKF((size_t)rec->val_off[vi] + sizeof(JSValue) <= rec->size,
                 "a component record's layout names an owned value PAST THE END of the record — entry %d, offset "

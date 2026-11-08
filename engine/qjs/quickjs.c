@@ -728,6 +728,7 @@ struct JSClass {
     JSClassCall *call;
     /* pointers for exotic behavior, can be NULL if none are present */
     const JSClassExoticMethods *exotic;
+    const JSRecordLayout *record;   /* the opaque record's layout (JSClassDef's `record`), or NULL */
     /* THIS ENTRY IS A PER-REALM VALUE SLOT AND NOT A CLASS — see JS_NewRealmValueSlotClass. A host that wants
        one per-realm store per concept mints a class id for the slot `ctx->class_proto[id]` already is and
        constructs nothing with it, so this entry's `class_proto` holds a value THAT IS NOT A PROTOTYPE and its
@@ -7322,6 +7323,109 @@ JSAtom JS_GetClassName(JSRuntime *rt, JSClassID class_id)
 
 /* create a new object internal class. Return -1 if error, 0 if
    OK. The finalizer can be NULL if none is needed. */
+/* A layout field's shape, asserted where the layout is registered: in bounds, with the count an array or a
+   conditional value needs and the sub-layout a record kind needs. */
+static void js_record_field_check(const JSRecordField *f, const JSRecordLayout *l)
+{
+    bool array = f->kind == JS_REC_POD_ARRAY || f->kind == JS_REC_CSTR_ARRAY || f->kind == JS_REC_VALUE_ARRAY ||
+                 f->kind == JS_REC_INLINE_ARRAY || f->kind == JS_REC_PTR_ARRAY;
+    bool rec = f->kind == JS_REC_INLINE_ARRAY || f->kind == JS_REC_PTR_ARRAY || f->kind == JS_REC_RECORD;
+
+    DCHECKF((size_t)f->off + (f->kind == JS_REC_VALUE_IF ? sizeof(JSValue) : sizeof(void *)) <= l->size,
+            "a record layout names a field at offset %u past the end of its %zu-byte record", (unsigned)f->off,
+            l->size);
+    DCHECKF(f->kind <= JS_REC_INTERNED && (array || f->kind == JS_REC_VALUE_IF) == (f->count != NULL) &&
+            rec == (f->sub != NULL) && (f->kind == JS_REC_POD_ARRAY) == (f->elem_size != 0),
+            "a record layout's field at offset %u (kind %d) lacks the count, sub-layout or element size its kind "
+            "needs, or carries one it does not", (unsigned)f->off, (int)f->kind);
+    for (int i = 0; f->sub && i < f->sub->n_fields; i++)
+        js_record_field_check(&f->sub->fields[i], f->sub);
+}
+
+/* Releases what a record laid out by `l` owns, leaving the record's own storage to the caller. A host record is
+   the C allocator's and not runtime memory (quickjs.h's JSRecordLayout), so its release is spelled `(free)`. */
+static void js_record_release(JSRuntime *rt, void *rec, const JSRecordLayout *l)
+{
+    uint8_t *b = rec;
+
+    for (int i = 0; i < l->n_val; i++)
+        JS_FreeValueRT(rt, *(JSValue *)(b + l->val_off[i]));
+    for (int i = 0; i < l->n_fields; i++) {
+        const JSRecordField *f = &l->fields[i];
+        void *ptr = *(void **)(b + f->off);
+        uint32_t n;
+
+        switch ((JSRecordKind)f->kind) {
+        case JS_REC_VALUE_IF:
+            if (f->count(rec)) JS_FreeValueRT(rt, *(JSValue *)(b + f->off));
+            continue;
+        case JS_REC_INTERNED:
+            continue;
+        case JS_REC_CSTR:
+        case JS_REC_POD_ARRAY:
+            break;
+        case JS_REC_CSTR_ARRAY:
+            for (n = ptr ? f->count(rec) : 0; n > 0; n--) (free)(((char **)ptr)[n - 1]);
+            break;
+        case JS_REC_VALUE_ARRAY:
+            for (n = ptr ? f->count(rec) : 0; n > 0; n--) JS_FreeValueRT(rt, ((JSValue *)ptr)[n - 1]);
+            break;
+        case JS_REC_INLINE_ARRAY:
+            for (n = ptr ? f->count(rec) : 0; n > 0; n--)
+                js_record_release(rt, (uint8_t *)ptr + (size_t)(n - 1) * f->sub->size, f->sub);
+            break;
+        case JS_REC_PTR_ARRAY:
+            for (n = ptr ? f->count(rec) : 0; n > 0; n--) {
+                void *e = ((void **)ptr)[n - 1];
+                if (e) { js_record_release(rt, e, f->sub); (free)(e); }
+            }
+            break;
+        case JS_REC_RECORD:
+            if (ptr) js_record_release(rt, ptr, f->sub);
+            break;
+        }
+        (free)(ptr);
+    }
+}
+
+/* Marks the values a record laid out by `l` owns, at every depth. */
+static void js_record_mark(JSRuntime *rt, const void *rec, const JSRecordLayout *l, JS_MarkFunc *mark_func)
+{
+    const uint8_t *b = rec;
+
+    for (int i = 0; i < l->n_val; i++)
+        JS_MarkValue(rt, *(const JSValue *)(b + l->val_off[i]), mark_func);
+    for (int i = 0; i < l->n_fields; i++) {
+        const JSRecordField *f = &l->fields[i];
+        const void *ptr = *(void *const *)(b + f->off);
+        uint32_t n;
+
+        switch ((JSRecordKind)f->kind) {
+        case JS_REC_VALUE_IF:
+            if (f->count(rec)) JS_MarkValue(rt, *(const JSValue *)(b + f->off), mark_func);
+            break;
+        case JS_REC_VALUE_ARRAY:
+            for (n = ptr ? f->count(rec) : 0; n > 0; n--) JS_MarkValue(rt, ((const JSValue *)ptr)[n - 1], mark_func);
+            break;
+        case JS_REC_INLINE_ARRAY:
+            for (n = ptr ? f->count(rec) : 0; n > 0; n--)
+                js_record_mark(rt, (const uint8_t *)ptr + (size_t)(n - 1) * f->sub->size, f->sub, mark_func);
+            break;
+        case JS_REC_PTR_ARRAY:
+            for (n = ptr ? f->count(rec) : 0; n > 0; n--) {
+                const void *e = ((void *const *)ptr)[n - 1];
+                if (e) js_record_mark(rt, e, f->sub, mark_func);
+            }
+            break;
+        case JS_REC_RECORD:
+            if (ptr) js_record_mark(rt, ptr, f->sub, mark_func);
+            break;
+        case JS_REC_CSTR: case JS_REC_POD_ARRAY: case JS_REC_CSTR_ARRAY: case JS_REC_INTERNED:
+            break;
+        }
+    }
+}
+
 static int JS_NewClass1(JSRuntime *rt, JSClassID class_id,
                         const JSClassDef *class_def, JSAtom name)
 {
@@ -7374,10 +7478,16 @@ static int JS_NewClass1(JSRuntime *rt, JSClassID class_id,
     cl = &rt->class_array[class_id];
     cl->class_id = class_id;
     cl->class_name = JS_DupAtomRT(rt, name);
+    DCHECK(!class_def->record || (!class_def->finalizer && !class_def->gc_mark),
+           "a class declared a record layout and a finalizer or gc_mark beside it — the layout is the one statement "
+           "of what the record owns, and a second one would free or mark it twice");
+    for (i = 0; class_def->record && i < class_def->record->n_fields; i++)
+        js_record_field_check(&class_def->record->fields[i], class_def->record);
     cl->finalizer = class_def->finalizer;
     cl->gc_mark = class_def->gc_mark;
     cl->call = class_def->call;
     cl->exotic = class_def->exotic;
+    cl->record = class_def->record;
     /* A CLASS, UNTIL A CALLER SAYS OTHERWISE — written here beside every other field rather than left to the
        `memset` that zeroes a grown entry, because those are two different guarantees: the memset covers an
        entry this call GREW INTO and says nothing about one that was already inside `class_count`. Registering
@@ -11308,6 +11418,10 @@ static void free_object(JSRuntime *rt, JSObject *p)
     finalizer = rt->class_array[p->class_id].finalizer;
     if (finalizer)
         (*finalizer)(rt, JS_MKPTR(JS_TAG_OBJECT, p));
+    if (rt->class_array[p->class_id].record && p->u.opaque) {
+        js_record_release(rt, p->u.opaque, rt->class_array[p->class_id].record);
+        (free)(p->u.opaque);
+    }
 
     /* fail safe */
     p->class_id = 0;
@@ -11584,6 +11698,8 @@ static void mark_children(JSRuntime *rt, JSGCObjectHeader *gp,
                 gc_mark = rt->class_array[p->class_id].gc_mark;
                 if (gc_mark)
                     gc_mark(rt, JS_MKPTR(JS_TAG_OBJECT, p), mark_func);
+                if (rt->class_array[p->class_id].record && p->u.opaque)
+                    js_record_mark(rt, p->u.opaque, rt->class_array[p->class_id].record, mark_func);
             }
         }
         break;
@@ -12757,7 +12873,7 @@ int JS_SetGlobalClass(JSContext *ctx, JSClassID class_id)
         return -1;
     /* See quickjs.h: the global's union has never been filled, so a class that owns per-object data would free
        or trace whatever happens to be in it. */
-    if (rt->class_array[class_id].finalizer || rt->class_array[class_id].gc_mark)
+    if (rt->class_array[class_id].finalizer || rt->class_array[class_id].gc_mark || rt->class_array[class_id].record)
         return -1;
     p->u.opaque = NULL;
     p->class_id = class_id;

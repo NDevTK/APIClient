@@ -267,7 +267,7 @@ void      cow_capture_host_state_at(JSContext *ctx, JSValueConst owner, void *p,
  * when the flow REACHES it cannot be missed at a write site, and there is no write site left to forget. Those
  * accessors take only the object, so the context is the session's, stashed by cow_set_ctx exactly as the DOM
  * delta's already is. */
-typedef struct { size_t size; const uint16_t *val_off; int n_val; } CowRecord;
+typedef JSRecordLayout CowRecord;   /* quickjs.h's layout; the byte capture takes only one with no `fields` */
 
 /* WHICH COMPONENT ASKED — the per-site half of this unit's ask count, and the one question `cowStateAsks`
  * cannot be made to answer however many kinds cow.h's list grows.

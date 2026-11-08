@@ -189,7 +189,7 @@ typedef struct {
        Memoised because a site atom is composed from where the page stood at the first purchase: recomputing
        would buy a value written under one key on two lines two atoms. A field makes the atom a pure function of
        the value, which the keyname table's declaration relies on.
-       Owned and freed at concolic_finalizer. The record has one mint (concolic_alloc, through reclaim_calloc,
+       Owned, and released by CONCOLIC_LAYOUT. The record has one mint (concolic_alloc, through reclaim_calloc,
        so the never-purchased state is the zero) and no field-by-field clone. */
     char *key_atom;
     /* The identity and shape of the value `x` this one is the string form of, else NULL: a concatenation with
@@ -260,6 +260,59 @@ typedef struct {
        concolic_mark_json_value at a reply's mint and by concolic_exotic_get on a member; 0 says nothing. */
     uint8_t json_value;
 } Concolic;
+
+/* The record's layout (quickjs.h's JSRecordLayout): the runtime releases and marks a Concolic by it, so a field
+   this record owns is named here and nowhere else. */
+static uint32_t aff_n(const void *r) { return (uint32_t)((const ConcolicAffine *)r)->n; }
+static const JSRecordField AFF_FIELDS[] = {
+    { offsetof(ConcolicAffine, term), JS_REC_CSTR_ARRAY, 0, aff_n, NULL },
+    { offsetof(ConcolicAffine, k), JS_REC_POD_ARRAY, sizeof(double), aff_n, NULL },
+};
+static const JSRecordLayout AFF_LAYOUT = { sizeof(ConcolicAffine), NULL, 0, AFF_FIELDS, 2, NULL };
+static size_t unit_class_size(const void *r)
+{
+    return sizeof(UnitClass) + (size_t)2 * (size_t)((const UnitClass *)r)->n * sizeof(uint16_t);
+}
+static const JSRecordLayout UNIT_CLASS_LAYOUT = { sizeof(UnitClass), NULL, 0, NULL, 0, unit_class_size };
+static const uint16_t PIECE_VALS[] = { offsetof(JSUnknownPiece, unknown) };
+static const JSRecordField PIECE_FIELDS[] = { { offsetof(JSUnknownPiece, codec), JS_REC_INTERNED, 0, NULL, NULL } };
+static const JSRecordLayout PIECE_LAYOUT = { sizeof(JSUnknownPiece), PIECE_VALS, 1, PIECE_FIELDS, 1, NULL };
+static uint32_t c_sp_nargs(const void *r) { return (uint32_t)((const Concolic *)r)->sp_nargs; }
+static uint32_t c_conj_n(const void *r) { return (uint32_t)((const Concolic *)r)->conj_n; }
+static uint32_t c_hole_spans(const void *r) { return 2 * (uint32_t)((const Concolic *)r)->hole_n; }
+/* One class per hole where `hole_span` is written, and the one whole-value class otherwise. */
+static uint32_t c_hole_classes(const void *r)
+{
+    const Concolic *c = r;
+    return c->hole_span ? (uint32_t)c->hole_n : 1;
+}
+static uint32_t c_piece_n(const void *r) { return (uint32_t)((const Concolic *)r)->piece_n; }
+static uint32_t c_split_rec(const void *r) { return ((const Concolic *)r)->split_rec; }
+static uint32_t c_split_bounds(const void *r) { return 2 * ((const Concolic *)r)->split_n; }
+static uint32_t c_kept_n(const void *r) { return (uint32_t)((const Concolic *)r)->kept_n; }
+#define C_CSTR(f) { offsetof(Concolic, f), JS_REC_CSTR, 0, NULL, NULL }
+static const JSRecordField CONCOLIC_FIELDS[] = {
+    C_CSTR(shape), C_CSTR(src), C_CSTR(root), C_CSTR(ident), C_CSTR(br_key), C_CSTR(cmp_tok), C_CSTR(cmp_subj),
+    C_CSTR(cmp_subj_ident), C_CSTR(typeof_of), C_CSTR(cmp_typeof_of), C_CSTR(rel_tok), C_CSTR(rel_subj),
+    C_CSTR(member), C_CSTR(facet_src), C_CSTR(sp_meth), C_CSTR(sp_subj), C_CSTR(key_atom), C_CSTR(str_of),
+    C_CSTR(str_of_shape), C_CSTR(search_recv), C_CSTR(search_tok), C_CSTR(kept_op),
+    { offsetof(Concolic, sp_args), JS_REC_CSTR_ARRAY, 0, c_sp_nargs, NULL },
+    { offsetof(Concolic, conj), JS_REC_CSTR_ARRAY, 0, c_conj_n, NULL },
+    { offsetof(Concolic, aff), JS_REC_RECORD, 0, NULL, &AFF_LAYOUT },
+    { offsetof(Concolic, hole_span), JS_REC_POD_ARRAY, sizeof(int), c_hole_spans, NULL },
+    { offsetof(Concolic, hole_class), JS_REC_PTR_ARRAY, 0, c_hole_classes, &UNIT_CLASS_LAYOUT },
+    { offsetof(Concolic, tail_class), JS_REC_RECORD, 0, NULL, &UNIT_CLASS_LAYOUT },
+    { offsetof(Concolic, piece), JS_REC_INLINE_ARRAY, 0, c_piece_n, &PIECE_LAYOUT },
+    { offsetof(Concolic, split_of), JS_REC_VALUE_IF, 0, c_split_rec, NULL },
+    { offsetof(Concolic, split_pos), JS_REC_POD_ARRAY, sizeof(uint32_t), c_split_bounds, NULL },
+    { offsetof(Concolic, kept), JS_REC_VALUE_ARRAY, 0, c_kept_n, NULL },
+};
+#undef C_CSTR
+static const uint16_t CONCOLIC_VALS[] = { offsetof(Concolic, example), offsetof(Concolic, proto) };
+static const JSRecordLayout CONCOLIC_LAYOUT = {
+    sizeof(Concolic), CONCOLIC_VALS, 2, CONCOLIC_FIELDS, (int)(sizeof CONCOLIC_FIELDS / sizeof CONCOLIC_FIELDS[0]),
+    NULL
+};
 
 /* §6.1's eight language types, one bit each, so a mint can state a set (`x - 1` is a Number or a BigInt). */
 enum {
@@ -2493,63 +2546,6 @@ void concolic_note_assumed_outcome(const char *key, const char *op, const char *
     c->adec_what = (signed char)CONCOLIC_DECISION_OUTCOME;
     c->adec_arm = completion;
     c->adec_neg = 0;
-}
-
-static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
-    Concolic *c = JS_GetOpaque(val, g_concolic_class);
-    if (!c) return;
-    free(c->shape);
-    free(c->src);
-    free(c->root);
-    free(c->ident);
-    free(c->br_key);
-    free(c->cmp_tok);
-    free(c->cmp_subj);
-    free(c->cmp_subj_ident);
-    free(c->typeof_of);
-    free(c->cmp_typeof_of);
-    free(c->rel_tok);
-    free(c->rel_subj);
-    free(c->member);
-    free(c->facet_src);
-    free(c->sp_meth);
-    ident_list_free(c->sp_args, c->sp_nargs);
-    free(c->sp_subj);
-    ident_list_free(c->conj, c->conj_n);
-    free(c->key_atom);
-    free(c->str_of);
-    free(c->str_of_shape);
-    aff_free(c->aff);
-    free(c->hole_span);
-    if (c->hole_class)
-        for (int i = 0; i < (c->hole_span ? c->hole_n : 1); i++) free(c->hole_class[i]);
-    free(c->hole_class);
-    free(c->tail_class);
-    for (int i = 0; i < c->piece_n; i++) JS_FreeValueRT(rt, c->piece[i].unknown);
-    free(c->piece);
-    if (c->split_rec) JS_FreeValueRT(rt, c->split_of);
-    free(c->split_pos);
-    for (int i = 0; i < c->kept_n; i++) JS_FreeValueRT(rt, c->kept[i]);
-    free(c->kept);
-    free(c->kept_op);
-    free(c->search_recv);
-    free(c->search_tok);
-    JS_FreeValueRT(rt, c->example);
-    /* The second owned JSValue on this record. A field added to the struct is an obligation here and at
-       concolic_gc_mark together. JS_UNINITIALIZED is not refcounted, so the never-asked case needs no test. */
-    JS_FreeValueRT(rt, c->proto);
-    free(c);
-}
-
-static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func) {
-    Concolic *c = JS_GetOpaque(val, g_concolic_class);
-    if (c && !JS_IsUndefined(c->example)) JS_MarkValue(rt, c->example, mark_func);
-    /* The derived prototype is reachable only from here: another value of this class, so the chain a page
-       walks is these records pointing at each other, and an unreported one would be collected while live. */
-    if (c && !JS_IsUninitialized(c->proto)) JS_MarkValue(rt, c->proto, mark_func);
-    for (int i = 0; c && i < c->piece_n; i++) JS_MarkValue(rt, c->piece[i].unknown, mark_func);
-    if (c && c->split_rec) JS_MarkValue(rt, c->split_of, mark_func);
-    for (int i = 0; c && i < c->kept_n; i++) JS_MarkValue(rt, c->kept[i], mark_func);
 }
 
 /* @S candidate injection: during a verification re-run, every read of the source g_cand_at returns
@@ -8642,8 +8638,8 @@ void concolic_init(JSContext *ctx) {
         DCHECK(g_concolic_class != 0, "concolic: class id allocation returned 0 — runtime class table exhausted");
     }
     if (!JS_IsRegisteredClass(rt, g_concolic_class)) {
-        JSClassDef def = { "Concolic", .finalizer = concolic_finalizer, .gc_mark = concolic_gc_mark,
-                           .call = concolic_call_c_entry, .exotic = &g_concolic_exotic };
+        JSClassDef def = { "Concolic", .call = concolic_call_c_entry, .exotic = &g_concolic_exotic,
+                           .record = &CONCOLIC_LAYOUT };
         int r = JS_NewClass(rt, g_concolic_class, &def);
         CHECK(r == 0, "concolic: JS_NewClass failed — cannot register the solver's value type");
     }

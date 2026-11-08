@@ -1103,6 +1103,39 @@ typedef struct JSClassExoticMethods {
     int (*prevent_extensions)(JSContext *ctx, JSValueConst obj);
 } JSClassExoticMethods;
 
+/* A host record's layout: the one statement of what a C record owns, read by everything that frees, marks,
+   captures or writes it. The bytes outside the named fields are plain data. `val_off` names the owned JSValue
+   slots; `fields` names the owned pointers, each by its kind. A count is a function of the record, because a
+   record states some of its lengths through other fields (a pair array is twice its count). Every pointer is
+   from the C allocator and is freed with free(). */
+typedef struct JSRecordLayout JSRecordLayout;
+typedef enum JSRecordKind {
+    JS_REC_CSTR,          /* char *: an owned NUL-terminated string, or NULL */
+    JS_REC_POD_ARRAY,     /* an owned array of `count` elements of `elem_size` plain bytes, or NULL */
+    JS_REC_CSTR_ARRAY,    /* char **: an owned array of `count` owned strings, or NULL */
+    JS_REC_VALUE_ARRAY,   /* JSValue *: an owned array of `count` owned values, or NULL */
+    JS_REC_INLINE_ARRAY,  /* an owned array of `count` contiguous records laid out by `sub`, or NULL */
+    JS_REC_PTR_ARRAY,     /* an owned array of `count` owned pointers to records laid out by `sub`, or NULL */
+    JS_REC_RECORD,        /* an owned pointer to one record laid out by `sub`, or NULL */
+    JS_REC_VALUE_IF,      /* JSValue: owned where `count` answers nonzero, and not a value otherwise */
+    JS_REC_INTERNED,      /* const char *: a name the runtime interns and owns (js_ab_codec_intern), or NULL */
+} JSRecordKind;
+typedef struct JSRecordField {
+    uint16_t off;
+    uint8_t kind;                          /* JSRecordKind */
+    uint32_t elem_size;                    /* JS_REC_POD_ARRAY's element size; 0 for every other kind */
+    uint32_t (*count)(const void *rec);    /* the array kinds' length and JS_REC_VALUE_IF's liveness */
+    const JSRecordLayout *sub;             /* the record kinds' element layout */
+} JSRecordField;
+struct JSRecordLayout {
+    size_t size;
+    const uint16_t *val_off;
+    int n_val;
+    const JSRecordField *fields;
+    int n_fields;
+    size_t (*self_size)(const void *rec);  /* a flexible record's size from its own header; NULL when fixed */
+};
+
 typedef void JSClassFinalizer(JSRuntime *rt, JSValueConst val);
 typedef void JSClassGCMark(JSRuntime *rt, JSValueConst val,
                            JS_MarkFunc *mark_func);
@@ -1128,6 +1161,9 @@ typedef struct JSClassDef {
        table of function pointers that nothing writes should be — discards the qualifier at the JSClassDef,
        and the only ways out are dropping the const or casting it away at every class. */
     const JSClassExoticMethods *exotic;
+    /* The layout of the record the object's opaque points at. A class that declares one has no finalizer and
+       no gc_mark: the runtime releases and marks the record by it, and frees it. NULL for every other class. */
+    const JSRecordLayout *record;
 } JSClassDef;
 
 #define JS_EVAL_OPTIONS_VERSION 1
