@@ -7,6 +7,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/wasm/linear_memory.h"
+#include "core/wasm/reference_vector.h"
 
 enum {
     I_IMPORTS = 0, I_ALLOC, I_GLOBALS, I_TABLES, I_TABLE_FILL, I_ELEMS, I_ACTIVE, I_ACTIVE_COPY, I_DATA, I_DATA_COPY,
@@ -181,7 +182,7 @@ static WasmExecStatus next(WasmInstance *inst, int phase)
     return WASM_EXEC_MORE;
 }
 
-static WasmTableInstance *table(WasmInstance *inst, size_t x)
+static const WasmTableInstance *table(WasmInstance *inst, size_t x)
 {
     DCHECKF(inst->tables[x] < inst->store->tables.n, "a WebAssembly instance's table %zu has no store address",
             x);
@@ -234,7 +235,7 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
 
             st = evaluate(inst, e, &v);
             if (st != WASM_EXEC_DONE) return st;
-            wasm_store_global(s, inst->globals[inst->imported_globals + inst->item])->value = v;
+            wasm_global_set(s, inst->globals[inst->imported_globals + inst->item], v);
             return next(inst, I_GLOBALS);
         }
     case I_TABLES:
@@ -252,17 +253,17 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         inst->phase = I_TABLE_FILL;
         return WASM_EXEC_MORE;
     case I_TABLE_FILL: {
-        WasmTableInstance *t = table(inst, inst->imported_tables + inst->item);
+        const WasmTableInstance *t = table(inst, inst->imported_tables + inst->item);
 
-        if (inst->sub == t->size) return next(inst, I_TABLES);
-        wasm_table_elem(t, inst->sub++)->lo = inst->offset;
+        if (inst->sub == wasm_refs_length(t->refs)) return next(inst, I_TABLES);
+        wasm_refs_set(t->refs, inst->sub++, (WasmValue){ inst->offset, 0 });
         JS_FlowRetireWork(1);
         return WASM_EXEC_MORE;
     }
     case I_ELEMS: {
         /* §4.7.2's element segments: each item a reference, a function index's or its expression's value. */
         const WasmElem *e;
-        WasmElemInstance *x;
+        const WasmElemInstance *x;
 
         if (inst->item == m->n_elems) {
             inst->item = 0;
@@ -275,14 +276,13 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         if (!e->exprs) {
             uint32_t f = m->elem_funcs[e->items + inst->sub];
 
-            x->refs[inst->sub].lo = (uint64_t)inst->funcs[f] + 1;
-            inst->sub++;
+            wasm_refs_set(x->refs, inst->sub++, (WasmValue){ (uint64_t)inst->funcs[f] + 1, 0 });
             JS_FlowRetireWork(1);
             return WASM_EXEC_MORE;
         }
         st = evaluate(inst, m->elem_exprs[e->items + inst->sub], &v);
         if (st != WASM_EXEC_DONE) return st;
-        wasm_store_elem(s, inst->elems[inst->item])->refs[inst->sub++] = v;
+        wasm_refs_set(x->refs, inst->sub++, v);
         return WASM_EXEC_MORE;
     }
     case I_ACTIVE: {
@@ -298,12 +298,13 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         e = &m->elems[inst->item];
         if (e->mode == WASM_SEGMENT_PASSIVE) return next(inst, I_ACTIVE);
         if (e->mode == WASM_SEGMENT_DECLARATIVE) {
-            wasm_store_elem(s, inst->elems[inst->item])->n = 0;
+            wasm_refs_drop(wasm_store_elem(s, inst->elems[inst->item])->refs);
             return next(inst, I_ACTIVE);
         }
         st = evaluate(inst, e->offset, &v);
         if (st != WASM_EXEC_DONE) return st;
-        if (v.lo > table(inst, e->table)->size || e->n_items > table(inst, e->table)->size - v.lo)
+        if (v.lo > wasm_refs_length(table(inst, e->table)->refs)
+            || e->n_items > wasm_refs_length(table(inst, e->table)->refs) - v.lo)
             return WASM_EXEC_TRAP_TABLE_BOUNDS;
         inst->offset = v.lo;
         inst->phase = I_ACTIVE_COPY;
@@ -311,13 +312,13 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
     }
     case I_ACTIVE_COPY: {
         const WasmElem *e = &m->elems[inst->item];
-        WasmElemInstance *x = wasm_store_elem(s, inst->elems[inst->item]);
+        const WasmElemInstance *x = wasm_store_elem(s, inst->elems[inst->item]);
 
         if (inst->sub == e->n_items) {
-            x->n = 0;
+            wasm_refs_drop(x->refs);
             return next(inst, I_ACTIVE);
         }
-        *wasm_table_elem(table(inst, e->table), inst->offset + inst->sub) = x->refs[inst->sub];
+        wasm_refs_set(table(inst, e->table)->refs, inst->offset + inst->sub, wasm_refs_get(x->refs, inst->sub));
         inst->sub++;
         JS_FlowRetireWork(1);
         return WASM_EXEC_MORE;
@@ -342,11 +343,11 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         return WASM_EXEC_MORE;
     }
     case I_DATA_COPY: {
-        WasmDataInstance *x = wasm_store_data(s, inst->datas[inst->item]);
+        const WasmDataInstance *x = wasm_store_data(s, inst->datas[inst->item]);
         uint8_t byte;
 
         if (inst->sub == x->n) {
-            x->n = 0;
+            wasm_data_drop(s, inst->datas[inst->item]);
             return next(inst, I_DATA);
         }
         byte = wasm_store_instance(s, x->inst)->bytes[x->offset + inst->sub];

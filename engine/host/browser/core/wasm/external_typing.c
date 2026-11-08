@@ -3,6 +3,7 @@
 
 #include "check.h"
 #include "core/wasm/linear_memory.h"
+#include "core/wasm/reference_vector.h"
 
 /* The type space a store value type's concrete heap index reads; a type that names no defined type reads none,
    so any serves. */
@@ -58,7 +59,8 @@ WasmMatch wasm_extern_check_begin(WasmExternCheck *c, const WasmStore *s, const 
         DCHECK(addr < s->tables.n, "a WebAssembly table import was given an address past the store's tables");
         t = wasm_store_table(s, addr);
         tt = types_of(s, &t->elem, importer);
-        if (!limits_le(t->type.addr64, t->size, t->type.has_max, t->type.max, &im->limits)) return WASM_MATCH_NO;
+        if (!limits_le(t->type.addr64, wasm_refs_length(t->refs), t->type.has_max, t->type.max, &im->limits))
+            return WASM_MATCH_NO;
         return wasm_val_eq(tt, &t->elem.type, importer, &im->type) ? WASM_MATCH_YES : WASM_MATCH_NO;
     }
     case WASM_EXTERN_GLOBAL: {

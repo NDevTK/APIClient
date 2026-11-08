@@ -11,6 +11,7 @@
 #include "core/wasm/instance.h"
 #include "core/wasm/instruction.h"
 #include "core/wasm/linear_memory.h"
+#include "core/wasm/reference_vector.h"
 
 enum { L_FUNC = 1, L_BLOCK, L_LOOP, L_IF };
 
@@ -568,7 +569,7 @@ static WasmExecStatus global(WasmInterpreter *it, uint32_t op, uint32_t x)
 
     DCHECKF(a < it->store->globals.n, "a WebAssembly instance's global %u has no store address", x);
     if (op == 0x23) return push(it, wasm_store_global(it->store, a)->value.lo) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
-    wasm_store_global(it->store, a)->value.lo = pop(it);
+    wasm_global_set(it->store, a, (WasmValue){ pop(it), 0 });
     return WASM_EXEC_MORE;
 }
 
@@ -605,7 +606,7 @@ static size_t table_addr(WasmInterpreter *it, uint64_t x)
     return a;
 }
 
-static WasmTableInstance *table_of(WasmInterpreter *it, uint64_t x)
+static const WasmTableInstance *table_of(WasmInterpreter *it, uint64_t x)
 {
     return wasm_store_table(it->store, table_addr(it, x));
 }
@@ -615,7 +616,7 @@ static WasmTableInstance *table_of(WasmInterpreter *it, uint64_t x)
    module (one supertype a unit of work); the function may be another instance's. */
 static WasmExecStatus call_indirect(WasmInterpreter *it, const WasmInstruction *in)
 {
-    WasmTableInstance *t = table_of(it, in->index[1]);
+    const WasmTableInstance *t = table_of(it, in->index[1]);
     uint64_t i = pop(it), f;
     const WasmFuncInstance *fi;
     const WasmTypes *callee;
@@ -624,9 +625,10 @@ static WasmExecStatus call_indirect(WasmInterpreter *it, const WasmInstruction *
     WasmMatch le;
 
     it->trap_index = i;
-    if (i >= t->size) return WASM_EXEC_TRAP_UNDEFINED_ELEMENT;
-    if (wasm_table_elem(t, i)->lo == 0) return WASM_EXEC_TRAP_UNINITIALIZED;
-    f = wasm_table_elem(t, i)->lo - 1;
+    if (i >= wasm_refs_length(t->refs)) return WASM_EXEC_TRAP_UNDEFINED_ELEMENT;
+    f = wasm_refs_get(t->refs, i).lo;
+    if (f == 0) return WASM_EXEC_TRAP_UNINITIALIZED;
+    f--;
     fi = wasm_store_func(it->store, f);
     callee = wasm_store_types(it->store, fi->types);
     a.code = b.code = WASM_TYPE_REF;
@@ -645,15 +647,15 @@ static WasmExecStatus call_indirect(WasmInterpreter *it, const WasmInstruction *
 /* §4.6.7's table.get and table.set. */
 static WasmExecStatus table_access(WasmInterpreter *it, const WasmInstruction *in)
 {
-    WasmTableInstance *t = table_of(it, in->index[0]);
+    const WasmTableInstance *t = table_of(it, in->index[0]);
     uint64_t r = in->opcode == 0x26 ? pop(it) : 0, i = pop(it);
 
-    if (i >= t->size) return WASM_EXEC_TRAP_TABLE_BOUNDS;
+    if (i >= wasm_refs_length(t->refs)) return WASM_EXEC_TRAP_TABLE_BOUNDS;
     if (in->opcode == 0x26) {
-        wasm_table_elem(t, i)->lo = r;
+        wasm_refs_set(t->refs, i, (WasmValue){ r, 0 });
         return WASM_EXEC_MORE;
     }
-    return push(it, wasm_table_elem(t, i)->lo) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
+    return push(it, wasm_refs_get(t->refs, i).lo) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
 }
 
 /* §4.6.7's table.size, table.grow, elem.drop, and table.fill, table.copy and table.init, whose bounds are
@@ -662,16 +664,16 @@ static WasmExecStatus table_access(WasmInterpreter *it, const WasmInstruction *i
 static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
 {
     WasmBulk *b = &it->bulk;
-    WasmTableInstance *t, *u;
-    WasmElemInstance *e;
-    uint64_t n, s, d, bound;
+    const WasmTableInstance *t, *u;
+    const WasmElemInstance *e;
+    uint64_t n, s, d, bound, size;
 
     switch (in->opcode) {
     case 13:
-        wasm_store_elem(it->store, INST(it)->elems[in->index[0]])->n = 0;
+        wasm_refs_drop(wasm_store_elem(it->store, INST(it)->elems[in->index[0]])->refs);
         return WASM_EXEC_MORE;
     case 16:
-        return push(it, table_of(it, in->index[0])->size) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
+        return push(it, wasm_refs_length(table_of(it, in->index[0])->refs)) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
     case 15:
         /* §4.7.1's growtable either succeeds or fails at the implementation's choice, which is an unknown of
            the environment: the step answers FORK with the success arm as the example (wasm_interpreter_choose).
@@ -680,8 +682,8 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
         n = pop(it);
         b->ref.lo = pop(it);
         bound = t->type.addr64 ? UINT64_MAX : UINT32_MAX;
-        if (n > bound - t->size || (t->type.has_max && t->size + n > t->type.max)
-            || t->size + n > SIZE_MAX / sizeof(WasmValue))
+        size = wasm_refs_length(t->refs);
+        if (n > bound - size || (t->type.has_max && size + n > t->type.max) || !wasm_refs_growable(t->refs, n))
             return push(it, bound) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
         it->choice.kind = WASM_CHOICE_TABLE_GROW;
         it->choice.addr = table_addr(it, in->index[0]);
@@ -692,7 +694,8 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
         n = pop(it);
         b->ref.lo = pop(it);
         d = pop(it);
-        if (d > t->size || n > t->size - d) return WASM_EXEC_TRAP_TABLE_BOUNDS;
+        size = wasm_refs_length(t->refs);
+        if (d > size || n > size - d) return WASM_EXEC_TRAP_TABLE_BOUNDS;
         b->op = 17;
         b->to = table_addr(it, in->index[0]);
         b->d = d;
@@ -704,7 +707,9 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
         n = pop(it);
         s = pop(it);
         d = pop(it);
-        if (d > t->size || n > t->size - d || s > u->size || n > u->size - s) return WASM_EXEC_TRAP_TABLE_BOUNDS;
+        size = wasm_refs_length(t->refs);
+        if (d > size || n > size - d || s > wasm_refs_length(u->refs) || n > wasm_refs_length(u->refs) - s)
+            return WASM_EXEC_TRAP_TABLE_BOUNDS;
         b->op = 14;
         b->to = table_addr(it, in->index[0]);
         b->from = table_addr(it, in->index[1]);
@@ -719,7 +724,9 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
         n = pop(it);
         s = pop(it);
         d = pop(it);
-        if (d > t->size || n > t->size - d || s > e->n || n > e->n - s) return WASM_EXEC_TRAP_TABLE_BOUNDS;
+        size = wasm_refs_length(t->refs);
+        if (d > size || n > size - d || s > wasm_refs_length(e->refs) || n > wasm_refs_length(e->refs) - s)
+            return WASM_EXEC_TRAP_TABLE_BOUNDS;
         b->op = 12;
         b->to = table_addr(it, in->index[1]);
         b->from = INST(it)->elems[in->index[0]];
@@ -814,7 +821,7 @@ static WasmExecStatus memory_bulk(WasmInterpreter *it, const WasmInstruction *in
     size_t to, from = 0;
 
     if (op == 9) {
-        wasm_store_data(it->store, INST(it)->datas[in->index[0]])->n = 0;
+        wasm_data_drop(it->store, INST(it)->datas[in->index[0]]);
         return WASM_EXEC_MORE;
     }
     n = pop(it);
@@ -846,7 +853,7 @@ static WasmExecStatus memory_bulk(WasmInterpreter *it, const WasmInstruction *in
 WasmExecStatus wasm_interpreter_choose(WasmInterpreter *it, bool example)
 {
     WasmChoice c = it->choice;
-    WasmTableInstance *t;
+    const WasmTableInstance *t;
     WasmBulk *b = &it->bulk;
 
     DCHECK(c.kind == WASM_CHOICE_TABLE_GROW || c.kind == WASM_CHOICE_MEMORY_GROW, "a WebAssembly choice was made "
@@ -862,12 +869,12 @@ WasmExecStatus wasm_interpreter_choose(WasmInterpreter *it, bool example)
     }
     t = wasm_store_table(it->store, c.addr);
     if (!example) return push(it, t->type.addr64 ? UINT64_MAX : UINT32_MAX) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
-    if (!push(it, t->size)) return WASM_EXEC_NO_ROOM;
+    if (!push(it, wasm_refs_length(t->refs))) return WASM_EXEC_NO_ROOM;
     b->op = 15;
     b->to = c.addr;
-    b->d = t->size;
+    b->d = wasm_refs_length(t->refs);
     b->n = c.n;
-    wasm_table_grow(t, c.n);
+    wasm_refs_grow(t->refs, c.n);
     return WASM_EXEC_MORE;
 }
 
@@ -888,18 +895,19 @@ static WasmExecStatus bulk_step(WasmInterpreter *it)
 
     switch (b->op) {
     case 15: case 17:
-        *wasm_table_elem(wasm_store_table(st, b->to), b->d++) = b->ref;
+        wasm_refs_set(wasm_store_table(st, b->to)->refs, b->d++, b->ref);
         break;
     case 14:
-        *wasm_table_elem(wasm_store_table(st, b->to), b->d + k) = *wasm_table_elem(wasm_store_table(st, b->from),
-                                                                                  b->s + k);
+        wasm_refs_set(wasm_store_table(st, b->to)->refs, b->d + k, wasm_refs_get(wasm_store_table(st, b->from)->refs,
+                                                                                 b->s + k));
         if (k == 0) {
             b->d++;
             b->s++;
         }
         break;
     case 12:
-        *wasm_table_elem(wasm_store_table(st, b->to), b->d++) = wasm_store_elem(st, b->from)->refs[b->s++];
+        wasm_refs_set(wasm_store_table(st, b->to)->refs, b->d++,
+                      wasm_refs_get(wasm_store_elem(st, b->from)->refs, b->s++));
         break;
     case 11:
         bulk_byte(wasm_store_mem(st, b->to), b->d++, (uint8_t)b->ref.lo);

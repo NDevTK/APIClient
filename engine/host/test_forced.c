@@ -24,6 +24,7 @@
 #include "core/wasm/linear_memory.h" /* WebAssembly Core §4.2.9's per-flow memory */
 #include "core/wasm/interpreter.h" /* WebAssembly Core §4.6's interpreter core */
 #include "core/wasm/instance.h"    /* WebAssembly Core §4.7.2's instantiation */
+#include "core/wasm/reference_vector.h" /* WebAssembly Core §4.2.8 and §4.2.12: references per flow */
 #include "fixture/wasm_valid.h"     /* the rows that validator answers */
 #include "fixture/wasm_exec.h"      /* the testsuite's assert_return and assert_trap rows the interpreter answers */
 #include "core/image/image_header.h" /* css-images-3 §4.1's natural dimensions — cross-checked by @PNGDEC */
@@ -470,6 +471,59 @@ static JSValue js_wasm_memory_load(JSContext *ctx, JSValueConst this_val, int ar
     if (argc < 2 || !wasm_memory_is(argv[0])) return JS_ThrowTypeError(ctx, "wasmMemoryLoad: not a memory");
     if (JS_ToUint32(ctx, &addr, argv[1]) < 0) return JS_EXCEPTION;
     return JS_NewInt32(ctx, wasm_memory_load(argv[0], addr, 1, &b) ? b : -1);
+}
+/* WebAssembly Core §4.2.3's store per flow (core/wasm/store.h), reached by the fixture before any interpreter or
+   JS API does: wasmStoreNew answers a store's owner holding globals 0 and 1 (mutable i32s), table 0 (two null
+   funcrefs), element segments 0 and 1 (two references each), data segments 0 and 1 (three bytes each) and memory
+   0 (one page); wasmStoreOp(store, op, i, v) writes or reads one record through the store's own accessors and
+   answers a number. */
+static WasmInstance g_wasm_store_row_instance;   /* the data segments' instance, whose bytes no op reads */
+static JSValue js_wasm_store_new(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    WasmStore *s = wasm_store_new(ctx);
+    WasmGlobalInstance g = { { 0, 0 }, { { WASM_TYPE_I32, false, 0, 0 }, SIZE_MAX }, true };
+    WasmStoreValType funcref = { { WASM_TYPE_REF, true, WASM_HEAP_FUNC, 0 }, SIZE_MAX };
+    WasmLimits two = { false, false, 2, 0 }, one = { false, false, 1, 0 };
+
+    (void)this_val; (void)argc; (void)argv;
+    wasm_store_add_instance(s, &g_wasm_store_row_instance);
+    CHECK(wasm_store_add_global(s, g) == 0 && wasm_store_add_global(s, g) == 1
+          && wasm_store_add_table(s, &two, funcref) == 0 && wasm_store_add_elem(s, 2) == 0
+          && wasm_store_add_elem(s, 2) == 1 && wasm_store_add_data(s, (WasmDataInstance){ 0, 0, 3 }) == 0
+          && wasm_store_add_data(s, (WasmDataInstance){ 0, 0, 3 }) == 1 && wasm_store_add_mem(s, &one) == 0,
+          "wasmStoreNew: the fixture store's records are not at their addresses");
+    return s->owner;   /* the reference wasm_store_new answered, now the caller's */
+}
+static JSValue js_wasm_store_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    WasmStore *s = argc >= 4 ? wasm_store_of(argv[0]) : NULL;
+    const char *op;
+    uint32_t i = 0, v = 0;
+    uint8_t b;
+    double r = -1;
+
+    (void)this_val;
+    if (s == NULL) return JS_ThrowTypeError(ctx, "wasmStoreOp: not a store");
+    if (JS_ToUint32(ctx, &i, argv[2]) < 0 || JS_ToUint32(ctx, &v, argv[3]) < 0) return JS_EXCEPTION;
+    op = JS_ToCString(ctx, argv[1]);
+    if (op == NULL) return JS_EXCEPTION;
+    if (!strcmp(op, "gset")) wasm_global_set(s, i, (WasmValue){ v, 0 });
+    else if (!strcmp(op, "gget")) r = (double)wasm_store_global(s, i)->value.lo;
+    else if (!strcmp(op, "gadd"))
+        r = (double)wasm_store_add_global(s, (WasmGlobalInstance){ { v, 0 }, { { WASM_TYPE_I32, false, 0, 0 },
+                                                                                SIZE_MAX }, true });
+    else if (!strcmp(op, "gcount")) r = (double)s->globals.n;
+    else if (!strcmp(op, "tset")) wasm_refs_set(wasm_store_table(s, 0)->refs, i, (WasmValue){ v, 0 });
+    else if (!strcmp(op, "tget")) r = (double)wasm_refs_get(wasm_store_table(s, 0)->refs, i).lo;
+    else if (!strcmp(op, "tgrow")) wasm_refs_grow(wasm_store_table(s, 0)->refs, i);
+    else if (!strcmp(op, "tsize")) r = (double)wasm_refs_length(wasm_store_table(s, 0)->refs);
+    else if (!strcmp(op, "edrop")) wasm_refs_drop(wasm_store_elem(s, i)->refs);
+    else if (!strcmp(op, "elen")) r = (double)wasm_refs_length(wasm_store_elem(s, i)->refs);
+    else if (!strcmp(op, "ddrop")) wasm_data_drop(s, i);
+    else if (!strcmp(op, "dlen")) r = (double)wasm_store_data(s, i)->n;
+    else if (!strcmp(op, "mstore")) { b = (uint8_t)v; r = wasm_memory_store(wasm_store_mem(s, 0), i, 1, &b); }
+    else if (!strcmp(op, "mload")) r = wasm_memory_load(wasm_store_mem(s, 0), i, 1, &b) ? b : -1;
+    else CHECKF(false, "wasmStoreOp: the fixture asked for op \"%s\", which this native does not define", op);
+    JS_FreeCString(ctx, op);
+    return JS_NewFloat64(ctx, r);
 }
 
 /* the DOM READ host-edge (getBodyAttr stands in for el.getAttribute): reads the CURRENT flow's view of the
@@ -1788,8 +1842,9 @@ static const char *HTML_MIN =
  * a second session rather than becoming a frontier this fixture cannot finish measuring. */
 static const char *HTML_COLD =
     "<!doctype html><html><body>"
-    /* The WebAssembly memory below is minted here, before the fork, so both arms share it and its chunk. */
-    "<script>var cfg = { admin: state.admin }; var wmem = wasmMemoryNew(1); wasmMemoryStore(wmem, 300, 7);</script>"
+    /* The WebAssembly memory and store below are minted here, before the fork, so both arms share them. */
+    "<script>var cfg = { admin: state.admin }; var wmem = wasmMemoryNew(1); wasmMemoryStore(wmem, 300, 7);"
+    " var wst = wasmStoreNew(); wasmStoreOp(wst, 'tset', 1, 4);</script>"
     "<script>"
     "var acc = 0; for (var i = 0; i < 6; i++) { acc += i; }"                       /* back-edges: a preempt mid-body, so a parked flow is FRAMED */
     "if (cfg.admin) { fetch('/api/cold/admin?a=' + acc); }"                        /* the fork: two arms, two decision chains, and an endpoint per arm */
@@ -1956,6 +2011,22 @@ static const char *HTML_COLD =
     "else { wasmMemoryStore(wmem, 200, 80);"
     " fetch('/api/wmem/f?v=A' + wasmMemoryLoad(wmem, 100) + 'B' + wasmMemoryLoad(wmem, 200)"
     "       + 'C' + wasmMemoryLoad(wmem, 300)); }"
+    "</script>"
+    /* WebAssembly Core §4.2.3's store per flow (core/wasm/store.h): each arm writes its own record of each kind in
+       the store minted before the fork (a global, a table element and the table's size, an element and a data
+       segment's drop, a memory byte, and an appended global at the same address) and reads both arms' records
+       back, so a leak shows whichever arm runs first. Refined on `cfg.admin`. */
+    "<script>"
+    "function wstRead(arm) { var o = function (op, i) { return wasmStoreOp(wst, op, i, 0); };"
+    " fetch('/api/wstore/' + arm + '?g=' + o('gget', 0) + '.' + o('gget', 1) + '&t=' + o('tget', 0) + '.'"
+    "       + o('tget', 1) + '.' + o('tsize', 0) + '&e=' + o('elen', 0) + '.' + o('elen', 1) + '&d=' + o('dlen', 0)"
+    "       + '.' + o('dlen', 1) + '&m=' + o('mload', 100) + '.' + o('mload', 200) + '&n=' + o('gcount', 0) + '.'"
+    "       + o('gget', 2)); }"
+    "function wstWrite(k, g, t, grow, m, add) { var w = function (op, i, v) { wasmStoreOp(wst, op, i, v); };"
+    " w('gset', k, g); w('tset', k, t); w('tgrow', grow, 0); w('edrop', k, 0); w('ddrop', k, 0);"
+    " w('mstore', m, g + 2); w('gadd', 0, add); }"
+    "if (cfg.admin) { wstWrite(0, 65, 66, 3, 100, 68); wstRead('t'); }"
+    "else { wstWrite(1, 80, 81, 1, 200, 83); wstRead('f'); }"
     "</script>"
     /* AND ONE EXTERNAL SCRIPT THIS FIXTURE'S ZONE REFUSES TO ASK FOR, WHICH IS THE ONE CURSOR THIS ENGINE
        CANNOT PASS AND THEREFORE THE FIRST HALF OF `park-remoteop`. That row asks whether a flow parked
@@ -6508,7 +6579,7 @@ static void wasm_cross_instance_selftest(JSContext *ctx)
         WasmInterpreter it;
         WasmExecStatus st;
 
-        wasm_table_elem(wasm_store_table(store, t), 0)->lo = (uint64_t)f + 1;
+        wasm_refs_set(wasm_store_table(store, t)->refs, 0, (WasmValue){ (uint64_t)f + 1, 0 });
         st = wasm_interpreter_begin(&it, &inst[1], wasm_export_index(&d[1].module, bytes[1], WASM_EXTERN_FUNC,
                                                                       row->call), NULL, 0);
         while (wasm_running(st)) st = wasm_next(&it, st, true);
@@ -6716,8 +6787,8 @@ static void wasm_exec_script(JSContext *ctx, size_t i, size_t n)
 }
 
 /* The store's records keep their addresses as the store grows (store.h), which a per-flow capture by address
- * needs: a global's record across 200 appends and a table's first element across a grow by 1000, each with an
- * allocation between appends so a list that reallocated could not extend in place. */
+ * needs: a global's and a table's record across 200 appends, each with an allocation between appends so a list
+ * that reallocated could not extend in place, and a table's first element across a grow by 1000. */
 static void wasm_store_stable_selftest(JSContext *ctx)
 {
     WasmStore *store = wasm_store_new(ctx);
@@ -6725,24 +6796,23 @@ static void wasm_store_stable_selftest(JSContext *ctx)
     WasmStoreValType funcref = { { WASM_TYPE_REF, true, WASM_HEAP_FUNC, 0 }, SIZE_MAX };
     WasmLimits limits = { false, false, 1, 0 };
     void *spacers[200];
-    WasmGlobalInstance *p;
-    WasmTableInstance *t;
-    WasmValue *e;
+    const WasmGlobalInstance *p;
+    const WasmTableInstance *t;
     size_t i, a = wasm_store_add_global(store, g), ta = wasm_store_add_table(store, &limits, funcref);
 
     p = wasm_store_global(store, a);
     t = wasm_store_table(store, ta);
-    e = wasm_table_elem(t, 0);
-    e->lo = 9;
+    wasm_refs_set(t->refs, 0, (WasmValue){ 9, 0 });
     for (i = 0; i < 200; i++) {
         wasm_store_add_global(store, g);
+        wasm_store_add_table(store, &limits, funcref);
         spacers[i] = malloc(64);
     }
-    wasm_table_grow(t, 1000);
+    wasm_refs_grow(t->refs, 1000);
     CHECK(p == wasm_store_global(store, a) && p->value.lo == 7, "a WebAssembly global's record moved as the store "
           "grew");
-    CHECK(t == wasm_store_table(store, ta) && e == wasm_table_elem(t, 0) && e->lo == 9 && t->size == 1001,
-          "a WebAssembly table's element moved as the table grew");
+    CHECK(t == wasm_store_table(store, ta) && wasm_refs_get(t->refs, 0).lo == 9 && wasm_refs_length(t->refs) == 1001,
+          "a WebAssembly table's record or first element moved as the store and the table grew");
     for (i = 0; i < 200; i++) free(spacers[i]);
     wasm_store_release(store);
 }
@@ -9185,6 +9255,8 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     tf_global_define(ctx, g, "appendChild", idl_step_function(ctx, "appendChild", g_id_append_child));
     tf_global_define(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
     tf_global_define(ctx, g, "wasmMemoryNew", JS_NewCFunction(ctx, js_wasm_memory_new, "wasmMemoryNew", 1));
+    tf_global_define(ctx, g, "wasmStoreNew", JS_NewCFunction(ctx, js_wasm_store_new, "wasmStoreNew", 0));
+    tf_global_define(ctx, g, "wasmStoreOp", JS_NewCFunction(ctx, js_wasm_store_op, "wasmStoreOp", 4));
     tf_global_define(ctx, g, "wasmMemoryStore", JS_NewCFunction(ctx, js_wasm_memory_store, "wasmMemoryStore", 3));
     tf_global_define(ctx, g, "wasmMemoryLoad", JS_NewCFunction(ctx, js_wasm_memory_load, "wasmMemoryLoad", 2));
     /* ONE LITERAL FOR THE SOURCE NAME, because this file had TWO and they disagreed. The probe that asks
@@ -28000,6 +28072,42 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
     fold_row(&wmem_iso, &wmem_why,
              param_value_count_of(js, "/api/wmem/f", "v", "A0B80C7") == param_value_count(js, "/api/wmem/f", "v"),
              "the FALSE arm read a WebAssembly memory other than its own: a /api/wmem/f value is not A0B80C7");
+    /* The store rows, one per record kind: both arms reached the read-back, and each read its own records and the
+       pre-fork ones, none of the sibling's. A record the store writes without capturing it shows as a `p` value
+       of the arm that ran second holding the first arm's write. */
+    static const struct { const char *name, *param, *t, *f, *what; } WSTORE[] = {
+        { "wstore-global", "g", "65.0", "0.80", "an arm read the other arm's global value: store.c's wasm_global_set "
+          "captures the global's record before it writes" },
+        { "wstore-table", "t", "66.4.5", "0.81.3", "an arm read the other arm's table element or size: "
+          "reference_vector.c's wasm_refs_set captures the chunk and wasm_refs_grow the length" },
+        { "wstore-elem", "e", "0.2", "2.0", "an arm read the other arm's element segment drop: reference_vector.c's "
+          "wasm_refs_drop captures the length" },
+        { "wstore-data", "d", "0.3", "3.0", "an arm read the other arm's data segment drop: store.c's wasm_data_drop "
+          "captures the segment's record" },
+        { "wstore-memory", "m", "67.0", "0.82", "an arm read the other arm's memory byte beside its store writes: "
+          "linear_memory.c's wasm_memory_store captures the chunk" },
+        { "wstore-append", "n", "3.68", "3.83", "an arm read the other arm's appended global or a count past its "
+          "own: store.c's list_append captures the count and the new entry" },
+    };
+    int wstore_ok[COUNTOF(WSTORE)];
+    const char *wstore_why[COUNTOF(WSTORE)];
+    for (size_t k = 0; k < COUNTOF(WSTORE); k++) {
+        wstore_ok[k] = 1;
+        wstore_why[k] = NULL;
+        fold_row(&wstore_ok[k], &wstore_why[k],
+                 param_value_count(js, "/api/wstore/t", WSTORE[k].param) > 0
+                 && param_value_count(js, "/api/wstore/f", WSTORE[k].param) > 0,
+                 "an arm did not reach the WebAssembly store read-back: /api/wstore/t or /api/wstore/f has no "
+                 "record, so the clauses below are about the schedule and not about the store");
+        fold_row(&wstore_ok[k], &wstore_why[k],
+                 param_value_count_of(js, "/api/wstore/t", WSTORE[k].param, WSTORE[k].t)
+                 == param_value_count(js, "/api/wstore/t", WSTORE[k].param),
+                 WSTORE[k].what);
+        fold_row(&wstore_ok[k], &wstore_why[k],
+                 param_value_count_of(js, "/api/wstore/f", WSTORE[k].param, WSTORE[k].f)
+                 == param_value_count(js, "/api/wstore/f", WSTORE[k].param),
+                 WSTORE[k].what);
+    }
     const Probe rows[] = {
         /* THE TWO COLD SESSIONS. Their key is the @S sink whose candidate sessions are what makes a park write
            a 'c' record at all, so the row still names a statement of the document it runs over; the SESSION is
@@ -28072,6 +28180,12 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
         { "nwiso-resume", nwiso_iso, "nwisoel", SESS_RESUME, nwiso_why },
         { "wmem-park", wmem_iso, "wasmMemoryStore", SESS_PARK, wmem_why },
         { "wmem-resume", wmem_iso, "wasmMemoryStore", SESS_RESUME, wmem_why },
+        { WSTORE[0].name, wstore_ok[0], "wasmStoreOp", SESS_PARK, wstore_why[0] },
+        { WSTORE[1].name, wstore_ok[1], "wasmStoreOp", SESS_PARK, wstore_why[1] },
+        { WSTORE[2].name, wstore_ok[2], "wasmStoreOp", SESS_PARK, wstore_why[2] },
+        { WSTORE[3].name, wstore_ok[3], "wasmStoreOp", SESS_PARK, wstore_why[3] },
+        { WSTORE[4].name, wstore_ok[4], "wasmStoreOp", SESS_PARK, wstore_why[4] },
+        { WSTORE[5].name, wstore_ok[5], "wasmStoreOp", SESS_PARK, wstore_why[5] },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

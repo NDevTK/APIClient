@@ -35,6 +35,7 @@
 #include "core/events/event_target.h"
 #include "core/events/message_port.h"
 #include "core/wasm/linear_memory.h"
+#include "core/wasm/reference_vector.h"
 #include "core/wasm/store.h"
 #include "core/workers/worker.h"
 #include "core/workers/worker_global_scope.h"
@@ -296,6 +297,7 @@ static void d_dom_rect(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect
 static void d_path_2d(JSContext *c, const PlatformAgent *a) { (void)a; path_2d_init(c); }
 static void d_image_data(JSContext *c, const PlatformAgent *a) { (void)a; image_data_init(c); }
 static void d_wasm_memory(JSContext *c, const PlatformAgent *a) { (void)a; wasm_memory_init(c); }
+static void d_wasm_refs(JSContext *c, const PlatformAgent *a) { (void)a; wasm_refs_init(c); }
 static void d_wasm_store(JSContext *c, const PlatformAgent *a) { (void)a; wasm_store_class_init(c); }
 static void d_canvas_ctx2d(JSContext *c, const PlatformAgent *a)
 { (void)a; canvas_rendering_context_2d_init(c); }
@@ -550,6 +552,7 @@ static void r_dom_rect(JSRuntime *rt) { (void)rt; dom_rect_free(); }
 static void r_path_2d(JSRuntime *rt) { (void)rt; path_2d_free(); }
 static void r_image_data(JSRuntime *rt) { (void)rt; image_data_free(); }
 static void r_wasm_memory(JSRuntime *rt) { (void)rt; wasm_memory_free(); }
+static void r_wasm_refs(JSRuntime *rt) { (void)rt; wasm_refs_free(); }
 static void r_wasm_store(JSRuntime *rt) { (void)rt; wasm_store_class_free(); }
 static void r_canvas_ctx2d(JSRuntime *rt) { canvas_rendering_context_2d_free(rt); }
 /* Rows whose releases a pairing check cannot tell from empty ones: a row with no release and a component that
@@ -990,6 +993,9 @@ static const PlatformComponent PLATFORM[] = {
     /* WebAssembly Core §4.2.9's memory instance, an internal class with no interface and no realm half: the
        per-flow linear memory JS API §5.3's Memory object will reference. */
     { "wasm_memory",         d_wasm_memory,         NULL,        r_wasm_memory },
+    /* WebAssembly Core §4.2.8's and §4.2.12's vector of references, a table's or element segment's, per flow; an
+       internal class like the row above's. */
+    { "wasm_refs",           d_wasm_refs,           NULL,        r_wasm_refs },
     /* WebAssembly Core §4.2.3's store, the owner of an agent's wasm instances, an internal class like the row
        above's. */
     { "wasm_store",          d_wasm_store,          NULL,        r_wasm_store },
