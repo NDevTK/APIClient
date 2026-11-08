@@ -19,6 +19,7 @@
 #include "core/css/css_transform_matrix.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
+#include "core/dom/element_scroll_position.h"
 #include "core/dom/element_scrolling.h"
 #include "core/dom/element_view.h"
 #include "core/dom/node.h"
@@ -408,25 +409,8 @@ static bool ev_box_is_inline(const EvTarget *t)
 
 /* ---- §6's `scrollTop` and `scrollLeft` ------------------------------------------------------------------- */
 
-/* THE GETTER, IN THE SPEC'S OWN STEP ORDER. Every terminal it can reach is either the spec's own zero, the
-   VIEWPORT's stored position, or an element's — and each is a real answer rather than a stand-in. IT USED TO
-   READ THAT EVERY TERMINAL IS THE ORIGIN, which CSSOM VIEW §3.1's arrival retired for the two window terminals
-   and left standing for the element one:
-     step 2 and step 3 are the spec's own zero for a document that is not being presented;
-     step 5 hands the root element the WINDOW's scroll position, which is REAL PER-FLOW STATE now
-       (core/frame/viewport.h) rather than the ICB origin this used to derive — so this terminal is not the
-       origin at all once a page has scrolled, and the sentence at the head of this comment is narrower than it
-       reads for exactly that step and step 6;
-     step 6 hands a quirks-mode BODY the same window scroll position when it is not potentially scrollable in
-       at least one axis — a condition this file could not decide until there was a computed-value entry to
-       read the body's and its parent's `overflow-x`/`overflow-y` through;
-     step 7 is the spec's own zero for an element with no associated box;
-     step 8 is the element's OWN current scroll position, which is STILL the origin because nothing has
-       scrolled it: a scroll position moves only when §3.1 Scrolling's perform a scroll runs, and every §6
-       member that could reach it for an ELEMENT — the setter below, `scroll()`/`scrollTo()`/`scrollBy()` and
-       `scrollIntoView()` — converges on §6.1's one perform-a-scroll step, which hands §3.1 an element box and
-       aborts there for want of a store (core/dom/perform_scroll.c, and element_view.h for why that must stay
-       one site). */
+/* The getter, in the spec's step order. Steps 2, 3 and 7 are the spec's own zero; steps 5 and 6 are the window's
+   scroll position (core/frame/viewport.h); step 8 is the element's own, which §3.1's perform a scroll writes. */
 static double ev_scroll_position_px(const EvTarget *t, bool vertical)
 {
     /* steps 2-3 */
@@ -440,8 +424,8 @@ static double ev_scroll_position_px(const EvTarget *t, bool vertical)
         return viewport_window_scroll(t->dctx, vertical);
     /* step 7 */
     if (!t->has_box) return 0.0;
-    /* step 8 */
-    return 0.0;
+    /* step 8: §3.1's perform a scroll is the position's one writer, and an element never scrolled is at zero */
+    return element_scroll_position(lxb_dom_interface_element(t->node), vertical);
 }
 
 /* THE ATTRIBUTE, over the derivation above — and the two are separate for the reason viewport.h gives for its
@@ -1383,11 +1367,17 @@ static void ev_border_area_px(lxb_dom_element_t *el, CssPx out[4])
 /* One rectangle of `el`'s from the initial containing block's space to client coordinates: §6's step 3's first
    constraint, css-transforms-1 §2's current transformation matrix, maps it ("starting from the viewport
    coordinate system", so before the conversion: a rotation does not commute with it), then CSSOM View §4's
-   scroll position is subtracted. Applied to an element nothing transforms, the matrix is the identity. */
+   scroll position is subtracted. Applied to an element nothing transforms, the matrix is the identity. The
+   scroll containers the box is inside displace it first (core/dom/element_scroll_position.h), which is exact
+   when no transform stands between a scroll container and the box. */
 static void ev_client_rect_px(const EvTarget *t, lxb_dom_element_t *el, const CssPx in[4], CssPx out[4])
 {
     CssPx x = in[0], y = in[1], w = in[2], h = in[3];
+    double dx, dy;
 
+    element_scroll_position_displacement(el, &dx, &dy);
+    x = css_px_sub(x, css_px(dx));
+    y = css_px_sub(y, css_px(dy));
     ev_map_through_transforms(el, &x, &y, &w, &h);
     out[0] = css_px_sub(x, css_px(viewport_window_scroll(t->dctx, false)));
     out[1] = css_px_sub(y, css_px(viewport_window_scroll(t->dctx, true)));
@@ -1728,8 +1718,10 @@ size_t element_view_text_rects_px(const lxb_dom_node_t *text, uint32_t start, ui
         CHECK(r != NULL, "CSSOM View §9's text rectangle list could not be allocated");
     }
     for (i = 0; i < n; i++) {
-        b[0] = frags[i].x;
-        b[1] = frags[i].y;
+        /* The text is the parent's content, so a parent that is a scroll container moves it by its own
+           position; ev_client_rect_px adds the containers above the parent. */
+        b[0] = css_px_sub(frags[i].x, css_px(element_scroll_position(lxb_dom_interface_element(p), false)));
+        b[1] = css_px_sub(frags[i].y, css_px(element_scroll_position(lxb_dom_interface_element(p), true)));
         b[2] = frags[i].width;
         b[3] = frags[i].height;
         /* "The transforms that apply to the ancestors are applied": the parent's, which the text is inside. */

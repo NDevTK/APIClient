@@ -9,6 +9,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/css/css_computed_value.h"
+#include "core/dom/element_scroll_position.h"
 #include "core/dom/perform_scroll.h"
 #include "core/dom/scroll_events.h"
 #include "core/frame/viewport.h"
@@ -48,15 +49,15 @@ static bool ps_instant_scroll(JSContext *ctx, const ElementScrollingBox *box, do
     double before_x, before_y;
 
     if (box->el != NULL) {
-        DFAIL("CSSOM VIEW §3.1 \"Scrolling\"'s perform a scroll was reached for an ELEMENT's scrolling box, and "
-              "an element in this engine has nowhere to put a scroll position. BUILD the store: it is per-flow "
-              "state, because two flows that scrolled one element differently must read back different values, "
-              "so it belongs in the COW delta — core/frame/viewport.c holds the VIEWPORT's as ordinary property "
-              "writes on a per-realm record for exactly that reason, and an element's wants the same shape keyed "
-              "by the element. core/dom/element_view.c's `scrollTop`/`scrollLeft` getter is the READER of the "
-              "same fact, so the store and that getter are one diff: building this without it would move a box "
-              "no member could report having moved");
-        return false;
+        /* An element's position, held per element and per flow (core/dom/element_scroll_position.h). */
+        before_x = element_scroll_position(box->el, false);
+        before_y = element_scroll_position(box->el, true);
+        DCHECK(x != before_x || y != before_y,
+               "§3.1's perform a scroll was asked to move an element's scrolling box to the position it is "
+               "already at — §6.1's scroll an element step 5 and scroll a target into view's step 2.3 both "
+               "return before this algorithm for exactly that");
+        element_scroll_position_set(ctx, box->el, x, y);
+        return x != before_x || y != before_y;
     }
     /* THE VIEWPORT'S POSITION, read and written through the component that owns it. `viewport_exists` is the
        caller's step (§4's own step 4, and §6.1's box constructor asserts it), so it is asserted and not
@@ -117,21 +118,18 @@ void perform_scroll(JSContext *ctx, const ElementScrollingBox *box, double x, do
        the one this call is resolving and nothing else can have. Its substep 7.2 resolves it, which is what the
        caller's resolved promise IS; its substep 7.1 is the line below. */
     if (changed) {
-        /* CSSOM VIEW §13.2 "Scrolling"'s own producer, which is a DIFFERENT algorithm from the step below and
-           runs first: "Whenever a viewport gets scrolled (whether in response to user interaction or by an
-           API), the user agent must run these steps", ending in "Append (doc, \"scroll\") to doc's pending
-           scroll events." A scroll that changed the position IS a viewport getting scrolled, which is why it
-           is run HERE and not at §3.1's own step 7.1.
-           IT IS ONLY EVER THE VIEWPORT, because `ps_instant_scroll` above aborts for an element's box — so
-           §13.2's element-gets-scrolled steps have no caller and its visual-viewport ones have none either
-           (nothing in this engine scrolls a VisualViewport: core/frame/visual_viewport.h derives a scale
-           factor of 1, at which it covers the layout viewport and has no pan of its own). */
-        scroll_events_viewport_scrolled(ctx);
+        /* CSSOM VIEW §13.2 "Scrolling"'s own producer, a different algorithm from step 7.1 below that runs
+           first: "Whenever an element gets scrolled (whether in response to user interaction or by an API)" and
+           its viewport twin each end in an append of (target, "scroll") to doc's pending scroll events, and a
+           scroll that changed the position is the box getting scrolled. Nothing scrolls a VisualViewport:
+           core/frame/visual_viewport.h derives a scale factor of 1, at which it has no pan of its own. */
+        if (box->el != NULL) scroll_events_element_scrolled(ctx, box->el);
+        else                 scroll_events_viewport_scrolled(ctx);
         /* STEP 7.1 — "If the scroll position changed as a result of this call, emit the scrollend event." —
-           which for §13.2 means making this box one that WAS SCROLLED; the scroll steps' own step 1 is what
-           turns that into a pair, one rendering opportunity later. core/dom/scroll_events.h states why the
-           two are not collapsed even though an instant scroll puts them in the same frame. */
-        scroll_events_viewport_scrollend(ctx);
+           which for §13.2 makes this box one that WAS SCROLLED; the scroll steps' own step 1 turns that into a
+           pair, one rendering opportunity later (core/dom/scroll_events.h). */
+        if (box->el != NULL) scroll_events_element_scrollend(ctx, box->el);
+        else                 scroll_events_viewport_scrollend(ctx);
     }
 }
 

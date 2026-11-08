@@ -27,10 +27,7 @@
  * (target, `scrollend`) pairs — one frame later than the `scroll` pair, which the gets-scrolled steps append
  * as the scroll happens. Collapsing the two would put `scrollend` in the list at the moment of the scroll,
  * which is the same order for an INSTANT scroll and the wrong one for a smooth scroll that is still running.
- * IN THIS BUILD THAT SET HAS AT MOST ONE MEMBER — the viewport — and is a boolean for that reason rather than
- * as a narrowing: an ELEMENT cannot be in it, because an element that reaches a real perform-a-scroll aborts
- * for want of a place to put its position (core/dom/perform_scroll.c). The diff that gives an element a scroll
- * position is the diff that makes this a set.
+ * The set is an Array of step 1.1's targets, each held once.
  *
  * A VIEWPORT'S TARGET IS ITS DOCUMENT, AND THAT IS READ OUT OF §13.2's OWN STEP 2 RATHER THAN CHOSEN. Its step
  * 1.1 says to let target be "the viewport", and a viewport is not an object any Web IDL interface exposes —
@@ -52,6 +49,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <lexbor/dom/dom.h>
+
 #include "quickjs.h"
 
 /* Declared once per AGENT: the realm-value slot the record lives in. The record itself is built WITH each
@@ -68,6 +67,11 @@ void scroll_events_viewport_scrolled(JSContext *ctx);
    VIEWPORT — which is to make it a member of the set §13.2's scroll steps step 1 iterates. It does NOT append
    to the list; step 1 is what does that, on the next run of the scroll steps. */
 void scroll_events_viewport_scrollend(JSContext *ctx);
+
+/* §13.2's "Whenever an element gets scrolled" steps, and §3.1's step 7.1 mark, for an element of `ctx`'s
+   document. The element's `scroll` and `scrollend` fire at it and do not bubble (scroll steps step 2). */
+void scroll_events_element_scrolled(JSContext *ctx, lxb_dom_element_t *el);
+void scroll_events_element_scrollend(JSContext *ctx, lxb_dom_element_t *el);
 
 /* Does this document give update-the-rendering anything to do on §13.2's account? HTML §8.1.7.3 step 4 removes
    a doc "for which the user agent believes updating the rendering would have no visible effect and whose map

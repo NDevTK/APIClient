@@ -31,6 +31,7 @@
 #include "core/agent_state.h"
 #include "core/dom/element.h"
 #include "core/dom/aria_mixin.h"
+#include "core/dom/element_scroll_position.h"
 #include "core/dom/name_intern.h"   /* §4.5's storage step stores the three names AS GIVEN — see that header */
 #include "core/dom/node_interface.h" /* …and the (local name, namespace) pair decides the element's C STRUCT */
 #include "core/dom/element_view.h"
@@ -3367,6 +3368,7 @@ void element_init(JSContext *ctx)
        the same kind of thing on the same interface: 44 reflections into the one registry above, and 8 members
        of §2.6.1's element-reflection model, which is its own component. */
     aria_mixin_init(ctx);
+    element_scroll_position_init(ctx);   /* CSSOM VIEW §6's scroll position, a record on the element's wrapper */
 
     idl_indexed_init(ctx);      /* the exotic class every indexed interface is built on */
     attr_init(ctx);             /* §4.9.2 Attr — registered for node type 2, which node_wrap had no interface for */
@@ -3633,6 +3635,7 @@ void element_free(JSRuntime *rt)
     sanitizer_free();
     idl_indexed_free(rt);
     aria_mixin_free(rt);   /* its state key is the AGENT's; its 44 registry rows go with the registry below */
+    element_scroll_position_free(rt);
     /* the prototypes are the REALMS' — each is released with its context */
     g_reflect_n = 0;
     /* NODE.C IS LAST, and it is the member of this group that holds real references rather than slot keys: the

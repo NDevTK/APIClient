@@ -9,6 +9,7 @@
 #include "core/agent_state.h"
 #include "core/css/css_computed_value.h"
 #include "core/dom/document.h"
+#include "core/dom/node.h"
 #include "core/dom/scroll_events.h"
 #include "core/events/event.h"
 #include "core/realm.h"
@@ -117,15 +118,58 @@ void scroll_events_viewport_scrolled(JSContext *ctx)
     se_append(ctx, doc, "scroll");
 }
 
-void scroll_events_viewport_scrollend(JSContext *ctx)
+/* Adds `target` (the Document for the viewport, or the element) to the set of scrolling boxes that were
+   scrolled, once. The scroll steps' step 1 turns the set into `scrollend` pairs on their next run. */
+static void se_mark_scrolled(JSContext *ctx, JSValueConst target)
 {
     JSValue rec = realm_value_get(ctx, g_slot);
+    JSValue set = JS_GetPropertyStr(ctx, rec, SE_SCROLLED);
+    uint32_t n, i;
+    bool held = false;
 
-    /* NOT AN APPEND. §3.1 step 7.1 makes the box one that WAS SCROLLED; §13.2's scroll steps step 1 is what
-       turns that into a pair, on the next run of those steps. See scroll_events.h for why the two are not
-       collapsed even though an instant scroll makes them one frame apart. */
-    JS_SetPropertyStr(ctx, rec, SE_SCROLLED, JS_TRUE);
+    DCHECK(JS_IsArray(set), "§13.2's was-scrolled set is not an Array; the record is built holding one and only "
+                            "this file writes it");
+    n = se_len(ctx, set);
+    for (i = 0; i < n && !held; i++) {
+        JSValue t = JS_GetPropertyUint32(ctx, set, i);
+
+        held = JS_IsSameValue(ctx, t, target);
+        JS_FreeValue(ctx, t);
+    }
+    if (!held) JS_SetPropertyUint32(ctx, set, n, JS_DupValue(ctx, target));
+    JS_FreeValue(ctx, set);
     JS_FreeValue(ctx, rec);
+}
+
+void scroll_events_viewport_scrollend(JSContext *ctx)
+{
+    se_mark_scrolled(ctx, document_object(ctx));
+}
+
+void scroll_events_element_scrolled(JSContext *ctx, lxb_dom_element_t *el)
+{
+    JSValue target;
+
+    /* Step 1: "Let doc be the element's node document", whose record this realm holds. */
+    DCHECK(el != NULL && document_realm_of(lxb_dom_interface_node(el)) == ctx,
+           "§13.2's element-gets-scrolled steps ran for an element whose node document is not this realm's; "
+           "§3.1 is handed the realm of the box's own document");
+    /* Step 2 */
+    se_no_snap_container("the element-gets-scrolled steps' step 2");
+    /* Steps 3 and 4: abort if (element, "scroll") is already pending, else append it. */
+    target = node_wrap(ctx, lxb_dom_interface_node(el));
+    CHECK(JS_IsObject(target), "an element that was scrolled could not be wrapped");
+    se_append(ctx, target, "scroll");
+    JS_FreeValue(ctx, target);
+}
+
+void scroll_events_element_scrollend(JSContext *ctx, lxb_dom_element_t *el)
+{
+    JSValue target = node_wrap(ctx, lxb_dom_interface_node(el));
+
+    CHECK(JS_IsObject(target), "an element that was scrolled could not be wrapped");
+    se_mark_scrolled(ctx, target);
+    JS_FreeValue(ctx, target);
 }
 
 bool scroll_events_pending(JSContext *ctx)
@@ -135,10 +179,10 @@ bool scroll_events_pending(JSContext *ctx)
     JSValue scrolled = JS_GetPropertyStr(ctx, rec, SE_SCROLLED);
     bool any;
 
-    DCHECK(JS_IsBool(scrolled),
-           "§13.2's was-scrolled field is not a boolean — §3.1's step 7.1 and the scroll steps' step 1 are its "
-           "only writers and both write a boolean");
-    any = se_len(ctx, list) > 0 || JS_ToBool(ctx, scrolled);
+    DCHECK(JS_IsArray(scrolled),
+           "§13.2's was-scrolled set is not an Array; se_mark_scrolled and the scroll steps' step 1 are its only "
+           "writers and both write one");
+    any = se_len(ctx, list) > 0 || se_len(ctx, scrolled) > 0;
     JS_FreeValue(ctx, scrolled);
     JS_FreeValue(ctx, list);
     JS_FreeValue(ctx, rec);
@@ -152,19 +196,23 @@ uint32_t scroll_events_scroll_steps_begin(JSContext *ctx)
     JSValue list;
     uint32_t n;
 
-    DCHECK(JS_IsBool(scrolled), "§13.2's was-scrolled field is not a boolean at the scroll steps' step 1");
-    /* STEP 1 — "For each scrolling box box that was scrolled". In this build that set is the viewport or
-       nothing (scroll_events.h), so the walk is this test; its step 1.1's target is the Document, its step 1.2
-       is the snap-container step, and its steps 1.3 and 1.4 are the append's own two halves. */
-    if (JS_ToBool(ctx, scrolled)) {
-        se_no_snap_container("the scroll steps' step 1.2");
-        se_append(ctx, document_object(ctx), "scrollend");
-        /* THE SET IS EMPTIED HERE AND §13.2 DOES NOT SAY SO, which is a gap in the standard rather than a
-           choice made here: step 3 empties the pending scroll events and names no other collection, so a set
-           that survived would append a `scrollend` at every rendering opportunity for ever after one scroll.
-           A box "that was scrolled" is one scrolled SINCE THESE STEPS LAST RAN, by the same reading §13.1's
-           resize steps state outright for their own condition. */
-        JS_SetPropertyStr(ctx, rec, SE_SCROLLED, JS_FALSE);
+    DCHECK(JS_IsArray(scrolled), "§13.2's was-scrolled set is not an Array at the scroll steps' step 1");
+    /* Step 1, "For each scrolling box box that was scrolled": the set holds step 1.1's target (the Document for
+       the viewport, the element otherwise); step 1.2 is the snap-container step; steps 1.3 and 1.4 are se_append. */
+    if (se_len(ctx, scrolled) > 0) {
+        uint32_t m = se_len(ctx, scrolled), i;
+
+        for (i = 0; i < m; i++) {
+            JSValue target = JS_GetPropertyUint32(ctx, scrolled, i);
+
+            se_no_snap_container("the scroll steps' step 1.2");
+            se_append(ctx, target, "scrollend");
+            JS_FreeValue(ctx, target);
+        }
+        /* §13.2 never empties this set; a box "that was scrolled" is read as one scrolled since these steps
+           last ran, else one scroll would append a `scrollend` at every rendering opportunity. Written only
+           when non-empty, so an idle frame adds nothing to a flow's delta. */
+        JS_SetPropertyStr(ctx, rec, SE_SCROLLED, JS_NewArray(ctx));
     }
     JS_FreeValue(ctx, scrolled);
     /* STEP 2's EXTENT, taken now — see scroll_events.h for why an index below it names one pair for the whole
@@ -191,20 +239,20 @@ void scroll_events_item(JSContext *ctx, uint32_t i, JSValue *target, JSValue *ev
     ty = JS_GetPropertyUint32(ctx, pair, SE_PAIR_TYPE);
     type = JS_ToCString(ctx, ty);
     CHECK(type != NULL, "§13.2's pending scroll events holds a type that could not be read as a string");
-    /* STEP 2's FOUR BRANCHES, and the first is the only one this build can reach. "If target is a `Document`,
-       and type is `scroll` or `scrollend`, fire an event named type that BUBBLES at target." Its two
-       SnapEvent branches are the snap-container steps asserted above; its last branch ("Otherwise, fire an
-       event named type at target") is for an ELEMENT's own scroll, which needs an element that can hold a
-       scroll position. So the assert below is two-sided against the arrival of either. */
-    DCHECK(JS_IsSameValue(ctx, *target, document_object(ctx)) &&
-           (strcmp(type, "scroll") == 0 || strcmp(type, "scrollend") == 0),
-           "§13.2's scroll steps step 2 reached a pending scroll event whose target is not this Document or "
-           "whose type is neither `scroll` nor `scrollend` — the three appends in this file are its only "
-           "writers and each appends one of those two at the document, so an element's or a VisualViewport's "
-           "pair has arrived and step 2's later branches must be written for it");
-    /* CANCELABLE is false and BUBBLES is true: §13.2 says "fire an event named type that bubbles", and DOM
-       §2.4's fire leaves every flag the caller does not name unset. TRUSTED, because the user agent fired it. */
-    *ev = event_new(ctx, type, /*bubbles*/ true, /*cancelable*/ false);
+    /* Step 2: a Document's `scroll`/`scrollend` "bubbles"; the SnapEvent branches are the snap-container steps
+       asserted above; "Otherwise, fire an event named type at target", which does not bubble. Fire leaves
+       cancelable unset (DOM §2.10 "Firing events"). */
+    DCHECK(strcmp(type, "scroll") == 0 || strcmp(type, "scrollend") == 0,
+           "§13.2's scroll steps step 2 reached a pending scroll event whose type is neither `scroll` nor "
+           "`scrollend` — a snap event's pair has arrived and step 2's SnapEvent branches must be written for it");
+    if (JS_IsSameValue(ctx, *target, document_object(ctx))) {
+        *ev = event_new(ctx, type, /*bubbles*/ true, /*cancelable*/ false);
+    } else {
+        DCHECK(node_of(*target) != NULL && node_of(*target)->type == LXB_DOM_NODE_TYPE_ELEMENT,
+               "§13.2's scroll steps step 2 reached a pending scroll event whose target is neither this Document "
+               "nor an element — a VisualViewport's pair has arrived, which nothing in this engine scrolls");
+        *ev = event_new(ctx, type, /*bubbles*/ false, /*cancelable*/ false);
+    }
     CHECK(!JS_IsException(*ev), "§13.2's scroll steps could not allocate their event");
     JS_FreeCString(ctx, type);
     JS_FreeValue(ctx, ty);
@@ -239,7 +287,7 @@ static void scroll_events_install(JSContext *ctx)
 
     CHECK(!JS_IsException(rec), "scroll_events: OOM building a realm's CSSOM VIEW §13.2 record");
     JS_SetPropertyStr(ctx, rec, SE_PENDING, JS_NewArray(ctx));
-    JS_SetPropertyStr(ctx, rec, SE_SCROLLED, JS_FALSE);
+    JS_SetPropertyStr(ctx, rec, SE_SCROLLED, JS_NewArray(ctx));
     realm_value_set(ctx, g_slot, rec);
 }
 

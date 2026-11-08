@@ -13,6 +13,7 @@
 #include "core/css/css_length.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
+#include "core/dom/element_scroll_position.h"
 #include "core/dom/element_scrolling.h"
 #include "core/dom/element_view.h"
 #include "core/dom/perform_scroll.h"
@@ -58,7 +59,7 @@ ScrollLogicalPosition element_scrolling_logical_position(const char *keyword)
  * The edges are in client coordinates because §6.1's determine the scroll-into-view position takes the
  * target's bounding border box from `getBoundingClientRect()`, which CSSOM VIEW §6 defines in the viewport's
  * space, and compares it edge to edge with the box. A box's edges are therefore its padding box less the
- * window scroll, as core/dom/element_view.c's border area is.
+ * window scroll and the scroll containers above it, as core/dom/element_view.c's border area is.
  *
  * An edge is a `CssPx` because it is a layout length that may derive from the initial containing block, and
  * the arithmetic propagates that fact (core/css/css_length.h). A scroll position is a `double` because it is
@@ -71,6 +72,7 @@ typedef ElementScrollingBox EsBox;
 static void es_box_open_element(lxb_dom_element_t *el, JSContext *dctx, EsBox *b)
 {
     FlowPoint o = flow_padding_box_origin(el);
+    double dx, dy;
     int a;
 
     DCHECK(scroll_container_is(el),
@@ -83,8 +85,9 @@ static void es_box_open_element(lxb_dom_element_t *el, JSContext *dctx, EsBox *b
        scrollable overflow area can be viewed) COINCIDES WITH ITS PADDING BOX, and is called the scrollport."
        That is the rectangle §6.1 aligns against, and CSSOM VIEW §2's own scrolling-area table is stated over
        the same two padding edges — one rectangle, one derivation (core/layout/flow_position.h). */
-    b->lo[ES_X] = css_px_sub(o.x, css_px(viewport_window_scroll(dctx, false)));
-    b->lo[ES_Y] = css_px_sub(o.y, css_px(viewport_window_scroll(dctx, true)));
+    element_scroll_position_displacement(el, &dx, &dy);
+    b->lo[ES_X] = css_px_sub(o.x, css_px(dx + viewport_window_scroll(dctx, false)));
+    b->lo[ES_Y] = css_px_sub(o.y, css_px(dy + viewport_window_scroll(dctx, true)));
     for (a = ES_X; a <= ES_Y; a++) {
         bool vertical = (a == ES_Y);
 
@@ -150,9 +153,7 @@ double element_scrolling_clamp_position(double v, double area_extent, double box
  * Step 2.3 holds one list item, a two-armed switch, and the arms decide the associated element: the element
  * arm passes "the element as the associated element" (the ancestor whose box this is, never the target), and
  * the viewport arm's substeps are "Let document be the viewport's associated `Document`." and "Let root
- * element be document's root element, if there is one, or null otherwise." `position` is already clamped.
- * An element's box cannot yet hold a scroll position; core/dom/perform_scroll.c, which owns §3.1, crashes
- * for it. */
+ * element be document's root element, if there is one, or null otherwise." `position` is already clamped. */
 static void es_perform_scroll(const EsBox *b, const double position[2], const char *behavior)
 {
     /* The ongoing-smooth-scroll disjunct is false for every box: §3.1 step 5 starts a smooth scroll only on

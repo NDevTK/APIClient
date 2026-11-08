@@ -98,21 +98,11 @@
  * viewport.c no longer derives the two as equal; and THE SENTENCE THAT FOLLOWED FROM IT — THE VIEWPORT'S ONE
  * VALID SCROLL POSITION THAT EVERY SCROLL MEMBER HERE READS — WENT WITH IT.
  *
- * SO THE VIEWPORT NO LONGER HAS ONE VALID SCROLL POSITION, AND EVERY ELEMENT STILL DOES. The two halves came
- * apart, which is why they are now stated apart. THE VIEWPORT's position is real per-flow state that CSSOM VIEW
- * §3.1 "Scrolling"'s perform a scroll writes and core/frame/viewport.h holds, so the members here that route to
- * the window (the `scrollTop` getter's steps 5 and 6, and the setter's steps 8 and 9) report and move a number
- * that changes. AN ELEMENT's is still derived rather than assumed: the origin of a scrolling area is defined AT
- * the element's default scroll position, a scroll position moves only when §3.1 runs, and every route to that
- * for an element ends at ONE crash — the four §6 members that can reach it (the `scrollTop`/`scrollLeft`
- * setter, `scroll()`/`scrollTo()`/`scrollBy()`, and `scrollIntoView()`) all converge on §6.1's one
- * perform-a-scroll step, which hands §3.1 an element box and aborts there for want of a store. So "no element
- * has been scrolled" is true BY CONSTRUCTION, which is what makes the getter's step 8 a derivation and not a
- * shrug, and the DFAIL is what keeps it true. IT MUST STAY ONE SITE: a second copy of that crash is a second
- * description of one absence, and the one nobody deletes is the one that goes on naming work that is already
- * done. It has MOVED TWICE for exactly that rule — out of this file when `scrollIntoView` arrived, and out of
- * core/dom/element_scrolling.c into core/dom/perform_scroll.c when §3.1 was written, which is where the
- * position store belongs and therefore where its absence does.
+ * Both kinds of scroll position are per-flow state that CSSOM VIEW §3.1 "Scrolling"'s perform a scroll writes:
+ * the viewport's in core/frame/viewport.h, an element's in core/dom/element_scroll_position.h. The members here
+ * that route to the window (the `scrollTop` getter's steps 5 and 6, the setter's steps 8 and 9) read and move
+ * the first; every element member (the `scrollTop`/`scrollLeft` setter, `scroll()`/`scrollTo()`/`scrollBy()`,
+ * `scrollIntoView()`) converges on §6.1's one perform-a-scroll step for the second.
  *
  * THE CONCOLIC POLICY IS INHERITED, NOT RE-DECIDED. A member that reports the viewport's size reports a UA
  * CHOICE, so it carries the modelled geometry as the EXAMPLE of a concolic minted through viewport.h's one seam

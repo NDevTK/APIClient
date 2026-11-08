@@ -18,6 +18,7 @@
                                         the ELEMENT's document's, never the running realm's */
 #include "core/dom/element.h"        /* element_wrap — HTML §4.12.5's bitmap is a JS value on the element's own
                                         JS object, so a canvas's pixels are reached through its wrapper */
+#include "core/dom/element_scroll_position.h"
 #include "core/dom/element_view.h"
 #include "core/frame/viewport.h"
 #include "core/html/html_canvas_element.h" /* canvas_bitmap_get — HTML §15.4.1's "the contents of such
@@ -1171,6 +1172,16 @@ static bool bp_context_step_7_2_1(BpState *st, lxb_dom_element_t *style, BlockFl
  * two overlap, which needs a negative margin to be visible at all — both runs are on the same line and the
  * span sits between them, so their rectangles are disjoint without one.
  * RETIREMENT: this record goes when a run of text is delimited by its own node rather than by its parent. */
+/* The origin `el`'s own line boxes are laid from: its content box origin, less its own scroll position, because
+   a scroll container's content scrolls within it (CSS Overflow 3 §2.3 "Scrolling Overflow"). An element that
+   is not a scroll container holds no position and reads zero. */
+static void bp_scrolled_content_origin(lxb_dom_element_t *el, CssPx *x, CssPx *y)
+{
+    bp_content_box_origin(el, x, y);
+    *x = css_px_sub(*x, css_px(element_scroll_position(el, /*vertical*/ false)));
+    *y = css_px_sub(*y, css_px(element_scroll_position(el, /*vertical*/ true)));
+}
+
 static bool bp_line_boxes(BpState *st, lxb_dom_element_t *el)
 {
     BlockFlowAnonBox *v;
@@ -1187,7 +1198,7 @@ static bool bp_line_boxes(BpState *st, lxb_dom_element_t *el)
            because there is no box between them. */
         whole.after = NULL;
         whole.end = NULL;
-        bp_content_box_origin(el, &x, &y);
+        bp_scrolled_content_origin(el, &x, &y);
         return bp_context_step_7_2_1(st, el, whole, x, y);
     }
     n = block_flow_anonymous_boxes(el, &v);
@@ -1203,7 +1214,7 @@ static bool bp_line_boxes(BpState *st, lxb_dom_element_t *el)
        frame needs it told apart from a context that ran and found no ink, which `BOX_PAINT_DECLINE_
        NO_CHARACTERS` is. */
     if (n == 0) { free(v); bp_decline(st, BOX_PAINT_DECLINE_NO_INLINE_CONTEXT); return true; }
-    bp_content_box_origin(el, &x, &y);
+    bp_scrolled_content_origin(el, &x, &y);
     for (i = 0; i < n && ok; i++)
         ok = bp_context_step_7_2_1(st, el, v[i].run, css_px_add(x, v[i].content_x), css_px_add(y, v[i].content_y));
     free(v);
