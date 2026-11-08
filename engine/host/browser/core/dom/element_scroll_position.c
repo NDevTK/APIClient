@@ -1,5 +1,5 @@
-/* CSSOM VIEW §6's element scroll position — see element_scroll_position.h for why it is an internal-slot record
-   on the element's wrapper and why a never-scrolled element has none. */
+/* CSSOM VIEW §6's element scroll position — see element_scroll_position.h for why it lives on the node's
+   internal-slot record and why a never-scrolled element has none. */
 #include <math.h>
 #include <stdbool.h>
 
@@ -11,63 +11,59 @@
 #include "core/dom/document.h"
 #include "core/dom/element_scroll_position.h"
 #include "core/dom/node.h"
-#include "core/idl_slots.h"
 #include "core/layout/scroll_container.h"
 #include "core/layout/used_value.h"
 
-#define ESP_X "x"
-#define ESP_Y "y"
-
-static JSValue g_key = JS_UNDEFINED;
-static JSAtom  g_atom = JS_ATOM_NULL;
+/* The two fields' names on the node's internal-slot record (core/dom/node.h), which other components share. */
+static JSAtom g_atom_x = JS_ATOM_NULL;
+static JSAtom g_atom_y = JS_ATOM_NULL;
 
 void element_scroll_position_init(JSContext *ctx)
 {
-    DCHECK(g_atom == JS_ATOM_NULL, "element_scroll_position_init ran twice — a second key would leave every "
-                                   "element already scrolled with no position under it");
-    g_key = JS_NewSymbol(ctx, "elementScrollPosition", false);
-    CHECK(!JS_IsException(g_key), "the element scroll position key could not be allocated");
-    g_atom = JS_ValueToAtom(ctx, g_key);
-    CHECK(g_atom != JS_ATOM_NULL, "the element scroll position key could not be interned");
+    DCHECK(g_atom_x == JS_ATOM_NULL, "element_scroll_position_init ran twice");
+    g_atom_x = JS_NewAtom(ctx, "scrollPositionX");
+    g_atom_y = JS_NewAtom(ctx, "scrollPositionY");
+    CHECK(g_atom_x != JS_ATOM_NULL && g_atom_y != JS_ATOM_NULL,
+          "the element scroll position's field names could not be interned");
 }
 
 void element_scroll_position_free(JSRuntime *rt)
 {
-    if (g_atom != JS_ATOM_NULL) { JS_FreeAtomRT(rt, g_atom); g_atom = JS_ATOM_NULL; }
-    JS_FreeValueRT(rt, g_key);
-    g_key = JS_UNDEFINED;
+    if (g_atom_x != JS_ATOM_NULL) { JS_FreeAtomRT(rt, g_atom_x); g_atom_x = JS_ATOM_NULL; }
+    if (g_atom_y != JS_ATOM_NULL) { JS_FreeAtomRT(rt, g_atom_y); g_atom_y = JS_ATOM_NULL; }
 }
 
 double element_scroll_position(lxb_dom_element_t *el, bool vertical)
 {
-    JSValueConst wrap;
+    JSValueConst slots;
     JSContext *rctx;
-    JSValue rec, v;
+    JSValue v;
     double px = 0.0;
+    int r;
 
     DCHECK(el != NULL, "an element's scroll position was asked of no element");
-    DCHECK(g_atom != JS_ATOM_NULL, "an element's scroll position was asked before its key was declared");
-    /* A record is written only through the wrapper, so an element with none was never scrolled. */
-    wrap = node_wrap_peek(lxb_dom_interface_node(el));
-    if (!JS_IsObject(wrap)) return 0.0;
+    DCHECK(g_atom_x != JS_ATOM_NULL, "an element's scroll position was asked before its names were declared");
+    /* The fields are written only through the record, so an element with none was never scrolled. */
+    slots = node_internal_slots_peek(lxb_dom_interface_node(el));
+    if (!JS_IsObject(slots)) return 0.0;
     rctx = document_realm_of(lxb_dom_interface_node(el));
     DCHECK(rctx != NULL, "an element's scroll position was read in a document no realm was installed for");
-    if (JS_GetOwnSlot(rctx, &rec, wrap, g_atom) <= 0) return 0.0;
-    v = JS_GetPropertyStr(rctx, rec, vertical ? ESP_Y : ESP_X);
+    r = JS_GetOwnSlot(rctx, &v, slots, vertical ? g_atom_y : g_atom_x);
+    DCHECK(r >= 0, "reading an element's scroll position off its internal-slot record threw");
+    if (r == 0) return 0.0;
     DCHECK(JS_IsNumber(v), "an element's scroll position record holds a non-number — this file is its one "
                            "writer and writes two finite doubles");
     JS_ToFloat64(rctx, &px, v);
     JS_FreeValue(rctx, v);
-    JS_FreeValue(rctx, rec);
     return px;
 }
 
 void element_scroll_position_set(JSContext *ctx, lxb_dom_element_t *el, double x, double y)
 {
-    JSValue wrap, rec;
+    JSValueConst slots;
 
-    DCHECK(el != NULL && g_atom != JS_ATOM_NULL, "an element's scroll position was written for no element, or "
-                                                 "before its key was declared");
+    DCHECK(el != NULL && g_atom_x != JS_ATOM_NULL, "an element's scroll position was written for no element, "
+                                                   "or before its names were declared");
     DCHECK(isfinite(x) && isfinite(y), "an element's scroll position was written non-finite — CSSOM VIEW §3.2's "
                                        "normalize non-finite values and §6.1's clamp run before the write");
     DCHECK(scroll_container_is(el), "an element's scroll position was written for an element that establishes no "
@@ -75,17 +71,11 @@ void element_scroll_position_set(JSContext *ctx, lxb_dom_element_t *el, double x
     DCHECK(document_realm_of(lxb_dom_interface_node(el)) == ctx,
            "an element's scroll position was written in a realm other than its node document's, where "
            "element_scroll_position reads it");
-    wrap = node_wrap(ctx, lxb_dom_interface_node(el));
-    CHECK(JS_IsObject(wrap), "an element being scrolled could not be wrapped");
-    if (JS_GetOwnSlot(ctx, &rec, wrap, g_atom) <= 0) {
-        rec = idl_slots_new(ctx);
-        CHECK(!JS_IsException(rec), "an element's scroll position record could not be allocated");
-        JS_DefinePropertyValue(ctx, wrap, g_atom, JS_DupValue(ctx, rec), JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
-    }
-    JS_SetPropertyStr(ctx, rec, ESP_X, JS_NewFloat64(ctx, x));
-    JS_SetPropertyStr(ctx, rec, ESP_Y, JS_NewFloat64(ctx, y));
-    JS_FreeValue(ctx, rec);
-    JS_FreeValue(ctx, wrap);
+    slots = node_internal_slots(ctx, lxb_dom_interface_node(el));
+    CHECK(JS_DefinePropertyValue(ctx, slots, g_atom_x, JS_NewFloat64(ctx, x), JS_PROP_C_W_E) >= 0 &&
+          JS_DefinePropertyValue(ctx, slots, g_atom_y, JS_NewFloat64(ctx, y), JS_PROP_C_W_E) >= 0,
+          "an element's scroll position could not be written to its internal-slot record, which nothing but "
+          "this engine can reach, freeze or give a prototype");
 }
 
 void element_scroll_position_displacement(lxb_dom_element_t *el, double *dx, double *dy)

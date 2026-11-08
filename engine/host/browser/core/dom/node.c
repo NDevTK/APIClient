@@ -124,8 +124,9 @@ static int     g_protos_ready;
    FIBONACCI HASHING on the pointer: node addresses come from Lexbor's mraw pool and are therefore highly
    regular — consecutive nodes differ by a fixed stride — so the low bits alone would collide in runs. */
 /* `realm` is the wrapper's [[Realm]], the realm whose prototype it was created with, and `at` the entry's index
-   in that realm's RealmWraps list. */
-typedef struct { lxb_dom_node_t *n; JSValue obj; JSContext *realm; int at; } NodeEntry;
+   in that realm's RealmWraps list. `slots` is the node's internal-slot record (node_internal_slots), or
+   JS_UNDEFINED; the entry owns it and the wrapper's realm reports it as an edge, as it does `obj`. */
+typedef struct { lxb_dom_node_t *n; JSValue obj; JSContext *realm; int at; JSValue slots; } NodeEntry;
 static NodeEntry *g_wraps;        /* g_wrap_cap slots, a power of two; a NULL `n` is empty */
 static int        g_wrap_n, g_wrap_cap;
 
@@ -5643,6 +5644,7 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
         g_wraps[slot].obj = JS_DupValue(ctx, obj);   /* the realm's edge; node_wrap_forget releases it */
         g_wraps[slot].realm = rctx;
         g_wraps[slot].at = rw->n;
+        g_wraps[slot].slots = JS_UNDEFINED;
         rw->nodes[rw->n++] = n;
         g_wrap_n++;
     }
@@ -5670,6 +5672,40 @@ JSValueConst node_wrap_peek(const lxb_dom_node_t *n)
         return JS_UNDEFINED;
     slot = node_wrap_slot(g_wraps, g_wrap_cap, n);
     return g_wraps[slot].n ? g_wraps[slot].obj : JS_UNDEFINED;
+}
+
+JSValueConst node_internal_slots_peek(const lxb_dom_node_t *n)
+{
+    unsigned slot;
+
+    if (!n || !g_wrap_cap)
+        return JS_UNDEFINED;
+    slot = node_wrap_slot(g_wraps, g_wrap_cap, n);
+    return g_wraps[slot].n ? g_wraps[slot].slots : JS_UNDEFINED;
+}
+
+JSValueConst node_internal_slots(JSContext *ctx, lxb_dom_node_t *n)
+{
+    JSValue wrap = node_wrap(ctx, n);
+    unsigned slot;
+    uint32_t gen;
+
+    CHECK(JS_IsObject(wrap), "a node's internal slots were asked for a node that could not be wrapped");
+    JS_FreeValue(ctx, wrap);   /* the table's reference keeps it */
+    slot = node_wrap_slot(g_wraps, g_wrap_cap, n);
+    DCHECK(g_wraps[slot].n == n, "a node just wrapped has no identity table entry");
+    if (JS_IsUndefined(g_wraps[slot].slots)) {
+        /* Born baseline for the wrapper's reason: the table hands it to every flow, so a young stamp would make
+           the delta skip every flow's write to it. The record is allocated in the wrapper's realm, whose mark
+           hook reports it. */
+        gen = JS_FlowGen();
+        JS_SetFlowGen(0);
+        g_wraps[slot].slots = JS_NewObjectProto(g_wraps[slot].realm, JS_NULL);
+        DCHECK(JS_FlowGen() == 0, "the flow generation moved inside node_internal_slots' baseline bracket");
+        JS_SetFlowGen(gen);
+        CHECK(!JS_IsException(g_wraps[slot].slots), "a node's internal-slot record could not be allocated");
+    }
+    return g_wraps[slot].slots;
 }
 
 /* REMOVE an entry, keeping the probe chains intact. Open addressing with linear probing cannot simply blank a
@@ -5756,6 +5792,7 @@ void node_wrap_forget(lxb_dom_node_t *n)
        site that made it. */
     JS_SetOpaque(g_wraps[slot].obj, NULL);
     JS_FreeValueRT(g_agent_rt, g_wraps[slot].obj);
+    JS_FreeValueRT(g_agent_rt, g_wraps[slot].slots);
     node_wrap_remove(n);
 }
 
@@ -5770,6 +5807,7 @@ void node_wrap_realm_mark(JSRuntime *rt, JSContext *realm, JS_MarkFunc *mark_fun
         DCHECK(g_wraps[slot].n == rw->nodes[i] && g_wraps[slot].realm == realm,
                "a realm's wrapper list names a node the map holds for no realm or for another one");
         JS_MarkValue(rt, g_wraps[slot].obj, mark_func);
+        JS_MarkValue(rt, g_wraps[slot].slots, mark_func);
     }
 }
 
@@ -5787,6 +5825,7 @@ void node_wrap_realm_teardown(JSContext *realm)
            released and the node's next wrapper is a new object — the residual stated at RealmWraps. */
         JS_SetOpaque(g_wraps[slot].obj, NULL);
         JS_FreeValueRT(g_agent_rt, g_wraps[slot].obj);
+        JS_FreeValueRT(g_agent_rt, g_wraps[slot].slots);
         node_wrap_remove(n);
         rw = rwrap_of(realm, false);
     }
@@ -6600,8 +6639,10 @@ void node_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_pi_attrs_key);
     g_pi_attrs_key = JS_UNDEFINED;
     for (i = 0; i < g_wrap_cap; i++)
-        if (g_wraps[i].n)
+        if (g_wraps[i].n) {
             JS_FreeValueRT(rt, g_wraps[i].obj);
+            JS_FreeValueRT(rt, g_wraps[i].slots);
+        }
     free(g_wraps);
     g_wraps = NULL; g_wrap_n = g_wrap_cap = 0;
     for (i = 0; i < g_rwrap_cap; i++) free(g_rwraps[i].nodes);

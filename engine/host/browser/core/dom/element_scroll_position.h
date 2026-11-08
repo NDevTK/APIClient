@@ -3,10 +3,11 @@
  * returns ("Return the y-coordinate of the scrolling area at the alignment point with the top of the padding edge
  * of the element") and CSSOM VIEW §3.1 "Scrolling"'s perform a scroll writes for an element's scrolling box.
  *
- * Held per element in an internal-slot record on its wrapper (core/idl_slots.h), so every write is an ordinary
- * property write the per-flow COW delta captures: two flows that scrolled one element differently read back
- * different values, and a fork's scroll lives in its own world. An element that has never been scrolled has no
- * record, and its position is zero on both axes, which is where §6.1's clamp starts every box.
+ * Held per element as two fields of the node's internal-slot record (core/dom/node.h's node_internal_slots), an
+ * object no page code can reach, so reflection, a Proxy, a clone or a freeze of the element neither shows nor
+ * refuses it. Every write is a property write the per-flow COW delta captures, so a fork's scroll lives in its
+ * own world. An element never scrolled has no fields, and its position is zero on both axes, which is where
+ * §6.1's clamp starts every box.
  *
  * The same positions move what a scroll container contains: CSS Overflow 3 §2.3 "Scrolling Overflow" scrolls the
  * scrollable overflow area within the scrollport, so a box is displaced by the position of every scroll container
@@ -20,7 +21,7 @@
 
 #include "quickjs.h"
 
-/* Declared once per agent: the private key the record hangs off. */
+/* Declared once per agent: the two field names. */
 void element_scroll_position_init(JSContext *ctx);
 void element_scroll_position_free(JSRuntime *rt);
 

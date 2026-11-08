@@ -22,6 +22,13 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n);
 /* The wrapper this node ALREADY has, or JS_UNDEFINED — node_wrap's lookup without node_wrap's allocation, for a
    component whose question is answered by a slot ON the wrapper and must not mint one to ask. BORROWED. */
 JSValueConst node_wrap_peek(const lxb_dom_node_t *n);
+/* `n`'s internal slots: a null-prototype object held by the identity table beside the wrapper and reachable from
+   nothing a page can name, so no reflection, Proxy, clone or freeze of the wrapper sees or refuses it. Born
+   baseline, like the wrapper, so every property a flow writes on it is in that flow's delta. The first call
+   wraps `n` if it has no wrapper. BORROWED; it lives as long as the table entry. */
+JSValueConst node_internal_slots(JSContext *ctx, lxb_dom_node_t *n);
+/* The same object if it exists, or JS_UNDEFINED, without creating anything. BORROWED. */
+JSValueConst node_internal_slots_peek(const lxb_dom_node_t *n);
 /* The Lexbor node behind any wrapper, or NULL if `v` is not one. */
 lxb_dom_node_t *node_of(JSValueConst v);
 /* The class node_wrap builds a Document's wrapper with, which implements Node's brand; from document_init. */
