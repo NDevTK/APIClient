@@ -3,9 +3,9 @@
  * stores, whose first operand is the address (the memory's address type replaces it). `natural` is a memory
  * access's natural alignment in bytes (§3.4.5's |t| or |N|/8), `lanes` a lane immediate's bound. Every other
  * instruction's typing reads its immediates or the stack, and code_validator.c types it by its own rule.
- * Generated from node 22's V8 as the oracle: of every signature over the number and vector types with up to
- * three operands and one result, the opcode's is the one with the fewest operands whose body validates; the
- * natural alignment is the largest memarg exponent and the lane bound the first lane index that does not. */
+ * Generated from the Type column of §7.10 "Index of Instructions" (the 2026-11-04 HTML), opcodes decoded from
+ * its Binary Opcode column; natural alignment and lane bounds by §3.4.5's and §3.4.11's rules from each name.
+ * A table derived independently with node 22's V8 as the oracle is identical, row for row. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_OPCODE_SIGNATURES_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_OPCODE_SIGNATURES_H
 
