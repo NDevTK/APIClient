@@ -78115,6 +78115,8 @@ typedef struct JSCodegen {
     int from;                  /* the cursor this stint entered the pass at */
     int pos, line_num, col_num, patch_offsets;
     uint32_t last_pc;
+    int *shift;                /* the jump shrinking's bytes removed before each jump, jump_count + 1 of them */
+    int jphase, src, dst;      /* ...its phase and its compaction's two fingers */
     bool dead;                 /* the instructions from `pos` on are unreachable up to a referenced label */
     int dead_line, dead_col;
     DynBuf out;
@@ -80163,81 +80165,126 @@ static __exception int resolve_labels(JSContext *ctx, JSFunctionDef *s, JSCodege
     return -1;
 }
 
-/* Pass 3's jump shrinking over `cg->out`: a jump whose distance fits a shorter form takes it and every address
-   after it moves back. Answers 0 or CG_RESTED. */
-static int resolve_jumps(JSFunctionDef *s, JSCodegen *cg)
+/* How many of `s`'s jumps have their operand before `addr`: the jumps are recorded in emission order, which is
+   address order, and their positions are still the instruction walk's. */
+static int jumps_before(const JSFunctionDef *s, int addr)
 {
-    DynBuf *bc_out = &cg->out;
-    JumpSlot *jp;
-    int i, op;
+    int lo = 0, hi = s->jump_count;
+
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (s->jump_slots[mid].pos < addr)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+/* Pass 3's jump shrinking over `cg->out`: a jump whose distance fits a shorter form takes it and every address
+   after it moves back by the bytes it no longer needs. Decided in address order with each jump's distance read
+   through `cg->shift`, the bytes the shrinks before it removed, so the buffer is compacted in one two-finger copy
+   as the decisions are made, and every label, source position and jump is then moved once by the shift of the
+   jumps before it. Answers 0, -1 or CG_RESTED. */
+static __exception int resolve_jumps(JSContext *ctx, JSFunctionDef *s, JSCodegen *cg)
+{
+    uint8_t *buf = cg->out.buf;
+    int i, n = s->jump_count;
 
     if (!cg->begun) {
         cg->begun = true;
+        cg->jphase = 0;
         cg->pos = 0;
+        cg->src = cg->dst = 0;
         cg->patch_offsets = 0;
+        cg->shift = js_malloc(ctx, sizeof(cg->shift[0]) * (n + 1));
+        if (!cg->shift) {
+            cg->begun = false;
+            return -1;
+        }
+        cg->shift[0] = 0;
     }
     cg->from = cg->pos;
-    for (i = cg->pos, jp = s->jump_slots + i; i < s->jump_count; i++, jp++) {
-        LabelSlot *ls;
-        JumpSlot *jp1;
-        int j, pos, diff, delta;
+    if (cg->jphase == 0) {
+        for (i = cg->pos; i < n; i++) {
+            JumpSlot *jp = &s->jump_slots[i];
+            int op, p, diff, delta, addr, size = 0;
 
+            if (js_codegen_rest(cg, i)) {
+                cg->pos = i;
+                return CG_RESTED;
+            }
+            js_codegen_charge(1);
+            DCHECK(i == 0 || jp->pos > s->jump_slots[i - 1].pos,
+                   "the jumps are not recorded in address order, which the shift lookup's binary search needs");
+            delta = 3;
+            switch (op = jp->op) {
+            case OP_goto16:
+                delta = 1;
+                /* fall thru */
+            case OP_if_false:
+            case OP_if_true:
+            case OP_goto:
+                p = jp->pos;
+                addr = s->label_slots[jp->label].addr;
+                diff = addr - cg->shift[min_int(jumps_before(s, addr), i)] - (p - cg->shift[i]);
+                if (diff >= -128 && diff <= 127 + delta) {
+                    size = 1;
+                    if (op == OP_goto16)
+                        jp->op = OP_goto8;
+                    else
+                        jp->op = OP_if_false8 + (op - OP_if_false);
+                } else if (diff == (int16_t)diff && op == OP_goto) {
+                    size = 2;
+                    delta = 2;
+                    jp->op = OP_goto16;
+                }
+                break;
+            }
+            if (size == 0) {
+                cg->shift[i + 1] = cg->shift[i];
+                continue;
+            }
+            p = jp->pos;
+            jp->size = size;
+            buf[p - 1] = jp->op;
+            memmove(buf + cg->dst, buf + cg->src, p + size - cg->src);
+            cg->dst += p + size - cg->src;
+            cg->src = p + size + delta;
+            cg->shift[i + 1] = cg->shift[i] + delta;
+            cg->patch_offsets++;
+        }
+        if (cg->src != cg->dst) {
+            memmove(buf + cg->dst, buf + cg->src, cg->out.size - cg->src);
+            cg->out.size -= cg->src - cg->dst;
+        }
+        DCHECK((int)cg->shift[n] == cg->src - cg->dst,
+               "the shrinks removed a different number of bytes than the compaction skipped");
+        cg->jphase = 1;
+        cg->pos = 0;
+        cg->from = -1;
+    }
+    /* the labels, the source positions and then the jumps themselves, whose positions the lookup reads */
+    for (i = cg->pos; cg->patch_offsets && i < s->label_count + s->source_loc_count + n; i++) {
         if (js_codegen_rest(cg, i)) {
             cg->pos = i;
             return CG_RESTED;
         }
         js_codegen_charge(1);
-        delta = 3;
-        switch (op = jp->op) {
-        case OP_goto16:
-            delta = 1;
-            /* fall thru */
-        case OP_if_false:
-        case OP_if_true:
-        case OP_goto:
-            pos = jp->pos;
-            diff = s->label_slots[jp->label].addr - pos;
-            if (diff >= -128 && diff <= 127 + delta) {
-                //put_u8(bc_out->buf + pos, diff);
-                jp->size = 1;
-                if (op == OP_goto16) {
-                    bc_out->buf[pos - 1] = jp->op = OP_goto8;
-                } else {
-                    bc_out->buf[pos - 1] = jp->op = OP_if_false8 + (op - OP_if_false);
-                }
-                goto shrink;
-            } else
-            if (diff == (int16_t)diff && op == OP_goto) {
-                //put_u16(bc_out->buf + pos, diff);
-                jp->size = 2;
-                delta = 2;
-                bc_out->buf[pos - 1] = jp->op = OP_goto16;
-            shrink:
-                /* XXX: should reduce complexity, using 2 finger copy scheme */
-                memmove(bc_out->buf + pos + jp->size, bc_out->buf + pos + jp->size + delta,
-                        bc_out->size - pos - jp->size - delta);
-                bc_out->size -= delta;
-                cg->patch_offsets++;
-                js_codegen_charge((uint64_t)s->label_count + (uint64_t)(s->jump_count - i - 1) +
-                                  (uint64_t)s->source_loc_count);
-                for (j = 0, ls = s->label_slots; j < s->label_count; j++, ls++) {
-                    if (ls->addr > pos)
-                        ls->addr -= delta;
-                }
-                for (j = i + 1, jp1 = jp + 1; j < s->jump_count; j++, jp1++) {
-                    if (jp1->pos > pos)
-                        jp1->pos -= delta;
-                }
-                for (j = 0; j < s->source_loc_count; j++) {
-                    if (s->source_loc_slots[j].pc > pos)
-                        s->source_loc_slots[j].pc -= delta;
-                }
-                continue;
-            }
-            break;
+        if (i < s->label_count) {
+            LabelSlot *ls = &s->label_slots[i];
+            ls->addr -= cg->shift[jumps_before(s, ls->addr)];
+        } else if (i < s->label_count + s->source_loc_count) {
+            uint32_t *pc = &s->source_loc_slots[i - s->label_count].pc;
+            *pc -= cg->shift[jumps_before(s, (int)*pc)];
+        } else {
+            int j = i - s->label_count - s->source_loc_count;
+            s->jump_slots[j].pos -= cg->shift[j];
         }
     }
     cg->begun = false;
+    js_free(ctx, cg->shift);
+    cg->shift = NULL;
     return 0;
 }
 
@@ -80686,7 +80733,14 @@ static void js_codegen_abandon_pass(JSContext *ctx, JSFunctionDef *fd, JSCodegen
         break;
     case CG_PASS_JUMPS:
     case CG_PASS_PATCH:
+        if (cg->pass == CG_PASS_JUMPS && cg->begun && cg->jphase == 0 && cg->src != cg->dst) {
+            /* close the compaction so the output decodes as one instruction stream */
+            memmove(cg->out.buf + cg->dst, cg->out.buf + cg->src, cg->out.size - cg->src);
+            cg->out.size -= cg->src - cg->dst;
+        }
         resolve_labels_abandon(ctx, fd, &cg->out, fd->byte_code.size);
+        js_free(ctx, cg->shift);
+        cg->shift = NULL;
         break;
     case CG_PASS_STACK:
         if (cg->begun)
@@ -80780,7 +80834,7 @@ static int js_create_function_passes(JSContext *ctx, JSFunctionDef *fd, JSCodege
             r = resolve_labels(ctx, fd, cg);
             break;
         case CG_PASS_JUMPS:
-            r = resolve_jumps(fd, cg);
+            r = resolve_jumps(ctx, fd, cg);
             break;
         case CG_PASS_PATCH:
             r = resolve_jumps_patch(ctx, fd, cg);
