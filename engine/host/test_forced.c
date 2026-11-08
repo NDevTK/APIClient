@@ -8175,16 +8175,17 @@ TF_UNIT void insert_walk_selftest(JSContext *ctx)
 /* DOM §4.5 adopt's step 3 walk is engine work: adoptNode of a detached `<div>` holding 1,000 `<i>` from one inert
    document into another is charged at least one THREAD_WORK_DOM_WALK unit per node, and appendChild of a second
    such subtree across the two documents at least five (adopt's walk beside insert_walk_selftest's four), the same
-   under both schedules. Each subtree is built by one program and moved by the next. */
+   under both schedules. Both subtrees are built by one program and each is moved by its own. */
 static const char *TF_ADOPT_WALK_SETUP_SRC =
-    "(function(){ var x = document.implementation.createHTMLDocument(''), d = x.createElement('div'), i;"
-    " for (i = 0; i < 1000; i++) d.appendChild(x.createElement('i'));"
-    " self.__tfAdoptWalk = [x, d, document.implementation.createHTMLDocument('')]; return 1; })()";
+    "(function(){ var x = document.implementation.createHTMLDocument(''), d = x.createElement('div'),"
+    " e = x.createElement('div'), i;"
+    " for (i = 0; i < 1000; i++) { d.appendChild(x.createElement('i')); e.appendChild(x.createElement('i')); }"
+    " self.__tfAdoptWalk = [d, e, document.implementation.createHTMLDocument('')]; return 1; })()";
 static const char *TF_ADOPT_WALK_SRC[2] = {
-    "(function(){ var w = self.__tfAdoptWalk; delete self.__tfAdoptWalk;"
-    " w[2].adoptNode(w[1]); return w[1].lastChild.ownerDocument === w[2] ? 1 : -1; })()",
-    "(function(){ var w = self.__tfAdoptWalk; delete self.__tfAdoptWalk;"
-    " w[2].body.appendChild(w[1]); return w[1].lastChild.ownerDocument === w[2] ? 1 : -1; })()",
+    "(function(){ var w = self.__tfAdoptWalk; w[2].adoptNode(w[0]);"
+    " return w[0].lastChild.ownerDocument === w[2] ? 1 : -1; })()",
+    "(function(){ var w = self.__tfAdoptWalk; delete self.__tfAdoptWalk; w[2].body.appendChild(w[1]);"
+    " return w[1].lastChild.ownerDocument === w[2] ? 1 : -1; })()",
 };
 
 TF_UNIT void adopt_walk_selftest(JSContext *ctx)
@@ -8194,14 +8195,14 @@ TF_UNIT void adopt_walk_selftest(JSContext *ctx)
     static const char *const WHAT[2] = { "an adoptNode", "a cross-document appendChild" };
     uint64_t charged[2][2];
 
-    for (int m = 0; m < 2; m++) {
-        for (int k = 0; k < 2; k++) {
-            ThreadWorkCensus before, now;
-            int susp, mach;
-            int32_t got;
+    for (int k = 0; k < 2; k++) {
+        int susp, mach;
+        int32_t got = tf_step_diff_run(ctx, TF_ADOPT_WALK_SETUP_SRC, "adopt-walk-setup", SCHED[k], &susp, &mach);
 
-            got = tf_step_diff_run(ctx, TF_ADOPT_WALK_SETUP_SRC, "adopt-walk-setup", SCHED[k], &susp, &mach);
-            CHECK(got == 1, "the adopt-walk fixture's detached subtree could not be built");
+        CHECK(got == 1, "the adopt-walk fixture's detached subtrees could not be built");
+        for (int m = 0; m < 2; m++) {
+            ThreadWorkCensus before, now;
+
             thread_work_census(&before);
             got = tf_step_diff_run(ctx, TF_ADOPT_WALK_SRC[m], "adopt-walk", SCHED[k], &susp, &mach);
             thread_work_census(&now);
@@ -8209,13 +8210,14 @@ TF_UNIT void adopt_walk_selftest(JSContext *ctx)
                    k ? "forced" : "declined");
             charged[m][k] = now.charged_input[THREAD_WORK_DOM_WALK] - before.charged_input[THREAD_WORK_DOM_WALK];
         }
-        JS_SetFlowControlHooks(&TF_DIFF_NONE);
+    }
+    JS_SetFlowControlHooks(&TF_DIFF_NONE);
+    for (int m = 0; m < 2; m++)
         CHECKF(charged[m][0] >= FLOOR[m] && charged[m][1] == charged[m][0],
                "%s of a 1,001-node subtree into another document was charged %llu DOM-walk nodes declined and %llu "
                "forced, not at least %llu under both: DOM §4.5 adopt's step 3 walk charged nothing, or a resume "
                "re-ran a parked walk", WHAT[m], (unsigned long long)charged[m][0],
                (unsigned long long)charged[m][1], (unsigned long long)FLOOR[m]);
-    }
 }
 
 /* DOM §4.2.10's live collections rest per node: the same reads of 300 detached elements answer the same under a
