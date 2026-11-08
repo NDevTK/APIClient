@@ -38993,6 +38993,41 @@ TF_UNIT void stacking_will_change_selftest(JSContext *ctx)
     printf("@STACK will-change ok=1\n");
 }
 
+typedef struct { const char *style; bool forms; } TfStackCase;
+
+/* One static box per case in a document this file writes, each asked whether it forms a stacking context and
+   which §9.9.1 layer it is painted in. */
+static void tf_stacking_cases(JSContext *ctx, const TfStackCase *cs, size_t n, const char *label)
+{
+    char doc[8192];
+    size_t off, i;
+    lxb_dom_element_t *root;
+    lxb_dom_node_t *box;
+    LayoutJob *job;
+
+    off = (size_t)snprintf(doc, sizeof doc, "<!DOCTYPE html><html><head></head><body>");
+    for (i = 0; i < n && off < sizeof doc; i++)
+        off += (size_t)snprintf(doc + off, sizeof doc - off, "<div style=\"%s\"></div>", cs[i].style);
+    if (off < sizeof doc) off += (size_t)snprintf(doc + off, sizeof doc - off, "</body></html>");
+    CHECKF(off < sizeof doc, "the %s stacking document outgrew its buffer", label);
+    root = lxb_dom_document_element(lxb_dom_interface_document(bp_scratch_document(ctx, doc)));
+    CHECKF(root != NULL, "the %s stacking document parsed with no root element", label);
+    job = tf_job_enter();
+    i = 0;
+    for (box = lxb_dom_interface_node(root)->first_child->next->first_child; box != NULL; box = box->next, i++) {
+        lxb_dom_element_t *el = lxb_dom_interface_element(box);
+
+        CHECKF(i < n, "the %s stacking document has more body children than it was written with", label);
+        CHECKF(stacking_context_forms(el) == cs[i].forms, "a static box declaring `%s` %s a stacking context",
+               cs[i].style, cs[i].forms ? "does not form" : "forms");
+        CHECKF(stacking_layer_of(el) == (cs[i].forms ? STACKING_LAYER_LEVEL_ZERO : STACKING_LAYER_BLOCK),
+               "a static box declaring `%s` is painted in layer %d", cs[i].style, (int)stacking_layer_of(el));
+    }
+    CHECKF(i == n, "the %s stacking document has fewer body children than it was written with", label);
+    tf_job_leave(job);
+    printf("@STACK %s ok=1\n", label);
+}
+
 /* The stacking contexts of css-color-4 §3.3 "Transparency: the opacity property" ("If a box has opacity less
    than 1, it forms a stacking context for its children"), filter-effects-1 §5 "Graphic filters: the filter
    property", filter-effects-2 §2 "Backdrop filters: the backdrop-filter property", compositing-1 §3.4.1 "The
@@ -39001,7 +39036,7 @@ TF_UNIT void stacking_will_change_selftest(JSContext *ctx)
    declaration outside its property's grammar is dropped, so the earlier valid one stands. */
 TF_UNIT void stacking_effects_selftest(JSContext *ctx)
 {
-    static const struct { const char *style; bool forms; } CASE[] = {
+    static const TfStackCase CASE[] = {
         { "opacity:.5", true }, { "opacity:50%", true }, { "opacity:0.999", true }, { "opacity:-1", true },
         { "filter:blur(2px)", true }, { "filter:url(#x)", true }, { "filter:drop-shadow(1px 1px red)", true },
         { "filter:blur()", true }, { "filter:Blur(1px) url(#a)", true }, { "filter:blur(1px);filter:bogus", true },
@@ -39014,34 +39049,35 @@ TF_UNIT void stacking_effects_selftest(JSContext *ctx)
         { "filter:drop-shadow(1px 1px 2px 3px)", false }, { "backdrop-filter:none", false },
         { "mix-blend-mode:normal", false }, { "mix-blend-mode:plus-darker", false }, { "isolation:auto", false },
     };
-    char doc[4096];
-    size_t off, i = 0;
-    lxb_dom_element_t *root;
-    lxb_dom_node_t *box;
-    LayoutJob *job;
 
-    off = (size_t)snprintf(doc, sizeof doc, "<!DOCTYPE html><html><head></head><body>");
-    for (i = 0; i < COUNTOF(CASE); i++)
-        off += (size_t)snprintf(doc + off, sizeof doc - off, "<div style=\"%s\"></div>", CASE[i].style);
-    off += (size_t)snprintf(doc + off, sizeof doc - off, "</body></html>");
-    CHECK(off < sizeof doc, "the effects stacking document outgrew its buffer");
-    root = lxb_dom_document_element(lxb_dom_interface_document(bp_scratch_document(ctx, doc)));
-    CHECK(root != NULL, "the effects stacking document parsed with no root element");
-    job = tf_job_enter();
-    i = 0;
-    for (box = lxb_dom_interface_node(root)->first_child->next->first_child; box != NULL; box = box->next, i++) {
-        lxb_dom_element_t *el = lxb_dom_interface_element(box);
+    tf_stacking_cases(ctx, CASE, COUNTOF(CASE), "effects");
+}
 
-        CHECK(i < COUNTOF(CASE), "the effects stacking document has more body children than it was written with");
-        CHECKF(stacking_context_forms(el) == CASE[i].forms, "a static box declaring `%s` %s a stacking context",
-               CASE[i].style, CASE[i].forms ? "does not form" : "forms");
-        CHECKF(stacking_layer_of(el) == (CASE[i].forms ? STACKING_LAYER_LEVEL_ZERO : STACKING_LAYER_BLOCK),
-               "css-color-4 §3.3: a static box declaring `%s` is painted in layer %d", CASE[i].style,
-               (int)stacking_layer_of(el));
-    }
-    CHECK(i == COUNTOF(CASE), "the effects stacking document has fewer body children than it was written with");
-    tf_job_leave(job);
-    printf("@STACK effects ok=1\n");
+/* css-masking-1 §5.1 "Clipping Shape: the clip-path property": "A computed value of other than none results in
+   the creation of a stacking context [CSS21] the same way that CSS opacity [CSS3COLOR] does for values other
+   than 1", over css-shapes-1 §3's `<basic-shape>`. Each value's validity is Chrome 153.0.8010.12's
+   CSS.supports, and inset(0)'s context its overlap with a later in-flow sibling. */
+TF_UNIT void stacking_clip_path_selftest(JSContext *ctx)
+{
+    static const TfStackCase CASE[] = {
+        { "clip-path:inset(0)", true }, { "clip-path:inset(0 1px 2px 3px round 4px / 5px)", true },
+        { "clip-path:circle(50% at 10px 20px)", true }, { "clip-path:circle()", true },
+        { "clip-path:ellipse(closest-side farthest-side)", true },
+        { "clip-path:polygon(0 0, 100% 0, 50% 100%)", true }, { "clip-path:polygon(evenodd, 0 0, 1px 1px)", true },
+        { "clip-path:path('M0 0 L10 10')", true }, { "clip-path:path(evenodd, 'M0 0')", true },
+        { "clip-path:shape(from 0 0, line to 10px 10px, close)", true },
+        { "clip-path:shape(from 0 0, arc to 10px 10px of 5px cw)", true }, { "clip-path:border-box", true },
+        { "clip-path:circle(1px) content-box", true }, { "clip-path:xywh(0 0 10px 10px)", true },
+        { "clip-path:rect(0 auto 10px 0)", true }, { "clip-path:url(#x)", true }, { "will-change:clip-path", true },
+        { "clip-path:inset(0);clip-path:bogus", true },
+        { "clip-path:none", false }, { "clip-path:bogus", false }, { "clip-path:circle(1px 2px)", false },
+        { "clip-path:inset()", false }, { "clip-path:inset(-1px round -2px)", false },
+        { "clip-path:polygon(0 0 0)", false }, { "clip-path:circle(-1px)", false },
+        { "clip-path:xywh(0 0 -1px 1px)", false }, { "clip-path:inset(1px) inset(2px)", false },
+        { "clip-path:border-box content-box", false },
+    };
+
+    tf_stacking_cases(ctx, CASE, COUNTOF(CASE), "clip-path");
 }
 
 /* `<p>` WITH AN INLINE BOX IN IT, BUILT INTO THE FIXTURE'S OWN ACTIVE DOCUMENT AND TAKEN OUT AGAIN — the
@@ -43639,6 +43675,7 @@ int main(int argc, char **argv) {
     stacking_will_change_selftest(ctx);
     /* and the effect properties' (opacity, filters, blending), over a third. */
     stacking_effects_selftest(ctx);
+    stacking_clip_path_selftest(ctx);
     /* AND THE SUB-LIST INSIDE ONE OF THOSE OFFERS — CSS 2.1 §E.2's step 7.2.1, over the boxes in a line box
        rather than over the block that establishes it. It uses `box_paint_text_selftest`'s document and NOT
        the scratch helper the two above use, because a line box cannot be measured on a document that is no
