@@ -57,9 +57,10 @@ static int g_dec_below = 0;         /* slots in that chain — the head's index 
 static signed char *g_dec = NULL; static int g_dec_n = 0, g_dec_cap = 0;   /* the head: this flow's own */
 static uint32_t *g_dec_k = NULL;   /* …and which question each of its slots answers */
 static int g_c = 0;
-/* The names this timeline has minted at its current cursor (decide_history_name): `g_mints` of them, counted
-   since the cursor stood at `g_mint_c`. Per flow, so it rides every blob a flow's decision state does. */
-static int g_mint_c = 0, g_mints = 0;
+/* The names this timeline has minted at its current history (decide_history_name): `g_mints` of them, counted
+   since the history was `g_mint_h`. Per flow, so it rides every blob a flow's decision state does. */
+static uint64_t g_mint_h = 0;
+static int g_mints = 0;
 static JSValue g_cur_fn = JS_UNDEFINED;   /* borrowed from the running Flow (alive for the run) */
 static int g_running = 0;
 
@@ -159,13 +160,16 @@ static void dec_ensure(int n) {
  * 32 bits: the likeliest divergence is one inserted or deleted question, and the damage is done at the first
  * misaligned slot, where an 8-bit key would false-agree 1 in 256 to save 3 bytes per slot.
  *
- * Two namespaces share the column, split by DEC_KEY_SITE so a predicate's hash never equals a code site's. A
- * predicate (decide_key, outcome_key, a completion's mechanism name) clears the bit; a branch with no spellable
- * question is keyed by dec_site_hash, which sets it. A position, a pc or a display shape cannot key a predicate,
- * since that would claim knowledge the identity layer lacks. A site slot claims no predicate: it records a
- * schedule choice at a code location, which is knowledge the engine has. 0 is in neither namespace, so
+ * Three namespaces share the column, so no two kinds of slot share a hash. A predicate (decide_key, outcome_key)
+ * clears both bits; a branch with no spellable question is keyed by dec_site_hash, which sets DEC_KEY_SITE; a
+ * completion (decide_completion: a value another party delivered) is keyed by its mechanism's name with
+ * DEC_KEY_ARRIVAL set. A position, a pc or a display shape cannot key a predicate, since that would claim
+ * knowledge the identity layer lacks. A site slot claims no predicate: it records a schedule choice at a code
+ * location, which is knowledge the engine has. An arrival slot is apart because its place among the program's own
+ * slots is where the delivery happened to land, which decide_history_name must not read. 0 is in no namespace, so
  * dec_append's `asked != 0` catches a slot written with no key computed. */
 #define DEC_KEY_SITE 0x80000000u
+#define DEC_KEY_ARRIVAL 0x40000000u
 
 static uint32_t dec_fnv(uint32_t h, const void *bytes, size_t n) {
     const unsigned char *b = bytes;
@@ -182,11 +186,19 @@ static uint32_t dec_key_hash(const char *key) {
 
     DCHECK(key != NULL, "a predicate's question hash was asked of no key — a branch with no spellable question "
                         "is keyed by its code site (dec_site_hash), never by the predicate namespace");
-    h = dec_fnv(2166136261u, key, strlen(key)) & ~DEC_KEY_SITE;
-    return h ? h : 1u;   /* 0 is in neither namespace, so a key that lands on it is nudged off */
+    h = dec_fnv(2166136261u, key, strlen(key)) & ~(DEC_KEY_SITE | DEC_KEY_ARRIVAL);
+    return h ? h : 1u;   /* 0 is in no namespace, so a key that lands on it is nudged off */
+}
+
+/* A completion's slot key: its mechanism name's hash in DEC_KEY_ARRIVAL's namespace. */
+static uint32_t dec_arrival_hash(const char *why) {
+    DCHECK(why != NULL && *why == '(', "a completion's slot key was asked of something that is not a mechanism's "
+                                       "name — the census files those as synthetic rows, whose names open on `(`");
+    return (dec_fnv(2166136261u, why, strlen(why)) & ~DEC_KEY_SITE) | DEC_KEY_ARRIVAL;
 }
 
 static int dec_key_is_site(uint32_t asked) { return (asked & DEC_KEY_SITE) != 0; }
+static int dec_key_is_arrival(uint32_t asked) { return (asked & (DEC_KEY_SITE | DEC_KEY_ARRIVAL)) == DEC_KEY_ARRIVAL; }
 
 /* The frozen chain's own census, counted at the two points a segment's lifetime begins and ends so the pair
    cannot drift from the thing it counts. */
@@ -390,7 +402,7 @@ void decide_enter(JSContext *ctx, Flow *f) {
     dec_clear();   /* whatever the previous flow was standing on is not this one's */
     g_dec_n = 0;
     g_c = 0;
-    g_mint_c = 0;
+    g_mint_h = 0;
     g_mints = 0;
     g_cur_fn = f->fn;   /* borrowed */
     g_running = 1;
@@ -910,10 +922,10 @@ void decide_refine_stats(long *asked, long *refined) {
    decide_resume restores and re-binds cur_fn. The cold tier rebuilds a parked flow into the same shape. A blob is
    a pointer at a segment and a cursor, O(1) whatever the vector's depth. Every arm a flow owes is a slot in its
    chain under the question it answers, so the chain and cursor are the whole of what crosses the cold tier. */
-typedef struct { DecSeg *seg; int c; int mint_c, mints; } DecideBlob;
-/* What every blob a fork or suspend takes from the running flow besides its chain: the mint count at the cursor,
+typedef struct { DecSeg *seg; int c; uint64_t mint_h; int mints; } DecideBlob;
+/* What every blob a fork or suspend takes from the running flow besides its chain: the mint count at its history,
    which the sibling shares because it shares the history up to here. */
-static void dec_blob_take_mints(DecideBlob *b) { b->mint_c = g_mint_c; b->mints = g_mints; }
+static void dec_blob_take_mints(DecideBlob *b) { b->mint_h = g_mint_h; b->mints = g_mints; }
 void *decide_suspend(void) {
     DecideBlob *b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM suspend blob");
     b->seg = dec_freeze();   /* the blob owns the reference the freeze hands back */
@@ -931,10 +943,9 @@ void decide_resume(void *blob, JSValueConst fn) {
     g_c = b->c;
     DCHECK(g_c <= dec_total(), "a flow resumed with a cursor past the end of its own decision vector — the "
                                "next branch would read a slot nothing recorded");
-    DCHECK(b->mint_c >= 0 && b->mint_c <= g_c && b->mints >= 0,
-           "a flow resumed with a mint count taken at a cursor past its own — dec_blob_take_mints copies both "
-           "from the running flow, whose cursor only moves forward");
-    g_mint_c = b->mint_c;
+    DCHECK(b->mints >= 0, "a flow resumed with a negative mint count — dec_blob_take_mints copies it from the "
+                          "running flow, whose count only grows from 0");
+    g_mint_h = b->mint_h;
     g_mints = b->mints;
     g_cur_fn = fn;   /* borrowed from the resuming Flow */
     g_running = 1;
@@ -1029,7 +1040,7 @@ void *decide_blob_new(void *seg) {
        re-reaches, and forks like any other flow once the cursor reaches the chain's end. It has minted nothing
        yet, so it re-mints every name its recorded run minted (decide_history_name). */
     b->c = 0;
-    b->mint_c = 0;
+    b->mint_h = 0;
     b->mints = 0;
     return b;
 }
@@ -1122,8 +1133,11 @@ int decide_blob_cursor(const void *blob) {
     return b->c;
 }
 
-/* See decide.h. FNV-1a over each consumed slot's question and arm, bottom of the chain first; a replay consumes
-   the same slots in the same order, so it hashes to the same value. */
+/* See decide.h. FNV-1a over each consumed question slot and its arm, bottom of the chain first; a replay consumes
+   the same slots in the same order, so it hashes to the same value. An arrival slot is skipped: a delivery lands
+   between two of the program's own slots wherever its sender's timing put it, so a creation made before it in one
+   session is made after it in a replay, and the name would move with it. The count is per history, not per
+   cursor, for the same reason: an arrival moves the cursor and leaves the history as it was. */
 void decide_history_name(uint64_t *identity, int *ordinal) {
     const DecSeg *s, **segs = NULL;
     uint64_t h = 1469598103934665603ULL;
@@ -1141,15 +1155,17 @@ void decide_history_name(uint64_t *identity, int *ordinal) {
     }
     for (i = n_segs - 1; i >= 0; i--)
         for (k = 0; k < segs[i]->n && segs[i]->below + k < g_c; k++) {
+            if (dec_key_is_arrival(segs[i]->k[k])) continue;
             h = (h ^ segs[i]->k[k]) * 1099511628211ULL;
             h = (h ^ (uint8_t)segs[i]->e[k]) * 1099511628211ULL;
         }
     free(segs);
     for (k = 0; g_dec_below + k < g_c; k++) {
+        if (dec_key_is_arrival(g_dec_k[k])) continue;
         h = (h ^ g_dec_k[k]) * 1099511628211ULL;
         h = (h ^ (uint8_t)g_dec[k]) * 1099511628211ULL;
     }
-    if (g_mint_c != g_c) { g_mint_c = g_c; g_mints = 0; }
+    if (g_mints == 0 || g_mint_h != h) { g_mint_h = h; g_mints = 0; }
     *identity = h;
     *ordinal = ++g_mints;
     CHECK(g_mints > 0, "decide: the per-history mint ordinal wrapped — the next name collides with one already "
@@ -1158,7 +1174,7 @@ void decide_history_name(uint64_t *identity, int *ordinal) {
 
 /* See decide.h. */
 int decide_completion_recorded_later(const char *why) {
-    uint32_t asked = dec_key_hash(why), k;
+    uint32_t asked = dec_arrival_hash(why), k;
     int i;
 
     DCHECK(g_running, "a completion's recorded slot was asked while no flow's decision state was loaded");
@@ -1236,7 +1252,7 @@ int decide_completion(const char *why, void **sib_blob) {
     DCHECK(g_running, "a completion fork was asked while no flow's decision state was loaded");
     DCHECK(sib_blob != NULL, "a completion fork was asked with nowhere to hand the sibling's decision state");
     *sib_blob = NULL;
-    asked = dec_key_hash(why);
+    asked = dec_arrival_hash(why);
     if (g_c < dec_total()) {
         arm = dec_replay(asked);
         if (arm >= 0) return arm;

@@ -497,10 +497,11 @@ void *decide_freeze_path(void);
 /* Swap the running decision state when the scheduler interleaves flows: suspend snapshots the evolving vector
    + cursor of the paused flow; resume restores them + re-binds the flow's fn. */
 /* A NAME FOR WHAT THE RUNNING TIMELINE CREATES THAT A REPLAY OF ITS HISTORY RE-MINTS (solver/world.c's
-   world_mint_doc). `identity` is a hash of the decisions this flow has consumed so far, the recipe prefix a cold
-   resume replays; `ordinal` counts this flow's mints at that prefix, from 1. Two timelines that diverged at a
-   recorded branch name their creations apart; two that share their consumed decisions (a replay, or siblings of a
-   fork over a value that arrived) name the same creation alike. Requires a running flow. */
+   world_mint_doc). `identity` is a hash of the program's own decisions this flow has consumed so far (arrival
+   slots excluded), the recipe prefix a cold resume replays; `ordinal` counts this flow's mints at that history,
+   from 1. Two timelines that diverged at a branch name their creations apart; two that share those decisions (a
+   replay, or the arms of a fork over a value that arrived, recorded or not) name the same creation alike.
+   Requires a running flow. */
 void  decide_history_name(uint64_t *identity, int *ordinal);
 /* Whether the running flow's recorded path, from its cursor on, takes the completion `why` (decide_completion's
    key) first at a slot past the cursor: an arrival the replay reaches before its record took it. */
