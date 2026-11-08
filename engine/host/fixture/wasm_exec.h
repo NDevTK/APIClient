@@ -1,15 +1,16 @@
 /* GENERATED: the WebAssembly spec testsuite's scripts over number values, for test_forced.c's
- * wasm_interpreter_selftest (no document, no realm). The .wast files are those of fixture/wasm_testsuite.h's
- * header, converted by WebAssembly/spec f3268fa9's reference interpreter. Rows are in script order, each file
- * one `script`: module instances (`module` its index in WASM_TESTSUITE_ROWS, `instance` its number), registers
- * (`export_name` the name), assert_unlinkable (`trap` the message), and assert_return, assert_trap and invoke.
- * A row is kept while what it acts on can be replayed: an instance scratch exec_scope2.c says instantiates,
- * whose non-spectest imports name live registered instances and, when linked, whose bodies are all in
- * core/wasm/interpreter.h's subset; a command exec_scope2.c admits. A skipped act that can touch an instance
- * (a dropped command, an exhaustion, a non-number value, an instantiation expected to trap) ends it and every
- * instance linked with it. 2123 instances, 52 registers, 81 unlinkable, 16210 returns, 3859 traps, 116 actions.
- * `match` is 0 for exact bits, 1 for `nan:canonical`, 2 for `nan:arithmetic`; a trap's message matches by
- * prefix; an action asserts only that the invocation returns. Regenerate with scratch gen/exec/regen2.sh. */
+ * wasm_interpreter_selftest, at the fixture agent's baseline. The .wast files are those of
+ * fixture/wasm_testsuite.h's header, converted by WebAssembly/spec f3268fa9's reference interpreter. Rows are
+ * in script order, each file one `script`: module instances (`module` its index in WASM_TESTSUITE_ROWS,
+ * `instance` its number), registers (`export_name` the name), assert_unlinkable (`trap` the message), and
+ * assert_return, assert_trap and invoke. A row is kept while what it acts on can be replayed: an instance
+ * scratch exec_scope2.c says instantiates, whose non-spectest imports name live registered instances and,
+ * when linked, whose bodies are all in core/wasm/interpreter.h's subset; a command exec_scope2.c admits. A
+ * skipped act that can touch an instance (a dropped command, an exhaustion, a non-number value, an
+ * instantiation expected to trap) ends it and every instance linked with it. 2123 instances, 52 registers, 81
+ * unlinkable, 16210 returns, 3859 traps, 116 actions. `match` is 0 for exact bits, 1 for `nan:canonical`, 2
+ * for `nan:arithmetic`; a trap's message matches by prefix; an action asserts only that the invocation
+ * returns. Regenerate with scratch gen/exec/regen2.sh. */
 #ifndef ENGINE_HOST_FIXTURE_WASM_EXEC_H
 #define ENGINE_HOST_FIXTURE_WASM_EXEC_H
 

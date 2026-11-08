@@ -9,10 +9,10 @@
  * NaN is the positive canonical NaN, and bit operations (abs, neg, copysign, reinterpret) keep bits.
  * The page's bytes have been decoded and validated, so an instruction the validator accepted that this file
  * does not execute is this codebase's gap (CHECK_FAIL), never a refusal.
- * Named residual. Not covered: a host function that throws (exceptions), memory (§4.6.8), and the vector,
- * exception and aggregate instructions and the references other than functions'. Next diff builds: memory.
- * Absence shows as: invoking a function that reaches one of them stops the process at the CHECK_FAIL naming
- * it; a host throw has no answer to give. */
+ * Named residual. Not covered: a host function that throws (exceptions), and the vector, exception and
+ * aggregate instructions and the references other than functions'. Next diff builds: the start function, then
+ * the JS API's install. Absence shows as: invoking a function that reaches one of them stops the process at the
+ * CHECK_FAIL naming it; a host throw has no answer to give. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 
@@ -40,6 +40,7 @@ typedef enum {
     WASM_EXEC_TRAP_INDIRECT_TYPE,     /* §4.6.5: call_indirect's function does not match the expected type */
     WASM_EXEC_TRAP_NULL_FUNCTION,     /* §4.6.5: call_ref of the null reference */
     WASM_EXEC_TRAP_NULL_REFERENCE,    /* §4.6.9: ref.as_non_null of the null reference */
+    WASM_EXEC_TRAP_MEMORY_BOUNDS,     /* §4.6.8: a memory access, or an active data segment, past the size */
     WASM_EXEC_NO_ROOM,                /* a stack or the locals could not be allocated (§7.2's resource exhaustion) */
     WASM_EXEC_LINK_INCOMPATIBLE       /* §4.7.2: an import's external value is not valid with its type (§4.5.2) */
 } WasmExecStatus;
@@ -68,22 +69,24 @@ typedef struct {
     uint32_t n_results;
 } WasmFrame;
 
-/* A bulk table instruction in progress, one element a step (§4.6.7's recursive table.fill, table.copy and
-   table.init): its opcode, its tables' or segment's store addresses, and its operands left. */
+/* A bulk instruction in progress, one element or byte a step (§4.6.7's recursive table.fill, table.copy and
+   table.init, §4.6.8's memory.fill, memory.copy and memory.init): its 0xFC opcode, which says whether `to` and
+   `from` are store addresses of tables, memories or segments, and its operands left; `ref` is a table.fill's
+   reference or a memory.fill's byte. */
 typedef struct {
     uint32_t op;
-    size_t table, from;
+    size_t to, from;
     uint64_t d, s, n;
     WasmValue ref;
 } WasmBulk;
 
 /* An outcome the spec leaves to the implementation, which is an unknown of the environment (§4.7.1's growtable
-   may fail): the step answers FORK, the caller runs the example arm or forks the assumption against it, and
-   wasm_interpreter_choose resumes with that arm. `kind` is 0 when none is pending. */
-enum { WASM_CHOICE_TABLE_GROW = 1 };
+   and growmem may fail): the step answers FORK, the caller runs the example arm or forks the assumption against
+   it, and wasm_interpreter_choose resumes with that arm. `kind` is 0 when none is pending. */
+enum { WASM_CHOICE_TABLE_GROW = 1, WASM_CHOICE_MEMORY_GROW };
 typedef struct {
     uint8_t kind;
-    size_t table;                /* the table's store address */
+    size_t addr;                 /* the table's or memory's store address, by `kind` */
     uint64_t n;
 } WasmChoice;
 

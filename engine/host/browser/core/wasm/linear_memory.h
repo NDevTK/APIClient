@@ -30,19 +30,27 @@
 void wasm_memory_init(JSContext *ctx);
 void wasm_memory_free(void);
 
-/* §4.7.1's allocmem: a memory of type `type`, its min pages of zeros, owned by the returned object. A RangeError
-   when the bytes cannot be allocated (JS API §5.3's constructor throws one). */
+/* §4.7.1's allocmem: a memory of type `type`, its min pages of zeros, owned by the returned object; JS_NULL when
+   the bytes cannot be allocated, which the page's type chose (JS API §5.3's constructor throws a RangeError). */
 JSValue wasm_memory_new(JSContext *ctx, const WasmLimits *type);
 /* Whether `v` is a memory instance's owner. */
 bool wasm_memory_is(JSValueConst v);
-/* The running flow's size in pages, and its byte length. */
+/* The running flow's size in pages. */
 uint64_t wasm_memory_pages(JSValueConst mem);
+/* §4.2.9's meminst.type in the running flow: the declared type with the size as its minimum, which growmem
+   raises (§4.5.2's external type). */
+void wasm_memory_type(JSValueConst mem, WasmLimits *out);
+/* Whether [addr, addr + n) lies inside the running flow's size. */
+bool wasm_memory_holds(JSValueConst mem, uint64_t addr, uint64_t n);
 /* Read or write `n` bytes at `addr` of the running flow's memory; false, with nothing read or written, when
    [addr, addr + n) is not inside its size (§4.6.8's out-of-bounds trap). */
 bool wasm_memory_load(JSValueConst mem, uint64_t addr, size_t n, uint8_t *out);
 bool wasm_memory_store(JSValueConst mem, uint64_t addr, size_t n, const uint8_t *in);
-/* §4.7.1's growmem by `delta` pages: the old size, or -1 where growmem fails (the type's maximum, the address
-   type's bound) or the storage cannot be allocated. */
-int64_t wasm_memory_grow(JSValueConst mem, uint64_t delta);
+/* Whether §4.7.1's growmem by `delta` pages succeeds (within the type's maximum and the address type's bound)
+   to a size whose bytes a size_t counts. */
+bool wasm_memory_growable(JSValueConst mem, uint64_t delta);
+/* growmem by `delta` pages, which wasm_memory_growable admits: the old size. Storage that cannot be had is a
+   CHECK (out of memory). */
+uint64_t wasm_memory_grow(JSValueConst mem, uint64_t delta);
 
 #endif

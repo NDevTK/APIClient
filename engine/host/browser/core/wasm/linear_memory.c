@@ -103,19 +103,17 @@ JSValue wasm_memory_new(JSContext *ctx, const WasmLimits *type)
     DCHECK(type != NULL && (!type->has_max || type->min <= type->max),
            "a WebAssembly memory was allocated from a type validation refuses (§3.2.12's limits)");
     m = calloc(1, sizeof *m);
-    if (m == NULL || !reserve(m, type->min)) {
-        if (m != NULL) memory_release(m);
-        return JS_ThrowRangeError(ctx, "WebAssembly.Memory(): could not allocate memory");
+    CHECK(m != NULL, "a WebAssembly memory instance could not be allocated: out of memory");
+    if (type->min > SIZE_MAX / WASM_PAGE_SIZE || !reserve(m, type->min)) {
+        memory_release(m);
+        return JS_NULL;
     }
     m->size.pages = type->min;
     m->addr64 = type->addr64;
     m->has_max = type->has_max;
     m->max = type->max;
     obj = JS_NewObjectProtoClass(ctx, JS_NULL, g_class);
-    if (JS_IsException(obj)) {
-        memory_release(m);
-        return obj;
-    }
+    CHECK(!JS_IsException(obj), "a WebAssembly memory's owner object could not be allocated: out of memory");
     JS_SetOpaque(obj, m);
     return obj;
 }
@@ -130,6 +128,16 @@ uint64_t wasm_memory_pages(JSValueConst mem)
     return memory_of(mem)->size.pages;
 }
 
+void wasm_memory_type(JSValueConst mem, WasmLimits *out)
+{
+    const WasmLinearMemory *m = memory_of(mem);
+
+    out->addr64 = m->addr64;
+    out->has_max = m->has_max;
+    out->min = m->size.pages;
+    out->max = m->max;
+}
+
 /* Whether [addr, addr + n) lies inside the running flow's size, compared in pages: a byte length of 2^48 pages
    does not fit in 64 bits. An end past 2^64 is outside every memory reserve could have allocated. */
 static bool in_bounds(const WasmLinearMemory *m, uint64_t addr, size_t n)
@@ -139,6 +147,11 @@ static bool in_bounds(const WasmLinearMemory *m, uint64_t addr, size_t n)
     if (n > UINT64_MAX - addr) return false;
     end = addr + n;
     return end / WASM_PAGE_SIZE + (end % WASM_PAGE_SIZE != 0) <= m->size.pages;
+}
+
+bool wasm_memory_holds(JSValueConst mem, uint64_t addr, uint64_t n)
+{
+    return n <= SIZE_MAX && in_bounds(memory_of(mem), addr, (size_t)n);
 }
 
 bool wasm_memory_load(JSValueConst mem, uint64_t addr, size_t n, uint8_t *out)
@@ -180,18 +193,27 @@ bool wasm_memory_store(JSValueConst mem, uint64_t addr, size_t n, const uint8_t 
     return true;
 }
 
-int64_t wasm_memory_grow(JSValueConst mem, uint64_t delta)
+bool wasm_memory_growable(JSValueConst mem, uint64_t delta)
 {
-    WasmLinearMemory *m = memory_of(mem);
+    const WasmLinearMemory *m = memory_of(mem);
     uint64_t old = m->size.pages, bound = m->addr64 ? (uint64_t)1 << 48 : (uint64_t)1 << 16;
 
     /* §4.7.1's growmem steps 2 to 5: i' within the maximum, and within 2^(|at|-16) pages. */
-    if (delta > bound || old > bound - delta) return -1;
-    if (m->has_max && old + delta > m->max) return -1;
-    if (!reserve(m, old + delta)) return -1;
+    if (delta > bound || old > bound - delta) return false;
+    if (m->has_max && old + delta > m->max) return false;
+    return old + delta <= SIZE_MAX / WASM_PAGE_SIZE;
+}
+
+uint64_t wasm_memory_grow(JSValueConst mem, uint64_t delta)
+{
+    WasmLinearMemory *m = memory_of(mem);
+    uint64_t old = m->size.pages;
+
+    DCHECK(wasm_memory_growable(mem, delta), "a WebAssembly memory was grown past what growmem admits");
+    CHECK(reserve(m, old + delta), "a WebAssembly memory could not grow: out of memory");
     cow_capture_host_record(mem, &m->size, &SIZE_REC);
     m->size.pages = old + delta;
-    return (int64_t)old;
+    return old;
 }
 
 void wasm_memory_init(JSContext *ctx)

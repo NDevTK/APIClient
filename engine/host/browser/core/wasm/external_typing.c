@@ -2,6 +2,7 @@
 #include "core/wasm/external_typing.h"
 
 #include "check.h"
+#include "core/wasm/linear_memory.h"
 
 /* The type space a store value type's concrete heap index reads; a type that names no defined type reads none,
    so any serves. */
@@ -16,7 +17,8 @@ static const WasmTypes *types_of(const WasmStore *s, const WasmStoreValType *t, 
     return s->types[t->types];
 }
 
-/* §3.3.11: at least the import's minimum, and within its maximum when it has one; the same address type. */
+/* §3.3.11 under §3.3.14 and §3.3.15: at least the import's minimum, and within its maximum when it has one;
+   the same address type. */
 static bool limits_le(bool addr64, uint64_t min, bool has_max, uint64_t max, const WasmLimits *im)
 {
     if (addr64 != im->addr64 || min < im->min) return false;
@@ -70,11 +72,17 @@ WasmMatch wasm_extern_check_begin(WasmExternCheck *c, const WasmStore *s, const 
         if (g->mutable_) return wasm_val_eq(gt, &g->type.type, importer, &im->type) ? WASM_MATCH_YES : WASM_MATCH_NO;
         return answer(c, gt, wasm_val_le(gt, &g->type.type, importer, &im->type, &c->climb));
     }
-    case WASM_EXTERN_MEMORY:
+    case WASM_EXTERN_MEMORY: {
+        WasmLimits t;
+
+        DCHECK(addr < s->n_mems, "a WebAssembly memory import was given an address past the store's memories");
+        wasm_memory_type(s->mems[addr], &t);
+        return limits_le(t.addr64, t.min, t.has_max, t.max, &im->limits) ? WASM_MATCH_YES : WASM_MATCH_NO;
+    }
     case WASM_EXTERN_TAG:
         break;
     }
-    CHECK_FAIL("a WebAssembly memory or tag import is not built in external_typing.c");
+    CHECK_FAIL("a WebAssembly tag import is not built in external_typing.c");
 }
 
 WasmMatch wasm_extern_check_step(WasmExternCheck *c)

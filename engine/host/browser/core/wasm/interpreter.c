@@ -1,5 +1,4 @@
-/* WebAssembly Core Specification (Release 3.0) §4.6 "Instructions", the numeric and control subset. See
-   interpreter.h. */
+/* WebAssembly Core Specification (Release 3.0) §4.6 "Instructions". See interpreter.h. */
 #include "core/wasm/interpreter.h"
 
 #include <math.h>
@@ -11,6 +10,7 @@
 #include "quickjs.h"
 #include "core/wasm/instance.h"
 #include "core/wasm/instruction.h"
+#include "core/wasm/linear_memory.h"
 
 enum { L_FUNC = 1, L_BLOCK, L_LOOP, L_IF };
 
@@ -684,7 +684,7 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
             || t->size + n > SIZE_MAX / sizeof *t->elems)
             return push(it, bound) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
         it->choice.kind = WASM_CHOICE_TABLE_GROW;
-        it->choice.table = table_addr(it, in->index[0]);
+        it->choice.addr = table_addr(it, in->index[0]);
         it->choice.n = n;
         return WASM_EXEC_FORK;
     case 17:
@@ -694,7 +694,7 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
         d = pop(it);
         if (d > t->size || n > t->size - d) return WASM_EXEC_TRAP_TABLE_BOUNDS;
         b->op = 17;
-        b->table = table_addr(it, in->index[0]);
+        b->to = table_addr(it, in->index[0]);
         b->d = d;
         b->n = n;
         return WASM_EXEC_MORE;
@@ -706,7 +706,7 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
         d = pop(it);
         if (d > t->size || n > t->size - d || s > u->size || n > u->size - s) return WASM_EXEC_TRAP_TABLE_BOUNDS;
         b->op = 14;
-        b->table = table_addr(it, in->index[0]);
+        b->to = table_addr(it, in->index[0]);
         b->from = table_addr(it, in->index[1]);
         b->d = d;
         b->s = s;
@@ -721,7 +721,7 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
         d = pop(it);
         if (d > t->size || n > t->size - d || s > e->n || n > e->n - s) return WASM_EXEC_TRAP_TABLE_BOUNDS;
         b->op = 12;
-        b->table = table_addr(it, in->index[1]);
+        b->to = table_addr(it, in->index[1]);
         b->from = INST(it)->elems[in->index[0]];
         b->d = d;
         b->s = s;
@@ -732,6 +732,117 @@ static WasmExecStatus table_bulk(WasmInterpreter *it, const WasmInstruction *in)
     CHECK_FAIL("a 0xFC table opcode interpreter.c does not define");
 }
 
+/* The store address of memory `x` of the current instance, and its owner. */
+static size_t mem_addr(WasmInterpreter *it, uint64_t x)
+{
+    size_t a = INST(it)->mems[x];
+
+    DCHECKF(a < it->store->n_mems, "a WebAssembly instance's memory %llu has no store address",
+            (unsigned long long)x);
+    return a;
+}
+
+static JSValueConst mem_of(WasmInterpreter *it, uint64_t x)
+{
+    return it->store->mems[mem_addr(it, x)];
+}
+
+/* -1 of a memory's or table's address type (§4.6.8's signed^-1_|at|(-1)). */
+static uint64_t minus_one(bool addr64)
+{
+    return addr64 ? UINT64_MAX : UINT32_MAX;
+}
+
+/* §4.6.8's loads and stores, 0x28 to 0x3E: the effective address is the operand plus the memarg's offset, an
+   access any byte of which lies past the memory's size traps, and the bytes are little endian (§5.4's bytes_t).
+   The alignment is a hint with no effect on the result. */
+static WasmExecStatus memory_access(WasmInterpreter *it, const WasmInstruction *in)
+{
+    static const uint8_t WIDTH[23] = { 4, 8, 4, 8, 1, 1, 2, 2, 1, 1, 2, 2, 4, 4, 4, 8, 4, 8, 1, 2, 1, 2, 4 };
+    uint32_t op = in->opcode;
+    size_t n = WIDTH[op - 0x28], k;
+    JSValueConst mem = mem_of(it, in->memory);
+    uint64_t v = op >= 0x36 ? pop(it) : 0, i = pop(it), x = 0;
+    uint8_t b[8];
+
+    DCHECKF(op >= 0x28 && op <= 0x3E, "opcode 0x%02X is not a memory load or store", op);
+    if (in->offset > UINT64_MAX - i) return WASM_EXEC_TRAP_MEMORY_BOUNDS;
+    if (op >= 0x36) {
+        for (k = 0; k < n; k++) b[k] = (uint8_t)(v >> (8 * k));
+        return wasm_memory_store(mem, i + in->offset, n, b) ? WASM_EXEC_MORE : WASM_EXEC_TRAP_MEMORY_BOUNDS;
+    }
+    if (!wasm_memory_load(mem, i + in->offset, n, b)) return WASM_EXEC_TRAP_MEMORY_BOUNDS;
+    for (k = n; k-- > 0;) x = x << 8 | b[k];
+    /* load8_s, load16_s and load32_s extend the sign; an i32 result is zero-extended into its slot. */
+    if (op == 0x2C || op == 0x30) x = (uint64_t)(int64_t)(int8_t)(uint8_t)x;
+    else if (op == 0x2E || op == 0x32) x = (uint64_t)(int64_t)(int16_t)(uint16_t)x;
+    else if (op == 0x34) x = (uint64_t)(int64_t)(int32_t)(uint32_t)x;
+    if (op == 0x2C || op == 0x2E) x = (uint32_t)x;
+    return push(it, x) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
+}
+
+/* §4.6.8's memory.size and memory.grow. growmem's success is an unknown of the environment, as growtable's is
+   (table_bulk): FORK with the success arm as the example. Where growmem fails, or its size has no storage a
+   size_t counts, only failure exists and -1 is the answer. */
+static WasmExecStatus memory_size(WasmInterpreter *it, const WasmInstruction *in)
+{
+    JSValueConst mem = mem_of(it, in->index[0]);
+    WasmLimits t;
+    uint64_t n;
+
+    if (in->opcode == 0x3F) return push(it, wasm_memory_pages(mem)) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
+    n = pop(it);
+    if (!wasm_memory_growable(mem, n)) {
+        wasm_memory_type(mem, &t);
+        return push(it, minus_one(t.addr64)) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
+    }
+    it->choice.kind = WASM_CHOICE_MEMORY_GROW;
+    it->choice.addr = mem_addr(it, in->index[0]);
+    it->choice.n = n;
+    return WASM_EXEC_FORK;
+}
+
+/* §4.6.8's memory.init, data.drop, memory.copy and memory.fill, whose bounds are checked here and whose bytes then
+   move one a step (WasmBulk). memory.init's immediates are the data segment, then the memory; memory.copy's the
+   destination, then the source. */
+static WasmExecStatus memory_bulk(WasmInterpreter *it, const WasmInstruction *in)
+{
+    WasmBulk *b = &it->bulk;
+    const WasmDataInstance *data;
+    uint32_t op = in->opcode;
+    uint64_t n, s, d;
+    size_t to, from = 0;
+
+    if (op == 9) {
+        it->store->datas[INST(it)->datas[in->index[0]]].n = 0;
+        return WASM_EXEC_MORE;
+    }
+    n = pop(it);
+    s = pop(it);
+    d = pop(it);
+    to = mem_addr(it, in->index[op == 8 ? 1 : 0]);
+    if (!wasm_memory_holds(it->store->mems[to], d, n)) return WASM_EXEC_TRAP_MEMORY_BOUNDS;
+    if (op == 10) {
+        from = mem_addr(it, in->index[1]);
+        if (!wasm_memory_holds(it->store->mems[from], s, n)) return WASM_EXEC_TRAP_MEMORY_BOUNDS;
+    } else if (op == 8) {
+        from = INST(it)->datas[in->index[0]];
+        data = &it->store->datas[from];
+        if (s > data->n || n > data->n - s) return WASM_EXEC_TRAP_MEMORY_BOUNDS;
+    } else {
+        DCHECKF(op == 11, "0xFC %u is not a memory instruction", op);
+    }
+    b->op = op;
+    b->to = to;
+    b->from = from;
+    b->d = d;
+    b->s = op == 11 ? 0 : s;
+    b->ref.lo = op == 11 ? (s & 0xFF) : 0;
+    b->ref.hi = 0;
+    b->n = n;
+    return WASM_EXEC_MORE;
+}
+
 WasmExecStatus wasm_interpreter_choose(WasmInterpreter *it, bool example)
 {
     WasmChoice c = it->choice;
@@ -739,9 +850,18 @@ WasmExecStatus wasm_interpreter_choose(WasmInterpreter *it, bool example)
     WasmBulk *b = &it->bulk;
     WasmValue *grown;
 
-    DCHECK(c.kind == WASM_CHOICE_TABLE_GROW, "a WebAssembly choice was made with none pending");
+    DCHECK(c.kind == WASM_CHOICE_TABLE_GROW || c.kind == WASM_CHOICE_MEMORY_GROW, "a WebAssembly choice was made "
+           "with none pending");
     it->choice.kind = 0;
-    t = &it->store->tables[c.table];
+    if (c.kind == WASM_CHOICE_MEMORY_GROW) {
+        JSValueConst mem = it->store->mems[c.addr];
+        WasmLimits type;
+
+        wasm_memory_type(mem, &type);
+        return push(it, example ? wasm_memory_grow(mem, c.n) : minus_one(type.addr64)) ? WASM_EXEC_MORE
+                                                                                       : WASM_EXEC_NO_ROOM;
+    }
+    t = &it->store->tables[c.addr];
     if (!example) return push(it, t->type.addr64 ? UINT64_MAX : UINT32_MAX) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
     if (t->size + c.n > t->cap) {
         grown = realloc(t->elems, (size_t)(t->size + c.n ? t->size + c.n : 1) * sizeof *t->elems);
@@ -751,40 +871,62 @@ WasmExecStatus wasm_interpreter_choose(WasmInterpreter *it, bool example)
     }
     if (!push(it, t->size)) return WASM_EXEC_NO_ROOM;
     b->op = 15;
-    b->table = c.table;
+    b->to = c.addr;
     b->d = t->size;
     b->n = c.n;
     t->size += c.n;
     return WASM_EXEC_MORE;
 }
 
-/* One element of the bulk table instruction in progress. table.copy moves backward when the destination lies
-   above the source, as §4.6.7's d > s arm does. */
+/* A byte of the bulk memory instruction in progress, whose bounds were checked when it began. */
+static void bulk_byte(JSValueConst mem, uint64_t at, uint8_t byte)
+{
+    CHECK(wasm_memory_store(mem, at, 1, &byte), "a WebAssembly bulk memory byte fell outside its checked bounds");
+}
+
+/* One element or byte of the bulk instruction in progress. table.copy and memory.copy move backward, from the
+   last element or byte, when the destination lies above the source, as §4.6.7's and §4.6.8's d > s arms do. */
 static WasmExecStatus bulk_step(WasmInterpreter *it)
 {
     WasmBulk *b = &it->bulk;
-    WasmTableInstance *t = &it->store->tables[b->table];
-    uint64_t k;
+    WasmStore *st = it->store;
+    uint64_t k = (b->op == 14 || b->op == 10) && b->d > b->s ? b->n - 1 : 0;
+    uint8_t byte;
 
     switch (b->op) {
     case 15: case 17:
-        t->elems[b->d++] = b->ref;
+        st->tables[b->to].elems[b->d++] = b->ref;
         break;
-    case 14: {
-        WasmTableInstance *u = &it->store->tables[b->from];
-
-        if (b->d <= b->s) t->elems[b->d++] = u->elems[b->s++];
-        else {
-            k = b->n - 1;
-            t->elems[b->d + k] = u->elems[b->s + k];
+    case 14:
+        st->tables[b->to].elems[b->d + k] = st->tables[b->from].elems[b->s + k];
+        if (k == 0) {
+            b->d++;
+            b->s++;
         }
         break;
-    }
     case 12:
-        t->elems[b->d++] = it->store->elems[b->from].refs[b->s++];
+        st->tables[b->to].elems[b->d++] = st->elems[b->from].refs[b->s++];
         break;
+    case 11:
+        bulk_byte(st->mems[b->to], b->d++, (uint8_t)b->ref.lo);
+        break;
+    case 10:
+        CHECK(wasm_memory_load(st->mems[b->from], b->s + k, 1, &byte),
+              "a WebAssembly memory.copy byte fell outside its checked bounds");
+        bulk_byte(st->mems[b->to], b->d + k, byte);
+        if (k == 0) {
+            b->d++;
+            b->s++;
+        }
+        break;
+    case 8: {
+        const WasmDataInstance *x = &st->datas[b->from];
+
+        bulk_byte(st->mems[b->to], b->d++, st->instances[x->inst]->bytes[x->offset + b->s++]);
+        break;
+    }
     default:
-        CHECK_FAIL("a WebAssembly bulk table operation interpreter.c does not define");
+        CHECK_FAIL("a WebAssembly bulk operation interpreter.c does not define");
     }
     b->n--;
     return WASM_EXEC_MORE;
@@ -796,6 +938,7 @@ static WasmExecStatus execute(WasmInterpreter *it, const WasmInstruction *in, si
     uint32_t x;
 
     if (in->prefix == 0xFC && in->opcode >= 12 && in->opcode <= 17) return table_bulk(it, in);
+    if (in->prefix == 0xFC && in->opcode >= 8 && in->opcode <= 11) return memory_bulk(it, in);
     if (in->prefix == 0xFC) {
         bool from32 = in->opcode == 0 || in->opcode == 1 || in->opcode == 4 || in->opcode == 5;
 
@@ -821,6 +964,7 @@ static WasmExecStatus execute(WasmInterpreter *it, const WasmInstruction *in, si
         if (a == 0) return WASM_EXEC_TRAP_NULL_FUNCTION;
         return call(it, (size_t)(a - 1), in->opcode == 0x15);
     case 0x25: case 0x26: return table_access(it, in);
+    case 0x3F: case 0x40: return memory_size(it, in);
     case 0xD0: return push(it, 0) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
     case 0xD1: return push(it, pop(it) == 0) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
     case 0xD2: return push(it, (uint64_t)func_addr(it, in->index[0]) + 1) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
@@ -866,6 +1010,7 @@ static WasmExecStatus execute(WasmInterpreter *it, const WasmInstruction *in, si
     }
     default: break;
     }
+    if (in->opcode >= 0x28 && in->opcode <= 0x3E) return memory_access(it, in);
     if ((in->opcode >= 0x46 && in->opcode <= 0x4F) || (in->opcode >= 0x6A && in->opcode <= 0x78))
         return binop_i32(it, in->opcode);
     if ((in->opcode >= 0x51 && in->opcode <= 0x5A) || (in->opcode >= 0x7C && in->opcode <= 0x8A))
@@ -964,6 +1109,7 @@ const char *wasm_exec_status_message(WasmExecStatus st)
     case WASM_EXEC_TRAP_INDIRECT_TYPE:  return "indirect call type mismatch";
     case WASM_EXEC_TRAP_NULL_FUNCTION:  return "null function reference";
     case WASM_EXEC_TRAP_NULL_REFERENCE: return "null reference";
+    case WASM_EXEC_TRAP_MEMORY_BOUNDS:  return "out of bounds memory access";
     case WASM_EXEC_NO_ROOM:             return "call stack exhausted";
     case WASM_EXEC_LINK_INCOMPATIBLE:   return "incompatible import type";
     }

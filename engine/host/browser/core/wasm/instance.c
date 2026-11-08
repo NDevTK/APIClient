@@ -6,8 +6,12 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/wasm/linear_memory.h"
 
-enum { I_IMPORTS = 0, I_ALLOC, I_GLOBALS, I_TABLES, I_TABLE_FILL, I_ELEMS, I_ACTIVE, I_ACTIVE_COPY, I_DONE };
+enum {
+    I_IMPORTS = 0, I_ALLOC, I_GLOBALS, I_TABLES, I_TABLE_FILL, I_ELEMS, I_ACTIVE, I_ACTIVE_COPY, I_DATA, I_DATA_COPY,
+    I_DONE
+};
 
 static size_t imported(const WasmModule *m, WasmExternKind kind)
 {
@@ -21,12 +25,13 @@ WasmExecStatus wasm_instance_begin(WasmInstance *inst, WasmStore *store, const W
                                    const WasmSideTable *side, const WasmTypes *types, const size_t *externs,
                                    size_t n_externs)
 {
-    size_t i, n_funcs, n_globals, n_tables, k[3] = { 0, 0, 0 };
+    size_t i, n_funcs, n_globals, n_tables, n_mems, k[4] = { 0, 0, 0, 0 };
 
     DCHECK(inst != NULL && store != NULL && m != NULL && bytes != NULL && side != NULL && types != NULL,
            "a WebAssembly instantiation began without its module");
     DCHECKF(n_externs == m->n_imports && (n_externs == 0 || externs != NULL), "a WebAssembly instantiation was "
             "given %zu external addresses for %zu imports", n_externs, m->n_imports);
+    CHECK(!m->has_start, "a WebAssembly module's start function is not built in instance.c");
     memset(inst, 0, sizeof *inst);
     inst->store = store;
     inst->module = m;
@@ -37,24 +42,28 @@ WasmExecStatus wasm_instance_begin(WasmInstance *inst, WasmStore *store, const W
     inst->imported_funcs = imported(m, WASM_EXTERN_FUNC);
     inst->imported_globals = imported(m, WASM_EXTERN_GLOBAL);
     inst->imported_tables = imported(m, WASM_EXTERN_TABLE);
+    inst->imported_mems = imported(m, WASM_EXTERN_MEMORY);
     n_funcs = inst->imported_funcs + m->n_func_types;
     n_globals = inst->imported_globals + m->n_globals;
     n_tables = inst->imported_tables + m->n_tables;
+    n_mems = inst->imported_mems + m->n_memories;
     inst->funcs = malloc((n_funcs + 1) * sizeof *inst->funcs);
     inst->globals = malloc((n_globals + 1) * sizeof *inst->globals);
     inst->tables = malloc((n_tables + 1) * sizeof *inst->tables);
+    inst->mems = malloc((n_mems + 1) * sizeof *inst->mems);
     inst->elems = malloc((m->n_elems + 1) * sizeof *inst->elems);
-    CHECK(inst->funcs && inst->globals && inst->tables && inst->elems,
+    inst->datas = malloc((m->n_datas + 1) * sizeof *inst->datas);
+    CHECK(inst->funcs && inst->globals && inst->tables && inst->mems && inst->elems && inst->datas,
           "a WebAssembly instance's index spaces could not be allocated: out of memory");
     /* §4.7.2's moduleinst: the imports' index spaces come first, from the external addresses. */
     for (i = 0; i < m->n_imports; i++) {
         WasmExternKind kind = m->imports[i].kind;
 
-        CHECKF(kind != WASM_EXTERN_MEMORY && kind != WASM_EXTERN_TAG, "a WebAssembly %s import is not built in "
-               "instance.c", kind == WASM_EXTERN_MEMORY ? "memory" : "tag");
+        CHECK(kind != WASM_EXTERN_TAG, "a WebAssembly tag import is not built in instance.c");
         if (kind == WASM_EXTERN_FUNC) inst->funcs[k[0]++] = externs[i];
         else if (kind == WASM_EXTERN_GLOBAL) inst->globals[k[1]++] = externs[i];
-        else inst->tables[k[2]++] = externs[i];
+        else if (kind == WASM_EXTERN_TABLE) inst->tables[k[2]++] = externs[i];
+        else inst->mems[k[3]++] = externs[i];
     }
     inst->phase = I_IMPORTS;
     return WASM_EXEC_MORE;
@@ -86,9 +95,20 @@ static WasmExecStatus allocate(WasmInstance *inst)
         if (a == SIZE_MAX) return WASM_EXEC_NO_ROOM;
         inst->tables[inst->imported_tables + i] = a;
     }
+    for (i = 0; i < m->n_memories; i++) {
+        size_t a = wasm_store_add_mem(store, &m->memories[i]);
+
+        if (a == SIZE_MAX) return WASM_EXEC_NO_ROOM;
+        inst->mems[inst->imported_mems + i] = a;
+    }
     for (i = 0; i < m->n_elems; i++) {
         inst->elems[i] = wasm_store_add_elem(store, m->elems[i].n_items);
         if (inst->elems[i] == SIZE_MAX) return WASM_EXEC_NO_ROOM;
+    }
+    for (i = 0; i < m->n_datas; i++) {
+        WasmDataInstance d = { inst->addr, m->datas[i].bytes_offset, m->datas[i].bytes_size };
+
+        inst->datas[i] = wasm_store_add_data(store, d);
     }
     inst->item = 0;
     inst->phase = I_GLOBALS;
@@ -108,13 +128,13 @@ static WasmExecStatus check_import(WasmInstance *inst)
         return WASM_EXEC_MORE;
     }
     im = &m->imports[inst->item];
-    k = im->kind == WASM_EXTERN_FUNC ? 0 : im->kind == WASM_EXTERN_GLOBAL ? 1 : 2;
+    k = im->kind == WASM_EXTERN_FUNC ? 0 : im->kind == WASM_EXTERN_GLOBAL ? 1 : im->kind == WASM_EXTERN_TABLE ? 2 : 3;
     JS_FlowRetireWork(1);
     if (inst->climbing) {
         le = wasm_extern_check_step(&inst->check);
     } else {
         a = k == 0 ? inst->funcs[inst->passed[0]] : k == 1 ? inst->globals[inst->passed[1]]
-                                                           : inst->tables[inst->passed[2]];
+          : k == 2 ? inst->tables[inst->passed[2]] : inst->mems[inst->passed[3]];
         le = wasm_extern_check_begin(&inst->check, inst->store, inst->types, im, a);
     }
     inst->climbing = le == WASM_MATCH_CLIMB;
@@ -145,6 +165,13 @@ static WasmExecStatus evaluate(WasmInstance *inst, WasmExpr e, WasmValue *out)
     }
     wasm_interpreter_free(&inst->init);
     return st;
+}
+
+/* The owner of memory `x` of the instance. */
+static JSValueConst memory(WasmInstance *inst, size_t x)
+{
+    DCHECKF(inst->mems[x] < inst->store->n_mems, "a WebAssembly instance's memory %zu has no store address", x);
+    return inst->store->mems[inst->mems[x]];
 }
 
 static WasmExecStatus next(WasmInstance *inst, int phase)
@@ -241,8 +268,9 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         const WasmElem *e;
 
         if (inst->item == m->n_elems) {
-            inst->phase = I_DONE;
-            return WASM_EXEC_DONE;
+            inst->item = 0;
+            inst->phase = I_DATA;
+            return WASM_EXEC_MORE;
         }
         e = &m->elems[inst->item];
         if (e->mode == WASM_SEGMENT_PASSIVE) return next(inst, I_ACTIVE);
@@ -271,6 +299,40 @@ WasmExecStatus wasm_instance_step(WasmInstance *inst)
         JS_FlowRetireWork(1);
         return WASM_EXEC_MORE;
     }
+    case I_DATA: {
+        /* §4.7.2's rundata for an active segment: memory.init over all of it at its offset, then data.drop. */
+        const WasmData *d;
+
+        if (inst->item == m->n_datas) {
+            inst->phase = I_DONE;
+            return WASM_EXEC_DONE;
+        }
+        d = &m->datas[inst->item];
+        if (d->mode == WASM_SEGMENT_PASSIVE) return next(inst, I_DATA);
+        DCHECK(d->mode == WASM_SEGMENT_ACTIVE, "a decoded WebAssembly data segment is neither passive nor active");
+        st = evaluate(inst, d->offset, &v);
+        if (st != WASM_EXEC_DONE) return st;
+        if (!wasm_memory_holds(memory(inst, d->memory), v.lo, s->datas[inst->datas[inst->item]].n))
+            return WASM_EXEC_TRAP_MEMORY_BOUNDS;
+        inst->offset = v.lo;
+        inst->phase = I_DATA_COPY;
+        return WASM_EXEC_MORE;
+    }
+    case I_DATA_COPY: {
+        WasmDataInstance *x = &s->datas[inst->datas[inst->item]];
+        uint8_t byte;
+
+        if (inst->sub == x->n) {
+            x->n = 0;
+            return next(inst, I_DATA);
+        }
+        byte = s->instances[x->inst]->bytes[x->offset + inst->sub];
+        CHECK(wasm_memory_store(memory(inst, m->datas[inst->item].memory), inst->offset + inst->sub, 1, &byte),
+              "a WebAssembly data segment's byte fell outside the bounds its memory.init checked");
+        inst->sub++;
+        JS_FlowRetireWork(1);
+        return WASM_EXEC_MORE;
+    }
     default: break;
     }
     CHECK_FAIL("a WebAssembly instantiation was stepped after it answered");
@@ -283,6 +345,8 @@ void wasm_instance_free(WasmInstance *inst)
     free(inst->funcs);
     free(inst->globals);
     free(inst->tables);
+    free(inst->mems);
     free(inst->elems);
+    free(inst->datas);
     memset(inst, 0, sizeof *inst);
 }

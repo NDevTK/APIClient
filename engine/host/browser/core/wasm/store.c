@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/wasm/linear_memory.h"
 
 static void room(void **p, size_t *cap, size_t n, size_t elem)
 {
@@ -20,10 +21,11 @@ static void room(void **p, size_t *cap, size_t n, size_t elem)
     *cap = c;
 }
 
-void wasm_store_init(WasmStore *s)
+void wasm_store_init(WasmStore *s, JSContext *ctx)
 {
-    DCHECK(s != NULL, "a WebAssembly store was initialized with no store");
+    DCHECK(s != NULL && ctx != NULL, "a WebAssembly store was initialized with no store or no context");
     memset(s, 0, sizeof *s);
+    s->ctx = ctx;
 }
 
 size_t wasm_store_add_func(WasmStore *s, WasmFuncInstance f)
@@ -61,6 +63,17 @@ size_t wasm_store_add_table(WasmStore *s, const WasmLimits *type, WasmStoreValTy
     return s->n_tables++;
 }
 
+/* §4.7.1's allocmem; storage the page's type asks for that cannot be had answers SIZE_MAX. */
+size_t wasm_store_add_mem(WasmStore *s, const WasmLimits *type)
+{
+    JSValue mem = wasm_memory_new(s->ctx, type);
+
+    if (JS_IsNull(mem)) return SIZE_MAX;
+    room((void **)&s->mems, &s->cap_mems, s->n_mems, sizeof *s->mems);
+    s->mems[s->n_mems] = mem;
+    return s->n_mems++;
+}
+
 size_t wasm_store_add_elem(WasmStore *s, uint64_t n)
 {
     WasmElemInstance *e;
@@ -74,6 +87,14 @@ size_t wasm_store_add_elem(WasmStore *s, uint64_t n)
     e->refs = refs;
     e->n = n;
     return s->n_elems++;
+}
+
+size_t wasm_store_add_data(WasmStore *s, WasmDataInstance d)
+{
+    DCHECK(d.inst < s->n_instances, "a WebAssembly data instance names no module instance");
+    room((void **)&s->datas, &s->cap_datas, s->n_datas, sizeof *s->datas);
+    s->datas[s->n_datas] = d;
+    return s->n_datas++;
 }
 
 size_t wasm_store_add_instance(WasmStore *s, WasmInstance *inst)
@@ -100,10 +121,13 @@ void wasm_store_free(WasmStore *s)
     DCHECK(s != NULL, "a WebAssembly store was freed with no store");
     for (i = 0; i < s->n_tables; i++) free(s->tables[i].elems);
     for (i = 0; i < s->n_elems; i++) free(s->elems[i].refs);
+    for (i = 0; i < s->n_mems; i++) JS_FreeValue(s->ctx, s->mems[i]);
     free(s->funcs);
     free(s->globals);
     free(s->tables);
+    free(s->mems);
     free(s->elems);
+    free(s->datas);
     free(s->instances);
     free(s->types);
     memset(s, 0, sizeof *s);

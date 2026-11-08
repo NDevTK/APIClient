@@ -444,11 +444,13 @@ static JSValue js_set_body_attr(JSContext *ctx, JSValueConst this_val, int argc,
 static JSValue js_wasm_memory_new(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     WasmLimits type = { 0 };
     uint32_t pages = 0;
+    JSValue mem;
 
     (void)this_val;
     if (argc < 1 || JS_ToUint32(ctx, &pages, argv[0]) < 0) return JS_EXCEPTION;
     type.min = pages;
-    return wasm_memory_new(ctx, &type);
+    mem = wasm_memory_new(ctx, &type);
+    return JS_IsNull(mem) ? JS_ThrowRangeError(ctx, "wasmMemoryNew: could not allocate memory") : mem;
 }
 static JSValue js_wasm_memory_store(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     uint32_t addr = 0, byte = 0;
@@ -6147,11 +6149,12 @@ static WasmExecStatus wasm_next(WasmInterpreter *it, WasmExecStatus st, bool exa
 }
 
 /* f3268fa9's interpreter/host/spectest.ml as a host in one store: its print functions (types from
- * WASM_SPECTEST_TYPES), its constant globals of 666 and 666.6, and its two tables of 10 to 20 null funcrefs. */
+ * WASM_SPECTEST_TYPES), its constant globals of 666 and 666.6, its two tables of 10 to 20 null funcrefs, and its
+ * memory of 1 to 2 pages. */
 typedef struct {
     WasmModuleDecoder d;
     WasmModuleValidator v;
-    size_t funcs[7], globals[4], table, table64;
+    size_t funcs[7], globals[4], table, table64, memory;
 } WasmSpectest;
 
 static const char *const WASM_SPECTEST_FUNCS[7] = {
@@ -6164,7 +6167,7 @@ static void wasm_spectest_begin(WasmSpectest *h, WasmStore *s)
     static const uint8_t codes[4] = { WASM_TYPE_I32, WASM_TYPE_I64, WASM_TYPE_F32, WASM_TYPE_F64 };
     static const uint64_t bits[4] = { 666, 666, 0x4426A666u, 0x4084D4CCCCCCCCCDull };
     WasmStoreValType funcref = { { WASM_TYPE_REF, true, WASM_HEAP_FUNC, 0 }, SIZE_MAX };
-    WasmLimits limits = { false, true, 10, 20 };
+    WasmLimits limits = { false, true, 10, 20 }, pages = { false, true, 1, 2 };
     size_t types, k;
 
     wasm_module_decoder_init(&h->d, (const uint8_t *)WASM_SPECTEST_TYPES, WASM_SPECTEST_TYPES_LEN);
@@ -6186,7 +6189,9 @@ static void wasm_spectest_begin(WasmSpectest *h, WasmStore *s)
     h->table = wasm_store_add_table(s, &limits, funcref);
     limits.addr64 = true;
     h->table64 = wasm_store_add_table(s, &limits, funcref);
-    CHECK(h->table != SIZE_MAX && h->table64 != SIZE_MAX, "the spectest host's tables could not be allocated");
+    h->memory = wasm_store_add_mem(s, &pages);
+    CHECK(h->table != SIZE_MAX && h->table64 != SIZE_MAX && h->memory != SIZE_MAX, "the spectest host's tables "
+          "or memory could not be allocated");
 }
 
 static void wasm_spectest_free(WasmSpectest *h)
@@ -6220,11 +6225,8 @@ static size_t wasm_lookup_import(const WasmSpectest *h, const char *const *names
         *kind = WASM_EXTERN_TABLE;
         if (wasm_name_is(bytes, im->name_offset, im->name_size, "table")) return h->table;
         if (wasm_name_is(bytes, im->name_offset, im->name_size, "table64")) return h->table64;
-        if (!wasm_name_is(bytes, im->name_offset, im->name_size, "memory")) return SIZE_MAX;
-        /* The memory has no store address here; it can only be the wrong kind for the import. */
-        CHECK(im->kind != WASM_EXTERN_MEMORY, "the spectest memory is not built in the wasm selftests");
         *kind = WASM_EXTERN_MEMORY;
-        return 0;
+        return wasm_name_is(bytes, im->name_offset, im->name_size, "memory") ? h->memory : SIZE_MAX;
     }
     for (k = 0; k < n; k++) {
         const WasmModule *m = insts[k]->module;
@@ -6240,9 +6242,9 @@ static size_t wasm_lookup_import(const WasmSpectest *h, const char *const *names
             if (x->kind == WASM_EXTERN_FUNC) return insts[k]->funcs[x->index];
             if (x->kind == WASM_EXTERN_GLOBAL) return insts[k]->globals[x->index];
             if (x->kind == WASM_EXTERN_TABLE) return insts[k]->tables[x->index];
-            /* A memory or tag has no store address here; it can only be the wrong kind for the import. */
-            CHECK(im->kind != WASM_EXTERN_MEMORY && im->kind != WASM_EXTERN_TAG, "a WebAssembly memory or tag "
-                  "import is not built in the wasm selftests");
+            if (x->kind == WASM_EXTERN_MEMORY) return insts[k]->mems[x->index];
+            /* A tag has no store address here; it can only be the wrong kind for the import. */
+            CHECK(im->kind != WASM_EXTERN_TAG, "a WebAssembly tag import is not built in the wasm selftests");
             return 0;
         }
     }
@@ -6276,7 +6278,7 @@ static size_t *wasm_resolve_imports(const WasmSpectest *h, const char *const *na
 }
 
 /* WASM_LINK_ROWS: each importer linked against one exporter "e" in one store. */
-static void wasm_link_selftest(void)
+static void wasm_link_selftest(JSContext *ctx)
 {
     const uint8_t *eb = (const uint8_t *)WASM_LINK_EXPORTER;
     const char *const names[1] = { "e" };
@@ -6289,7 +6291,7 @@ static void wasm_link_selftest(void)
     WasmExecStatus st;
     size_t i;
 
-    wasm_store_init(&store);
+    wasm_store_init(&store, ctx);
     wasm_spectest_begin(&host, &store);
     wasm_module_decoder_init(&ed, eb, WASM_LINK_EXPORTER_LEN);
     CHECK(wasm_module_decoder_run(&ed) == WASM_DECODE_DONE, "the link rows' exporter does not decode");
@@ -6380,7 +6382,7 @@ static void wasm_interpreter_park(WasmInterpreter *to, const WasmInterpreter *it
 /* WASM_HOST_CALL_ROWS: each invocation run alone, its record parked (copied, the original freed) at every host
  * call and resumed from the copy, then on two instances stepped in turn; each answers its result after its
  * count of host calls. Each import is its own host function, typed by the importer's own type space. */
-static void wasm_host_call_selftest(void)
+static void wasm_host_call_selftest(JSContext *ctx)
 {
     const uint8_t *bytes = (const uint8_t *)WASM_HOST_CALLER;
     WasmModuleDecoder d;
@@ -6393,7 +6395,7 @@ static void wasm_host_call_selftest(void)
     CHECK(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the host call module does not decode");
     wasm_module_validator_init(&v, &d.module, bytes, wasm_agent_types());
     CHECK(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the host call module is invalid");
-    wasm_store_init(&store);
+    wasm_store_init(&store, ctx);
     types = wasm_store_add_types(&store, &v.ctx.types);
     for (k = 0; k < 2; k++) {
         WasmExecStatus st;
@@ -6451,7 +6453,7 @@ static void wasm_host_call_selftest(void)
 
 /* WASM_CROSS_INSTANCE_ROWS: a call_indirect in one instance of a function of another module's instance, its type
  * checked across the two modules by their registry's identities. */
-static void wasm_cross_instance_selftest(void)
+static void wasm_cross_instance_selftest(JSContext *ctx)
 {
     const uint8_t *bytes[2] = { (const uint8_t *)WASM_XMOD_EXPORTER, (const uint8_t *)WASM_XMOD_CALLER };
     const size_t len[2] = { WASM_XMOD_EXPORTER_LEN, WASM_XMOD_CALLER_LEN };
@@ -6461,7 +6463,7 @@ static void wasm_cross_instance_selftest(void)
     WasmStore store;
     size_t k, i;
 
-    wasm_store_init(&store);
+    wasm_store_init(&store, ctx);
     for (k = 0; k < 2; k++) {
         WasmExecStatus st;
 
@@ -6593,7 +6595,7 @@ static void wasm_exec_unlinkable(WasmExecWorld *w, WasmExecModule *x, const Wasm
 /* Rows [i, n), one script, in three worlds: every module and register in each; every command alone in world 0,
  * retiring one unit of work per step it counts, then in worlds 1 and 2 one step of each in turn, which must
  * answer as world 0 did. An unlinkable row changes no world, so world 0 alone answers it. */
-static void wasm_exec_script(size_t i, size_t n)
+static void wasm_exec_script(JSContext *ctx, size_t i, size_t n)
 {
     WasmExecWorld w[3];
     WasmExecModule *mods = calloc(n - i + 1, sizeof *mods);
@@ -6603,7 +6605,7 @@ static void wasm_exec_script(size_t i, size_t n)
         if (WASM_EXEC_ROWS[j].instance + 1 > slots) slots = WASM_EXEC_ROWS[j].instance + 1;
     CHECK(mods != NULL, "a testsuite script's modules could not be allocated");
     for (k = 0; k < 3; k++) {
-        wasm_store_init(&w[k].store);
+        wasm_store_init(&w[k].store, ctx);
         wasm_spectest_begin(&w[k].host, &w[k].store);
         w[k].insts = calloc(slots, sizeof *w[k].insts);
         w[k].names = calloc(n - i + 1, sizeof *w[k].names);
@@ -6694,13 +6696,13 @@ static void wasm_exec_script(size_t i, size_t n)
  * its example arm, the success the testsuite asserts. fixture/wasm_valid.h's WASM_CROSS_INSTANCE_ROWS,
  * WASM_LINK_ROWS, WASM_HOST_CALL_ROWS and WASM_INVOKE_ROWS come first: what the testsuite's rows in scope do not
  * reach. */
-TF_UNIT void wasm_interpreter_selftest(void)
+TF_UNIT void wasm_interpreter_selftest(JSContext *ctx)
 {
     size_t i = 0;
 
-    wasm_cross_instance_selftest();
-    wasm_link_selftest();
-    wasm_host_call_selftest();
+    wasm_cross_instance_selftest(ctx);
+    wasm_link_selftest(ctx);
+    wasm_host_call_selftest(ctx);
     for (i = 0; i < COUNTOF(WASM_INVOKE_ROWS); i++) {
         const WasmInvokeRow *row = &WASM_INVOKE_ROWS[i];
         const uint8_t *bytes = (const uint8_t *)row->bytes;
@@ -6721,7 +6723,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
                 && memcmp(bytes + d.module.exports[e].name_offset, row->export_name, strlen(row->export_name)) == 0)
                 func = d.module.exports[e].index;
         CHECKF(func != SIZE_MAX, "the invoke row %s has no export %s", row->src, row->export_name);
-        wasm_store_init(&store);
+        wasm_store_init(&store, ctx);
         st = wasm_instance_begin(&inst, &store, &d.module, bytes, wasm_module_validator_side_table(&v),
                                  &v.ctx.types, NULL, 0);
         while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst);
@@ -6742,7 +6744,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
         size_t n = i;
 
         while (n < COUNTOF(WASM_EXEC_ROWS) && WASM_EXEC_ROWS[n].script == WASM_EXEC_ROWS[i].script) n++;
-        wasm_exec_script(i, n);
+        wasm_exec_script(ctx, i, n);
         i = n;
     }
 }
@@ -42705,7 +42707,6 @@ int main(int argc, char **argv) {
     png_decode_selftest();
     wasm_module_decoder_selftest();   /* WebAssembly Core §5.5's framing, a primitive with no in-flow caller yet */
     wasm_module_validator_selftest(); /* §3.5's module validation over that decoder's output, after it */
-    wasm_interpreter_selftest();      /* §4.6's interpreter over that validator's side tables, after it */
     /* @IMGMARK — the IMAGE mark that turns that decoder's output into ink, AFTER it and for the reason its
        own banner gives: this row's operand is png_decode's output. */
     display_image_mark_selftest();
@@ -42967,6 +42968,9 @@ int main(int argc, char **argv) {
        position core/file/file_system.c's two roots are built at, and for the same reason: a record written
        here belongs to the pre-boot baseline rather than to whichever flow happened to run first. */
     idb_store_selftest(ctx);
+    /* WebAssembly Core §4.6's interpreter over the wasm validator's side tables, at the baseline: its memories
+       are owner objects of the agent's memory instance class, which tf_agent_init declares. */
+    wasm_interpreter_selftest(ctx);
 
     /* FILE API §6.3's four arms, over known bytes. It needs only a realm — see the function for why this
        half of the FileReader is the half a C fixture can hold to an answer at all. */
