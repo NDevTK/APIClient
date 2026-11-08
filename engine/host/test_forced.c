@@ -22697,9 +22697,11 @@ TF_UNIT void probes_codegenrest(const char *js, Probe *tab, int *n) {
     fold_row(&tt, &why, rests >= 2,
              "a code generation several work quanta long took no rest, so it held the thread from its first "
              "instruction to its last");
-    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
-             "a turn held the thread for a quantum or more between two offers: a pass over a function's "
-             "instructions ran to completion");
+    /* An offer is made where the budget, asked every ENGINE_QUANTUM_ASK_EVERY polls of a unit each, is spent, so a
+       turn that offers only there reaches it one quantum plus at most one period after the last. */
+    fold_row(&tt, &why, gap >= 0 && gap <= ENGINE_QUANTUM_WORK + ENGINE_QUANTUM_ASK_EVERY,
+             "a turn held the thread for more than a quantum and one ask period between two offers: a pass over "
+             "a function's input ran to completion");
     const Probe rows[] = {
         { "codegen-rests", tt, "/api/cgr-done", SESS_EXPLORE, why },
     };
