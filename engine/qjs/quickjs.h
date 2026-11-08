@@ -2417,6 +2417,11 @@ JS_EXTERN void *JS_ModuleEvalStateSave(JSContext *ctx, void *m);
 JS_EXTERN void  JS_ModuleEvalStateRestore(JSContext *ctx, void *m, void *blob);
 JS_EXTERN void *JS_ModuleEvalStateClone(JSContext *ctx, void *blob);
 JS_EXTERN void  JS_ModuleEvalStateFree(JSRuntime *rt, void *blob);
+/* The [[Status]] a saved evaluation state holds (ECMAScript §16.2.1.6 Cyclic Module Records), as one
+   of the JS_MODULE_EVAL_* values below. Reads the blob only. */
+enum { JS_MODULE_EVAL_UNLINKED, JS_MODULE_EVAL_LINKING, JS_MODULE_EVAL_LINKED, JS_MODULE_EVAL_EVALUATING,
+       JS_MODULE_EVAL_EVALUATING_ASYNC, JS_MODULE_EVAL_EVALUATED };
+JS_EXTERN int   JS_ModuleEvalStateStatus(const void *blob);
 /* The settlement state of a promise (state + result + the pending reaction records) or of a resolving-function
    pair (its already_resolved latch), as an opaque owned blob. NULL for an object that has neither. Restore
    puts it back exactly, so a flow's timeline is reproduced rather than replayed. */

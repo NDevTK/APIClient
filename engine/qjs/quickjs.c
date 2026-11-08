@@ -74939,6 +74939,21 @@ void *JS_ModuleEvalStateClone(JSContext *ctx, void *blob)
     return c;
 }
 
+int JS_ModuleEvalStateStatus(const void *blob)
+{
+    const JSModuleEvalState *b = blob;
+
+    DCHECK(b != NULL, "a module's [[Status]] was read from no saved state");
+    _Static_assert(JS_MODULE_EVAL_UNLINKED == JS_MODULE_STATUS_UNLINKED &&
+                   JS_MODULE_EVAL_LINKING == JS_MODULE_STATUS_LINKING &&
+                   JS_MODULE_EVAL_LINKED == JS_MODULE_STATUS_LINKED &&
+                   JS_MODULE_EVAL_EVALUATING == JS_MODULE_STATUS_EVALUATING &&
+                   JS_MODULE_EVAL_EVALUATING_ASYNC == JS_MODULE_STATUS_EVALUATING_ASYNC &&
+                   JS_MODULE_EVAL_EVALUATED == JS_MODULE_STATUS_EVALUATED,
+                   "the exported [[Status]] values must be the engine's own");
+    return (int)b->status;
+}
+
 void JS_ModuleEvalStateFree(JSRuntime *rt, void *blob)
 {
     JSModuleEvalState *b = blob;

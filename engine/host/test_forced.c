@@ -7603,6 +7603,261 @@ TF_UNIT void sort_merge_selftest(JSContext *ctx)
     JS_SetFlowControlHooks(&TF_DIFF_NONE);
 }
 
+/* ===== §16.2.1.6.1.2 Link ( ) CLONED MID-WALK, on a runtime of its own =====
+ *
+ * A dynamic import's link machine is parked at a rest of its walk with several modules LINKING, and the clone
+ * primitive (JS_CloneParkedFlows) is called on it twice. Each copy resumes in a world of its own and the
+ * original in a third: the worlds here are the module records' evaluation states alone (JS_ModuleEvalState*),
+ * applied and unapplied as the COW delta applies a flow's, with the first write's state as each world's
+ * baseline. Asserted on those states: both resumed arms finish the link (every module past LINKING, or, for the
+ * graph whose deepest import names a missing binding, the stack back at UNLINKED by step 4), the original's
+ * world still reads its own mid-walk statuses after a sibling finished, and tearing the third copy down while
+ * its world is switched out changes no status in the world that is applied. */
+enum { TF_LK_N = 8, TF_LK_RECS = 2 * TF_LK_N + 2 };
+typedef struct { void *m; void *base; void *cur; } TfLkRec;
+typedef struct { TfLkRec r[TF_LK_RECS]; int n; } TfLkWorld;
+static TfLkWorld *g_tf_lk_world;
+static void *g_tf_lk_mod[2][TF_LK_N + 1];   /* [graph][index]; [1][TF_LK_N] is the bad graph's `badz` */
+
+/* JSTimeTravelHooks.module_eval: the applied world keeps the state a record had before its first write. */
+static void tf_lk_capture(JSContext *ctx, void *m)
+{
+    TfLkWorld *w = g_tf_lk_world;
+    int i;
+
+    CHECK(w != NULL, "a module record was written with no world applied");
+    for (i = 0; i < w->n; i++)
+        if (w->r[i].m == m) return;
+    CHECK(w->n < TF_LK_RECS, "the link selftest's world holds more records than its two graphs have");
+    w->r[w->n].m = m;
+    w->r[w->n].base = JS_ModuleEvalStateSave(ctx, m);
+    w->r[w->n].cur = NULL;
+    CHECK(w->r[w->n].base != NULL, "a module's evaluation state could not be saved");
+    w->n++;
+}
+
+static void tf_lk_unapply(JSContext *ctx, TfLkWorld *w)
+{
+    for (int i = 0; i < w->n; i++) {
+        DCHECK(w->r[i].cur == NULL, "a world was unapplied twice");
+        w->r[i].cur = JS_ModuleEvalStateSave(ctx, w->r[i].m);
+        JS_ModuleEvalStateRestore(ctx, w->r[i].m, w->r[i].base);
+    }
+    g_tf_lk_world = NULL;
+}
+
+static void tf_lk_apply(JSContext *ctx, TfLkWorld *w)
+{
+    DCHECK(g_tf_lk_world == NULL, "a world was applied over another");
+    for (int i = 0; i < w->n; i++) {
+        JS_ModuleEvalStateRestore(ctx, w->r[i].m, w->r[i].cur);
+        JS_ModuleEvalStateFree(JS_GetRuntime(ctx), w->r[i].cur);
+        w->r[i].cur = NULL;
+    }
+    g_tf_lk_world = w;
+}
+
+/* A world forked from the applied one: the same baselines, and the applied values as its own. */
+static void tf_lk_fork(JSContext *ctx, TfLkWorld *dst, const TfLkWorld *src)
+{
+    DCHECK(g_tf_lk_world == src, "a world was forked from one that is not applied");
+    dst->n = src->n;
+    for (int i = 0; i < src->n; i++) {
+        dst->r[i].m = src->r[i].m;
+        dst->r[i].base = JS_ModuleEvalStateClone(ctx, src->r[i].base);
+        dst->r[i].cur = JS_ModuleEvalStateSave(ctx, src->r[i].m);
+    }
+}
+
+static void tf_lk_world_free(JSRuntime *rt, TfLkWorld *w)
+{
+    for (int i = 0; i < w->n; i++) {
+        JS_ModuleEvalStateFree(rt, w->r[i].base);
+        if (w->r[i].cur) JS_ModuleEvalStateFree(rt, w->r[i].cur);
+    }
+    w->n = 0;
+}
+
+static int tf_lk_status(JSContext *ctx, void *m)
+{
+    void *b = JS_ModuleEvalStateSave(ctx, m);
+    int s;
+
+    CHECK(b != NULL, "a module's evaluation state could not be saved");
+    s = JS_ModuleEvalStateStatus(b);
+    JS_ModuleEvalStateFree(JS_GetRuntime(ctx), b);
+    return s;
+}
+
+/* The two graphs: okK and badK import index K+1; ok7 exports depth 0 and bad7 imports a binding badz lacks. */
+static JSModuleDef *tf_lk_load(JSContext *ctx, const char *name, void *opaque)
+{
+    char src[128];
+    int g, k;
+    JSValue v;
+
+    (void)opaque;
+    if (!strcmp(name, "badz")) {
+        g = 1; k = TF_LK_N;
+        snprintf(src, sizeof src, "export var z = 0;");
+    } else {
+        g = !strncmp(name, "bad", 3);
+        k = atoi(name + (g ? 3 : 2));
+        CHECK(k >= 0 && k < TF_LK_N, "the link selftest's loader was asked for a module it does not have");
+        if (k + 1 < TF_LK_N)
+            snprintf(src, sizeof src, "import { depth as d } from '%s%d'; export var depth = d + 1;",
+                     g ? "bad" : "ok", k + 1);
+        else if (g)
+            snprintf(src, sizeof src, "import { nosuch } from 'badz'; export var depth = nosuch;");
+        else
+            snprintf(src, sizeof src, "export var depth = 0;");
+    }
+    v = JS_Eval(ctx, src, strlen(src), name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    CHECK(JS_VALUE_GET_TAG(v) == JS_TAG_MODULE, "a link selftest module did not compile");
+    g_tf_lk_mod[g][k] = JS_VALUE_GET_PTR(v);
+    JS_FreeValue(ctx, v);
+    return g_tf_lk_mod[g][k];
+}
+
+/* Resume parked continuations and drain jobs until neither is left. Only the bad graph's link may complete a
+   continuation abruptly (its SyntaxError is the reaction's throw), and that completion is the arm's answer. */
+static void tf_lk_pump(JSContext *ctx, int g)
+{
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    JSContext *jctx;
+    JSValue pres;
+    int r;
+
+    for (;;) {
+        if (JS_ResumeParkedFlow(rt, &pres)) {
+            r = JS_IsException(pres) ? -1 : 1;
+        } else {
+            r = JS_ExecutePendingJob(rt, &jctx);
+            if (r == 0) break;
+        }
+        if (r < 0) {
+            CHECK(g == 1, "a continuation of the good graph's import completed abruptly");
+            JS_FreeValue(ctx, JS_GetException(ctx));
+        }
+    }
+}
+
+/* Run graph `g` to a rest with at least three of its modules LINKING; answers how many are. */
+static int tf_lk_park_mid_walk(JSContext *ctx, int g)
+{
+    static const char *SRC[2] = { "import('ok0').then(function () {}, function () {});",
+                                  "import('bad0').then(function () {}, function () {});" };
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    JSContext *jctx;
+    JSValue *flow, res = JS_UNDEFINED, pres;
+    int linking = 0;
+
+    JS_SetFlowControlHooks(&TF_DIFF_DECLINE);
+    flow = JS_FlowNew(ctx, SRC[g], strlen(SRC[g]), "link-fork", 0);
+    CHECK(flow != NULL, "the link selftest could not create its flow");
+    CHECK(JS_FlowResume(ctx, flow, &res) == 0 && !JS_IsException(res), "the link selftest's import did not run");
+    JS_FreeValue(ctx, res);
+    JS_FlowFree(ctx, flow);
+    JS_SetFlowControlHooks(&TF_DIFF_FORCE);
+    for (;;) {
+        if (!JS_HasParkedFlow(rt)) {
+            CHECK(JS_ExecutePendingJob(rt, &jctx) > 0, "the link selftest's import finished without parking mid-walk");
+        } else {
+            linking = 0;
+            for (int k = 0; k < TF_LK_N; k++)
+                if (g_tf_lk_mod[g][k] && tf_lk_status(ctx, g_tf_lk_mod[g][k]) == JS_MODULE_EVAL_LINKING) linking++;
+            if (linking >= 3) break;
+            CHECK(JS_ResumeParkedFlow(rt, &pres) && !JS_IsException(pres), "a parked link did not resume");
+        }
+    }
+    return linking;
+}
+
+/* Every module of graph `g`, in the applied world, past the link (or, for the bad graph, unlinked by step 4). */
+static void tf_lk_assert_done(JSContext *ctx, int g, const char *arm)
+{
+    for (int k = 0; k < TF_LK_N; k++) {
+        int s = tf_lk_status(ctx, g_tf_lk_mod[g][k]);
+        CHECKF(g ? s == JS_MODULE_EVAL_UNLINKED : s >= JS_MODULE_EVAL_LINKED,
+               "16.2.1.6.1.2: in the %s arm, module %s%d ended at status %d after a link cloned mid-walk — %s",
+               arm, g ? "bad" : "ok", k, s,
+               g ? "step 4 sets every module of the stack back to unlinked in the arm that threw"
+                 : "each arm's copy of the walk must finish every module it claimed, in its own world");
+    }
+}
+
+static void tf_lk_one_graph(JSContext *ctx, int g, int *pmid)
+{
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    TfLkWorld a = { .n = 0 }, b = { .n = 0 }, d = { .n = 0 };
+    int mid[TF_LK_N], after[TF_LK_N];
+    void *c1, *c2, *pa;
+
+    g_tf_lk_world = &a;
+    *pmid = tf_lk_park_mid_walk(ctx, g);
+    for (int k = 0; k < TF_LK_N; k++)
+        mid[k] = g_tf_lk_mod[g][k] ? tf_lk_status(ctx, g_tf_lk_mod[g][k]) : -1;
+    c1 = JS_CloneParkedFlows(ctx);   /* the primitive every fork site calls */
+    c2 = JS_CloneParkedFlows(ctx);
+    CHECK(c1 != NULL && c2 != NULL, "a link parked mid-walk could not be cloned");
+    pa = JS_TakeParkedFlows(rt);
+    tf_lk_fork(ctx, &b, &a);
+    tf_lk_fork(ctx, &d, &a);
+
+    tf_lk_unapply(ctx, &a);
+    tf_lk_apply(ctx, &b);
+    JS_PutParkedFlows(rt, c1);
+    tf_lk_pump(ctx, g);
+    tf_lk_assert_done(ctx, g, "first cloned");
+
+    tf_lk_unapply(ctx, &b);
+    tf_lk_apply(ctx, &a);
+    for (int k = 0; k < TF_LK_N; k++)
+        CHECKF((g_tf_lk_mod[g][k] ? tf_lk_status(ctx, g_tf_lk_mod[g][k]) : -1) == mid[k],
+               "module %s%d reads status %d in the original's world after a sibling finished its link, where the "
+               "original parked it at %d — the walk's writes reached a world that did not make them",
+               g ? "bad" : "ok", k, g_tf_lk_mod[g][k] ? tf_lk_status(ctx, g_tf_lk_mod[g][k]) : -1, mid[k]);
+    JS_PutParkedFlows(rt, pa);
+    tf_lk_pump(ctx, g);
+    tf_lk_assert_done(ctx, g, "original");
+
+    for (int k = 0; k < TF_LK_N; k++) after[k] = tf_lk_status(ctx, g_tf_lk_mod[g][k]);
+    JS_FreeParkedFlows(c2);   /* torn down while its world is switched out */
+    for (int k = 0; k < TF_LK_N; k++)
+        CHECKF(tf_lk_status(ctx, g_tf_lk_mod[g][k]) == after[k],
+               "tearing down an arm parked mid-link moved module %s%d from status %d to %d in the world that is "
+               "applied — a teardown of a flow that is not switched in writes into no world",
+               g ? "bad" : "ok", k, after[k], tf_lk_status(ctx, g_tf_lk_mod[g][k]));
+
+    tf_lk_unapply(ctx, &a);
+    tf_lk_world_free(rt, &a);
+    tf_lk_world_free(rt, &b);
+    tf_lk_world_free(rt, &d);
+}
+
+TF_UNIT void module_link_fork_selftest(void)
+{
+    static const JSTimeTravelHooks HOOKS = { .module_eval = tf_lk_capture };
+    static const JSTimeTravelHooks NONE = { 0 };
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx;
+    int mid_ok = 0, mid_bad = 0;
+
+    CHECK(rt != NULL, "the link selftest could not make a runtime");
+    JS_SetModuleLoaderFunc(rt, NULL, tf_lk_load, NULL);
+    ctx = JS_NewContext(rt);
+    CHECK(ctx != NULL, "the link selftest could not make a context");
+    JS_SetRealmAgent(ctx, JS_NewAgentRecord(rt, false));
+    JS_SetTimeTravelHooks(&HOOKS);
+    tf_lk_one_graph(ctx, 0, &mid_ok);
+    tf_lk_one_graph(ctx, 1, &mid_bad);
+    JS_SetTimeTravelHooks(&NONE);
+    JS_SetFlowControlHooks(&TF_DIFF_NONE);
+    printf("@LINKFORK {\"midOk\":%d,\"midBad\":%d}\n", mid_ok, mid_bad);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+}
+
 /* ===== A KEYED WALK THE SCHEDULER CAN BE ASKED INSIDE =====
  *
  * The sort above is one machine that declared its own rest points. THIS is the shape that declared none and
@@ -42873,6 +43128,7 @@ int main(int argc, char **argv) {
     world_registry_selftest(ctx);   /* the peer half: worlds minted as if by another document */
     flow_job_selftest(ctx);         /* §8.1.7's two queues, §7.5.10 step 5, and the fork's copy-on-nothing */
     sort_merge_selftest(ctx);       /* 23.1.3.30.1 step 4 rests per element, and both schedules agree */
+    module_link_fork_selftest();    /* §16.2.1.6.1.2 Link ( ) cloned mid-walk finishes in each world */
     concat_keyed_selftest(ctx);     /* §23.1.3.2's keyed walk rests per request, declaring no yield of its own */
 #if APICLIENT_DEV && !defined(__EMSCRIPTEN__)
     nested_entry_selftest(ctx);     /* a C activation entering the engine is named; the leaf dispatch is not */
