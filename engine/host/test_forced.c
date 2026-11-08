@@ -1778,6 +1778,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rxprefix.h"
 #include "fixture/rxtest.h"
 #include "fixture/uriclass.h"
+#include "fixture/candslot.h"
 #include "fixture/slicelen.h"
 #include "fixture/strsearch.h"
 #include "fixture/rxsearch.h"
@@ -2576,6 +2577,7 @@ TF_DOCS[] = {
     { "rxprefix", HTML_RXPREFIX },
     { "rxtest", HTML_RXTEST },
     { "uriclass", HTML_URICLASS },
+    { "candslot", HTML_CANDSLOT },
     { "slicelen", HTML_SLICELEN },
     { "strsearch", HTML_STRSEARCH },
     { "rxsearch", HTML_RXSEARCH },
@@ -21293,6 +21295,35 @@ TF_UNIT void probes_uriclass(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `candslot` document (fixture/candslot.h): the innerHTML search over the fragment fires, and its
+   candidate, seeded on a path holding a decision over the fragment's own length, replays that path without leaving
+   it — a recorded slot over a candidate's source is answered by the delivered value. In this document no session
+   resumes, so a left path is a candidate's or a sibling's replay. */
+TF_UNIT void probes_candslot(const char *js, Probe *tab, int *n) {
+    char src[1024] = "";
+    int has = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, src, sizeof src);
+    long hits = 0, left = 0, left_arms = 0;
+    const char *f_why = NULL, *l_why = NULL;
+    int f_tt = 1, l_tt = 1;
+    static char l_buf[256];
+
+    decide_replay_stats(&hits, &left, &left_arms);
+    int fired = has && s_stage(js, "innerHTML", src) == S_FIRED;
+
+    fold_row(&f_tt, &f_why, fired,
+             "the innerHTML <- location.hash search did not fire a PoC, so no candidate replayed the length test's "
+             "arm to the sink");
+    snprintf(l_buf, sizeof l_buf, "%ld replay(s) left their recorded path (%ld arm(s) abandoned, %ld slot(s) "
+             "replayed): a candidate asked nothing at the decision over its own source and diverged at the next "
+             "question", left, left_arms, hits);
+    fold_row(&l_tt, &l_why, fired && left == 0, l_buf);
+    const Probe rows[] = {
+        { "cs-fired", f_tt, "csRun", SESS_EXPLORE, f_why },
+        { "cs-kept-path", l_tt, "csRun", SESS_EXPLORE, l_why, .gate = "cs-fired" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `rxtest` document (fixture/rxtest.h): `test` over an unknown subject is a predicate of the
    match, decided where the page's units decide the match and forked where the subject's domain allows both. */
 TF_UNIT void probes_rxtest(const char *js, Probe *tab, int *n) {
@@ -30782,6 +30813,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rxprefix(js, probes, &np);
     probes_rxtest(js, probes, &np);
     probes_uriclass(js, probes, &np);
+    probes_candslot(js, probes, &np);
     probes_slicelen(js, probes, &np);
     probes_strsearch(js, probes, &np);
     probes_rxsearch(js, probes, &np);
