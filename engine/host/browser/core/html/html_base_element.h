@@ -47,6 +47,9 @@ void html_base_element_free(void);
 /* §4.2.3's FIRST SITUATION, reached through DOM §4.2.3's insertion and removing steps — registered on
    core/dom/node.h's tree-steps list, so a tree write cannot reach the tree without it. */
 void html_base_element_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase);
+/* The first situation for one node of a subtree removed from a connected parent (DOM §4.2.3 remove steps 11 and
+   14.1), for a removal that drives its descendants one per step. */
+void html_base_element_removing_steps(lxb_dom_node_t *n);
 /* §4.2.3's SECOND SITUATION (and the first, when an `href` appears on or leaves an element that is not the
    frozen one), reached through DOM §4.9's attribute change steps — registered on core/dom/element.c's
    element_attr_changed beside media_element_attr_changed. */

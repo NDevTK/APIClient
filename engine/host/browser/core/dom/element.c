@@ -2389,38 +2389,41 @@ static void tree_steps_insertion_steps(lxb_dom_node_t *root)
     }
 }
 
+void element_removing_steps(lxb_dom_node_t *n)
+{
+    JSContext *ctx = document_realm_of(n);
+    lxb_dom_element_t *el;
+    JSValue w;
+
+    DCHECK(ctx != NULL, "remove's removing steps reached a node in a document with no realm — the caller asks "
+                        "this of the parent the node was removed from");
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) return;
+    el = lxb_dom_interface_element(n);
+    w = node_wrap(ctx, n);
+    /* HTML §4.8.5's iframe removing steps: "destroy a child navigable given removedNode", which "happens without
+       any unload events firing (the element's content document is destroyed, not unloaded)". */
+    if (iframe_element_is(n)) iframe_destroy_navigable(ctx, w);
+    /* HTML §4.2.6's update a style block, "or disconnected": the sheet is removed. */
+    html_style_element_update(el);
+    /* HTML §3.1.6: "Whenever a render-blocking element el becomes browsing-context disconnected … unblock
+       rendering on el." An element not in the set is unaffected. */
+    render_blocking_unblock(el);
+    /* HTML §4.11.4's dialog removing steps: an open dialog's cleanup steps destroy its close watcher here,
+       before a dialog this member inserts next establishes one. */
+    html_dialog_removing_steps(ctx, w);
+    JS_FreeValue(ctx, w);
+}
+
 /* DOM §4.2.3 `remove` step 11, "Run the removing steps with node, true, and parent", and step 14.1's for each
    shadow-including descendant: after step 7's detach and before step 13's disconnectedCallback (node.c's CE hook,
-   registered after this one). None of them can rest, so they run here, at the remove they belong to, and a later
-   insert of the same member finds them done. */
+   registered after this one), for a removal that does not rest (core/dom/node_remove.h's machine drives
+   element_removing_steps itself). */
 static void tree_steps_removing_steps(lxb_dom_node_t *root)
 {
     lxb_dom_node_t *n;
 
-    for (n = root; n; ) {
-        JSContext *ctx = document_realm_of(n);
-
-        DCHECK(ctx != NULL, "remove's removing steps reached a node in a document with no realm — "
-                            "tree_steps_can_run asked this of the parent it was removed from");
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            lxb_dom_element_t *el = lxb_dom_interface_element(n);
-            JSValue w = node_wrap(ctx, n);
-
-            /* HTML §4.8.5's iframe removing steps: "destroy a child navigable given removedNode", which "happens
-               without any unload events firing (the element's content document is destroyed, not unloaded)". */
-            if (iframe_element_is(n)) iframe_destroy_navigable(ctx, w);
-            /* HTML §4.2.6's update a style block, "or disconnected": the sheet is removed. */
-            html_style_element_update(el);
-            /* HTML §3.1.6: "Whenever a render-blocking element el becomes browsing-context disconnected … unblock
-               rendering on el." An element not in the set is unaffected. */
-            render_blocking_unblock(el);
-            /* HTML §4.11.4's dialog removing steps: an open dialog's cleanup steps destroy its close watcher
-               here, before a dialog this member inserts next establishes one. */
-            html_dialog_removing_steps(ctx, w);
-            JS_FreeValue(ctx, w);
-        }
-        n = shadow_root_next_in_shadow_including(ctx, n, root);
-    }
+    for (n = root; n; n = shadow_root_next_in_shadow_including(document_realm_of(n), n, root))
+        element_removing_steps(n);
 }
 
 static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_node_t *parent, int phase)

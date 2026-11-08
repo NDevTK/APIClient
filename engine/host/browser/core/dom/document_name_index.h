@@ -23,6 +23,13 @@ size_t document_name_index_list(lxb_dom_node_t *doc, const char *name, size_t n,
 size_t document_name_index_values(lxb_dom_node_t *doc);
 const char *document_name_index_value_at(lxb_dom_node_t *doc, size_t i, size_t *len);
 
+/* The document whose document tree `n` is in, or NULL. */
+lxb_dom_document_t *document_name_index_tree_document(lxb_dom_node_t *n);
+
+/* One element's id and name values enter (`delta` +1) or leave (-1) `doc`'s index while it is linked in `doc`'s
+   tree, for a link whose subtree upkeep solver/dom_cow.c carries per element; whether it carries any. */
+bool document_name_index_element(lxb_dom_document_t *doc, lxb_dom_element_t *el, int delta);
+
 /* Dev builds: recount every live document's id and name values from its tree and assert each equals its
    index, naming the first value that differs and the caller's site. The index's correctness rests on every
    tree write passing an observed primitive; this states it at rest points (a session's close, a cold resume). */

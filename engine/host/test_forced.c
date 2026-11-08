@@ -17225,23 +17225,36 @@ TF_UNIT void probes_pagewrite(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The row of the `removerest` document (fixture/removerest.h): a removeChild of 100,000 elements rests inside
-   the call, read from the scheduler's own record, `stepUnitOverrunGapArms`'s classic-program arm (the widest
-   stretch of work between two offers in a turn of that arm), which must stay under one quantum. */
+/* The rows of the `removerest` document (fixture/removerest.h). removechild-rests: the removing arm's removeChild
+   of 100,002 elements rests inside the call, read from the scheduler's own record, `sliceOverrunGapWork` (the
+   widest stretch of work between two offers in any turn, the maximum of `stepUnitOverrunGapArms`, since the
+   fork moves the removal out of the turn that started the program), which must stay under one quantum, and the
+   arm then reads the box whole and both names gone. removechild-sibling-tree: the
+   sibling arm, which can run while the first is parked mid-removal, reads the box in place and both names
+   through the document's name index. */
 TF_UNIT void probes_removerest(const char *js, Probe *tab, int *n) {
-    const char *why = NULL, *arms = strstr(js, "\"stepUnitOverrunGapArms\":{");
-    const char *arm = arms ? strstr(arms, "\"start-a-classic-program\":") : NULL;
-    long gap = arm ? strtol(arm + strlen("\"start-a-classic-program\":"), NULL, 10) : -1;
-    int tt = 1;
+    const char *why = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1, kt = 1;
 
-    fold_row(&tt, &why, param_value_is(js, "/api/rr-done", "c", "100000"),
-             "NOT REACHED: no /api/rr-done?c=100000 record, so the removal did not finish with its subtree whole");
-    fold_row(&tt, &why, gap >= 0, "the result document carries no classic-program arm in `stepUnitOverrunGapArms`");
+    fold_row(&tt, &why, param_value_is(js, "/api/rr-done", "c", "100002"),
+             "NOT REACHED: no /api/rr-done?c=100002 record, so the removal did not finish with its subtree whole");
+    fold_row(&tt, &why, param_value_is(js, "/api/rr-done", "n", "1") && param_value_is(js, "/api/rr-done", "w", "1"),
+             "the removing arm still found a removed element by name: the name index kept an entry the removal "
+             "took out of the document tree");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
     fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
-             "a classic program's turn held the thread for a quantum or more between two offers: a removeChild of "
-             "100,000 elements ran its descendants' walk to completion inside the call instead of resting per node");
+             "a turn held the thread for a quantum or more between two offers: a removeChild of 100,002 elements "
+             "ran a walk of its subtree to completion inside the call instead of resting per node");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/rr-kept", "p", "1") && param_value_is(js, "/api/rr-kept", "c", "100002"),
+             "NOT REACHED: no /api/rr-kept?p=1&c=100002 record, so the sibling arm did not read the box in place "
+             "with its children");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/rr-kept", "n", "1") && param_value_is(js, "/api/rr-kept", "w", "1"),
+             "the sibling arm did not find the box's named elements: the removing arm's name-index upkeep reached "
+             "a flow whose tree still holds them");
     const Probe rows[] = {
         { "removechild-rests", tt, "rrBox", SESS_EXPLORE, why },
+        { "removechild-sibling-tree", kt, "rrBox", SESS_EXPLORE, kwhy },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

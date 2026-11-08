@@ -337,6 +337,9 @@ void element_reflect_double_set(JSContext *ctx, JSValueConst el, const char *att
    THE CONNECTEDNESS TEST IS THE CALLER'S — it is the children changed steps' own step 1 and is asked at the
    moment the standard asks it; insert step 12's is a separate and later read the drain performs per entry. */
 void element_post_connection_record(lxb_dom_node_t *n);
+/* DOM §4.2.3 remove steps 11 and 14.1's removing steps HTML defines, for one node removed from a connected parent
+   in a document with a realm; they cannot rest or run script. */
+void element_removing_steps(lxb_dom_node_t *n);
 
 /* The element behind a wrapper, or NULL when the value is not one. */
 lxb_dom_element_t *element_of_value(JSValueConst v);

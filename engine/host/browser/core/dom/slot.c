@@ -425,7 +425,7 @@ static void assign_a_slot(JSContext *ctx, lxb_dom_node_t *slottable)
 
 /* ---- §4.2.3's triggers -------------------------------------------------------------------------------------- */
 
-/* Does this subtree contain a slot — §4.2.3 remove's step 7 condition, "node has an inclusive descendant that
+/* Does this subtree contain a slot — §4.2.3 remove's step 10 condition, "node has an inclusive descendant that
    is a slot". */
 static bool has_inclusive_slot(lxb_dom_node_t *node)
 {
@@ -481,12 +481,12 @@ void slot_insert_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *par
         assign_slottables_for_a_tree(ctx, node_root(node));
 }
 
-void slot_removed_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent)
+void slot_removed_assigned_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent)
 {
     lxb_dom_node_t *assigned;
 
     DCHECK(g_ready, "§4.2.3's slot steps ran before slot_init");
-    if (!node || !parent) return;
+    DCHECK(node != NULL && parent != NULL, "§4.2.3 remove's slot steps ran for no node or no parent");
     DCHECK(node->parent != parent, "§4.2.3 remove's slot steps ran BEFORE step 7's detach — step 8 recomputes "
                                    "the slot's assigned nodes and would find the node it is removing");
     /* "If node is ASSIGNED, then run assign slottables for node's assigned slot." */
@@ -496,13 +496,30 @@ void slot_removed_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *pa
        signal a slot change for parent." */
     if (slot_is(parent) && shadow_root_is(node_root(parent)) && slot_assigned_empty(ctx, parent))
         signal_a_slot_change(ctx, parent);
-    /* "If node has an inclusive descendant that is a slot: run assign slottables for a tree with parent's root,
-       and with node." Both, because the removed subtree's slots now hold nothing and the tree it left may have
-       a different slot answering for the same name. */
-    if (shadow_root_is(node_root(parent)) && has_inclusive_slot(node)) {
-        assign_slottables_for_a_tree(ctx, node_root(parent));
-        assign_slottables_for_a_tree(ctx, node);
-    }
+}
+
+bool slot_removed_tree_steps_apply(lxb_dom_node_t *parent)
+{
+    /* A slot holds assigned nodes only in a shadow tree, so a subtree that left a tree whose root is not a
+       shadow root carries no slot step 10's two runs could change. */
+    return shadow_root_is(node_root(parent));
+}
+
+void slot_removed_tree_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent)
+{
+    DCHECK(g_ready && node != NULL && parent != NULL && node->parent != parent,
+           "§4.2.3 remove's step 10 ran before slot_init, for no node or parent, or before step 7's detach");
+    /* Both, because the removed subtree's slots now hold nothing and the tree it left may have a different slot
+       answering for the same name. */
+    assign_slottables_for_a_tree(ctx, node_root(parent));
+    assign_slottables_for_a_tree(ctx, node);
+}
+
+void slot_removed_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent)
+{
+    if (!node || !parent) return;
+    slot_removed_assigned_steps(ctx, node, parent);
+    if (slot_removed_tree_steps_apply(parent) && has_inclusive_slot(node)) slot_removed_tree_steps(ctx, node, parent);
 }
 
 void slot_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local)

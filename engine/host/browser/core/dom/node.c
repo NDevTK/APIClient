@@ -54,6 +54,7 @@
 #include "core/dom/slot.h"
 #include "core/dom/collections.h"
 #include "core/dom/range.h"
+#include "core/dom/node_remove.h"   /* §4.2.3 remove, the machine removeChild runs */
 #include "core/dom/node_iterator.h"   /* §6.1's pre-remove steps, which §4.2.3's move runs at its step 10 */
 #include "core/xml/xml_name.h"   /* §4.13 step 1's `Name` production is XML's, referenced by the DOM */
 #include "quickjs-step.h"
@@ -393,9 +394,8 @@ static JSValue js_node_child_nodes(JSContext *ctx, JSValueConst this_val)
     return collections_child_nodes(ctx, this_val);
 }
 
-/* §4.2.3 appendChild / removeChild — the per-flow chokepoints, and they return the node the spec returns
-   (pages chain on it). Any node kind, which is the whole point of this file. */
-static JSValue js_node_child_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
+/* §4.4 appendChild — the per-flow chokepoint, returning the node the spec returns (pages chain on it). */
+static JSValue js_node_append_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
 
 /* A newly inserted <script> is PREPARED (HTML 4.12.1) by the element component, which owns that rule; the base
    asks for it through this hook so node.c does not have to know what a script is. */
@@ -627,7 +627,7 @@ static int g_tree_hook_n;
 static NodeChildrenChangedHook g_cc_hooks[NODE_CHILDREN_CHANGED_HOOKS_MAX];
 static int g_cc_hook_n;
 
-static void node_children_changed(JSContext *ctx, lxb_dom_node_t *parent)
+void node_children_changed(JSContext *ctx, lxb_dom_node_t *parent)
 {
     int i;
 
@@ -1376,43 +1376,87 @@ static bool node_move(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *new_
     return true;
 }
 
-/* §4.4 appendChild / removeChild. DECLARED members, like every other one — they were raw JS_CFUNC_DEF entries,
-   which is a shape that cannot park at all and, more to the point here, does not pass through the machine every
-   declared member converges on. `Node node` is an INTERFACE type, so the IDL coerces nothing and REFUSES
-   everything that is not a node; the declaration is what puts them on that path. magic 0 = appendChild,
-   1 = removeChild.
-   THE NUMBER WAS §4.5 HERE AND AT THREE MORE SITES IN THIS FILE, and §4.5 is "Interface Document" — these four
-   members are declared AND given their method steps in §4.4 "Interface Node" ("The appendChild(node) method
-   steps are to return the result of appending node to this"), and it is the ALGORITHM they call that lives
-   elsewhere, in §4.2.3 "Mutation algorithms". Two sections, and the wrong one read as authoritative. */
-static JSValue js_node_child_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* §4.4 appendChild. `[CEReactions] Node appendChild(Node node)`: the position is a non-nullable interface type,
+   so §3.6's arity check and §3.2.15's brand are the declaration's and stand in front of this body. */
+static JSValue js_node_append_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *n = node_of(this_val), *child;
 
+    (void)magic;
     if (!n) return JS_UNDEFINED;
-    /* `[CEReactions] Node appendChild(Node node)` / `[CEReactions] Node removeChild(Node child)`. BOTH
-       POSITIONS ARE NON-NULLABLE INTERFACE TYPES, so §3.6's arity check and §3.2.15's brand are the
-       DECLARATION's and stand in front of this body — the `argc < 1` that answered `undefined` where step 5
-       throws, and the hand-written TypeError that stood where the brand belongs, are what they replaced. */
-    DCHECK(argc == 1, "a §4.4 child operation reached its body without its declared argument — the position is "
-                      "not optional, so §3.6 Overload resolution algorithm's step 5 (\"If S is empty, then "
-                      "throw a TypeError\") is what a zero-argument call gets");
+    DCHECK(argc == 1, "appendChild reached its body without its declared argument — the position is not "
+                      "optional, so §3.6 Overload resolution algorithm's step 5 throws for a zero-argument call");
     child = node_of(argv[0]);
-    DCHECK(child != NULL, "appendChild/removeChild's `Node` argument reached the body as something that is not "
-                          "a node — the declaration's IDL_INTERFACE position and its "
-                          "idl_iface_brand(node_class_id()) are what make that a TypeError before step 1");
-    if (magic) {
-        if (child->parent != n)
-            return JS_ThrowDOMException(ctx, "NotFoundError", "the node to remove is not a child of this node");
-        dom_cow_remove_child(child);
-    } else {
-        /* §4.4's `appendChild(node)` method steps are `append`, which §4.2.3 Mutation algorithms defines as
-           pre-insert with a null child — all eleven validity steps, not the one
-           ancestor check that used to stand here. */
-        if (!node_pre_insert(ctx, child, n, NULL)) return JS_EXCEPTION;
-    }
+    DCHECK(child != NULL, "appendChild's `Node` argument reached the body as something that is not a node — the "
+                          "declaration's IDL_INTERFACE position and its idl_iface_brand(node_class_id()) make "
+                          "that a TypeError before step 1");
+    /* §4.4's `appendChild(node)` method steps are `append`, which §4.2.3 defines as pre-insert with a null
+       child — all eleven validity steps. */
+    if (!node_pre_insert(ctx, child, n, NULL)) return JS_EXCEPTION;
     return JS_DupValue(ctx, argv[0]);
 }
+
+/* §4.4 removeChild(child): "return the result of pre-removing child from this". §4.2.3 pre-remove step 1 is
+   the first stage, step 2's remove is core/dom/node_remove.h's machine, and step 3 returns child. `child` is a
+   non-nullable interface position, so the declaration brands it before step 1. */
+#define NODE_REMOVE_CHILD_STAGES(X) \
+    X(RC_CHECK,  "DOM §4.2.3 pre-remove step 1 (child's parent is not parent: NotFoundError)") \
+    NODE_REMOVE_ALGO_STAGES(X, RC, "DOM §4.2.3 pre-remove step 2") \
+    X(RC_RETURN, "DOM §4.2.3 pre-remove step 3 (return child)")
+enum { IDL_STEP_STAGE_BASE(NODE_REMOVE_CHILD_STAGES) NODE_REMOVE_CHILD_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NODE_REMOVE_CHILD_STEPS[] = { NODE_REMOVE_CHILD_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static void node_remove_child_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    (void)ctx; (void)st; (void)v;   /* lexbor nodes, the document's; the header holds this and child */
+}
+
+static int js_node_remove_child(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeRemoveState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    STEP_DISPATCH(NODE_REMOVE_CHILD_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(RC_CHECK);
+    {
+        lxb_dom_node_t *parent = node_of(hdr->this_val), *child;
+
+        if (!parent) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        DCHECK(argc == 1, "removeChild reached its body without its declared argument");
+        child = node_of(argv[0]);
+        DCHECK(child != NULL, "removeChild's `Node` argument reached the body as something that is not a node");
+        if (child->parent != parent) {
+            JS_ThrowDOMException(ctx, "NotFoundError", "the node to remove is not a child of this node");
+            return JS_STEP_ABRUPT;
+        }
+        node_remove_start(hdr, s, child, RC_RANGES, RC_RETURN);
+        return JS_STEP_YIELD;
+    }
+
+    STEP_ARM(RC_RANGES);
+    STEP_ARM(RC_ITERATORS);
+    STEP_ARM(RC_DETACH);
+    STEP_ARM(RC_ASSIGNED);
+    STEP_ARM(RC_SLOT_FIND);
+    STEP_ARM(RC_SLOT_ASSIGN);
+    STEP_ARM(RC_ROOT);
+    STEP_ARM(RC_DESCENDANTS);
+    STEP_ARM(RC_RECORD);
+    STEP_ARM(RC_CHANGED);
+    return node_remove_run(ctx, hdr, s, RC_RANGES);
+
+    STEP_ARM(RC_RETURN);
+    *presult = JS_DupValue(ctx, argv[0]);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl NODE_REMOVE_CHILD_STEP = {
+    js_node_remove_child, sizeof(NodeRemoveState), node_remove_child_visit, NULL,
+    "DOM §4.4 Node.removeChild (over §4.2.3 pre-remove)", NODE_REMOVE_CHILD_STEPS
+};
 
 /* DOM §4.2.8 "Mixin ChildNode" AND §4.2.6 "Mixin ParentNode" — THE CONVENIENCE MIXINS — `el.remove()`, `parent.append(a, b)`,
    `el.before(node, 'text')`, `el.replaceWith(x)`, `parent.replaceChildren()`. They are on Element, on
@@ -4895,9 +4939,9 @@ static void node_declare_walkers(JSContext *ctx)
     idl_iface_brand(node_class_id());
     /* §4.4's four MUTATING members — the section that DECLARES them and states their method steps; §4.2.3
        Mutation algorithms is where the algorithms those steps call are written. */
-    g_w_append = idl_method_id(ctx, ONE_NODE, 1, js_node_child_op, 0);
+    g_w_append = idl_method_id(ctx, ONE_NODE, 1, js_node_append_child, 0);
     idl_iface_brand(node_class_id());
-    g_w_remove = idl_method_id(ctx, ONE_NODE, 1, js_node_child_op, 1);
+    g_w_remove = idl_method_id_step(ctx, ONE_NODE, 1, NULL, 0, &NODE_REMOVE_CHILD_STEP, 0);
     idl_iface_brand(node_class_id());
     g_w_insert = idl_method_id(ctx, NODE_THEN_NULLABLE, 2, js_node_insert, 0);
     idl_iface_brand(node_class_id());

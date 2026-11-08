@@ -137,6 +137,14 @@ void dom_cow_insert_before(lxb_dom_node_t *ref, lxb_dom_node_t *child);
 /* Detach a node the BASELINE may own — captured so it comes back on revert/unapply. innerHTML= needs it:
    it REPLACES children, and an uncaptured removal leaks the old subtree across a context switch. */
 void dom_cow_remove_child(lxb_dom_node_t *node);
+/* DOM §4.2.3 remove's per-node primitives, for core/dom/node_remove.h's machine, which runs the steps around
+   them. `_index_element` takes one element of the subtree out of `doc`'s name index while the subtree is still
+   linked, captured; `_detach` is step 7's unlink, captured, which then walks no index and runs no tree hook. */
+void dom_cow_remove_index_element(lxb_dom_document_t *doc, lxb_dom_element_t *el);
+void dom_cow_remove_detach(lxb_dom_node_t *node);
+/* Whether the tree link or unlink in progress carries its subtree's name-index upkeep per element, so lexbor's
+   tree observer walks none of it (core/dom/document_name_index.c). */
+bool dom_cow_name_index_apart(void);
 /* DOM §4.2.3's "MOVE", AS ITS OWN CHOKEPOINT PAIR — steps 13 and 19-20 of `move a node node into a node
    newParent before null or a node child`. The standard says why this is not remove-then-insert in its own
    words, in the note under move step 24.2: "Because the move algorithm is a separate primitive from insert
@@ -504,7 +512,8 @@ long dom_cow_chain_bytes(void);
 long dom_cow_head_bytes(int cap);
 /* WHAT A SERIALIZED COPY OF ONE PARKED FLOW'S DOM DELTA WOULD HOLD — its head buffer (dom_buf_take) and base chain
    (dom_base_take): entries by kind, the string bytes they carry, and the nodes under the subtrees it created. */
-typedef struct { long head, chain, segs, kinds[9], str_bytes, created_nodes, created_text_bytes, head_bytes; } DomSerialCensus;
+#define DOM_UNDO_KINDS 10
+typedef struct { long head, chain, segs, kinds[DOM_UNDO_KINDS], str_bytes, created_nodes, created_text_bytes, head_bytes; } DomSerialCensus;
 void dom_cow_serial_census(const void *head, int n, const void *base, DomSerialCensus *out);
 
 /* THIS FLOW CREATED THIS NODE. Called from every place a node is made, so the delta owns it and destroys it

@@ -11873,7 +11873,7 @@ static struct {
     long work_max, full_max, own_max;
     double heap_head, heap_chain, heap_segs, slots, cells, coro, maps, states[16], host_bytes;
     double priv_objs, priv_bytes, priv_str_bytes, shared_born, baseline, bytecode, coro_slots, tramp, parks;
-    double dom_head, dom_chain, dom_segs, dom_kinds[9], dom_str, dom_nodes, dom_text;
+    double dom_head, dom_chain, dom_segs, dom_kinds[DOM_UNDO_KINDS], dom_str, dom_nodes, dom_text;
     long h_work[SALE_HIST], h_full[SALE_HIST], h_own[SALE_HIST], h_ratio[SALE_HIST];
 } g_sale_census;
 
@@ -11982,7 +11982,7 @@ static void engine_sale_census_take(const Flow *f) {
     g_sale_census.baseline += r.baseline; g_sale_census.bytecode += r.bytecode;
     g_sale_census.coro_slots += r.coro_slots; g_sale_census.tramp += r.tramp_frames; g_sale_census.parks += r.parks;
     g_sale_census.dom_head += dc.head; g_sale_census.dom_chain += dc.chain; g_sale_census.dom_segs += dc.segs;
-    for (int k = 0; k < 9; k++) g_sale_census.dom_kinds[k] += dc.kinds[k];
+    for (int k = 0; k < DOM_UNDO_KINDS; k++) g_sale_census.dom_kinds[k] += dc.kinds[k];
     g_sale_census.dom_str += dc.str_bytes; g_sale_census.dom_nodes += dc.created_nodes;
     g_sale_census.dom_text += dc.created_text_bytes;
     g_sale_census.h_work[sale_log2((double)work)]++;
@@ -12027,7 +12027,7 @@ char *engine_sale_census_json(void) {
         n += snprintf(b + n, cap - (size_t)n, "%s\"%s\":%.0f", k ? "," : "", cow_state_kind_name(k),
                       g_sale_census.states[k]);
     n += snprintf(b + n, cap - (size_t)n, "},\"domKinds\":[");
-    for (int k = 0; k < 9; k++) n += snprintf(b + n, cap - (size_t)n, "%s%.0f", k ? "," : "", g_sale_census.dom_kinds[k]);
+    for (int k = 0; k < DOM_UNDO_KINDS; k++) n += snprintf(b + n, cap - (size_t)n, "%s%.0f", k ? "," : "", g_sale_census.dom_kinds[k]);
     n += snprintf(b + n, cap - (size_t)n, "],");
     n += sale_hist_json(b + n, cap - (size_t)n, "hWork", g_sale_census.h_work);
     n += snprintf(b + n, cap - (size_t)n, ",");

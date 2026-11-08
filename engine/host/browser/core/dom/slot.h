@@ -35,6 +35,11 @@ void slot_assign_for_a_tree(JSContext *ctx, lxb_dom_node_t *root);
    the node has no parent left to read by then. */
 void slot_insert_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent);
 void slot_removed_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent);
+/* The same remove half in the parts a resting removal drives: steps 8-9; whether step 10 can change anything for
+   a node removed from `parent`; and steps 10.1-10.2, once the caller has found an inclusive descendant slot. */
+void slot_removed_assigned_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent);
+bool slot_removed_tree_steps_apply(lxb_dom_node_t *parent);
+void slot_removed_tree_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent);
 /* §4.2.2's attribute change steps: `slot` on a slottable updates its name and re-assigns, `name` on a slot
    re-assigns that shadow tree. `ns` NULL is the null namespace, which is the only one either applies to. */
 void slot_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local);

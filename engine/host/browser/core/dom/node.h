@@ -96,7 +96,9 @@ void node_install_parent_mixin(JSContext *ctx, JSValueConst proto);
    run AFTER, or the recomputation still finds the node being removed and nothing changes — so the removal
    fires no `slotchange`.
    `parent` is the node's parent, PASSED rather than read off the node, because by NODE_TREE_REMOVED there is
-   none left to read. */
+   none left to read.
+   A removal through core/dom/node_remove.h's machine reaches none of them: it runs the same steps itself, in
+   remove's order, one node per rest. */
 enum { NODE_TREE_REMOVED = -1, NODE_TREE_REMOVING = 0, NODE_TREE_INSERTED = 1 };
 typedef void (*NodeTreeHook)(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase);
 void node_add_tree_hook(NodeTreeHook fn);
@@ -136,6 +138,8 @@ void node_custom_element_reactions_tree_steps(JSContext *ctx, lxb_dom_node_t *n,
  * the flow performing the write is routinely not in the realm the parent belongs to. */
 typedef void (*NodeChildrenChangedHook)(JSContext *ctx, lxb_dom_node_t *parent);
 void node_add_children_changed_hook(NodeChildrenChangedHook fn);
+/* Run that list for `parent` (nothing when it is NULL), for an algorithm that runs its own steps. */
+void node_children_changed(JSContext *ctx, lxb_dom_node_t *parent);
 
 /* §4.2.3's MOVING STEPS — "specifications may define moving steps for all or some nodes. The algorithm is
  * passed a node movedNode, a boolean isSubtreeRoot, and a node oldAncestor as indicated in the move algorithm

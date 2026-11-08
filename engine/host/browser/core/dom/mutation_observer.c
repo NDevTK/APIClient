@@ -758,6 +758,26 @@ void mutation_observer_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_nod
     JS_FreeValue(ctx, list);
 }
 
+void mutation_observer_removal_record(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent,
+                                      lxb_dom_node_t *old_prev, lxb_dom_node_t *old_next)
+{
+    JSValue list, wrap;
+
+    DCHECK(node != NULL && parent != NULL && node->parent == NULL,
+           "§4.2.3 remove step 16 was reached for no node, no parent, or a node still attached");
+    DCHECK(g_batch == 0, "a removal that queues its own record ran inside an insert or replace scope, whose "
+                         "record would have taken it");
+    if (!g_ready || !g_any_observer) return;
+    wrap = node_wrap(ctx, node);
+    if (JS_IsNull(wrap)) { JS_FreeValue(ctx, wrap); return; }
+    list = JS_NewArray(ctx);
+    CHECK(!JS_IsException(list), "a tree mutation record's node list could not be allocated");
+    JS_SetPropertyUint32(ctx, list, 0, wrap);
+    mutation_observer_queue_record(ctx, MR_TYPE_CHILD_LIST, parent, NULL, NULL, NULL, 0, JS_UNDEFINED, list,
+                                   old_prev, old_next);
+    JS_FreeValue(ctx, list);
+}
+
 void mutation_observer_move_steps(JSContext *ctx, lxb_dom_node_t *node,
                                   lxb_dom_node_t *old_parent, lxb_dom_node_t *old_prev, lxb_dom_node_t *old_next,
                                   lxb_dom_node_t *new_parent, lxb_dom_node_t *new_prev, lxb_dom_node_t *child)

@@ -13,6 +13,7 @@
 #include "core/dom/name_intern.h"   /* a node's names are per-DOCUMENT state, so kind 8 moves them with the pointer */
 #include "core/dom/node_heap.h"     /* …and its BYTES are the agent's, which is why kind 8 asserts and moves nothing */
 #include "core/dom/node_interface.h"   /* dom_document_destroy — a document's nodes go back before its arenas do */
+#include "core/dom/document_name_index.h"   /* kind 9 moves one element's values in and out of its index */
 #include "core/dom/node.h"   /* node_template_content — §4.12.3's second tree, which a parse also builds into */
 #include "solver/quantum.h"   /* quantum_slice_open — HOST TIME, asserted by the baseline write below */
 #include "solver/attr_shadow.h"   /* the taint shadow rides the attribute delta (per-flow isolation of stashed taint) */
@@ -68,6 +69,12 @@ typedef struct DomUndo {
        children, and without a removal capture the old subtree would survive into the new markup and leak
        across a context switch into a sibling flow that never removed it. */
     int reinserted;                                           /* kind 2: currently back in the tree (unapplied) */
+    /* kind 2: a removal whose subtree's name-index upkeep is carried by kind-9 entries recorded before it, so its
+       unlink and re-link walk no index (dom_cow_name_index_apart). */
+    int index_apart;
+    /* kind 9: an element whose id and name values left `index_doc`'s name index while linked in its tree; unapply
+       rejoins them. Recorded before the removal they belong to, so both directions run with the element linked. */
+    lxb_dom_document_t *index_doc;
     /* kind 6: an ATTRIBUTE this flow created — kind 4's twin, and a separate kind because both halves of what
        a creation entry does differ. "Is it still reachable?" is `owner != NULL` for an attribute and not
        `dom_is_attached` (an Attr's parent is always null, so kind 4's test would call an attribute sitting in
@@ -1012,11 +1019,11 @@ static void dom_insert_capture(lxb_dom_node_t *node) {
 /* The removal twin: the node AND THE POSITION IT SAT AT, read off the live tree before the unlink, because
    `lxb_dom_node_remove` NULLs `parent`, `next` and `prev` and there is no answer to "where was it" afterwards.
    Three callers pushed this identical block; a fourth would have been the one that forgot the next sibling. */
-static void dom_remove_capture(lxb_dom_node_t *node) {
+static void dom_remove_capture(lxb_dom_node_t *node, int index_apart) {
     if (!g_dom_capture) return;
     DomUndo u; memset(&u, 0, sizeof u);
     dom_capture_begin();   /* the position is read off the live tree and written down by the push */
-    u.kind = 2; u.node = node;
+    u.kind = 2; u.node = node; u.index_apart = index_apart;
     u.parent = node->parent; u.next = node->next;
     u.sh_old = u.sh_cur = JS_UNDEFINED;
     dom_undo_push(u);
@@ -1327,7 +1334,7 @@ void dom_cow_remove_child(lxb_dom_node_t *node) {
     /* BEFORE the detach, because "was it connected" has no answer afterwards. */
     DCHECK(!g_tree_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
     if (g_tree_hook) g_tree_hook(g_cow_ctx, node, node->parent, 0);
-    dom_remove_capture(node);
+    dom_remove_capture(node, 0);
     {
         /* §4.2.3 remove step 3 detaches, and steps 4-7 run AFTER it — the slot steps recompute a slot's
            assigned nodes, and doing that while the node is still a child finds it again and reports no change.
@@ -1337,6 +1344,32 @@ void dom_cow_remove_child(lxb_dom_node_t *node) {
         lxb_dom_node_remove(node);
         if (g_tree_hook) g_tree_hook(g_cow_ctx, node, was, -1);
     }
+}
+
+/* Depth of a tree link or unlink whose subtree's name-index upkeep is carried per element (kind 9). */
+static int g_dom_index_apart;
+bool dom_cow_name_index_apart(void) { return g_dom_index_apart > 0; }
+
+void dom_cow_remove_index_element(lxb_dom_document_t *doc, lxb_dom_element_t *el) {
+    DomUndo u;
+
+    if (!document_name_index_element(doc, el, -1) || !g_dom_capture) return;
+    memset(&u, 0, sizeof u);
+    dom_capture_begin();
+    u.kind = 9; u.el = el; u.index_doc = doc;
+    u.sh_old = u.sh_cur = JS_UNDEFINED;
+    dom_undo_push(u);
+    dom_capture_end();
+}
+
+void dom_cow_remove_detach(lxb_dom_node_t *node) {
+    DOM_WRITE_OUTSIDE_LAYOUT();
+    DCHECK(node != NULL && node->parent != NULL, "a removal's unlink was asked for no node or a node with no parent");
+    g_dom_version++;
+    dom_remove_capture(node, 1);
+    g_dom_index_apart++;
+    lxb_dom_node_remove(node);
+    g_dom_index_apart--;
 }
 
 /* A PRIVATE TREE — the DOM's half of the invariant the heap COW already keeps: a delta captures only SHARED
@@ -2399,7 +2432,7 @@ static void cow_tc_remove(lxb_html_tree_t *tree, lxb_dom_node_t *node)
         lxb_dom_node_remove(node);
         return;
     }
-    dom_remove_capture(node);
+    dom_remove_capture(node, 0);
     lxb_dom_node_remove(node);
 }
 
@@ -2505,7 +2538,7 @@ void dom_cow_move_out(lxb_dom_node_t *node) {
     g_move_in_flight = node;
 #endif
     g_dom_version++;
-    dom_remove_capture(node);
+    dom_remove_capture(node, 0);
     lxb_dom_node_remove(node);
 }
 
@@ -2571,7 +2604,7 @@ void dom_cow_remove_baseline(lxb_dom_node_t *node) {
            "why this entry is host time's and why a flow's removal must go through dom_cow_remove_child, "
            "whose tree hook records §4.2.3's removing steps for the member's own drain");
     g_dom_version++;
-    dom_remove_capture(node);
+    dom_remove_capture(node, 0);
     lxb_dom_node_remove(node);
 }
 /* dom_revert — the "DISCARD the running flow's writes -> baseline" twin of dom_unapply — is DELETED, and this
@@ -2657,9 +2690,13 @@ static void dom_unapply_entry_body(DomUndo *u) {
         lxb_dom_node_remove(u->node); u->detached = 1;
     } else if (u->kind == 2 && !u->reinserted) {
         /* the baseline HAD this node and this flow removed it: parking restores the baseline. */
+        g_dom_index_apart += u->index_apart;
         if (u->next) lxb_dom_node_insert_before(u->next, u->node);
         else if (u->parent) lxb_dom_node_insert_child(u->parent, u->node);
+        g_dom_index_apart -= u->index_apart;
         u->reinserted = 1;
+    } else if (u->kind == 9) {
+        document_name_index_element(u->index_doc, u->el, +1);
     }
 }
 /* per-entry APPLY (parked -> flow): restore the flow's value/taint over the baseline. */
@@ -2687,7 +2724,11 @@ static void dom_apply_entry_body(DomUndo *u) {
                "the delta's apply moved a node into a document whose arenas are not the ones its bytes are in");
     } else if (u->kind == 2 && u->reinserted) {
         /* resuming the flow: it had removed this node, so take it back out. */
+        g_dom_index_apart += u->index_apart;
         lxb_dom_node_remove(u->node); u->reinserted = 0;
+        g_dom_index_apart -= u->index_apart;
+    } else if (u->kind == 9) {
+        document_name_index_element(u->index_doc, u->el, -1);
     } else if (u->kind == 1 && u->detached) {
         if (u->next) lxb_dom_node_insert_before(u->next, u->node);
         else if (u->parent) lxb_dom_node_insert_child(u->parent, u->node);
@@ -2781,7 +2822,7 @@ long dom_cow_chain_bytes(void) {
 long dom_cow_head_bytes(int cap) { return (long)cap * (long)sizeof(DomUndo); }
 
 static void dom_entry_serial(const DomUndo *u, DomSerialCensus *out) {
-    DCHECK(u->kind >= 0 && u->kind < 9, "a DOM undo entry's kind is outside the census's rows");
+    DCHECK(u->kind >= 0 && u->kind < DOM_UNDO_KINDS, "a DOM undo entry's kind is outside the census's rows");
     out->kinds[u->kind]++;
     if (u->name) out->str_bytes += (long)strlen(u->name);
     if (u->ns) out->str_bytes += (long)strlen(u->ns);

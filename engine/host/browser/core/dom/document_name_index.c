@@ -240,6 +240,19 @@ static lxb_dom_document_t *dni_tree_document(lxb_dom_node_t *n)
     return NULL;
 }
 
+/* Whether `n` is in `doc`'s document tree: dni_tree_document's question, uncharged, for an assert. */
+static bool dni_linked_in(const lxb_dom_node_t *n, const lxb_dom_document_t *doc)
+{
+    for (; n->parent != NULL; n = n->parent)
+        if (n->parent == lxb_dom_interface_node(doc)) {
+            const lxb_dom_node_t *c = n->parent->first_child;
+
+            while (c != NULL && c != n) c = c->next;
+            return c != NULL;
+        }
+    return false;
+}
+
 /* `a`'s value, when it is a non-empty null-namespace `id` or `name`. */
 static bool dni_value(lxb_dom_attr_t *a, const lxb_char_t **v, size_t *n)
 {
@@ -268,9 +281,10 @@ static void dni_element(lxb_dom_document_t *doc, lxb_dom_element_t *el, int delt
 
 /* The current call's steps, charged as THREAD_WORK_DOM_WALK unless a context switch's delta restore made the
    write, which is no flow's act.
-   Named residual. Not covered: the upkeep runs inside the tree write's primitive, charged but not resting, so an
-   inserted subtree's walk or a long sibling scan holds the thread. Next: the DOM's insert and remove algorithms
-   as step machines resting per node, which this upkeep then joins. Absence shows as a flow's slice overrun
+   Named residual. Not covered: an insertion's upkeep, and a removal's other than core/dom/node_remove.h's
+   machine, runs inside the tree write's primitive, charged but not resting, so an inserted or innerHTML-cleared
+   subtree's walk holds the thread. Next: DOM insert as a step machine resting per node, and every removal routed
+   through that machine, which the observer's subtree walks then leave. Absence shows as a flow's slice overrun
    inside a tree write with DOM-walk work charged across it. */
 static void dni_charge(void)
 {
@@ -293,8 +307,46 @@ static void dni_subtree(lxb_dom_node_t *root, int delta)
     }
 }
 
-static void dni_inserted(lxb_dom_node_t *node) { dni_subtree(node, +1); dni_charge(); }
-static void dni_removing(lxb_dom_node_t *node) { if (node->parent != NULL) dni_subtree(node, -1); dni_charge(); }
+/* A link solver/dom_cow.c makes with the subtree's upkeep carried per element (dom_cow_name_index_apart) walks
+   nothing here: the elements left, or rejoin, the index through document_name_index_element. */
+static void dni_inserted(lxb_dom_node_t *node)
+{
+    if (!dom_cow_name_index_apart()) dni_subtree(node, +1);
+    dni_charge();
+}
+static void dni_removing(lxb_dom_node_t *node)
+{
+    if (node->parent != NULL && !dom_cow_name_index_apart()) dni_subtree(node, -1);
+    dni_charge();
+}
+
+lxb_dom_document_t *document_name_index_tree_document(lxb_dom_node_t *n)
+{
+    lxb_dom_document_t *doc;
+
+    DCHECK(g_installed, "a name index's document was asked before the index was lexbor's tree observer");
+    DCHECK(n != NULL, "a name index's document was asked of no node");
+    doc = dni_tree_document(n);
+    dni_charge();
+    return doc;
+}
+
+bool document_name_index_element(lxb_dom_document_t *doc, lxb_dom_element_t *el, int delta)
+{
+    bool held = false;
+    const lxb_char_t *v;
+    size_t n;
+
+    DCHECK(doc != NULL && el != NULL && (delta == 1 || delta == -1),
+           "an element's name-index values were adjusted with no document, no element or a delta that is not one");
+    DCHECKF(dni_linked_in(lxb_dom_interface_node(el), doc),
+            "an element's name-index values were adjusted for a document whose tree it is not in (delta %d): its "
+            "values are a function of that tree only while it is linked there", delta);
+    for (lxb_dom_attr_t *a = el->first_attr; a != NULL; a = a->next)
+        if (dni_value(a, &v, &n)) { dni_adjust(doc, v, n, el, delta); held = true; }
+    dni_charge();
+    return held;
+}
 
 static void dni_attr(lxb_dom_element_t *el, lxb_dom_attr_t *a, int delta)
 {
