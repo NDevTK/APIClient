@@ -6439,6 +6439,9 @@ static inline void js_key_ledger_atom_api(JSAtom v, int n)
    armed key's own word when `v` is that key's JSString. */
 static inline void js_key_ledger_value(JSContext *ctx, JSValueConst v, int n)
 {
+    DCHECK(g_key_ledger_atom == JS_ATOM_NULL || !__JS_AtomIsConst(g_key_ledger_atom),
+           "the key ledger is armed over a constant or tagged-integer atom, which has no atom_array entry to "
+           "compare against and no refcount to move");
     if (unlikely(g_key_ledger_atom != JS_ATOM_NULL) && !g_key_ledger_in_capture &&
         JS_VALUE_GET_TAG(v) == JS_TAG_STRING &&
         JS_VALUE_GET_STRING(v) == ctx->rt->atom_array[g_key_ledger_atom])
@@ -19354,7 +19357,8 @@ static int js_define_prop_borrowed_key_at(JSContext *ctx, JSValueConst this_obj,
     memcpy(outer_by, g_key_ledger_by, sizeof(outer_by));
     memset(g_key_ledger_by, 0, sizeof(g_key_ledger_by));
     g_key_ledger_in_capture = 0;
-    g_key_ledger_atom = prop;
+    /* a constant or tagged-integer atom (an array index key) has no refcount for the ledger to account */
+    g_key_ledger_atom = __JS_AtomIsConst(prop) ? JS_ATOM_NULL : prop;
     rc0 = js_atom_refcount(ctx->rt, prop);
     /* CONSTANTS ONLY, and read BEFORE the define so no arm can have replaced `val` under it: is the value this
        call stores the atom's own JSString? A const atom has no entry to compare against and no refcount to
