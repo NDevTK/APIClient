@@ -1581,6 +1581,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/uriclass.h"
 #include "fixture/slicelen.h"
 #include "fixture/strsearch.h"
+#include "fixture/rxsearch.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -2287,6 +2288,7 @@ TF_DOCS[] = {
     { "uriclass", HTML_URICLASS },
     { "slicelen", HTML_SLICELEN },
     { "strsearch", HTML_STRSEARCH },
+    { "rxsearch", HTML_RXSEARCH },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -18437,6 +18439,26 @@ TF_UNIT void probes_msgimgload(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rxsearch` document (fixture/rxsearch.h): @@search's step 9 over an unknown match is decided
+   where the subject's domain decides the match, and forks into its two completions where it does not. */
+TF_UNIT void probes_rxsearch(const char *js, Probe *tab, int *n) {
+    const char *a_why = NULL, *q_why = NULL, *s_why = NULL;
+    int a_tt = 1, q_tt = 1, s_tt = 1;
+
+    fold_row(&a_tt, &a_why, !!strstr(js, "\"/api/rs-none\"") && !strstr(js, "/api/rs-some"),
+             "a search for `#` over a page path and an encoded component was not -1 in every world");
+    fold_row(&q_tt, &q_why, !!strstr(js, "\"/api/rs-q-none\"") && !!strstr(js, "\"/api/rs-q-some\""),
+             "String.prototype.search over a page path and the raw query did not run both completions of step 9");
+    fold_row(&s_tt, &s_why, !!strstr(js, "\"/api/rs-s-none\"") && !!strstr(js, "\"/api/rs-s-some\""),
+             "@@search called over a page path and the raw query did not run both completions of step 9");
+    const Probe rows[] = {
+        { "rs-none-one-arm", a_tt, "/api/rs-none", SESS_EXPLORE, a_why },
+        { "rs-string-both-arms", q_tt, "/api/rs-q-none", SESS_EXPLORE, q_why },
+        { "rs-symbol-both-arms", s_tt, "/api/rs-s-none", SESS_EXPLORE, s_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `strsearch` document (fixture/strsearch.h): a replace with a String searchValue keeps the
    receiver's units no occurrence can reach, so a page-written path's host stays the document's. */
 TF_UNIT void probes_strsearch(const char *js, Probe *tab, int *n) {
@@ -27166,6 +27188,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_uriclass(js, probes, &np);
     probes_slicelen(js, probes, &np);
     probes_strsearch(js, probes, &np);
+    probes_rxsearch(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_paintrest(js, probes, &np);
     probes_deepnest(js, probes, &np);
