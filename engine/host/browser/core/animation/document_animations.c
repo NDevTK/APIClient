@@ -107,6 +107,14 @@ static JSValue da_animations(JSContext *ctx, JSValueConst record)
     return out;
 }
 
+JSValue document_animations_all(JSContext *ctx)
+{
+    JSValue record = document_animations_record(ctx), as = da_animations(ctx, record);
+
+    JS_FreeValue(ctx, record);
+    return as;
+}
+
 bool document_animations_pending(JSContext *docctx)
 {
     JSValue record = document_animations_record(docctx), q = da_list(docctx, record, "events");

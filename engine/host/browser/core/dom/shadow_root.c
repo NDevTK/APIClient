@@ -60,6 +60,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/animation/animatable.h"
 #include "core/agent_state.h"
 #include "core/css/style_sheet_list.h"
 #include "core/dom/document.h"
@@ -908,6 +909,8 @@ void shadow_root_install_proto(JSContext *ctx)
        retargeting against `this` is what turns an element fullscreened inside this tree into the node an
        observer of this tree may see, and its step 1 asks whether this root's HOST is connected at all. */
     fullscreen_install_shadow_root_members(ctx, proto);
+    /* Web Animations §6.10's DocumentOrShadowRoot getAnimations(), the same member Document carries. */
+    animatable_install_document_or_shadow_root_members(ctx, proto);
     /* CSSOM §6.2.3's `styleSheets` — the SAME mixin member Document carries, over a DIFFERENT list: §6.2's
        collection belongs to "the document OR SHADOW ROOT", and a `<style>` whose root is this shadow root is
        in this one. That is why the member is installed here rather than inherited: DocumentFragment does not

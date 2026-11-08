@@ -7,10 +7,12 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
+#include "core/animation/animatable.h"
 #include "core/animation/animation.h"
 #include "core/animation/animation_playback_event.h"
 #include "core/animation/animation_time.h"
 #include "core/animation/animation_timeline.h"
+#include "core/animation/css_animations.h"
 #include "core/animation/document_animations.h"
 #include "core/events/event_target.h"
 #include "core/idl_args.h"
@@ -376,6 +378,11 @@ static void an_update_finished_state(JSContext *ctx, JSValueConst animation, JSV
         }
     }
     if (!finished && an_settled(ctx, slots, "finished")) an_new_promise(ctx, slots, "finished");
+    /* CSS Animations Level 2 §2.2: a CSS animation disassociated from its owning element joins the global
+       animation list "at the first moment when they transition out of the idle play state". */
+    if (sint(ctx, slots, "listed") == 0 && !css_animations_owned(ctx, animation) &&
+        an_play_state(ctx, slots) != AN_IDLE)
+        sset(ctx, slots, "listed", JS_NewInt32(ctx, (int32_t)document_animations_list_append(ctx)));
 }
 
 /* Step 5's finish notification steps. */
@@ -957,10 +964,20 @@ bool animation_replaceable(JSContext *ctx, JSValueConst animation)
 
 int animation_composite_order(JSContext *ctx, JSValueConst a, JSValueConst b)
 {
-    JSValue sa = animation_slots(ctx, a), sb = animation_slots(ctx, b);
-    int pa = sint(ctx, sa, "listed"), pb = sint(ctx, sb, "listed");
+    bool ca = css_animations_owned(ctx, a), cb = css_animations_owned(ctx, b);
+    JSValue sa, sb;
+    int pa, pb;
 
-    DCHECK(pa > 0 && pb > 0, "§5.4.2 sorted an animation that has no position in the global animation list");
+    /* §5.4.2's inter-class order: CSS Animations Level 2 §2.2 puts a CSS animation with an owning element
+       before every animation without a specific class, and orders the class itself. */
+    if (ca != cb) return ca ? -1 : 1;
+    if (ca) return css_animations_order(ctx, a, b);
+    sa = animation_slots(ctx, a);
+    sb = animation_slots(ctx, b);
+    pa = sint(ctx, sa, "listed");
+    pb = sint(ctx, sb, "listed");
+    DCHECK(pa > 0 && pb > 0, "§5.4.2 sorted an animation that has no position in the global animation list — CSS "
+                             "Animations Level 2 §2.2 gives one to every animation not ordered by an owning element");
     JS_FreeValue(ctx, sa);
     JS_FreeValue(ctx, sb);
     return pa < pb ? -1 : pa > pb;
@@ -1182,6 +1199,7 @@ void animation_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, proto);
     idl_define_global_property_reference(ctx, global, "Animation", ctor);
     animation_playback_event_install(ctx, global);
+    css_animations_install(ctx, global);
 }
 
 void animation_init(JSContext *ctx)
@@ -1252,12 +1270,16 @@ void animation_init(JSContext *ctx)
     agent_state_id("animation", &g_id_persist, "§6.4 Animation's `persist()` declaration");
     realm_declare_intrinsic(animation_install_realm);
     animation_playback_event_init(ctx);
+    css_animations_init(ctx);
+    animatable_init(ctx);
 }
 
 void animation_free(JSRuntime *rt)
 {
     DCHECK(g_rt != NULL, "Web Animations §6.4 was released in an agent that never declared it");
     DCHECK(g_rt == rt, "Web Animations §6.4 was released against a runtime other than the one it was declared in");
+    animatable_free();
+    css_animations_free(rt);
     animation_playback_event_free(rt);
     animation_timeline_free(rt);
     document_animations_free(rt);

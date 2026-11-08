@@ -30,6 +30,9 @@ void document_animations_append_event(JSContext *ctx, JSValueConst record, JSVal
    list's order is all §5.4.2 reads of it, so a per-realm count in creation order is the list. */
 uint32_t document_animations_list_append(JSContext *ctx);
 
+/* Every animation associated with one of this realm's Document's timelines, timeline by timeline. OWNED. */
+JSValue document_animations_all(JSContext *ctx);
+
 /* HTML §8.1.7.3 step 4's "no visible effect" term for this document: an animation of it owes a pending task,
    a finish its timeline has not reached, or an event the queue holds. */
 bool document_animations_pending(JSContext *docctx);

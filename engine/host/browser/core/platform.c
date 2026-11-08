@@ -1147,6 +1147,7 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "AnimationTimeline",     "animation" },
     { "DocumentTimeline",      "animation" },
     { "AnimationPlaybackEvent", "animation" },
+    { "CSSAnimation",          "animation" },
     /* CSSOM §8.1's namespace object: a missing install makes `CSS.escape` read `undefined`, and only the call
        throws. */
     { "CSS",                   "css_namespace" },

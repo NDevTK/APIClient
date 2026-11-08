@@ -27,6 +27,7 @@
 #include "solver/endpoint.h"
 #include "solver/engine.h"
 #include "solver/solve.h"
+#include "core/animation/animatable.h"
 #include "core/agent_state.h"
 #include "core/dom/element.h"
 #include "core/dom/aria_mixin.h"
@@ -3490,6 +3491,8 @@ void element_install_proto(JSContext *ctx)
     /* CSSOM VIEW §6's `partial interface Element` — the scroll and client geometry. Per realm because its
        answers are per realm: a child navigable's viewport is a different size from the traversable's. */
     element_view_install(ctx, proto);
+    /* Web Animations §6.11's `Element includes Animatable`: its getAnimations(). */
+    animatable_install_element_members(ctx, proto);
     /* Pointer Events 4 §4's `partial interface Element` — per realm for the same reason §6's members are:
        a C member runs in the realm that DEFINED it. */
     pointer_capture_install(ctx, proto);

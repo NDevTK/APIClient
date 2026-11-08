@@ -1,9 +1,7 @@
 /* Web Animations Level 1 §4.5 "Animations" and §6.4 "The Animation interface".
  *
- * An animation's state is §4.5's: its timeline, its associated effect, start time, hold time, playback rate and
- * pending playback rate, previous current time, pending play or pause task, current ready and finished promises,
- * and replace state. It lives in internal slots on a null-prototype object, so every write is the running flow's
- * own and a fork's sibling never sees it.
+ * An animation's §4.5 state lives in internal slots on a null-prototype object, so every write is the running
+ * flow's own and a fork's sibling never sees it.
  *
  * A pending play or pause task runs "as soon as animation is ready" (§4.5.6): the user agent has rendered the
  * associated effect's first frame and the timeline is active. That is the next update animations and send events
