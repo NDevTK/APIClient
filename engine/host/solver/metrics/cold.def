@@ -372,6 +372,7 @@ METRIC(tw_selector_match_us, "twSelectorMatchUs", LIFETIME, "us", PROCESS, "core
 /* …and the DOM-walk input charged, the named getters' resting walks' visits (core/dom/named_walk.c) and the name
    index's upkeep steps (core/dom/document_name_index.c): within one run, their share of `twChargedUnits`. */
 METRIC(tw_dom_walk_input, "twDomWalkInput", LIFETIME, "element", PROCESS, "core/timing/thread_work.c", INT)
+METRIC(tw_style_ask_input, "twStyleAskInput", LIFETIME, "ask", PROCESS, "core/timing/thread_work.c", INT)
 /* …and the rule text a style sheet's CSSOM build made objects of, a rule counting as
    THREAD_WORK_CSSOM_BYTES_PER_RULE bytes, with its spans' own CPU. */
 METRIC(tw_cssom_build_spans, "twCssomBuildSpans", LIFETIME, "span", PROCESS, "core/timing/thread_work.c", INT)

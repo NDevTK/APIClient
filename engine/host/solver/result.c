@@ -1769,6 +1769,7 @@ char *result_cold_json(void) {
         METRIC_SET(tw_selector_match_bytes, (long long)tw.bytes[THREAD_WORK_SELECTOR_MATCH]);
         METRIC_SET(tw_selector_match_us, tw.cpu_us[THREAD_WORK_SELECTOR_MATCH]);
         METRIC_SET(tw_dom_walk_input, (long long)tw.charged_input[THREAD_WORK_DOM_WALK]);
+        METRIC_SET(tw_style_ask_input, (long long)tw.charged_input[THREAD_WORK_STYLE_ASK]);
         METRIC_SET(tw_cssom_build_spans, tw.spans[THREAD_WORK_CSSOM_BUILD]);
         METRIC_SET(tw_cssom_build_bytes, (long long)tw.bytes[THREAD_WORK_CSSOM_BUILD]);
         METRIC_SET(tw_cssom_build_us, tw.cpu_us[THREAD_WORK_CSSOM_BUILD]);

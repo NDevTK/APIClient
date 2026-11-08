@@ -72,6 +72,9 @@
    rest, so the per-call floor above (rounded up) prices a node at one unit whatever the rate; the rate states that
    floor. */
 #define THREAD_WORK_UNITS_PER_KI_DOM_ELEMENTS 1024
+/* A style ask the cascade record serves from a held match (core/css/css_cascade_pass.c): its input is the one ask,
+   priced at the per-call floor of one unit, which the rate states. */
+#define THREAD_WORK_UNITS_PER_KI_STYLE_ASKS 1024
 
 #include <stddef.h>
 #include <stdint.h>
@@ -90,6 +93,7 @@ typedef enum {
     THREAD_WORK_SELECTOR_MATCH, /* style rules tested by one element's author match (css_style_declaration.c) */
     THREAD_WORK_DOM_WALK,       /* nodes a resting tree walk visited (core/dom/named_walk.c, collections.c) */
     THREAD_WORK_CSSOM_BUILD,    /* rule text a style sheet's CSSOM build made objects of (core/css/css_rule.c) */
+    THREAD_WORK_STYLE_ASK,      /* a match the cascade record served (core/css/css_cascade_pass.c) */
     THREAD_WORK_N
 } ThreadWorkKind;
 

@@ -14,6 +14,7 @@
 #include "core/css/css_match_result.h"
 #include "core/layout/layout_job.h"   /* the record of the job whose activation holds the thread */
 #include "core/rendering/visual_update.h"   /* an element state's write is a visible effect */
+#include "core/timing/thread_work.h"   /* a served ask is host work, charged in the engine's unit */
 #include "solver/flow.h"               /* the running flow's cascade input generation */
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
@@ -246,6 +247,7 @@ bool css_cascade_pass_match_ask(lxb_dom_element_t *el, const struct CssAuthorShe
            "while the record was held");
     *out = slot->match;
     g_match_served++;
+    thread_work_charge(THREAD_WORK_STYLE_ASK, 1);
     return true;
 }
 

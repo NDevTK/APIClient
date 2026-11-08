@@ -190,12 +190,13 @@ static void ru_overrun_check(void)
            "computation run to completion under it) is made an ask, and the number is not what to change. "
            "Fired from the unit's end, LOWER THE NUMBER FOR THIS KIND IN rest_unit.c unless the per-item cost "
            "itself has grown. Of it, "
-           "host charges are %llu units over %llu box questions, %llu line items, %llu rule tests, %llu CSS "
-           "bytes, %llu decoded bytes, %llu HTML bytes, %llu constraint bytes and %llu orphan entries; %llu "
+           "host charges are %llu units over %llu box questions, %llu line items, %llu rule tests, %llu served "
+           "style asks, %llu CSS bytes, %llu decoded bytes, %llu HTML bytes, %llu constraint bytes and %llu orphan entries; %llu "
            "script bytes were parsed; the rest is retired opcodes",
            (int)g_rest_kind, rest_unit_items(g_rest_kind), (long long)spent, (long long)ENGINE_QUANTUM_WORK,
            (unsigned long long)(tw.charged_units - g_rest_mark_tw.charged_units), RU_IN(THREAD_WORK_LAYOUT_BOX),
-           RU_IN(THREAD_WORK_LAYOUT_LINE), RU_IN(THREAD_WORK_SELECTOR_MATCH), RU_IN(THREAD_WORK_CSS_PARSE),
+           RU_IN(THREAD_WORK_LAYOUT_LINE), RU_IN(THREAD_WORK_SELECTOR_MATCH), RU_IN(THREAD_WORK_STYLE_ASK),
+           RU_IN(THREAD_WORK_CSS_PARSE),
            RU_IN(THREAD_WORK_DECODE), RU_IN(THREAD_WORK_HTML_PARSE), RU_IN(THREAD_WORK_CONSTRAINT),
            RU_IN(THREAD_WORK_ORPHAN_WALK),
            (unsigned long long)(tw.script_parse_bytes_all - g_rest_mark_tw.script_parse_bytes_all));
