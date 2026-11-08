@@ -4253,7 +4253,10 @@ void JS_SetJobRemoveHook(JSJobRemoveHook h) { g_job_remove_hook = h; }
    JS_SetConcolicHooks. Declared HERE, with the other engine-wide hook sets, because the string helpers a
    thousand lines below assert against unknown external input reaching them and a declaration that sits after
    its first assertion is a rule nobody can state. */
-static _Thread_local JSConcolicHooks g_concolic;
+/* `is` is never NULL: a runtime whose host installed no table (a self-test runtime, an agent with no solver
+   after concolic_free withdrew its table) holds no unknown, and every value answers that it is not one. */
+static int js_concolic_none_is(JSValueConst v) { (void)v; return 0; }
+static _Thread_local JSConcolicHooks g_concolic = { .is = js_concolic_none_is };
 
 /* THE ORDINAL HALF OF A PAGE-CREATED VALUE'S NAME, ASKED IN ONE PLACE — the canonical spelling of a question
    that has FOUR carriers (`func.creation_ord` for a closure, `regexp.creation_ord` for a RegExp,
@@ -8195,7 +8198,7 @@ static JSValue JS_ConcatString3(JSContext *ctx, const char *str1,
     int len1, len3;
     JSString *p;
 
-    DCHECK(!(g_concolic.is && g_concolic.is(str2)),
+    DCHECK(!(g_concolic.is(str2)),
            "JS_ConcatString3 was handed unknown external input — this helper concatenates engine literals onto "
            "a value that is already convertible, so an unknown one means a caller skipped the ToString "
            "sub-sequence that answers §7.1.19 for it");
@@ -8293,7 +8296,7 @@ static JSValue js_force_tostring(JSContext *ctx, JSValueConst val1, const char *
        The shape is asked for through key_name, which answers as a real String, so the JS_ToCString below
        re-enters this function on a JS_TAG_STRING and returns at the fast path above. It is asked for rather
        than assumed, because a value that came back as anything else would recurse. */
-    if (unlikely(g_concolic.is && g_concolic.is(val1))) {
+    if (unlikely(g_concolic.is(val1))) {
         /* SIZED FOR THE WHOLE MESSAGE — the prose is 992 bytes, the shape is capped at 240, and the rest is
            the CONSUMER'S PATH, the one field whose length this file does not control. It is also why the
            file:line is placed in the FIRST sentence rather than at the end: a truncation may cost the reader
@@ -9054,7 +9057,7 @@ static JSValue JS_ConcatString(JSContext *ctx, JSValue op1, JSValue op2)
 {
     JSString *p1, *p2;
 
-    DCHECK(!(g_concolic.is && (g_concolic.is(op1) || g_concolic.is(op2))),
+    DCHECK(!((g_concolic.is(op1) || g_concolic.is(op2))),
            "JS_ConcatString was handed unknown external input — 13.15.3's `+` answers one at the concolic .add "
            "hook and every other caller holds engine strings, so this operand reached string concatenation "
            "through a path that has no answer for it");
@@ -9899,7 +9902,7 @@ static JSValue js_compile_check_call(JSContext *realm, const JSCompileCheck *cc,
    back rather than read from. */
 static bool js_value_is_concolic(JSValueConst v)
 {
-    return g_concolic.is != NULL && g_concolic.is(v);
+    return g_concolic.is(v);
 }
 static bool js_toprim_operand(JSValueConst v)
 {
@@ -22555,7 +22558,7 @@ static JSValue js_dtoa2(JSContext *ctx,
    the operation on the concrete, never a rule that predicts what performing it would have produced. */
 static JSValue js_concolic_operand(JSContext *ctx, JSValueConst v)
 {
-    if (!(g_concolic.builtin && g_concolic.is && g_concolic.is(v)))
+    if (!(g_concolic.builtin && g_concolic.is(v)))
         return JS_UNINITIALIZED;
     return g_concolic.example ? g_concolic.example(ctx, v) : JS_UNDEFINED;
 }
@@ -22594,7 +22597,7 @@ static JSValue js_concolic_derive(JSContext *ctx, JSValueConst v, const char *op
         JS_FreeValue(ctx, JS_GetException(ctx));
         real = JS_UNDEFINED;
     }
-    if (!(g_concolic.builtin && g_concolic.is && g_concolic.is(v))) { JS_FreeValue(ctx, real); return JS_UNINITIALIZED; }
+    if (!(g_concolic.builtin && g_concolic.is(v))) { JS_FreeValue(ctx, real); return JS_UNINITIALIZED; }
     return g_concolic.builtin(ctx, v, op, real);
 }
 
@@ -22690,7 +22693,7 @@ static JSValue JS_ToStringInternal(JSContext *ctx, JSValueConst val,
                with no flow base. That second assert lives HERE rather than in JS_ToPrimitiveFree for exactly
                the reason js_force_tostring's does: hint STRING has ONE caller — this line — so the boundary
                that can name the edge is this one, and the one downstream can only name the class. */
-            if (unlikely(g_concolic.is && g_concolic.is(val))) {
+            if (unlikely(g_concolic.is(val))) {
 #if APICLIENT_DEV
                 {
                     /* The SHAPE, asked for explicitly — the same projection every other C consumer of an
@@ -22840,7 +22843,7 @@ static JSValue JS_ToPropertyKeyInternal(JSContext *ctx, JSValueConst val,
        other. This is the one place all of them convert, so it is the one place the model is stated.
        It does NOT decide a READ of a slot that was never written — that is a lookup, not a coercion, and the
        operator answers it with an unknown value so a gate on it still forks (see .key_read). */
-    if (g_concolic.is && g_concolic.key_name && g_concolic.is(val)) {
+    if (g_concolic.key_name && g_concolic.is(val)) {
         JSValue name = g_concolic.key_name(ctx, val);
         if (!JS_IsUninitialized(name))
             return name;
@@ -24306,10 +24309,10 @@ static no_inline int js_relational_slow(JSContext *ctx, JSValue *sp,
        ToPrimitive trampoline so its user code runs with a flow base; js_toprim_operand excludes concolics, so
        those alone arrive, and 7.1.1 over a concolic returns it unchanged. An unrouted real object would run
        JS from C, which is the thing the routing exists to prevent. */
-    DCHECK(JS_VALUE_GET_TAG(op1) != JS_TAG_OBJECT || (g_concolic.is && g_concolic.is(op1)),
+    DCHECK(JS_VALUE_GET_TAG(op1) != JS_TAG_OBJECT || (g_concolic.is(op1)),
            "a real object operand reached the slow path — the operator dispatch must route it to the "
            "ToPrimitive trampoline, never run valueOf from C here");
-    DCHECK(JS_VALUE_GET_TAG(op2) != JS_TAG_OBJECT || (g_concolic.is && g_concolic.is(op2)),
+    DCHECK(JS_VALUE_GET_TAG(op2) != JS_TAG_OBJECT || (g_concolic.is(op2)),
            "a real object operand reached the slow path — the operator dispatch must route it to the "
            "ToPrimitive trampoline, never run valueOf from C here");
     op1 = JS_ToPrimitiveFree(ctx, op1, HINT_NUMBER);
@@ -24540,10 +24543,10 @@ static no_inline __exception int js_eq_slow(JSContext *ctx, JSValue *sp,
            ToPrimitive trampoline so its user code runs with a flow base; js_toprim_operand excludes concolics, so
            those alone arrive, and 7.1.1 over a concolic returns it unchanged. An unrouted real object would run
            JS from C, which is the thing the routing exists to prevent. */
-        DCHECK(JS_VALUE_GET_TAG(op1) != JS_TAG_OBJECT || (g_concolic.is && g_concolic.is(op1)),
+        DCHECK(JS_VALUE_GET_TAG(op1) != JS_TAG_OBJECT || (g_concolic.is(op1)),
                "a real object operand reached the slow path — the operator dispatch must route it to the "
                "ToPrimitive trampoline, never run valueOf from C here");
-        DCHECK(JS_VALUE_GET_TAG(op2) != JS_TAG_OBJECT || (g_concolic.is && g_concolic.is(op2)),
+        DCHECK(JS_VALUE_GET_TAG(op2) != JS_TAG_OBJECT || (g_concolic.is(op2)),
                "a real object operand reached the slow path — the operator dispatch must route it to the "
                "ToPrimitive trampoline, never run valueOf from C here");
         op1 = JS_ToPrimitiveFree(ctx, op1, HINT_NONE);
@@ -27367,7 +27370,7 @@ static int step_length_unknown(JSContext *ctx, JSStepHdr *h, int64_t *plen)
 {
     for (;;) {
         int arm, r;
-        DCHECK(g_concolic.is && g_concolic.is(h->coerce),
+        DCHECK(g_concolic.is(h->coerce),
                "the unknown-length chain resumed holding something that is not unknown input — the operand it "
                "forks over has to be the value the length read actually produced");
         snprintf(h->len_op, sizeof h->len_op, "LengthOfArrayLike>%d", h->len_probe);
@@ -27392,7 +27395,7 @@ static int step_length_unknown(JSContext *ctx, JSStepHdr *h, int64_t *plen)
 static int step_length_value(JSContext *ctx, JSStepHdr *h, JSValue v, int64_t *plen,
                              JSValue **out_cb, int *out_argc)
 {
-    if (unlikely(g_concolic.is && g_concolic.is(v))) {
+    if (unlikely(g_concolic.is(v))) {
         h->coerce = v;             /* owned across the whole chain of asks */
         h->len_probe = 0;
         h->len_phase = LEN_PH_UNKNOWN;
@@ -27813,7 +27816,7 @@ int step_tobool_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, const char *op
            an Object and nothing else can be. A value that is not one is answered by §7.1.2 itself with no
            request, no round trip through the driver and no fork — which is what makes this a coercion with one
            path rather than a choice between two. */
-        if (JS_VALUE_GET_TAG(v) != JS_TAG_OBJECT || !g_concolic.is || !g_concolic.is(v)) {
+        if (JS_VALUE_GET_TAG(v) != JS_TAG_OBJECT || !g_concolic.is(v)) {
             *pres = JS_ToBool(ctx, v);
             DCHECK(*pres == 0 || *pres == 1,
                    "§7.1.2 ToBoolean answered neither true nor false for a value that is not unknown input — "
@@ -27866,7 +27869,7 @@ static int step_coerce_unknown(JSContext *ctx, JSStepHdr *h, JSValueConst v, uin
     *ex = JS_UNDEFINED;
     DCHECK(!JS_IsUninitialized(e), "a coercion reported unknown input for an operand that is not unknown");
     if (!JS_IsUndefined(e)) {
-        DCHECK(!(g_concolic.is && g_concolic.is(e)),
+        DCHECK(!(g_concolic.is(e)),
                "an unknown's example is itself unknown input — an example rides the concrete value the "
                "interpreter produced, so a producer attached a derivation where a datum belongs");
         if (JS_IsUninitialized(h->unknown_operand)) {
@@ -27918,7 +27921,7 @@ int step_tostring_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, 
            only as a carrier), and hand it to a conversion boundary that owes C a real JSString. THIS is the
            "build it in the operator" that boundary's abort names, and it is built at the ONE sub-sequence every
            builtin's ToString goes through rather than at the sixty call sites that reach it. */
-        if (unlikely(g_concolic.is && g_concolic.is(v)))
+        if (unlikely(g_concolic.is(v)))
             STEP_COERCE_UNKNOWN(step_tostring_run, ctx, h, v, JS_UNDEFINED, &h->str_phase, pout, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
@@ -27939,7 +27942,7 @@ int step_tostring_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, 
        ANSWERED with unknown external input — `{ valueOf() { return location.hash } }`. §7.1.19 step 11 asserts
        the primitive is not an Object, and a concolic satisfies that assertion about the PAGE's value while
        failing it about the carrier, so this is the same case arriving one hop later. */
-    if (unlikely(g_concolic.is && g_concolic.is(in)))
+    if (unlikely(g_concolic.is(in)))
         STEP_COERCE_UNKNOWN(step_tostring_run, ctx, h, in, in, &h->str_phase, pout, out_cb, out_argc);
     *pout = JS_ToStringFree(ctx, in);
     return JS_IsException(*pout) ? -1 : 0;
@@ -27964,7 +27967,7 @@ static JSValue js_step_unknown_result(JSContext *ctx, const JSTrampStepDef *def,
     size_t n;
     int nstages = 0;
 
-    DCHECK(g_concolic.is && g_concolic.is(v),
+    DCHECK(g_concolic.is(v),
            "a step machine's completion was derived from something that is not unknown external input — the "
            "operand step_coerce_unknown records is not on the header the DRIVER is stepping, which is what "
            "happens when a machine FORWARDS its step to another machine's own header and does not move it across");
@@ -28246,7 +28249,7 @@ int step_toprimitive_number_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JS
 {
     /* §7.1.1 over unknown external input returns it unchanged, so the coercion is the unknown's — see
        step_coerce_unknown. */
-    if (h->num_phase == NUM_PH_START && unlikely(g_concolic.is && g_concolic.is(v))) {
+    if (h->num_phase == NUM_PH_START && unlikely(g_concolic.is(v))) {
         STEP_COERCE_UNKNOWN(step_toprimitive_number_run, ctx, h, v, in, &h->num_phase, pout, out_cb, out_argc);
     }
     return step_toprim_run(ctx, h, v, HINT_NUMBER, in, pout, out_cb, out_argc);
@@ -28258,7 +28261,7 @@ int step_toint64_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, i
     if (h->num_phase == NUM_PH_START) {
         JS_FreeValue(ctx, in);
         /* §7.1.4 steps 7-10 over unknown external input — see step_coerce_unknown. */
-        if (unlikely(g_concolic.is && g_concolic.is(v)))
+        if (unlikely(g_concolic.is(v)))
             STEP_COERCE_UNKNOWN(step_toint64_run, ctx, h, v, JS_UNDEFINED, &h->num_phase, pres, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
@@ -28275,7 +28278,7 @@ int step_toint64_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, i
     h->coerce = JS_UNDEFINED;
     h->num_phase = NUM_PH_START;
     /* …and the other way in: the page's own valueOf ANSWERED with unknown external input. */
-    if (unlikely(g_concolic.is && g_concolic.is(in)))
+    if (unlikely(g_concolic.is(in)))
         STEP_COERCE_UNKNOWN(step_toint64_run, ctx, h, in, in, &h->num_phase, pres, out_cb, out_argc);
     return JS_ToInt64SatFree(ctx, pres, in);
 }
@@ -28291,7 +28294,7 @@ int step_todouble_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, 
     if (h->num_phase == NUM_PH_START) {
         JS_FreeValue(ctx, in);
         /* §7.1.4 steps 7-10 over unknown external input — see step_coerce_unknown. */
-        if (unlikely(g_concolic.is && g_concolic.is(v)))
+        if (unlikely(g_concolic.is(v)))
             STEP_COERCE_UNKNOWN(step_todouble_run, ctx, h, v, JS_UNDEFINED, &h->num_phase, pres, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
@@ -28308,7 +28311,7 @@ int step_todouble_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, 
     h->coerce = JS_UNDEFINED;
     h->num_phase = NUM_PH_START;
     /* …and the other way in: the page's own valueOf ANSWERED with unknown external input. */
-    if (unlikely(g_concolic.is && g_concolic.is(in)))
+    if (unlikely(g_concolic.is(in)))
         STEP_COERCE_UNKNOWN(step_todouble_run, ctx, h, in, in, &h->num_phase, pres, out_cb, out_argc);
     return JS_ToFloat64Free(ctx, pres, in);
 }
@@ -28408,7 +28411,7 @@ static int step_tolength_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSVal
     if (h->num_phase == NUM_PH_START) {
         JS_FreeValue(ctx, in);
         /* §7.1.4 steps 7-10 over unknown external input — see step_coerce_unknown. */
-        if (unlikely(g_concolic.is && g_concolic.is(v)))
+        if (unlikely(g_concolic.is(v)))
             STEP_COERCE_UNKNOWN(step_tolength_run, ctx, h, v, JS_UNDEFINED, &h->num_phase, pres, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
@@ -28425,7 +28428,7 @@ static int step_tolength_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSVal
     h->coerce = JS_UNDEFINED;
     h->num_phase = NUM_PH_START;
     /* …and the other way in: the page's own valueOf ANSWERED with unknown external input. */
-    if (unlikely(g_concolic.is && g_concolic.is(in)))
+    if (unlikely(g_concolic.is(in)))
         STEP_COERCE_UNKNOWN(step_tolength_run, ctx, h, in, in, &h->num_phase, pres, out_cb, out_argc);
     return JS_ToLengthFree(ctx, pres, in);
 }
@@ -28439,7 +28442,7 @@ static int step_toint32_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValu
     if (h->num_phase == NUM_PH_START) {
         JS_FreeValue(ctx, in);
         /* §7.1.4 steps 7-10 over unknown external input — see step_coerce_unknown. */
-        if (unlikely(g_concolic.is && g_concolic.is(v)))
+        if (unlikely(g_concolic.is(v)))
             STEP_COERCE_UNKNOWN(step_toint32_run, ctx, h, v, JS_UNDEFINED, &h->num_phase, pres, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
@@ -28456,7 +28459,7 @@ static int step_toint32_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValu
     h->coerce = JS_UNDEFINED;
     h->num_phase = NUM_PH_START;
     /* …and the other way in: the page's own valueOf ANSWERED with unknown external input. */
-    if (unlikely(g_concolic.is && g_concolic.is(in)))
+    if (unlikely(g_concolic.is(in)))
         STEP_COERCE_UNKNOWN(step_toint32_run, ctx, h, in, in, &h->num_phase, pres, out_cb, out_argc);
     return JS_ToInt32Free(ctx, pres, in);
 }
@@ -28472,7 +28475,7 @@ static int step_toint32sat_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSV
     if (h->num_phase == NUM_PH_START) {
         JS_FreeValue(ctx, in);
         /* §7.1.4 steps 7-10 over unknown external input — see step_coerce_unknown. */
-        if (unlikely(g_concolic.is && g_concolic.is(v)))
+        if (unlikely(g_concolic.is(v)))
             STEP_COERCE_UNKNOWN(step_toint32sat_run, ctx, h, v, JS_UNDEFINED, &h->num_phase, pres, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
@@ -28489,7 +28492,7 @@ static int step_toint32sat_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSV
     h->coerce = JS_UNDEFINED;
     h->num_phase = NUM_PH_START;
     /* …and the other way in: the page's own valueOf ANSWERED with unknown external input. */
-    if (unlikely(g_concolic.is && g_concolic.is(in)))
+    if (unlikely(g_concolic.is(in)))
         STEP_COERCE_UNKNOWN(step_toint32sat_run, ctx, h, in, in, &h->num_phase, pres, out_cb, out_argc);
     { int r = JS_ToInt32Sat(ctx, pres, in); JS_FreeValue(ctx, in); return r; }
 }
@@ -28500,7 +28503,7 @@ static int step_tofloat64_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSVa
     if (h->num_phase == NUM_PH_START) {
         JS_FreeValue(ctx, in);
         /* §7.1.4 steps 7-10 over unknown external input — see step_coerce_unknown. */
-        if (unlikely(g_concolic.is && g_concolic.is(v)))
+        if (unlikely(g_concolic.is(v)))
             STEP_COERCE_UNKNOWN(step_tofloat64_run, ctx, h, v, JS_UNDEFINED, &h->num_phase, pres, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
@@ -28517,7 +28520,7 @@ static int step_tofloat64_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSVa
     h->coerce = JS_UNDEFINED;
     h->num_phase = NUM_PH_START;
     /* …and the other way in: the page's own valueOf ANSWERED with unknown external input. */
-    if (unlikely(g_concolic.is && g_concolic.is(in)))
+    if (unlikely(g_concolic.is(in)))
         STEP_COERCE_UNKNOWN(step_tofloat64_run, ctx, h, in, in, &h->num_phase, pres, out_cb, out_argc);
     return JS_ToFloat64Free(ctx, pres, in);
 }
@@ -35411,7 +35414,7 @@ static bool tramp_concolic_example_is(JSContext *ctx, JSValueConst callee, bool 
     JSValue ex;
     bool r;
 
-    if (!(g_concolic.is && g_concolic.is(callee))) return false;
+    if (!(g_concolic.is(callee))) return false;
     ex = g_concolic.example(ctx, callee);
     r = pred(ex);
     JS_FreeValue(ctx, ex);
@@ -36380,7 +36383,11 @@ void JS_SetFlowGen(uint32_t gen) { g_flow_gen = gen; }
 void JS_SetFlowControlHooks(const JSFlowControlHooks *h) { g_flow_control = *h; flow_budget_arm(); }
 void JS_FlowBudgetArm(void) { flow_budget_arm(); }
 void JS_SetTimeTravelHooks(const JSTimeTravelHooks *h) { g_time_travel = *h; }
-void JS_SetConcolicHooks(const JSConcolicHooks *h) { g_concolic = *h; }
+void JS_SetConcolicHooks(const JSConcolicHooks *h)
+{
+    g_concolic = *h;
+    if (!g_concolic.is) g_concolic.is = js_concolic_none_is;
+}
 void JS_SetEvalSinkHook(JSEvalSinkFunc *cb) { g_eval_sink = cb; }
 
 void JS_SetHostEnsureCanCompileStrings(JSContext *realm, JSValueConst hook)
@@ -36451,7 +36458,7 @@ static int js_nullish_is_concolic(JSContext *ctx, JSValue *sp, JSValue y, JSConc
 {
     JSValue pair[2];
 
-    if (!(g_concolic.is && g_concolic.is(sp[-1])))
+    if (!(g_concolic.is(sp[-1])))
         return 0;
     DCHECK(g_concolic.cmp != NULL, "an unknown reached a nullish test under a host with no comparison hook");
     pair[0] = js_dup(sp[-1]);
@@ -41261,7 +41268,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    eighteen operators each remember to ask js_toprim_operand first. The operators that DO have
                    concolic semantics (.add, .cmp, .rel) now reach them through a coercion site; the ones that
                    do not crash at the conversion boundary, which names itself. */
-                if (g_concolic.is && g_concolic.is(tp->obj)) {
+                if (g_concolic.is(tp->obj)) {
                     JS_FreeValue(ctx, ret_val);
                     ret_val = js_dup(tp->obj);
                     goto toprim_deliver;
@@ -41404,7 +41411,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         DCHECK(touter_kind == CONT_STEP, "ToPrimitive outer continuation: unknown machine kind");
                         goto do_step_step;
                     }
-                    DCHECK(JS_VALUE_GET_TAG(ret_val) != JS_TAG_OBJECT || (g_concolic.is && g_concolic.is(ret_val)),
+                    DCHECK(JS_VALUE_GET_TAG(ret_val) != JS_TAG_OBJECT || (g_concolic.is(ret_val)),
                            "7.1.1 ToPrimitive completed with an OBJECT — the walk returned without converting, so "
                            "every resume below is about to run the slow path on the operand it was meant to "
                            "replace. A CONCOLIC is the one object that IS the answer: it stands for external "
@@ -51163,7 +51170,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    atom. The operator answers instead — the value is a concolic derived from the base and the
                    key's source, so a gate on it still forks and a sink still solves for the key. Example-free
                    on purpose: which property was meant is exactly what is not known, and @H never invents. */
-                if (g_concolic.is && g_concolic.key_read && g_concolic.is(sp[-1])) {
+                if (g_concolic.key_read && g_concolic.is(sp[-1])) {
                     /* A WRITE THROUGH THIS SAME SOURCE WINS. ToPropertyKey maps an unknown key to its shape's
                        slot, so `o[x] = 1; o[x]` must read back 1 rather than "unknown" — the read is the only
                        operator that could disagree with the others, and it does not. */
@@ -52501,7 +52508,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JS_ThrowTypeError(ctx, "invalid 'in' operand");
                 goto exception;
             }
-            if (unlikely(g_concolic.is && g_concolic.is(sp[-1]))) {
+            if (unlikely(g_concolic.is(sp[-1]))) {
                 /* Over an unknown object whether it holds the key is unknown, so a branch over the answer forks;
                    the class's [[HasProperty]] answers true for every key, which would delete the absent arm. */
                 JSValue hb;
@@ -96044,7 +96051,7 @@ static bool js_array_search_asks(JSValueConst target, JSValueConst el, int eq)
 {
     DCHECK(eq == JS_EQ_STRICT || eq == JS_EQ_SAME_VALUE_ZERO, "an array search compares by neither of its two "
                                                               "algorithms");
-    return g_concolic.is && (g_concolic.is(target) || g_concolic.is(el));
+    return (g_concolic.is(target) || g_concolic.is(el));
 }
 
 /* step_tobool_run's `op` for the search's one comparison, one per algorithm. */
@@ -101050,7 +101057,7 @@ static const JSTrampStepDef *tramp_step_def_of(JSValueConst func)
            class `call` hook read it with JS_GetProperty from C. */
         return &js_promise_resolvefn_def;
     }
-    if (g_concolic.is && g_concolic.is(func)) {
+    if (g_concolic.is(func)) {
         /* an unknown IS a step machine: its [[Call]] runs the callee's example as a request. */
         return &js_concolic_call_def;
     }
@@ -103109,7 +103116,7 @@ static JSValue sort_order_unknown(JSContext *ctx, JSValue a, JSValue b, OPCodeEn
 {
     JSValue sp[2] = { a, b };
 
-    DCHECK(g_concolic.rel != NULL && g_concolic.is != NULL && (g_concolic.is(a) || g_concolic.is(b)),
+    DCHECK(g_concolic.rel != NULL && (g_concolic.is(a) || g_concolic.is(b)),
            "a sort's order question over unknown input has no unknown operand, or no relational hook to ask");
     if (!g_concolic.rel(ctx, sp + 2, op)) {
         JS_FreeValue(ctx, a);
@@ -105316,7 +105323,7 @@ static int js_num_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        answers, because the ToNumber boundary owes C a real number. `new Number(x)` is a wrapper and is not this
        case. The derived value IS the number-hint coercion, so .arith's identity operator is what names it. */
     if (!s->coerced && s->hdr.argc > 0 && JS_IsUndefined(nt) &&
-        g_concolic.arith && g_concolic.is && g_concolic.is(arg)) {
+        g_concolic.arith && g_concolic.is(arg)) {
         JSValue slot[1];
         slot[0] = JS_DupValue(ctx, arg);
         if (g_concolic.arith(ctx, slot + 1, JS_CARITH_PLUS, 1)) {
@@ -105727,7 +105734,7 @@ static JSValue js_boolean_ctor_body(JSContext *ctx, JSValueConst obj_, int argc,
        reason: step 4's [[BooleanData]] is read back by js_thisBooleanValue off the slot's TAG, so there is no
        slot representation for an unknown, and storing one would make `new Boolean(x).valueOf()` throw. `obj`
        is ours on that arm, so it is given back before the derivation replaces it. */
-    if (g_concolic.is && g_concolic.is(argv[0])) {
+    if (g_concolic.is(argv[0])) {
         JSValue c;
         if (JS_IsUndefined(obj)) {
             /* A CHECK AND NOT A DCHECK, AND THE PROMOTION IS THIS LINE'S. The hook set is one struct with one
@@ -105930,7 +105937,7 @@ static JSValue js_str_ctor_unknown(JSContext *ctx, JSValueConst nt, JSValueConst
 {
     JSValue c;
 
-    if (!(g_concolic.is && g_concolic.is(v)))
+    if (!(g_concolic.is(v)))
         return JS_UNINITIALIZED;
     if (JS_IsUndefined(nt)) {
         DCHECK(g_concolic.to_str != NULL,
@@ -107683,7 +107690,7 @@ static int js_str_concat_join(JSContext *ctx, JSStrConcat *s, JSValue val, bool 
 {
     JSValue pair[2], str;
 
-    if (g_concolic.is && g_concolic.add && g_concolic.is(val)) {
+    if (g_concolic.add && g_concolic.is(val)) {
         if (first) { s->acc = val; return 0; }
         pair[0] = s->acc; pair[1] = val;
         if (!g_concolic.add(ctx, pair + 2, JS_CONCOLIC_ADD_CONCAT))
@@ -107696,7 +107703,7 @@ static int js_str_concat_join(JSContext *ctx, JSStrConcat *s, JSValue val, bool 
     JS_FreeValue(ctx, val);
     if (JS_IsException(str)) return -1;
     if (first) { s->acc = str; return 0; }
-    if (g_concolic.is && g_concolic.add && g_concolic.is(s->acc)) {
+    if (g_concolic.add && g_concolic.is(s->acc)) {
         /* the accumulator went concolic earlier: every later piece joins it the same way. */
         pair[0] = s->acc; pair[1] = str;
         if (!g_concolic.add(ctx, pair + 2, JS_CONCOLIC_ADD_CONCAT))
@@ -109204,7 +109211,7 @@ static int JS_ToUTF32String(JSContext *ctx, uint32_t **pbuf, JSValue val1)
     JSValue val;
     int len;
 
-    DCHECK(!(g_concolic.is && g_concolic.is(val1)),
+    DCHECK(!(g_concolic.is(val1)),
            "JS_ToUTF32String over unknown external input — 22.1.3.15 String.prototype.normalize takes its "
            "receiver through step_thisstring_run, which collapses the machine to a derived concolic before any "
            "of this runs, so an unknown here means a caller coerced outside that sub-sequence");
@@ -109980,7 +109987,7 @@ static JSValue js_math_random(JSContext *ctx, JSValueConst this_val,
           "Math.random was called under a host that installed no JSConcolicHooks.random; the engine holds no "
           "generator of its own, so every host installs one before it builds a realm");
     v = g_concolic.random(ctx);
-    DCHECK(JS_IsNumber(v) || (g_concolic.is && g_concolic.is(v)),
+    DCHECK(JS_IsNumber(v) || (g_concolic.is(v)),
            "JSConcolicHooks.random answered neither a Number nor an unknown");
     return v;
 }
@@ -112655,7 +112662,7 @@ static int js_re_search_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         if (!JS_IsObject(s->hdr.this_val)) { JS_ThrowTypeErrorNotAnObject(ctx); return -1; }
         s->hdr.stage = RES_STR;
     }
-    if (s->hdr.stage == RES_STR && g_concolic.is && g_concolic.is(step_arg(&s->hdr, 0))) {
+    if (s->hdr.stage == RES_STR && g_concolic.is(step_arg(&s->hdr, 0))) {
         /* test's and @@search's step 3 over an unknown that is a String in every world (its domain says so):
            §7.1.17 ToString returns a String argument itself, so RegExpExec runs over the unknown, whose
            RegExpBuiltinExec decides from the subject's domain (REX_DOMAIN). */
@@ -114036,7 +114043,7 @@ static int js_json_parse_vstep(JSContext *ctx, void *st, JSValue cb_result, JSVa
             s->parsing = 0;
             s->probe_real = JS_OUTCOME_REAL_UNSTATED;
             s->probe_phase = PROBE_PH_DONE;   /* …unless the branch below finds an example to run */
-            if (g_concolic.is && g_concolic.is(text)) {
+            if (g_concolic.is(text)) {
                 /* A NON-STRING EXAMPLE IS "CANNOT SAY", AND IT IS THE SAME LINE THE PARSE ARM DRAWS. §25.5.2
                    JSON.parse ( text [ , reviver ] ) step 1 is `? ToString(text)`, so an example that is not
                    already a String would have to be coerced before the parse — and the parse arm below refuses
@@ -114115,7 +114122,7 @@ static int js_json_parse_vstep(JSContext *ctx, void *st, JSValue cb_result, JSVa
                    "JSON.parse reached its outcome fork owning state — the probe one stage above releases what "
                    "it built precisely so the sibling's snapshot is taken of a machine that owns nothing");
         }
-        if (g_concolic.is && g_concolic.is(text)) {
+        if (g_concolic.is(text)) {
             int arm, real = JS_OUTCOME_REAL_UNSTATED;
             if (!json_text_may_start_with(g_concolic.lead ? g_concolic.lead(text) : 0)) {
                 /* THE PARSE ARM IS INFEASIBLE and is pruned rather than forked. The component that owns this
@@ -114159,7 +114166,7 @@ static int js_json_parse_vstep(JSContext *ctx, void *st, JSValue cb_result, JSVa
             }
         }
         s->hdr.stage = JP_TOSTRING;
-        if (g_concolic.is && g_concolic.is(text)) {
+        if (g_concolic.is(text)) {
             /* THE PARSE COMPLETION, over a text this engine does not have. What it DOES have is the source's
                EXAMPLE — the concrete fragment this document was loaded with — and §solver's rule is that an
                example propagates by RUNNING THE REAL OPERATION on it, so the example becomes this machine's
@@ -114879,7 +114886,7 @@ static void sj_take_unknown(JSContext *ctx, JSJsonStr *s, JSValue *pv)
 
     if (JS_IsUninitialized(ex))
         return;
-    DCHECK(!(g_concolic.is && g_concolic.is(ex)),
+    DCHECK(!(g_concolic.is(ex)),
            "an unknown's EXAMPLE is itself unknown external input — an example rides the concrete value the "
            "interpreter really produced, so a producer has attached a derivation where a datum belongs, and "
            "the walk below would take it as a serializable object");
@@ -115070,7 +115077,7 @@ static int js_json_str_prologue(JSContext *ctx, JSJsonStr *s, JSValue in, JSValu
                so a `valueOf` answering with unknown input is rejected as non-primitive and the walk ends in
                §7.1.1.1 OrdinaryToPrimitive's TypeError instead. Asserted rather than assumed, because the day
                that gate learns about this class is the day this line starts receiving one. */
-            DCHECK(!(g_concolic.is && g_concolic.is(prim)),
+            DCHECK(!(g_concolic.is(prim)),
                    "§25.5.4 step 6.a's ToNumber was handed unknown external input by §7.1.1 ToPrimitive — the "
                    "conversion boundary owes C a real number, so this needs a derived answer here and not a "
                    "conversion");
@@ -115171,7 +115178,7 @@ static int sj_writes(JSContext *ctx, JSValueConst val)
            "callable", takes step 12, and is dropped from the output with its taint. That is the bug this
            assert makes impossible to reintroduce: a new route into the walk that forgets the take would be
            silent, and silence here is a deleted attacker source. */
-        DCHECK(!(g_concolic.is && g_concolic.is(val)),
+        DCHECK(!(g_concolic.is(val)),
                "unknown external input reached §25.5.4.2 SerializeJSONProperty's type dispatch — step 11's "
                "IsCallable answers TRUE for this value class's carrier, so the member would be dropped and its "
                "provenance with it; the value is taken at sj_take_unknown before any step branches on it");
@@ -115326,7 +115333,7 @@ static int js_json_str_walk(JSContext *ctx, JSJsonStr *s, JSValue in, JSValue **
                this value class IS an Object, so a `valueOf` on a [[NumberData]] wrapper that answers with
                unknown input is rejected as non-primitive and §7.1.1.1 OrdinaryToPrimitive throws instead of
                handing one here. A conversion here would abort the document. */
-            DCHECK(!(g_concolic.is && g_concolic.is(prim)),
+            DCHECK(!(g_concolic.is(prim)),
                    "§25.5.4.2 step 4.b's ToNumber was handed unknown external input by §7.1.1 ToPrimitive — the "
                    "conversion boundary owes C a real number, so this needs a derived answer here and not a "
                    "conversion");
@@ -126215,7 +126222,7 @@ static JSValue js_date_current_time(JSContext *ctx)
           "the current time was asked under a host that installed no JSConcolicHooks.clock; the engine reads "
           "no clock of its own, so every host installs one before it builds a realm");
     v = g_concolic.clock(ctx);
-    DCHECK((g_concolic.is && g_concolic.is(v)) ||
+    DCHECK((g_concolic.is(v)) ||
            (JS_IsNumber(v) && (JS_VALUE_GET_NORM_TAG(v) != JS_TAG_FLOAT64 ||
                                JS_VALUE_GET_FLOAT64(v) == trunc(JS_VALUE_GET_FLOAT64(v)))),
            "JSConcolicHooks.clock answered neither an integral Number nor an unknown; §21.4.1.1 makes a finite "
