@@ -57,8 +57,7 @@ typedef struct {
    section, with no fallback coordinate.
    §10.1's second case makes this a recursion over ancestors, costing each box its depth. The layout job's
    placement record (core/layout/flow_placement.h) remembers answers for the job's lifetime, collapsing the
-   climb to one derivation per box, and each served answer is re-checked against its §10.1 equation; the
-   synchronous job holds the record only while a drive is open. */
+   climb to one derivation per box, and each served answer is re-checked against its §10.1 equation. */
 FlowPoint flow_border_box_origin(lxb_dom_element_t *el);
 
 /* The same origin asked without a drive of its own: false ("not yet") when a question it asked was deferred,

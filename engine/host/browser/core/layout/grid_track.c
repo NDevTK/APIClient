@@ -1213,8 +1213,7 @@ static bool gt_axis_ask(lxb_dom_element_t *container, bool vertical, GridSizingC
 }
 
 /* The axis for a caller that cannot propagate "not yet": a drive over the ask, which takes no body when the
-   memo holds the answer. `*d` is begun here and ended by the caller once it has read the answer, since the
-   synchronous job's memo is emptied when its outermost drive ends. */
+   memo holds the answer. `*d` is begun here and ended by the caller once it has read the answer. */
 static const struct GridAxisAnswer *gt_axis_drive(LayoutJobDrive *d, lxb_dom_element_t *container, bool vertical)
 {
     const struct GridAxisAnswer *a;

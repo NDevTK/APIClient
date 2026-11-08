@@ -38,10 +38,9 @@ CssComputedStyle *css_computed_style_create(lxb_dom_element_t *el);
 void css_computed_style_free(CssComputedStyle *s);
 lxb_dom_element_t *css_computed_style_element(const CssComputedStyle *s);
 
-/* Every computed value's entry requires a cascade record to be held: a step machine's entered layout job, or the
-   synchronous job inside a drive a layout entry opened. A read with none is a caller that is not yet a step
-   machine owning a job. Always fatal, because the record is what the ask's derivation dereferences. Expanded at
-   the entry, so the crash names it. */
+/* Every computed value's entry requires a cascade record to be held: a step machine's entered layout job. A read
+   with none is a caller that is not yet a step machine owning a job. Always fatal, because the record is what
+   the ask's derivation dereferences. Expanded at the entry, so the crash names it. */
 #define css_computed_style_require_record() \
     CHECK(css_cascade_record_is_held(), \
           "a computed value was asked with no layout job holding a cascade record. Its caller is a layout or " \

@@ -3973,8 +3973,8 @@ bool css_resolved_ask(lxb_dom_element_t *el, const char *name)
     return true;
 }
 
-/* One resolved value is one hold: its computed, cascaded and used values share the record its first ask opens,
-   so an undriven getComputedStyle read resolves its element's cascade once. */
+/* One resolved value is one hold: its computed, cascaded and used values share the entered job's record, so a
+   getComputedStyle read resolves its element's cascade once. */
 JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *name)
 {
     JSValue out;

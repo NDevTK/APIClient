@@ -62,7 +62,7 @@ typedef struct {
 } LjContext;
 
 /* Answers per chunk of the job's answer storage. Chunks never move, so a slot's pointer survives the table's
-   growth; they are reused from the start when the memo is emptied. */
+   growth; they are freed with the job or its shed. */
 #define LJ_ANSWER_CHUNK ((size_t)64)
 
 struct LayoutJob {
@@ -90,8 +90,7 @@ struct LayoutJob {
     uint64_t  rests;
     const char *drive_file;   /* the innermost open drive's site */
     int         drive_line;
-    bool      driven;
-    LjContext **ctxs;    /* the grid row contexts entered since the memo was last emptied, owned */
+    LjContext **ctxs;    /* the grid row contexts entered since the job was made or shed, owned */
     size_t      nctx, ctx_cap;
     unsigned    ctx;     /* the current one, an index into `ctxs` plus one; 0 is none */
     FlowPlacementRecord placement;   /* core/layout/flow_placement.h's three facts, for this job */
@@ -108,20 +107,24 @@ struct LayoutJob {
     const Flow         *flow;        /* the flow whose step entered it, NULL before its first activation */
 };
 
-/* The job whose activation holds the thread when a driver entered one, and the thread's synchronous job.
-   Both are facts about the current C activation, never about a flow: `layout_job_leave` asserts the
-   entered job is empty before the thread is given back, and the synchronous job's memo is emptied when its
-   outermost drive ends, so neither carries state from one flow's activation into another's. */
+/* The job whose activation holds the thread, entered by its driver. A fact about the current C activation, never
+   about a flow: `layout_job_leave` asserts the entered job is empty before the thread is given back, so it carries
+   no state from one flow's activation into another's. */
 static LayoutJob *g_entered;
-static LayoutJob  g_sync = { .gen = 1 };
 static size_t     g_alive;
 static LayoutJob *g_alive_head;
 static long       g_sheds;
 static int64_t    g_shed_bytes;
 
+/* Every layout read happens inside an entered job: a step machine owning a driven job enters it before laying
+   out, so a read with none is an entry that does not, and the job is dereferenced on every path. */
 static LayoutJob *lj_current(void)
 {
-    return g_entered != NULL ? g_entered : &g_sync;
+    CHECK(g_entered != NULL, "layout was asked with no layout job entered. Every layout read happens inside an "
+                             "entered job; BUILD the entry that reached here as a step machine owning a driven "
+                             "job (layout_job_new, then layout_job_enter before its reads), as CSSOM VIEW §6's "
+                             "members in core/dom/element_view.c are");
+    return g_entered;
 }
 
 /* ---- the memo ------------------------------------------------------------------------------------------- */
@@ -174,8 +177,8 @@ static void lj_memo_grow(LayoutJob *job)
     job->memo_cap = cap;
 }
 
-/* Releases every context's records, and forgets the contexts when `forget`. */
-static void lj_contexts_release(LayoutJob *job, bool forget)
+/* Releases and forgets every context. */
+static void lj_contexts_release(LayoutJob *job)
 {
     size_t i;
 
@@ -183,9 +186,9 @@ static void lj_contexts_release(LayoutJob *job, bool forget)
         flow_placement_record_release(&job->ctxs[i]->placement);
         line_box_record_release(&job->ctxs[i]->line_boxes);
         intrinsic_size_record_release(&job->ctxs[i]->intrinsic);
-        if (forget) free(job->ctxs[i]);
+        free(job->ctxs[i]);
     }
-    if (forget) job->nctx = 0;
+    job->nctx = 0;
 }
 
 static void lj_storage_free(LayoutJob *job)
@@ -196,23 +199,7 @@ static void lj_storage_free(LayoutJob *job)
     job->nstorage = 0;
 }
 
-/* Emptying is a generation step, so a job reused across activations pays nothing per slot, and one free per
-   answer that holds storage. The contexts are forgotten only when none is current and no entry names one;
-   otherwise their records are emptied. */
-static void lj_memo_shed(LayoutJob *job)
-{
-    job->gen++;
-    lj_storage_free(job);
-    job->memo_used = 0;
-    job->answer_used = 0;
-    lj_contexts_release(job, job->ctx == 0 && job->n == 0);
-    flow_placement_record_release(&job->placement);
-    css_cascade_record_release(&job->cascade);
-    line_box_record_release(&job->line_boxes);
-    intrinsic_size_record_release(&job->intrinsic);
-}
-
-/* The storage for the next memoized answer, from the job's chunks; it lives until the memo is emptied. */
+/* The storage for the next memoized answer, from the job's chunks; it lives until the job is freed or shed. */
 static LayoutAnswer *lj_answer_alloc(LayoutJob *job)
 {
     size_t c = job->answer_used / LJ_ANSWER_CHUNK;
@@ -286,7 +273,6 @@ LayoutJob *layout_job_new(void)
 
     CHECK(job != NULL, "a layout job could not be allocated");
     job->gen = 1;
-    job->driven = true;
     job->decline.over = JS_UNDEFINED;
     job->own = job->held = (int64_t)c_alloc_live() - (int64_t)live;
     job->alive_next = g_alive_head;
@@ -299,7 +285,7 @@ LayoutJob *layout_job_new(void)
 
 void layout_job_free(LayoutJob *job)
 {
-    DCHECK(job != NULL && job->driven, "a layout job was freed that no driver owns");
+    DCHECK(job != NULL, "no layout job was freed");
     DCHECK(job != g_entered, "a layout job was freed while its activation still holds the thread");
     DCHECKF(lj_all_suspended(job) && job->drives == 0,
             "a layout job was freed with a computing question on its stack of %zu or %u drives open; a driver "
@@ -310,7 +296,7 @@ void layout_job_free(LayoutJob *job)
     else g_alive_head = job->alive_next;
     if (job->alive_next != NULL) job->alive_next->alive_prev = job->alive_prev;
     DCHECKF(job->ctx == 0, "a layout job was freed inside grid row context %u", job->ctx);
-    lj_contexts_release(job, true);
+    lj_contexts_release(job);
     free(job->ctxs);
     flow_placement_record_release(&job->placement);
     css_cascade_record_release(&job->cascade);
@@ -324,13 +310,10 @@ void layout_job_free(LayoutJob *job)
 
 void layout_job_enter(LayoutJob *job)
 {
-    DCHECK(job != NULL && job->driven, "a layout job was entered that no driver owns");
+    DCHECK(job != NULL, "no layout job was entered");
     DCHECK(g_entered == NULL,
            "a layout job was entered while another job's activation holds the thread — layout runs no page "
            "code, so a second driver can only be reached from inside the first one's activation");
-    DCHECKF(g_sync.n == 0 && g_sync.drives == 0,
-            "a layout job was entered while the synchronous job has %zu questions and %u drives open, so a "
-            "driver was reached from inside an undriven layout entry", g_sync.n, g_sync.drives);
     DCHECK(job->flow == NULL || job->flow == flow_running(),
            "a layout job was entered by a flow other than the one whose step entered it before — a job lives in "
            "one member's step state and a fork gives the arm its own, so the shed's order reads the wrong rank");
@@ -354,7 +337,7 @@ void layout_job_leave(LayoutJob *job)
 
 void layout_job_rested(LayoutJob *job)
 {
-    DCHECK(job != NULL && job->driven && job != g_entered,
+    DCHECK(job != NULL && job != g_entered,
            "a layout job was reported resting while it is entered — a driver leaves its job before it yields");
     job->rests++;
     METRIC_ADD(job_rests, 1);
@@ -383,7 +366,7 @@ const JSStepTreeOps layout_job_step_ops = { lj_step_clone, lj_step_destroy };
 
 bool layout_job_holds_thread(void)
 {
-    return g_entered != NULL || g_sync.n != 0 || g_sync.drives != 0;
+    return g_entered != NULL;
 }
 
 size_t layout_job_alive(void)
@@ -433,13 +416,13 @@ size_t layout_job_shed(LayoutJob *job)
 {
     size_t live = c_alloc_live(), freed;
 
-    DCHECK(job != NULL && job->driven && job != g_entered, "a layout job was shed that is not a resting driven job");
+    DCHECK(job != NULL && job != g_entered, "a layout job was shed that is not a resting driven job");
     DCHECKF(job->drives == 0 && job->ctx == 0 && !job->resting && lj_all_suspended(job),
             "a layout job was shed with %u drives open or inside grid row context %u — a job rests only after its "
             "driver left it", job->drives, job->ctx);
     DCHECK(!job->decline.undetermined,
            "a layout job was shed holding an unanswered decline, whose fork has not been taken");
-    lj_contexts_release(job, true);
+    lj_contexts_release(job);
     free(job->ctxs);
     job->ctxs = NULL;
     job->ctx_cap = 0;
@@ -466,8 +449,7 @@ size_t layout_job_shed(LayoutJob *job)
 /* The job whose records are held now, or NULL; and the current grid row context of a job, or NULL. */
 static LayoutJob *lj_held(void)
 {
-    if (g_entered != NULL) return g_entered;
-    return g_sync.drives != 0 ? &g_sync : NULL;
+    return g_entered;
 }
 
 static LjContext *lj_context(const LayoutJob *job)
@@ -485,8 +467,7 @@ FlowPlacementRecord *layout_job_placement(void)
 
 CssCascadeRecord *layout_job_cascade(void)
 {
-    if (g_entered != NULL) return &g_entered->cascade;
-    return g_sync.drives != 0 ? &g_sync.cascade : NULL;
+    return g_entered != NULL ? &g_entered->cascade : NULL;
 }
 
 LineBoxRecord *layout_job_line_boxes(void)
@@ -826,7 +807,6 @@ void layout_job_drive_end(LayoutJobDrive *d)
     job->drive_file = d->outer_file;
     job->drive_line = d->outer_line;
     if (d->rests) job->resting = false;
-    if (job == &g_sync && job->drives == 0) lj_memo_shed(job);
 }
 
 /* ---- the stacked questions ------------------------------------------------------------------------------ */

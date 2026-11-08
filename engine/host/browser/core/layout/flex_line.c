@@ -899,8 +899,7 @@ static bool fl_lines_ask(lxb_dom_element_t *container, const struct FlexLinesAns
 }
 
 /* The lines for a caller that cannot propagate "not yet": a drive over the ask, which takes no body when the memo
-   holds the answer. `*d` is begun here and ended by the caller once it has read the answer, since the
-   synchronous job's memo is emptied when its outermost drive ends. */
+   holds the answer. `*d` is begun here and ended by the caller once it has read the answer. */
 static const struct FlexLinesAnswer *fl_lines_drive(LayoutJobDrive *d, lxb_dom_element_t *container)
 {
     const struct FlexLinesAnswer *a;

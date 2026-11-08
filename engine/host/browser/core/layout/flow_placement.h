@@ -12,8 +12,7 @@
  * first ask about any child answers its siblings'. The origin and the width are recursions over ancestors,
  * for which remembering the return value is the collapse; their sections below state that. */
 
-/* The record's lifetime is its job's (layout_job_placement): a driven job's for all its activations, and the
- * synchronous job's while a drive is open. Nothing here decides whether an entry is still good: the job's
+/* The record's lifetime is its job's (layout_job_placement), for all of that job's activations. Nothing here decides whether an entry is still good: the job's
  * validity argument (no DOM write while a job's activation holds the thread; a driven job rests only inside
  * its own flow's member call) is what makes every entry an answer about the current tree. Each served answer
  * is still checked against its own derivation where that is cheap: a position written twice must agree, and

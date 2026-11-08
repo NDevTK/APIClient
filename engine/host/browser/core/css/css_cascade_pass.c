@@ -65,8 +65,8 @@ static CssCascadeRecord *cp_held(void)
 {
     CssCascadeRecord *r = layout_job_cascade();
 
-    DCHECK(r != NULL, "the cascade record was asked with none held — every ask is made inside a computed style "
-                      "hold, which opens a drive on the synchronous job when no driven job is entered");
+    DCHECK(r != NULL, "the cascade record was asked with none held — every ask is made inside an entered layout "
+                      "job");
     cp_valid(r);
     return r;
 }

@@ -2,7 +2,7 @@
    atomic inline and 20,001 empty inline boxes (test_forced.c's COLLREST_10000, twice), more line items between
    two code point positions than a work quantum prices, so the line box fill rests between them inside
    getBoundingClientRect. The count stays small beside that because test_forced.c's paint selftests lay this
-   document out again on synchronous jobs. The box's
+   document out again on jobs of their own. The box's
    `font-size:0` empties every strut, so the line is the 30px image on its baseline and the last box is a
    zero-width point on the baseline after it: Chrome reads `x` 20, `y` 30 and the box's `offsetHeight` 30. Its
    declared `height` equals that line, so painting its line boxes is not served by a walk its own size asked. The

@@ -88,8 +88,8 @@
  *
  * WHAT IS HELD, AND FOR HOW LONG. A layout is per-flow state, so nothing here outlives a layout job
  * (core/layout/layout_job.h): §9.4.1's contribution of a box is a question the job memoizes for its own
- * lifetime, and the job is either one member call's (it rests only inside that flow's own call, where the
- * flow writes nothing) or the thread's synchronous job, emptied when its outermost drive ends. Every other
+ * lifetime, and the job is one member call's (it rests only inside that flow's own call, where the flow writes
+ * nothing). Every other
  * answer is derived per read from the running flow's own tree and cascade.
  *
  * A HEIGHT IS A `CssPx` FOR used_value.h's REASON AND THE PROPAGATION IS FREE. Every operand of the walk is

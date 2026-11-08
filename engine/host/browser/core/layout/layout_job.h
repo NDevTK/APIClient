@@ -15,9 +15,9 @@
  * temporaries and process-wide brackets across their calls (table grids, line fragments, measurement
  * buffers, the paint passes), so only a frame that propagates "not yet" explicitly may be unwound. */
 
-/* Which job. A job its driver entered (`layout_job_enter`) is current for that activation. Otherwise the
- * thread's synchronous job is: it serves every layout entry that does not drive a job, and its memo is
- * emptied when its outermost drive ends, so nothing it holds outlives the activation that computed it.
+/* Which job. A job its driver entered (`layout_job_enter`) is current for that activation, and every layout read
+ * happens inside one: with none entered the read is refused (lj_current), and a computed value read with no
+ * record held is refused (css_computed_style_require_record).
  *
  * Memo validity. An answer is a function of the document, the cascade and the viewport. No DOM write may
  * happen while a job's activation holds the thread (asserted at solver/dom_cow.c's write entries), and a
@@ -28,11 +28,9 @@
  * ask to the answer on a drive that does not rest, inside the entered job: paint's line_box_glyphs and
  * block_flow_anonymous_boxes (core/paint/document_paint.c states that half), the flex baselines'
  * flex_cross_size_anonymous_lines, and the read twins (intrinsic_inline_run_sizes,
- * block_flow_establishes_inline_context) where no resting drive is innermost. The thread's synchronous job
- * serves a layout entry with no entered job and never rests; the step machines that lay out enter a driven
- * job, as test_forced.c's self-tests do through tf_job_enter, so a read on it is an entry that does not. Next:
- * each such reader asked under the caller's resting drive, and the synchronous job deleted behind an assert at
- * lj_current that a job is entered. How its absence shows: a flow's slice overrun inside a layout member with `_layoutJobRests` flat. */
+ * block_flow_establishes_inline_context) where no resting drive is innermost. Next: each such reader asked
+ * under the caller's resting drive. How its absence shows: a flow's slice overrun inside a layout member with
+ * `_layoutJobRests` flat. */
 
 /* The resting drive. `scrollIntoView`'s step machine is the drive of its scrolling-area walk: a node's
  * border-box origin through CSS 2.1 §10.1's second case and through §9.4.2's line boxes (the establishing box,
@@ -129,9 +127,8 @@ void layout_job_rested(LayoutJob *job);
    pointers a machine holds, so a declarer passes no cursors. */
 extern const JSStepTreeOps layout_job_step_ops;
 
-/* Whether a job's activation holds the thread (an entered job, or the synchronous job inside a drive or with
-   a question open), and how many driven jobs are alive. Read by solver/dom_cow.c's write entries, which
-   assert against both; nothing branches on them. */
+/* Whether a job's activation holds the thread (a job is entered), and how many driven jobs are alive. Read by
+   solver/dom_cow.c's write entries, which assert against both; nothing branches on them. */
 bool layout_job_holds_thread(void);
 size_t layout_job_alive(void);
 
@@ -169,8 +166,7 @@ LayoutJobResting *layout_job_resting(size_t *n);
 size_t layout_job_shed(LayoutJob *job);
 
 /* The placement record (core/layout/flow_placement.h) of the job that holds it now: a driven job's while it
-   is entered, the synchronous job's while a drive is open, and NULL otherwise. The record is the job's and
-   is released with its memo. */
+   is entered, and NULL otherwise. The record is the job's and is released with its memo. */
 FlowPlacementRecord *layout_job_placement(void);
 /* The same for css-cascade-5 §4.2's cascaded-value record (core/css/css_cascade_pass.h). */
 CssCascadeRecord *layout_job_cascade(void);

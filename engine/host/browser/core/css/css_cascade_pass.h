@@ -7,8 +7,8 @@
  * for each over and over: css-cascade-5 §7.2 "Inheritance" makes a read of an inherited property read the
  * parent, and css-logical-1 §4 "Flow-Relative Box Model Properties" makes `writing-mode`, `direction` and
  * `text-orientation` a prerequisite of cascading every margin, padding, border and inset. Every ask is made
- * while a job holds a record — a step machine's entered job, or the synchronous job inside a drive a layout
- * entry opened — which css_computed_style_require_record asserts at each computed value's entry. */
+ * while a step machine's entered job holds a record, which css_computed_style_require_record asserts at each
+ * computed value's entry. */
 
 /* Validity. The record holds answers about the document the job's flow sees. Its inputs are asserted not to
  * move while it is held: tree and attribute writes at solver/dom_cow.c's write entries; every CSSOM write that
