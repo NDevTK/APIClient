@@ -1469,6 +1469,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/pagewrite.h"
 #include "fixture/keydomain.h"
 #include "fixture/keydomainwalk.h"
+#include "fixture/removerest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2206,6 +2207,7 @@ TF_DOCS[] = {
     { "pagewrite", HTML_PAGEWRITE },
     { "keydomain", HTML_KEYDOMAIN },
     { "keydomainwalk", HTML_KEYDOMAINWALK },
+    { "removerest", HTML_REMOVEREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -17223,6 +17225,27 @@ TF_UNIT void probes_pagewrite(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The row of the `removerest` document (fixture/removerest.h): a removeChild of 100,000 elements rests inside
+   the call, read from the scheduler's own record, `stepUnitOverrunGapArms`'s classic-program arm (the widest
+   stretch of work between two offers in a turn of that arm), which must stay under one quantum. */
+TF_UNIT void probes_removerest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *arms = strstr(js, "\"stepUnitOverrunGapArms\":{");
+    const char *arm = arms ? strstr(arms, "\"start-a-classic-program\":") : NULL;
+    long gap = arm ? strtol(arm + strlen("\"start-a-classic-program\":"), NULL, 10) : -1;
+    int tt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/rr-done", "c", "100000"),
+             "NOT REACHED: no /api/rr-done?c=100000 record, so the removal did not finish with its subtree whole");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no classic-program arm in `stepUnitOverrunGapArms`");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a classic program's turn held the thread for a quantum or more between two offers: a removeChild of "
+             "100,000 elements ran its descendants' walk to completion inside the call instead of resting per node");
+    const Probe rows[] = {
+        { "removechild-rests", tt, "rrBox", SESS_EXPLORE, why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The row of the `keydomainwalk` document (fixture/keydomainwalk.h): 200 unknown-key reads of a Document and a
    WindowProxy over 2,000 unnamed elements charge no walk of them. */
 static long kdw_census(const char *js, const char *key);
@@ -29082,6 +29105,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_pagewrite(js, probes, &np);
     probes_keydomain(js, probes, &np);
     probes_keydomainwalk(js, probes, &np);
+    probes_removerest(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
