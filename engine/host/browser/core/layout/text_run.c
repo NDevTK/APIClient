@@ -11,6 +11,7 @@
 #include <lexbor/encoding/decode.h>
 
 #include "check.h"
+#include "core/dom/flat_tree.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
@@ -901,8 +902,8 @@ static lxb_dom_element_t *tr_nearest_common_ancestor(lxb_dom_element_t *a, lxb_d
            "Every character this accumulator collects carries the element whose computed properties it has, "
            "written by `tr_append`, so a NULL here is a collection entry that was never filled");
     if (a == b) return a;
-    for (x = lxb_dom_interface_node(a); x != NULL; x = x->parent)
-        for (y = lxb_dom_interface_node(b); y != NULL; y = y->parent)
+    for (x = lxb_dom_interface_node(a); x != NULL; x = flat_tree_parent(x))
+        for (y = lxb_dom_interface_node(b); y != NULL; y = flat_tree_parent(y))
             if (x == y) {
                 DCHECK(x->type == LXB_DOM_NODE_TYPE_ELEMENT,
                        "css-text-3 §5.5's nearest common ancestor of two characters in ONE inline formatting "

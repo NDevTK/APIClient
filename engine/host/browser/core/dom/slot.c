@@ -739,6 +739,33 @@ lxb_dom_node_t *slot_assigned_slot(JSContext *ctx, const lxb_dom_node_t *n)
     return slot_ref_of(ctx, n, g_atom_slot_of);
 }
 
+/* §4.2.2.1's assigned nodes of `slot`, as a count and by index: the stored list "assign slottables" wrote, which
+   css-shadow-1 §4.1's flattening reads as the slot's flat-tree children (core/dom/flat_tree.h). */
+size_t slot_assigned_count(JSContext *ctx, const lxb_dom_node_t *slot)
+{
+    JSValue list;
+    size_t n;
+
+    DCHECK(slot_is(slot), "a slot's assigned nodes were counted on a node that is no slot");
+    list = slot_list_of(ctx, (lxb_dom_node_t *)slot, g_atom_assigned, false);
+    n = list_len(ctx, list);
+    JS_FreeValue(ctx, list);
+    return n;
+}
+
+lxb_dom_node_t *slot_assigned_at(JSContext *ctx, const lxb_dom_node_t *slot, size_t i)
+{
+    JSValue list = slot_list_of(ctx, (lxb_dom_node_t *)slot, g_atom_assigned, false);
+    lxb_dom_node_t *n;
+
+    DCHECKF(i < list_len(ctx, list), "assigned node %zu of a slot holding %u was asked for", i,
+            (unsigned)list_len(ctx, list));
+    n = list_node(ctx, list, (uint32_t)i);
+    JS_FreeValue(ctx, list);
+    DCHECK(n != NULL, "a slot's assigned nodes list holds a value that is no node");
+    return n;
+}
+
 /* ---- declaration and installation ----------------------------------------------------------------------------- */
 
 void slot_init(JSContext *ctx)

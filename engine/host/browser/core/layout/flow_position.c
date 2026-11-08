@@ -7,6 +7,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
+#include "core/dom/flat_tree.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/dom/document.h"
@@ -877,7 +878,7 @@ static bool fp_origin_agrees(lxb_dom_element_t *el, const lxb_dom_element_t *cb,
    root and the float move it too; the root's own is in its origin, and the float's is added by the caller. */
 static bool fp_float_origin(lxb_dom_element_t *el, FlowPoint *out)
 {
-    lxb_dom_node_t *n, *parent = lxb_dom_interface_node(el)->parent;
+    lxb_dom_node_t *n, *parent = flat_tree_parent(lxb_dom_interface_node(el));
     lxb_dom_element_t *root;
     FlowFloatBox b;
     FlowPoint o;
@@ -891,7 +892,7 @@ static bool fp_float_origin(lxb_dom_element_t *el, FlowPoint *out)
                         css_px_add(b.left, used_value_px(el, "margin-left")));
     out->y = css_px_add(css_px_add(o.y, used_value_leading_edge_px(root, true)),
                         css_px_add(b.top, used_value_px(el, "margin-top")));
-    for (n = parent; n != lxb_dom_interface_node(root); n = n->parent) {
+    for (n = parent; n != lxb_dom_interface_node(root); n = flat_tree_parent(n)) {
         out->x = css_px_add(out->x, fp_relative_offset(lxb_dom_interface_element(n), false));
         out->y = css_px_add(out->y, fp_relative_offset(lxb_dom_interface_element(n), true));
     }

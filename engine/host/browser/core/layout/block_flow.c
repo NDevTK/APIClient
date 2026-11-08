@@ -8,6 +8,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
+#include "core/dom/flat_tree.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/timing/thread_work.h"
@@ -288,7 +289,7 @@ static lxb_dom_element_t *bf_context_root(lxb_dom_element_t *el)
         lxb_dom_element_t *e = lxb_dom_interface_element(n);
 
         if (bf_is_context_root(e)) return e;
-        DCHECKF(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+        DCHECKF(flat_tree_parent(n) != NULL && flat_tree_parent(n)->type == LXB_DOM_NODE_TYPE_ELEMENT,
                 "%s: CSS 2.2 §9.4.1's walk for the block formatting context this box's contents are in left "
                 "the element tree without reaching a root element, so there is no outermost context for it to "
                 "stop at. css-display-3 §2.8 \"The Root Element's Principal Box\" makes the root's own box the "
@@ -296,16 +297,16 @@ static lxb_dom_element_t *bf_context_root(lxb_dom_element_t *el)
                 "a box in no formatting context at all — which is a DETACHED subtree being laid out, and "
                 "core/dom/element_view.h's has-a-box predicate is the caller's step that declines one",
                 box_subject_node(n, nbuf, sizeof nbuf));
-        n = n->parent;
+        n = flat_tree_parent(n);
     }
 }
 
 /* The node after `n` in a pre-order walk of `root`'s subtree, entering `n`'s children when `descend`. */
 static lxb_dom_node_t *bf_scan_next(lxb_dom_node_t *n, bool descend, lxb_dom_node_t *root)
 {
-    if (descend && n->first_child != NULL) return n->first_child;
-    for (; n != root; n = n->parent)
-        if (n->next != NULL) return n->next;
+    if (descend && flat_tree_first_child(n) != NULL) return flat_tree_first_child(n);
+    for (; n != root; n = flat_tree_parent(n))
+        if (flat_tree_next_sibling(n) != NULL) return flat_tree_next_sibling(n);
     return NULL;
 }
 
@@ -321,7 +322,7 @@ lxb_dom_element_t *block_flow_context_root(lxb_dom_element_t *el)
    side. The float's own box establishes a context, so the question is asked of its PARENT. */
 static void bf_require_float_in_context(lxb_dom_element_t *f, lxb_dom_element_t *root)
 {
-    lxb_dom_node_t *fp = lxb_dom_interface_node(f)->parent;
+    lxb_dom_node_t *fp = flat_tree_parent(lxb_dom_interface_node(f));
     char fbuf[160], rbuf[160], ubuf[160];
     lxb_dom_element_t *up;
 
@@ -1316,24 +1317,25 @@ lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t 
 }
 
 /* Whether node `a` precedes node `b` in tree order (DOM §4.2 "Node tree": "preceding ... if A and B are in the
-   same tree and A comes before B in tree order"). An ancestor precedes its descendants. */
+   same tree and A comes before B in tree order"), over css-shadow-1 §4.1's flat tree, the tree layout orders boxes
+   in. An ancestor precedes its descendants. */
 bool block_flow_node_precedes(const lxb_dom_node_t *a, const lxb_dom_node_t *b)
 {
     const lxb_dom_node_t *x, *y;
     size_t da = 0, db = 0;
 
-    for (x = a; x->parent != NULL; x = x->parent) da++;
-    for (y = b; y->parent != NULL; y = y->parent) db++;
+    for (x = a; flat_tree_parent(x) != NULL; x = flat_tree_parent(x)) da++;
+    for (y = b; flat_tree_parent(y) != NULL; y = flat_tree_parent(y)) db++;
     DCHECK(x == y, "tree order was asked of two nodes in different trees");
-    for (; db > da; db--) b = b->parent;
+    for (; db > da; db--) b = flat_tree_parent(b);
     if (a == b) return true;
-    for (; da > db; da--) a = a->parent;
+    for (; da > db; da--) a = flat_tree_parent(a);
     if (a == b) return false;
-    while (a->parent != b->parent) {
-        a = a->parent;
-        b = b->parent;
+    while (flat_tree_parent(a) != flat_tree_parent(b)) {
+        a = flat_tree_parent(a);
+        b = flat_tree_parent(b);
     }
-    for (x = a->next; x != NULL; x = x->next)
+    for (x = flat_tree_next_sibling(a); x != NULL; x = flat_tree_next_sibling(x))
         if (x == b) return true;
     return false;
 }
@@ -1655,7 +1657,7 @@ static bool bf_is_inclusive_ancestor(const lxb_dom_element_t *a, const lxb_dom_e
 {
     const lxb_dom_node_t *x;
 
-    for (x = lxb_dom_interface_node(el); x != NULL; x = x->parent)
+    for (x = lxb_dom_interface_node(el); x != NULL; x = flat_tree_parent(x))
         if (x == lxb_dom_interface_node(a)) return true;
     return false;
 }
@@ -3251,8 +3253,8 @@ lxb_dom_element_t *block_flow_static_position_containing_block(lxb_dom_element_t
            "block, no element's box, and its callers answer the root before asking");
 
     DCHECK(el != NULL, "CSS 2.1 §10.3.7's static-position containing block was asked for with no element");
-    for (n = lxb_dom_interface_node(el)->parent; n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT;
-         n = n->parent) {
+    for (n = flat_tree_parent(lxb_dom_interface_node(el)); n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT;
+         n = flat_tree_parent(n)) {
         lxb_dom_element_t *a = lxb_dom_interface_element(n);
         CssDisplay d = css_computed_display(a);
         bool container = block_flow_display_is_block_container(d);

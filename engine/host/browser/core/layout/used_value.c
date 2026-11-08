@@ -13,6 +13,7 @@
 #include "core/css/css_property_applies.h"
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
+#include "core/dom/flat_tree.h"
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
 #include "core/layout/block_flow.h"
@@ -1331,7 +1332,7 @@ static UvCb uv_cb(lxb_dom_element_t *el)
        and `none` gives the element AND ITS DESCENDANTS none, which takes the SUBJECT's box with it and is
        therefore a question with no subject rather than a rectangle to find. */
     if (fixed || css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE)) {
-        for (a = n->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
+        for (a = flat_tree_parent(n); a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = flat_tree_parent(a)) {
             lxb_dom_element_t *anc = lxb_dom_interface_element(a);
             CssDisplay d = css_computed_display(anc);
             bool none = css_display_is_box(d, CSS_KEYWORD_NONE);
@@ -1420,7 +1421,7 @@ static UvCb uv_cb(lxb_dom_element_t *el)
        the ancestors that are not block container boxes are not one problem. Two of them ARE this case's answer
        by another module's own sentence, two need a box the ELEMENT tree does not name, and one has no subject
        at all — and an `else` here would return a rectangle for every one of them. */
-    for (a = n->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
+    for (a = flat_tree_parent(n); a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = flat_tree_parent(a)) {
         lxb_dom_element_t *anc = lxb_dom_interface_element(a);
         CssDisplay d = css_computed_display(anc);
         bool container = block_flow_display_is_block_container(d);
@@ -1992,7 +1993,8 @@ static lxb_dom_element_t *uv_root_element(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *a;
 
-    for (a = lxb_dom_interface_node(el); a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent)
+    for (a = lxb_dom_interface_node(el); a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT;
+         a = flat_tree_parent(a))
         if (uv_is_root(a)) return lxb_dom_interface_element(a);
     DFAIL("§10.1's first case names the ROOT ELEMENT's own `direction` and the walk up from this element "
           "reached no root. Every containing-block answer above is reached from a tree that has one — "

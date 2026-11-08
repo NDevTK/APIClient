@@ -11,6 +11,7 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_style_declaration.h"   /* the style ask a child walk makes before its reads */
+#include "core/dom/flat_tree.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/button_label.h"
@@ -51,9 +52,11 @@ static lxb_dom_node_t *bt_continue_after(lxb_dom_element_t *box, lxb_dom_node_t 
 {
     lxb_dom_node_t *root = lxb_dom_interface_node(box);
 
-    for (; n != root; n = n->parent) {
-        if (n->next != NULL) return n->next;
-        DCHECK(n->parent != NULL,
+    for (; n != root; n = flat_tree_parent(n)) {
+        lxb_dom_node_t *next = flat_tree_next_sibling(n);
+
+        if (next != NULL) return next;
+        DCHECK(flat_tree_parent(n) != NULL,
                "css-display-3 §2.5's spliced child sequence was stepped out of the top of the tree without ever "
                "reaching the box it was asked about, so the node it was stepped from is not in that box's "
                "sequence at all — the ascent only ever passes through elements §2.5 replaced by their contents");
@@ -67,7 +70,7 @@ static lxb_dom_node_t *bt_continue_after(lxb_dom_element_t *box, lxb_dom_node_t 
 static lxb_dom_node_t *bt_resolve(lxb_dom_element_t *box, lxb_dom_node_t *n)
 {
     while (n != NULL && bt_is_spliced(n))
-        n = n->first_child != NULL ? n->first_child : bt_continue_after(box, n);
+        n = flat_tree_first_child(n) != NULL ? flat_tree_first_child(n) : bt_continue_after(box, n);
     return n;
 }
 
@@ -76,11 +79,11 @@ bool box_tree_children_style_ask(lxb_dom_element_t *box)
     lxb_dom_node_t *n;
 
     DCHECK(box != NULL, "a box's children's styles were asked of no box");
-    for (n = lxb_dom_interface_node(box)->first_child; n != NULL;) {
+    for (n = flat_tree_first_child(lxb_dom_interface_node(box)); n != NULL;) {
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
             if (!cssom_style_ask(lxb_dom_interface_element(n))) return false;
-            if (bt_is_spliced(n) && n->first_child != NULL) {
-                n = n->first_child;
+            if (bt_is_spliced(n) && flat_tree_first_child(n) != NULL) {
+                n = flat_tree_first_child(n);
                 continue;
             }
         }
@@ -95,9 +98,11 @@ static lxb_dom_node_t *bt_continue_before(lxb_dom_element_t *box, lxb_dom_node_t
 {
     lxb_dom_node_t *root = lxb_dom_interface_node(box);
 
-    for (; n != root; n = n->parent) {
-        if (n->prev != NULL) return n->prev;
-        DCHECK(n->parent != NULL,
+    for (; n != root; n = flat_tree_parent(n)) {
+        lxb_dom_node_t *prev = flat_tree_prev_sibling(n);
+
+        if (prev != NULL) return prev;
+        DCHECK(flat_tree_parent(n) != NULL,
                "css-display-3 §2.5's spliced child sequence was stepped BACKWARD out of the top of the tree "
                "without ever reaching the box it was asked about, so the node it was stepped from is not in "
                "that box's sequence at all — the ascent only ever passes through elements §2.5 replaced by "
@@ -111,7 +116,7 @@ static lxb_dom_node_t *bt_continue_before(lxb_dom_element_t *box, lxb_dom_node_t
 static lxb_dom_node_t *bt_resolve_back(lxb_dom_element_t *box, lxb_dom_node_t *n)
 {
     while (n != NULL && bt_is_spliced(n))
-        n = n->last_child != NULL ? n->last_child : bt_continue_before(box, n);
+        n = flat_tree_last_child(n) != NULL ? flat_tree_last_child(n) : bt_continue_before(box, n);
     return n;
 }
 
@@ -136,7 +141,7 @@ static BoxTreeChild bt_label_of(lxb_dom_element_t *box)
 static BoxTreeChild bt_first_content_member(lxb_dom_element_t *box)
 {
     if (button_label_generated(box)) return bt_label_of(box);
-    return box_tree_child_of_node(bt_resolve(box, lxb_dom_interface_node(box)->first_child));
+    return box_tree_child_of_node(bt_resolve(box, flat_tree_first_child(lxb_dom_interface_node(box))));
 }
 
 /* Is `n` a member of `box`'s sequence? `box_tree_parent` is the box a member's box is a child of, so
@@ -232,7 +237,8 @@ lxb_dom_element_t *box_tree_parent(BoxTreeChild c)
     /* §2.5's replacement read upward: the box parent is the first ancestor past every `contents` element. A
        spliced `n` is answered rather than refused (see box_tree.h). The loop ends at a non-element parent,
        which is the root's own case. */
-    for (p = c.node->parent; p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT; p = p->parent)
+    for (p = flat_tree_parent(c.node); p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT;
+         p = flat_tree_parent(p))
         if (!bt_is_spliced(p)) return lxb_dom_interface_element(p);
     return NULL;
 }

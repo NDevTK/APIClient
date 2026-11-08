@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #include "check.h"
+#include "core/dom/flat_tree.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_display.h"
 #include "core/layout/block_flow.h"
@@ -154,7 +155,7 @@ static bool get_place_through(lxb_dom_element_t *f, const CssPx *start_at, FlowF
     size_t n, i, k;
     char fbuf[160];
 
-    parent = lxb_dom_interface_node(f)->parent;
+    parent = flat_tree_parent(lxb_dom_interface_node(f));
     DCHECKF(parent != NULL && parent->type == LXB_DOM_NODE_TYPE_ELEMENT, "%s floats with no element parent",
             box_subject(f, fbuf, sizeof fbuf));
     root = block_flow_context_root(lxb_dom_interface_element(parent));

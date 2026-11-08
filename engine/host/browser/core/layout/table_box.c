@@ -8,6 +8,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
+#include "core/dom/flat_tree.h"
 #include "core/css/css_computed_value.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
@@ -548,9 +549,9 @@ lxb_dom_element_t *table_box_table_of(lxb_dom_element_t *internal)
                 "rectangle the caption is not in",
                 box_subject(internal, nbuf, sizeof nbuf));
     }
-    for (n = lxb_dom_interface_node(internal)->parent;
+    for (n = flat_tree_parent(lxb_dom_interface_node(internal));
          n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT;
-         n = n->parent) {
+         n = flat_tree_parent(n)) {
         lxb_dom_element_t *anc = lxb_dom_interface_element(n);
         CssDisplay d = css_computed_display(anc);
         TableBoxKind k = table_box_kind(d);

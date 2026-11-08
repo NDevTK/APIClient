@@ -7,6 +7,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
+#include "core/dom/flat_tree.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/dom/document.h"
@@ -125,7 +126,7 @@ static bool sa_excluded(lxb_dom_element_t *el, lxb_dom_element_t *descendant)
     cbn = lxb_dom_interface_node(cb);
     /* An ANCESTOR of the element, which is strictly above it: a box whose containing block is the ELEMENT
        ITSELF is in the scrolling area, so the walk starts at the element's parent. */
-    for (a = lxb_dom_interface_node(el)->parent; a != NULL; a = a->parent)
+    for (a = flat_tree_parent(lxb_dom_interface_node(el)); a != NULL; a = flat_tree_parent(a))
         if (a == cbn) return true;
     return false;
 }
@@ -503,12 +504,12 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
     } else if (n->type == LXB_DOM_NODE_TYPE_TEXT) {
         lxb_dom_element_t *parent;
 
-        DCHECKF(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+        DCHECKF(flat_tree_parent(n) != NULL && flat_tree_parent(n)->type == LXB_DOM_NODE_TYPE_ELEMENT,
                "walk root %s, the text node's parent is %s: "
                "a TEXT node inside an element's subtree has no element parent — the walk started at an "
                "element and descends only through its children, so a text node here belongs to one",
-               box_subject(w->root, wbuf, sizeof wbuf), box_subject_node(n->parent, pbuf, sizeof pbuf));
-        parent = lxb_dom_interface_element(n->parent);
+               box_subject(w->root, wbuf, sizeof wbuf), box_subject_node(flat_tree_parent(n), pbuf, sizeof pbuf));
+        parent = lxb_dom_interface_element(flat_tree_parent(n));
         /* §9.2.2.1's rule answers whether the run is a box at all; collapsible white space is not and
            contributes nothing. A run that IS a box is on a line box of ONE of the two contexts folded
            above, and CSS 2.2 §9.2.1 is what makes that exhaustive for a BLOCK CONTAINER: it "either
@@ -577,9 +578,9 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
     }
     w->stage = SA_STAGE_EDGE;
     w->anon = 0;
-    if (descend && n->first_child != NULL) { w->n = n->first_child; return true; }
-    while (n != root && n->next == NULL) n = n->parent;
-    w->n = n == root ? NULL : n->next;
+    if (descend && flat_tree_first_child(n) != NULL) { w->n = flat_tree_first_child(n); return true; }
+    while (n != root && flat_tree_next_sibling(n) == NULL) n = flat_tree_parent(n);
+    w->n = n == root ? NULL : flat_tree_next_sibling(n);
     return true;
 }
 

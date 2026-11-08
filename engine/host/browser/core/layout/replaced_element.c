@@ -8,6 +8,7 @@
 #include <lexbor/css/syntax/tokenizer.h>
 
 #include "check.h"
+#include "core/dom/flat_tree.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/dom/document.h"
@@ -394,7 +395,7 @@ static ReplacedElement rep_classify(lxb_dom_element_t *el)
     if (n->ns == LXB_NS_SVG) {
         size_t len = 0;
         const lxb_char_t *name = lxb_dom_element_local_name(el, &len);
-        const lxb_dom_node_t *p = n->parent;
+        const lxb_dom_node_t *p = flat_tree_parent(n);
 
         if (len == 3 && memcmp(name, "svg", 3) == 0 &&
             !(p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT && p->ns == LXB_NS_SVG))

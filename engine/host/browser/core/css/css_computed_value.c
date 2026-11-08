@@ -44,6 +44,7 @@
 #include "core/fonts/font_matching.h"
 #include "core/dom/document.h"
 #include "core/dom/shadow_root.h"
+#include "core/dom/flat_tree.h"
 #include "core/frame/viewport.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/used_value.h"
@@ -91,11 +92,9 @@ static bool css_is_root_element(const lxb_dom_node_t *n)
    why it is exported rather than being re-walked by each caller that needs the chain. */
 lxb_dom_element_t *css_parent_element(lxb_dom_element_t *el)
 {
-    lxb_dom_node_t *p = lxb_dom_interface_node(el)->parent;
+    lxb_dom_node_t *p = flat_tree_parent(lxb_dom_interface_node(el));
 
-    if (p == NULL) return NULL;
-    if (shadow_root_is(p)) return shadow_root_host(p);
-    if (p->type != LXB_DOM_NODE_TYPE_ELEMENT) return NULL;
+    if (p == NULL || p->type != LXB_DOM_NODE_TYPE_ELEMENT) return NULL;
     return lxb_dom_interface_element(p);
 }
 
@@ -396,7 +395,7 @@ bool css_box_parent_display(const lxb_dom_node_t *n, CssDisplay *out)
     const lxb_dom_node_t *p;
 
     DCHECK(n != NULL && out != NULL, "a box parent's `display` was asked of no node or into nowhere");
-    for (p = n->parent; p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT; p = p->parent) {
+    for (p = flat_tree_parent(n); p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT; p = flat_tree_parent(p)) {
         CssDisplay v = css_computed_display(lxb_dom_interface_element((lxb_dom_node_t *)p));
 
         if (!css_display_is_box(v, CSS_KEYWORD_CONTENTS)) { *out = v; return true; }
@@ -410,7 +409,7 @@ static bool cv_box_parent_display_held(const lxb_dom_node_t *n, CssDisplay *out)
 {
     const lxb_dom_node_t *p;
 
-    for (p = n->parent; p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT; p = p->parent) {
+    for (p = flat_tree_parent(n); p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT; p = flat_tree_parent(p)) {
         CssDisplay v = css_computed_style_held(lxb_dom_interface_element((lxb_dom_node_t *)p),
                                                CSS_PROPERTY_DISPLAY).display;
 
@@ -541,7 +540,7 @@ static bool display_contents_computes_to_none(lxb_dom_element_t *el)
            element is a nested one, which is container-and-renderable and therefore hoists. Every other parent
            — an HTML element, a MathML element, the Document — leaves the element with CSS box layout. */
         if (cv_local_name_is(el, "svg")) {
-            const lxb_dom_node_t *p = n->parent;
+            const lxb_dom_node_t *p = flat_tree_parent(n);
 
             return !(p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT && p->ns == LXB_NS_SVG);
         }

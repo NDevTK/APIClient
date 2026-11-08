@@ -22,6 +22,9 @@ bool slot_is(const lxb_dom_node_t *n);
    §4.4's get the parent is stated over ("returns the node's assigned slot, if node is assigned"), and answering
    that one with the script-facing getter would route a closed tree's event around its own slot. */
 lxb_dom_node_t *slot_assigned_slot(JSContext *ctx, const lxb_dom_node_t *n);
+/* §4.2.2.1's assigned nodes of `slot`, in order: how many, and the one at `i` (asserted in range). */
+size_t slot_assigned_count(JSContext *ctx, const lxb_dom_node_t *slot);
+lxb_dom_node_t *slot_assigned_at(JSContext *ctx, const lxb_dom_node_t *slot, size_t i);
 
 /* §4.2.2.4's "ASSIGN SLOTTABLES FOR A TREE, given a node root", for the one caller that is not a mutation. A
    browser reaches it through §4.2.3's insertion steps as each node of a shadow tree is inserted; a tree the

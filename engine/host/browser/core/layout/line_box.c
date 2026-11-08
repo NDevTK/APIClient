@@ -10,6 +10,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
+#include "core/dom/flat_tree.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/css/font_metrics.h"   /* the parent's x-height `middle` aligns against */
@@ -1392,8 +1393,8 @@ static bool lb_fill_bands_ask(LbFill *f)
     if (f->run.after != NULL) {
         lxb_dom_node_t *x = f->run.after;
 
-        while (x != sn && x->next == NULL) x = x->parent;
-        first = x == sn ? NULL : x->next;
+        while (x != sn && flat_tree_next_sibling(x) == NULL) x = flat_tree_parent(x);
+        first = x == sn ? NULL : flat_tree_next_sibling(x);
     }
     for (i = 0; i < n; i++)
         if (first != NULL && block_flow_node_precedes(lxb_dom_interface_node(v[i]), first)) v[k++] = v[i];
@@ -1424,7 +1425,7 @@ static bool lb_fill_bands_ask(LbFill *f)
         bool open = false;
 
         if (flow_placement_float_box_peek(v[i], &fb) || flow_placement_bfc_frame_peek(fcb, &unused)) continue;
-        for (x = sn; x != NULL; x = x->parent)
+        for (x = sn; x != NULL; x = flat_tree_parent(x))
             if (x == lxb_dom_interface_node(fcb)) open = true;
         if (!open) continue;
         DFAILF("%s's line boxes follow %s, whose containing block's top content edge is not resolved yet. BUILD the "
@@ -2395,7 +2396,7 @@ static bool lb_inside(lxb_dom_element_t *el, lxb_dom_node_t *n)
 {
     lxb_dom_node_t *box = lxb_dom_interface_node(el);
 
-    for (n = n == NULL ? NULL : n->parent; n != NULL; n = n->parent)
+    for (n = n == NULL ? NULL : flat_tree_parent(n); n != NULL; n = flat_tree_parent(n))
         if (n == box) return true;
     return false;
 }
@@ -2554,7 +2555,7 @@ static bool lb_establishing_context(lxb_dom_node_t *subject, LbContext *out)
        §2.5 "Box Generation: the none and contents keywords"), so the member is whatever is already in
        `child`, and advancing past it would key the lookup on a node in no sequence. So the advance is
        conditional, not in the increment clause. */
-    for (a = child->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
+    for (a = flat_tree_parent(child); a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = flat_tree_parent(a)) {
         lxb_dom_element_t *anc = lxb_dom_interface_element(a);
         CssDisplay d = css_computed_display(anc);
         bool container = block_flow_display_is_block_container(d);

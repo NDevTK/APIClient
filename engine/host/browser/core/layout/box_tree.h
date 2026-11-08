@@ -1,7 +1,9 @@
 /* css-display-3 §1 "Introduction"'s box tree on its child axis: the members whose boxes are the children of
- * one box. It differs from the box's DOM child list in two ways, and every layout and paint walk over a box's
- * children reads this sequence so that the walks agree (core/layout/intrinsic_size.c and core/paint/box_paint.c
- * assert two such agreements).
+ * one box. It is a sequence over css-shadow-1 §4.1 "Flattening the DOM into an Element Tree"'s flat tree
+ * (core/dom/flat_tree.h), which "CSS uses for all purposes after Selectors (including inheritance and box
+ * construction)", and differs from the box's flat-tree child list in two ways; every layout and paint walk over
+ * a box's children reads this sequence so that the walks agree (core/layout/intrinsic_size.c and
+ * core/paint/box_paint.c assert two such agreements).
  *
  * css-display-3 §2.5 "Box Generation: the none and contents keywords" splices a `contents` element: "the
  * element must be treated as if it had been replaced in the element tree by its contents". The sequence pierces
@@ -10,7 +12,7 @@
  * core/css/css_computed_value.h's `css_box_parent_display` reads the same computed value for the same relation.
  * §2.5's Note keeps style on the document tree ("any semantics based on the document tree, such as
  * selector-matching, event handling, and property inheritance, are not affected"), so a walk reading an
- * inherited property of a member reads it off the member's own DOM parent, never off the box it is spliced
+ * inherited property of a member reads it off the member's own flat-tree parent, never off the box it is spliced
  * into. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_BOX_TREE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_BOX_TREE_H
