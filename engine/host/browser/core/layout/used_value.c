@@ -5048,6 +5048,19 @@ static bool uv_operands_ask(lxb_dom_element_t *el, bool vertical)
 
     for (x = el; x != NULL; x = uv_cb(x).element)
         if (!used_value_width_ask(x)) return false;
+    /* A table box's height, and a cell's, row's or row group's, is CSS 2.1 §17.5.3's over its table, whose
+       operands are the cells' content heights and baselines. */
+    if (vertical && uv_box_kind(el) == UV_BOX_TABLE) {
+        lxb_dom_element_t *table =
+            table_box_kind_generates_table_box(uv_table_box_kind(el)) ? el : table_box_table_of(el);
+        TableGrid grid;
+        bool ready;
+
+        table_grid_build(table, &grid);
+        ready = table_heights_ask(table, &grid);
+        table_grid_release(&grid);
+        if (!ready) return false;
+    }
     /* A flex item's length on its container's cross axis is its line's where it stretches (css-flexbox-1 §9.4
        step 11): the container's inner cross size for a single line, and for several, step 8's measurement of
        every member of every line; otherwise step 7's hypothetical cross size, whose inline arm reads the item's
@@ -5076,9 +5089,9 @@ static bool uv_operands_ask(lxb_dom_element_t *el, bool vertical)
         if (!grid_item_area_extents_ask(uv_cb(el).element, el, &w, &h)) return false;
     }
     /* A block's auto height is its content's, and a grid item's automatic minimum reads the same content
-       height (css-grid-1 §6.6's content size suggestion), so both ask it. */
-    if (vertical && uv_box_kind(el) != UV_BOX_INLINE && used_value_height_behaves_as_auto(el) &&
-        !block_flow_auto_height_ask(el, &h))
+       height (css-grid-1 §6.6's content size suggestion), so both ask it; a table box's is §17.5.3's, above. */
+    if (vertical && uv_box_kind(el) != UV_BOX_INLINE && uv_box_kind(el) != UV_BOX_TABLE &&
+        used_value_height_behaves_as_auto(el) && !block_flow_auto_height_ask(el, &h))
         return false;
     /* A non-replaced absolutely positioned box's block-axis lengths are §10.6.4's solve's values, whose operands
        include its static position. Asked whatever its `height` is, since a margin reads the same solve. */

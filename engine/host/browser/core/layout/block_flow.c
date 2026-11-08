@@ -2164,6 +2164,13 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             ce = wl[w.wi];
             if (ce != NULL && held) bf_entry_write(el, ce, &w, &entry, has_frame, frame_top);
             if (ce == NULL) {
+                CssPx table_h;
+
+                /* The table box's height is CSS 2.1 §17.5.3's over its cells' content heights, asked first. */
+                if (!used_value_border_edge_ask(el, true, &table_h)) {
+                    free(wl);
+                    return bf_walk_stage(body, el, &w, &out);
+                }
                 b = bf_table_box(el);
             } else if (!bf_box(ce, pass, &b)) {
                 free(wl);
