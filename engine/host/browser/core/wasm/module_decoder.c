@@ -2,12 +2,14 @@
 #include "core/wasm/module_decoder.h"
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <lexbor/encoding/decode.h>
 
 #include "check.h"
+#include "core/wasm/opcode_immediates.h"
 
 enum {
     PH_PREAMBLE = 0,   /* §5.5.17's magic and version */
@@ -26,6 +28,13 @@ enum {
     PH_IMPORT_NAME,    /* its item name */
     PH_IMPORT_DESC,    /* its §5.3.14 external type */
     PH_FUNCTION,       /* §5.5.6: the next function's type index, or the section's end */
+    PH_GLOBAL,         /* §5.5.9: the next global's type, or the section's end */
+    PH_GLOBAL_END,     /* its initializer has been read */
+    PH_CODE,           /* §5.5.13: the next code entry's len and locals count, or the section's end */
+    PH_LOCALS,         /* its next locals entry, then its body */
+    PH_CODE_END,       /* its body has been read */
+    PH_EXPR,           /* §5.4.10: the next instruction of an expr */
+    PH_EXPR_LIST,      /* one element of an instruction's list immediate */
     PH_FINISHED
 };
 
@@ -179,6 +188,14 @@ static WasmDecodeStatus push_section(WasmModuleDecoder *d, WasmSectionId id, siz
     return WASM_DECODE_MORE;
 }
 
+/* A section's contents end where its §5.5.2 len says; the reference interpreter asks once the list is read. */
+static WasmDecodeStatus end_section(WasmModuleDecoder *d)
+{
+    if (d->pos != d->section_end) return WASM_DECODE_SECTION_SIZE;
+    d->phase = PH_SECTION;
+    return WASM_DECODE_MORE;
+}
+
 /* §5.2.4's name begins: list(byte)'s length, held to the bytes left; its code points are read by PH_NAME, then
    the decode goes on at `next`. */
 static WasmDecodeStatus begin_name(WasmModuleDecoder *d, int next, size_t *offset, uint32_t *size)
@@ -201,7 +218,12 @@ static WasmDecodeStatus read_section(WasmModuleDecoder *d)
     uint32_t size, name_size;
     uint8_t id;
 
-    if (d->pos == d->in_len) return WASM_DECODE_DONE;
+    if (d->pos == d->in_len) {
+        /* §5.5.17's side conditions over the whole module, in decode.ml's order. */
+        if (d->module.n_func_types != d->module.n_codes) return WASM_DECODE_FUNC_CODE_LENGTHS;
+        if (!d->module.has_data_count && d->code_names_data) return WASM_DECODE_DATA_COUNT_REQUIRED;
+        return WASM_DECODE_DONE;
+    }
     id = d->in[d->pos];
     if (id > SECTION_ID_LAST) return WASM_DECODE_SECTION_ID;
     if (id != WASM_SECTION_CUSTOM) {
@@ -221,11 +243,20 @@ static WasmDecodeStatus read_section(WasmModuleDecoder *d)
         d->phase = PH_TYPE;
         return WASM_DECODE_MORE;
     }
-    if (id == WASM_SECTION_IMPORT || id == WASM_SECTION_FUNCTION) {
+    if (id == WASM_SECTION_IMPORT || id == WASM_SECTION_FUNCTION || id == WASM_SECTION_GLOBAL
+        || id == WASM_SECTION_CODE) {
         st = read_list_length(d, &d->items_left);
         if (st != WASM_DECODE_DONE) return st;
-        d->phase = id == WASM_SECTION_IMPORT ? PH_IMPORT : PH_FUNCTION;
+        d->phase = id == WASM_SECTION_IMPORT ? PH_IMPORT : id == WASM_SECTION_FUNCTION ? PH_FUNCTION
+                 : id == WASM_SECTION_GLOBAL ? PH_GLOBAL : PH_CODE;
         return WASM_DECODE_MORE;
+    }
+    if (id == WASM_SECTION_DATA_COUNT) {
+        /* §5.5.15's datacnt: one u32. */
+        st = read_u32(d, &d->module.data_count);
+        if (st != WASM_DECODE_DONE) return st;
+        d->module.has_data_count = true;
+        return end_section(d);
     }
     if (id != WASM_SECTION_CUSTOM) {
         d->pos += size;
@@ -267,14 +298,6 @@ static WasmDecodeStatus read_name(WasmModuleDecoder *d)
     DCHECK(cp <= LXB_ENCODING_DECODE_MAX_CODEPOINT && q > d->in + d->pos && q <= d->in + d->name_end,
            "lexbor's UTF-8 decoder answered a character without consuming bytes inside the name");
     d->pos = (size_t)(q - d->in);
-    return WASM_DECODE_MORE;
-}
-
-/* A section's contents end where its §5.5.2 len says; the reference interpreter asks once the list is read. */
-static WasmDecodeStatus end_section(WasmModuleDecoder *d)
-{
-    if (d->pos != d->section_end) return WASM_DECODE_SECTION_SIZE;
-    d->phase = PH_SECTION;
     return WASM_DECODE_MORE;
 }
 
@@ -643,6 +666,321 @@ static WasmDecodeStatus read_function(WasmModuleDecoder *d)
     return WASM_DECODE_MORE;
 }
 
+/* §5.4.2's open structured instructions, a byte each on the decoder's block stack. */
+enum { BK_BLOCK = 1, BK_IF_THEN, BK_IF_ELSE };
+/* Which list immediate PH_EXPR_LIST reads: br_table's labels, select's value types, try_table's catches. */
+enum { IL_LABELS = 1, IL_VALTYPES, IL_CATCHES };
+
+static WasmDecodeStatus push_block(WasmModuleDecoder *d, uint8_t kind)
+{
+    if (!POOL_ROOM(d->blocks, d->n_blocks, d->cap_blocks)) return WASM_DECODE_NO_ROOM;
+    d->blocks[d->n_blocks++] = kind;
+    return WASM_DECODE_MORE;
+}
+
+/* Begin a §5.4.10 expr at the current byte; the decode goes on at `next` once its final 0x0B is read. */
+static void begin_expr(WasmModuleDecoder *d, int next)
+{
+    d->expr_offset = d->pos;
+    d->expr_next = next;
+    d->n_blocks = 0;
+    d->phase = PH_EXPR;
+}
+
+/* §5.4.2's blocktype: a non-negative s33 is a type index, else 0x40 is the empty type, else a value type, each
+   tried from the same byte in decode.ml's order. */
+static WasmDecodeStatus read_block_type(WasmModuleDecoder *d)
+{
+    size_t at = d->pos;
+    int64_t x;
+    WasmValType t;
+
+    if (read_sN(d, 33, &x) == WASM_DECODE_DONE && x >= 0) return WASM_DECODE_DONE;
+    d->pos = at;
+    if (d->pos < d->in_len && d->in[d->pos] == 0x40) {
+        d->pos++;
+        return WASM_DECODE_DONE;
+    }
+    return read_val_type(d, &t);
+}
+
+/* §5.4.5's memarg: a u32 below 2^7 whose bit 6 says a memory index follows, then a u64 offset. */
+static WasmDecodeStatus read_memarg(WasmModuleDecoder *d)
+{
+    uint32_t flags, x;
+    uint64_t offset;
+    WasmDecodeStatus st = read_u32(d, &flags);
+
+    if (st != WASM_DECODE_DONE) return st;
+    if (flags >= 0x80) return WASM_DECODE_MEMOP_FLAGS;
+    if ((flags & 0x40) != 0 && (st = read_u32(d, &x)) != WASM_DECODE_DONE) return st;
+    return read_uN(d, 64, &offset);
+}
+
+static WasmDecodeStatus read_bytes(WasmModuleDecoder *d, size_t n)
+{
+    if (n > d->in_len - d->pos) return WASM_DECODE_UNEXPECTED_END;
+    d->pos += n;
+    return WASM_DECODE_DONE;
+}
+
+static WasmDecodeStatus begin_list(WasmModuleDecoder *d, int kind)
+{
+    WasmDecodeStatus st = read_list_length(d, &d->list_left);
+
+    if (st != WASM_DECODE_DONE) return st;
+    d->list_kind = kind;
+    d->phase = PH_EXPR_LIST;
+    return WASM_DECODE_MORE;
+}
+
+/* One instruction's immediates by opcode_immediates.h's shape. A shape that ends in a list hands the rest of the
+   instruction to PH_EXPR_LIST. */
+static WasmDecodeStatus read_immediates(WasmModuleDecoder *d, WasmImmediate shape)
+{
+    WasmDecodeStatus st;
+    WasmValType t;
+    uint64_t u;
+    int64_t s;
+    uint32_t x;
+    uint8_t flags;
+    int i;
+
+    switch (shape) {
+    case WASM_IMM_ILLEGAL:
+        return WASM_DECODE_ILLEGAL_OPCODE;
+    case WASM_IMM_NONE:
+        return WASM_DECODE_MORE;
+    case WASM_IMM_BLOCK:
+    case WASM_IMM_IF:
+        st = read_block_type(d);
+        if (st != WASM_DECODE_DONE) return st;
+        return push_block(d, shape == WASM_IMM_IF ? BK_IF_THEN : BK_BLOCK);
+    case WASM_IMM_TRY_TABLE:
+        st = read_block_type(d);
+        if (st != WASM_DECODE_DONE) return st;
+        return begin_list(d, IL_CATCHES);
+    case WASM_IMM_IDX:
+    case WASM_IMM_IDX2:
+        st = read_u32(d, &x);
+        if (st == WASM_DECODE_DONE && shape == WASM_IMM_IDX2) st = read_u32(d, &x);
+        break;
+    case WASM_IMM_BR_TABLE:
+        return begin_list(d, IL_LABELS);
+    case WASM_IMM_SELECT_T:
+        return begin_list(d, IL_VALTYPES);
+    case WASM_IMM_MEMOP:
+    case WASM_IMM_MEMOP_LANE:
+        st = read_memarg(d);
+        if (st == WASM_DECODE_DONE && shape == WASM_IMM_MEMOP_LANE) st = read_uN(d, 8, &u);
+        break;
+    case WASM_IMM_LANE:
+        st = read_uN(d, 8, &u);
+        break;
+    case WASM_IMM_SHUFFLE:
+        for (i = 0, st = WASM_DECODE_DONE; i < 16 && st == WASM_DECODE_DONE; i++) st = read_uN(d, 8, &u);
+        break;
+    case WASM_IMM_S32:
+    case WASM_IMM_S64:
+        st = read_sN(d, shape == WASM_IMM_S32 ? 32 : 64, &s);
+        break;
+    case WASM_IMM_F32: st = read_bytes(d, 4); break;
+    case WASM_IMM_F64: st = read_bytes(d, 8); break;
+    case WASM_IMM_V128: st = read_bytes(d, 16); break;
+    case WASM_IMM_HEAPTYPE:
+        st = read_heap_type(d, &t);
+        break;
+    case WASM_IMM_BR_ON_CAST:
+        if (d->pos >= d->in_len) return WASM_DECODE_UNEXPECTED_END;
+        flags = d->in[d->pos++];
+        if ((flags & 0xfc) != 0) return WASM_DECODE_BR_ON_CAST_FLAGS;
+        st = read_u32(d, &x);
+        if (st == WASM_DECODE_DONE) st = read_heap_type(d, &t);
+        if (st == WASM_DECODE_DONE) st = read_heap_type(d, &t);
+        break;
+    default:
+        CHECK_FAIL("opcode_immediates.h names an immediate shape module_decoder.c does not read");
+    }
+    return st == WASM_DECODE_DONE ? WASM_DECODE_MORE : st;
+}
+
+/* One §5.4 instruction of an expr: 0x0B closes the innermost block or the expr itself, 0x05 turns the innermost
+   if to its else arm (anywhere else it is a missing 0x0B, as decode.ml's end_ reads it), and any other opcode
+   is read with its immediates, under its prefix (0xFB, 0xFC, 0xFD with a u32 sub-opcode) where it has one. */
+static WasmDecodeStatus read_instruction(WasmModuleDecoder *d)
+{
+    WasmDecodeStatus st;
+    uint32_t sub;
+    uint8_t op;
+
+    if (d->pos >= d->in_len) return WASM_DECODE_UNEXPECTED_END;
+    op = d->in[d->pos++];
+    if (op == 0x0B) {
+        if (d->n_blocks > 0) {
+            d->n_blocks--;
+            return WASM_DECODE_MORE;
+        }
+        d->phase = d->expr_next;
+        return WASM_DECODE_MORE;
+    }
+    if (op == 0x05) {
+        if (d->n_blocks == 0 || d->blocks[d->n_blocks - 1] != BK_IF_THEN) return WASM_DECODE_END_EXPECTED;
+        d->blocks[d->n_blocks - 1] = BK_IF_ELSE;
+        return WASM_DECODE_MORE;
+    }
+    d->illegal_prefix = 0;
+    d->illegal_opcode = op;
+    if (op != 0xFB && op != 0xFC && op != 0xFD) return read_immediates(d, (WasmImmediate)WASM_IMM_ONE[op]);
+    st = read_u32(d, &sub);
+    if (st != WASM_DECODE_DONE) return st;
+    d->illegal_prefix = op;
+    d->illegal_opcode = sub;
+    /* §5.5.17's dataidx(func*): memory.init and data.drop (0xFC 8, 9), array.new_data and array.init_data
+       (0xFB 9, 18) name a data segment. */
+    if (d->in_code && ((op == 0xFC && (sub == 8 || sub == 9)) || (op == 0xFB && (sub == 9 || sub == 18))))
+        d->code_names_data = true;
+    if (op == 0xFB) return read_immediates(d, sub < sizeof WASM_IMM_FB ? (WasmImmediate)WASM_IMM_FB[sub] : WASM_IMM_ILLEGAL);
+    if (op == 0xFC) return read_immediates(d, sub < sizeof WASM_IMM_FC ? (WasmImmediate)WASM_IMM_FC[sub] : WASM_IMM_ILLEGAL);
+    return read_immediates(d, sub < sizeof WASM_IMM_FD ? (WasmImmediate)WASM_IMM_FD[sub] : WASM_IMM_ILLEGAL);
+}
+
+/* One element of an instruction's list immediate, then what follows the list: br_table's default label, or the
+   try_table's block. */
+static WasmDecodeStatus read_instruction_list(WasmModuleDecoder *d)
+{
+    WasmDecodeStatus st = WASM_DECODE_DONE;
+    WasmValType t;
+    uint32_t x;
+    uint8_t c;
+
+    if (d->list_left == 0) {
+        d->phase = PH_EXPR;
+        if (d->list_kind == IL_LABELS) {
+            st = read_u32(d, &x);
+            return st == WASM_DECODE_DONE ? WASM_DECODE_MORE : st;
+        }
+        return d->list_kind == IL_CATCHES ? push_block(d, BK_BLOCK) : WASM_DECODE_MORE;
+    }
+    d->list_left--;
+    switch (d->list_kind) {
+    case IL_LABELS:
+        st = read_u32(d, &x);
+        break;
+    case IL_VALTYPES:
+        st = read_val_type(d, &t);
+        break;
+    case IL_CATCHES:
+        /* §5.4.2's catch: 0x00 catch and 0x01 catch_ref take a tag and a label, 0x02 catch_all and 0x03
+           catch_all_ref a label. */
+        if (d->pos >= d->in_len) return WASM_DECODE_UNEXPECTED_END;
+        c = d->in[d->pos++];
+        if (c > 0x03) return WASM_DECODE_CATCH_CLAUSE;
+        st = read_u32(d, &x);
+        if (st == WASM_DECODE_DONE && c < 0x02) st = read_u32(d, &x);
+        break;
+    default:
+        CHECK_FAIL("an instruction list immediate of a kind module_decoder.c does not define");
+    }
+    return st == WASM_DECODE_DONE ? WASM_DECODE_MORE : st;
+}
+
+/* §5.5.13's code: a len held to the bytes left, then list(locals), then the body's expr, which must end at
+   len. */
+static WasmDecodeStatus read_code(WasmModuleDecoder *d)
+{
+    WasmModule *m = &d->module;
+    WasmCode *c;
+    uint32_t size;
+    WasmDecodeStatus st;
+
+    if (d->items_left == 0) return end_section(d);
+    d->items_left--;
+    st = read_list_length(d, &size);
+    if (st != WASM_DECODE_DONE) return st;
+    d->code_end = d->pos + size;
+    if (!POOL_ROOM(m->codes, m->n_codes, m->cap_codes)) return WASM_DECODE_NO_ROOM;
+    c = &m->codes[m->n_codes++];
+    memset(c, 0, sizeof *c);
+    c->locals = m->n_locals;
+    d->locals_total = 0;
+    st = read_list_length(d, &d->list_left);
+    if (st != WASM_DECODE_DONE) return st;
+    d->phase = PH_LOCALS;
+    return WASM_DECODE_MORE;
+}
+
+/* One locals entry: a u32 count and a value type. The entries' counts are summed and held below 2^32 once all
+   are read, as decode.ml's `locals` does. */
+static WasmDecodeStatus read_locals(WasmModuleDecoder *d)
+{
+    WasmModule *m = &d->module;
+    WasmLocals l;
+    WasmDecodeStatus st;
+
+    if (d->list_left == 0) {
+        if (d->locals_total >= ((uint64_t)1 << 32)) return WASM_DECODE_TOO_MANY_LOCALS;
+        d->in_code = true;
+        begin_expr(d, PH_CODE_END);
+        return WASM_DECODE_MORE;
+    }
+    d->list_left--;
+    st = read_u32(d, &l.count);
+    if (st == WASM_DECODE_DONE) st = read_val_type(d, &l.type);
+    if (st != WASM_DECODE_DONE) return st;
+    if (!POOL_ROOM(m->locals, m->n_locals, m->cap_locals)) return WASM_DECODE_NO_ROOM;
+    m->locals[m->n_locals++] = l;
+    m->codes[m->n_codes - 1].n_locals++;
+    d->locals_total += l.count;
+    return WASM_DECODE_MORE;
+}
+
+static WasmDecodeStatus read_code_end(WasmModuleDecoder *d)
+{
+    WasmCode *c = &d->module.codes[d->module.n_codes - 1];
+
+    DCHECK(d->pos > d->expr_offset && d->in[d->pos - 1] == 0x0B,
+           "a WebAssembly function body ended somewhere other than after its 0x0B");
+    d->in_code = false;
+    if (d->pos != d->code_end) return WASM_DECODE_SECTION_SIZE;
+    c->body_offset = d->expr_offset;
+    c->body_size = d->pos - 1 - d->expr_offset;
+    d->phase = PH_CODE;
+    return WASM_DECODE_MORE;
+}
+
+/* §5.5.9's global: a §5.3.11 global type in one step, then its expr. */
+static WasmDecodeStatus read_global(WasmModuleDecoder *d)
+{
+    WasmModule *m = &d->module;
+    WasmGlobal *g;
+    WasmDecodeStatus st;
+
+    if (d->items_left == 0) return end_section(d);
+    d->items_left--;
+    if (!POOL_ROOM(m->globals, m->n_globals, m->cap_globals)) return WASM_DECODE_NO_ROOM;
+    g = &m->globals[m->n_globals++];
+    memset(g, 0, sizeof *g);
+    st = read_val_type(d, &g->type);
+    if (st != WASM_DECODE_DONE) return st;
+    if (d->pos >= d->in_len) return WASM_DECODE_UNEXPECTED_END;
+    if (d->in[d->pos] > 0x01) return WASM_DECODE_MUTABILITY;
+    g->mutable_ = d->in[d->pos++] == 0x01;
+    begin_expr(d, PH_GLOBAL_END);
+    return WASM_DECODE_MORE;
+}
+
+static WasmDecodeStatus read_global_end(WasmModuleDecoder *d)
+{
+    WasmGlobal *g = &d->module.globals[d->module.n_globals - 1];
+
+    DCHECK(d->pos > d->expr_offset && d->in[d->pos - 1] == 0x0B,
+           "a WebAssembly global's initializer ended somewhere other than after its 0x0B");
+    g->init_offset = d->expr_offset;
+    g->init_size = d->pos - 1 - d->expr_offset;
+    d->phase = PH_GLOBAL;
+    return WASM_DECODE_MORE;
+}
+
 WasmDecodeStatus wasm_module_decoder_step(WasmModuleDecoder *d)
 {
     WasmDecodeStatus st;
@@ -667,6 +1005,13 @@ WasmDecodeStatus wasm_module_decoder_step(WasmModuleDecoder *d)
     case PH_IMPORT_NAME: st = read_import_name(d); break;
     case PH_IMPORT_DESC: st = read_import_desc(d); break;
     case PH_FUNCTION: st = read_function(d); break;
+    case PH_GLOBAL:   st = read_global(d); break;
+    case PH_GLOBAL_END: st = read_global_end(d); break;
+    case PH_CODE:     st = read_code(d); break;
+    case PH_LOCALS:   st = read_locals(d); break;
+    case PH_CODE_END: st = read_code_end(d); break;
+    case PH_EXPR:     st = read_instruction(d); break;
+    case PH_EXPR_LIST: st = read_instruction_list(d); break;
     default:
         CHECK_FAIL("a WebAssembly decode stands in a phase this file does not define");
     }
@@ -702,7 +1047,23 @@ void wasm_module_decoder_free(WasmModuleDecoder *d)
     d->sections = NULL;
     d->n_sections = 0;
     d->cap_sections = 0;
+    free(d->blocks);
+    d->blocks = NULL;
+    d->n_blocks = 0;
+    d->cap_blocks = 0;
     wasm_module_free(&d->module);
+}
+
+void wasm_module_decoder_message(const WasmModuleDecoder *d, WasmDecodeStatus st, char *buf, size_t cap)
+{
+    const char *m = wasm_decode_status_message(st);
+
+    DCHECK(d != NULL && buf != NULL && cap > 0, "a WebAssembly decode's message was asked with nowhere to write it");
+    if (m == NULL) m = "";
+    if (st != WASM_DECODE_ILLEGAL_OPCODE) snprintf(buf, cap, "%s", m);
+    else if (d->illegal_prefix == 0 || d->illegal_prefix == 0xFD)
+        snprintf(buf, cap, "%s %02x", m, (unsigned)d->illegal_opcode);
+    else snprintf(buf, cap, "%s %02x %02x", m, (unsigned)d->illegal_prefix, (unsigned)d->illegal_opcode);
 }
 
 const WasmModule *wasm_module_decoder_module(const WasmModuleDecoder *d)
@@ -734,6 +1095,14 @@ const char *wasm_decode_status_message(WasmDecodeStatus st)
     case WASM_DECODE_IMPORT_KIND:          return "malformed import kind";
     case WASM_DECODE_LIMITS_FLAGS:         return "malformed limits flags";
     case WASM_DECODE_ZERO_BYTE:            return "zero byte expected";
+    case WASM_DECODE_END_EXPECTED:         return "END opcode expected";
+    case WASM_DECODE_ILLEGAL_OPCODE:       return "illegal opcode";
+    case WASM_DECODE_MEMOP_FLAGS:          return "malformed memop flags";
+    case WASM_DECODE_BR_ON_CAST_FLAGS:     return "malformed br_on_cast flags";
+    case WASM_DECODE_CATCH_CLAUSE:         return "malformed catch clause";
+    case WASM_DECODE_TOO_MANY_LOCALS:      return "too many locals";
+    case WASM_DECODE_FUNC_CODE_LENGTHS:    return "function and code section have inconsistent lengths";
+    case WASM_DECODE_DATA_COUNT_REQUIRED:  return "data count section required";
     case WASM_DECODE_NO_ROOM:              return "out of memory";
     }
     CHECK_FAIL("a WebAssembly decode status this file does not define");

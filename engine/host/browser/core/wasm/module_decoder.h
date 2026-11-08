@@ -1,17 +1,16 @@
 /* WebAssembly Core Specification (Release 3.0) §5.5 "Modules": the binary format's preamble and its sequence of
  * sections, decoded as a step machine over a complete byte sequence.
- * One step reads one production instance: the §5.5.17 preamble, one §5.5.2 section header (with a custom
- * section's name length or a list's count), one code point of a §5.2.4 name, one item of §5.5.4's type section
- * (a §5.3.8 rectype or subtype head, a supertype index, a §5.3.7 composite head, a value type or a field), one
- * §5.5.5 import's name length or external type, or one §5.5.6 function's type index. The caller owns how many
- * steps a rest covers; the whole state is the WasmModuleDecoder.
- * The bytes are input: every malformed encoding is a WasmDecodeStatus refusal, never an assert. A refusal names
- * the production that failed with the reference interpreter's message, which the spec testsuite matches.
- * Named residual. Not covered: the contents of the sections after the function section (§5.5.7-§5.5.16) and
- * §5.5.17's function/code and data count agreements; such a section is delimited and not decoded. Next diff
- * builds: §5.4's instructions for §5.4.10's constant expressions, which the table, global, element and data
- * sections hold. Absence shows as: a module whose type, import and function sections and framing are well formed
- * but whose later contents are malformed is answered WASM_DECODE_DONE. */
+ * One step reads one production instance: the §5.5.17 preamble, a §5.5.2 section header with a list's count, a
+ * code point of a §5.2.4 name, an item of a section's list or of a type's (a §5.3.8 rectype or subtype head, a
+ * supertype, a composite head, a value type, a field, an import's name length or external type, a function's
+ * type index, a global's type, a code entry's len or locals entry), or one §5.4 instruction of an expr with its
+ * immediates (an element of a list immediate is a step of its own). The caller owns how many steps a rest
+ * covers; the whole state is the WasmModuleDecoder. The bytes are input: every malformed encoding is a
+ * WasmDecodeStatus refusal carrying the reference interpreter's message, never an assert.
+ * Named residual. Not covered: the table, memory, tag, export, start, element and data sections' contents
+ * (§5.5.7, §5.5.8, §5.5.16, §5.5.10-§5.5.12, §5.5.14) and §5.5.17's data count agreement; such a section is
+ * delimited and not decoded. Next diff builds: those sections, each a resting step over its bytes. Absence shows
+ * as: a module whose malformed bytes lie only in one of those sections is answered WASM_DECODE_DONE. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_MODULE_DECODER_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_MODULE_DECODER_H
 
@@ -41,6 +40,14 @@ typedef enum {
     WASM_DECODE_IMPORT_KIND,          /* §5.3.14: an external type's byte other than 0x00 to 0x04 */
     WASM_DECODE_LIMITS_FLAGS,         /* §5.3.9: a limits flag byte other than 0x00, 0x01, 0x04 and 0x05 */
     WASM_DECODE_ZERO_BYTE,            /* §5.3.10: a tag type's first byte is not 0x00 */
+    WASM_DECODE_END_EXPECTED,         /* §5.4.2: a block, a function body or an expr not closed by 0x0B */
+    WASM_DECODE_ILLEGAL_OPCODE,       /* §5.4: an opcode no production defines; see wasm_module_decoder_message */
+    WASM_DECODE_MEMOP_FLAGS,          /* §5.4.5: a memarg's first u32 is 2^7 or more */
+    WASM_DECODE_BR_ON_CAST_FLAGS,     /* §5.4.6: br_on_cast's flag byte sets a bit above the second */
+    WASM_DECODE_CATCH_CLAUSE,         /* §5.4.2: a catch clause's byte other than 0x00 to 0x03 */
+    WASM_DECODE_TOO_MANY_LOCALS,      /* §5.5.13: a code entry's locals number 2^32 or more */
+    WASM_DECODE_FUNC_CODE_LENGTHS,    /* §5.5.17: the function and code sections' lists differ in length */
+    WASM_DECODE_DATA_COUNT_REQUIRED,  /* §5.5.17: a code entry names a data segment and no data count is given */
     WASM_DECODE_NO_ROOM               /* a list could not be allocated; its size is the input's */
 } WasmDecodeStatus;
 
@@ -74,7 +81,17 @@ typedef struct {
     size_t section_end;     /* while a section's contents are read: the byte after its len */
     uint32_t items_left;    /* the section's list: items not yet read */
     uint32_t group_left;    /* §5.3.8's current rec group: subtypes not yet read */
-    uint32_t list_left;     /* the current subtype's list being read: items not yet read */
+    uint32_t list_left;     /* the current subtype's or instruction's list being read: items not yet read */
+    int list_kind;          /* which instruction immediate that list is (module_decoder.c's IL_ values) */
+    uint8_t *blocks;        /* §5.4.2's open structured instructions, innermost last (module_decoder.c's BK_) */
+    size_t n_blocks, cap_blocks;
+    size_t expr_offset;     /* where the §5.4.10 expr being read began */
+    int expr_next;          /* the phase that follows it */
+    uint32_t illegal_prefix, illegal_opcode;   /* for WASM_DECODE_ILLEGAL_OPCODE's message */
+    size_t code_end;        /* while a code entry is read: the byte after its len */
+    uint64_t locals_total;  /* its locals so far */
+    bool in_code;           /* the expr being read is a function body */
+    bool code_names_data;   /* some function body holds a data index (§5.5.17's dataidx(func*)) */
     size_t rec_start;       /* the current rec group's first type index, and its size */
     uint32_t rec_size;
     WasmSection *sections;
@@ -97,6 +114,11 @@ const WasmSection *wasm_module_decoder_section(const WasmModuleDecoder *d, size_
 const WasmModule *wasm_module_decoder_module(const WasmModuleDecoder *d);
 /* Release the section list and the module. Idempotent. */
 void wasm_module_decoder_free(WasmModuleDecoder *d);
+
+/* The reference interpreter's message for the refusal `d` answered, written to `buf` (at most `cap` bytes, NUL
+   terminated): wasm_decode_status_message's, with the opcode appended for WASM_DECODE_ILLEGAL_OPCODE as
+   decode.ml's `illegal` and `illegal2` spell it. */
+void wasm_module_decoder_message(const WasmModuleDecoder *d, WasmDecodeStatus st, char *buf, size_t cap);
 
 /* The reference interpreter's message for a refusal (interpreter/binary/decode.ml), which the testsuite's
    `assert_malformed` matches by prefix. A static string; NULL for DONE and MORE. */

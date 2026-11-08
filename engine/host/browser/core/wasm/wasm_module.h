@@ -1,7 +1,9 @@
 /* A decoded WebAssembly module: the abstract syntax of WebAssembly Core Specification (Release 3.0) §2.5
  * "Modules" that core/wasm/module_decoder.h's §5 decode produces, held as pools of plain records indexed by
  * position, so it carries no pointer into itself and a later stage (validation, instantiation) reads it as data.
- * Each pool is owned and grown by the decoder; wasm_module_free releases all of them. */
+ * Code is not translated: a function body or an initializer is a range of the decoded bytes, which the module
+ * keeps and execution reads in place. Each pool is owned and grown by the decoder; wasm_module_free releases
+ * all of them. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_WASM_MODULE_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_WASM_MODULE_H
 
@@ -80,6 +82,27 @@ typedef struct {
     bool mutable_;
 } WasmImport;
 
+/* §5.5.9's global: its §5.3.11 type and its initializer, a §5.4.10 expr kept as a range of the decoded bytes
+   (its instructions, without the final 0x0B), which execution reads in place. */
+typedef struct {
+    WasmValType type;
+    bool mutable_;
+    size_t init_offset, init_size;
+} WasmGlobal;
+
+/* §5.5.13's locals entry: `count` locals of one value type. */
+typedef struct {
+    uint32_t count;
+    WasmValType type;
+} WasmLocals;
+
+/* §5.5.13's code entry: its locals entries (a range of `locals`) and its body, a §5.4.10 expr kept as a range
+   of the decoded bytes without its final 0x0B. */
+typedef struct {
+    size_t locals, n_locals;
+    size_t body_offset, body_size;
+} WasmCode;
+
 typedef struct {
     WasmSubType *types;
     size_t n_types, cap_types;
@@ -93,6 +116,14 @@ typedef struct {
     size_t n_imports, cap_imports;
     uint32_t *func_types;   /* §5.5.6: each defined function's type index, in function index order */
     size_t n_func_types, cap_func_types;
+    WasmGlobal *globals;
+    size_t n_globals, cap_globals;
+    WasmCode *codes;
+    size_t n_codes, cap_codes;
+    WasmLocals *locals;
+    size_t n_locals, cap_locals;
+    bool has_data_count;    /* §5.5.15: the data count section is present, and its count */
+    uint32_t data_count;
 } WasmModule;
 
 /* Release every pool. Idempotent. */
