@@ -27,13 +27,15 @@
 #include "core/idl_args.h"
 #include "core/html/sanitizer.h"
 #include "core/html/xml_fragment.h"
+#include "core/dom/node_insert.h"
+#include "core/dom/node_replace.h"
 
-/* WHERE THE PARSED NODES GO. Not a step of §13.4 — §13.4 returns a DocumentFragment and says nothing about
-   what its caller does with it — but the one thing the six members differ in, so it rides the parse rather
-   than being a sixth copy of the placement loop. `FRAG_INTO_CHILDREN` with an anchor that IS a
-   DocumentFragment is how a member that RETURNS the fragment (§8.5.7) reaches the same loop as one that
-   replaces an element's children (§8.5.4). */
-enum { FRAG_INTO_CHILDREN = 0, FRAG_INTO_BEFORE, FRAG_INTO_AFTER, FRAG_INTO_FIRST_CHILD, FRAG_INTO_REPLACE };
+/* WHERE THE PARSED NODES GO: the DOM §4.2.3 algorithm each member runs over the fragment, around `anchor`.
+   REPLACE_ALL is replace all within anchor (§8.5.4 step 5, §8.6.4 set and filter HTML's last step); REPLACE is
+   replace anchor within its parent (§8.5.5 step 7); BEFORE, AFTER and FIRST_CHILD are §8.5.6 step 6's inserts
+   and CHILDREN its append; RETURN places nothing (§8.5.7 returns the fragment). */
+enum { FRAG_INTO_CHILDREN = 0, FRAG_INTO_BEFORE, FRAG_INTO_AFTER, FRAG_INTO_FIRST_CHILD, FRAG_INTO_REPLACE,
+       FRAG_INTO_REPLACE_ALL, FRAG_INTO_RETURN };
 
 /* HTML §13.2.4.5 "Other parsing state flags"' PARSER SCRIPTING MODE — the two values §13.4 admits, which its
    own first step asserts ("Assert: scriptingMode is either Inert or Fragment"). Normal and Disabled are the
@@ -56,9 +58,9 @@ typedef enum { FRAG_SCRIPTING_INERT = 0, FRAG_SCRIPTING_FRAGMENT = 1 } FragScrip
 /* WHERE THIS MACHINE RESTS. The six members that parse markup are the same shape — a few leading steps of
    their own, then "let fragment be the result of invoking the fragment parsing algorithm steps", then either a
    placement or a return — so the stages after the entry belong to those two operations and each member's
-   declaration names them in ITS OWN numbering. The clear is LAST in the enum on purpose: only the
-   children-replacing members reach it, so insertAdjacentHTML and createContextualFragment simply do not
-   declare that stage, and the driver's check is what says so if the shared machine ever reaches it from there.
+   declaration names them in ITS OWN numbering. The placement's DOM §4.2.3 blocks follow these, insert first:
+   createContextualFragment declares none of them and insertAdjacentHTML only the insert block, and the
+   driver's check is what says so if the shared machine ever reaches a stage past a member's list.
    ONE LIST FOR ONE MACHINE. A stage of a shared machine is ONE rest point, so it carries ONE label naming
    every section that reaches it; which member a parked flow is in is what the declaration's `algorithm` says.
    Splitting the wording per member would be two statements of one stage, which is the drift the X-list exists
@@ -78,32 +80,32 @@ typedef enum { FRAG_SCRIPTING_INERT = 0, FRAG_SCRIPTING_FRAGMENT = 1 } FragScrip
                   "§8.5.4's fragment parsing algorithm steps step 2 sends every one of those members to when " \
                   "the target's node document is an XML document (one parse item, or one of step 9's " \
                   "newChildren, per step)") \
-    X(FRAG_PLACE, "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 \"Sanitization algorithms\"' set and filter HTML step 9 " \
-                  "(insert one node of the fragment at the position the member names), and HTML §13.4 steps " \
-                  "15-16 for the member that RETURNS it (§8.5.7): lexbor builds under §13.4 step 12's `root`, " \
-                  "so this is where those nodes become the fragment's, one node per step") \
+    X(FRAG_FRAGMENT, "HTML §13.4 \"Parsing HTML fragments\" step 17 (the parser's root insertion target is " \
+                     "step 16's fragment: one of root's children into it per step)") \
     X(FRAG_DONE,  "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.5.7 step 7 / §8.6.4 " \
                   "\"Sanitization algorithms\"' set and filter HTML step 9 (the fragment is placed or returned)")
-/* FOUR STAGES, NOT FIVE, for insertAdjacentHTML and createContextualFragment: neither replaces its target's
-   children, so FRAG_CLEAR is past the end of what they declare and the driver says so if the shared machine
-   ever reaches it from there. It is its own list for that reason — the setter's declaration is the shared four
-   followed by this one. */
-#define FRAG_STAGE_CLEAR(X) \
-    X(FRAG_CLEAR, "HTML §8.5.4 step 5 / §8.6.4 \"Sanitization algorithms\"' set and filter HTML step 9 (replace all within target: remove " \
-                  "one existing child per step)")
+/* THE PLACEMENT'S STAGES, after the shared ones: insertAdjacentHTML declares the insert block, and the members
+   that replace declare both lists. */
+#define FRAG_INSERT_STAGES(X) \
+    NODE_INSERT_ALGO_STAGES(X, FRAG_IN, "HTML §8.5.6 insertAdjacentHTML step 6 (insert fragment, or append " \
+                                        "fragment's pre-insert step 4)")
+#define FRAG_REPLACE_STAGES(X) \
+    NODE_REPLACE_ALL_ALGO_STAGES(X, FRAG_RA, "HTML §8.5.4 innerHTML setter step 5 / §8.6.4 set and filter " \
+                                             "HTML (replace all with fragment within target)") \
+    NODE_REPLACE_ALGO_STAGES(X, FRAG_RP, "HTML §8.5.5 outerHTML setter step 7 (replace this with fragment " \
+                                         "within this's parent)")
 /* AND §8.6.4 set and filter HTML's FILTER, whose stages are sanitizer.h's own X-list. They belong to the members that FILTER —
    §8.5.2's setHTML and setHTMLUnsafe — and are numbered after this machine's because the walk runs between the
    parse and the placement. The base travels to the walk as SAN_CHILD so neither file states the offset. */
 enum { IDL_STEP_STAGE_BASE(FRAG_STAGES)
-       FRAG_STAGES(JS_STEP_STAGE_ENUM) FRAG_STAGE_CLEAR(JS_STEP_STAGE_ENUM)
-       SANITIZE_STAGES(JS_STEP_STAGE_ENUM) };
+       FRAG_STAGES(JS_STEP_STAGE_ENUM) FRAG_INSERT_STAGES(JS_STEP_STAGE_ENUM)
+       FRAG_REPLACE_STAGES(JS_STEP_STAGE_ENUM) SANITIZE_STAGES(JS_STEP_STAGE_ENUM) };
 
 /* The parse in progress, a cache over the markup — see fragment_parser.c. */
 typedef struct FragParseCache FragParseCache;
 
 typedef struct {
     uint8_t where;
-    uint8_t clear_first;          /* innerHTML= empties the element before parsing, one child per step */
     /* HTML §13.4's `allowDeclarativeShadowRoots`, which the two Unsafe members pass TRUE and every other
        fragment parse passes false. It rides the state because the step that acts on it — §13.2.6.4.4's
        template start tag, run over the finished fragment — is stages away from the one that read it. */
@@ -126,7 +128,12 @@ typedef struct {
        parent for §8.5.5, a non-Element or `<html>` context for §8.5.6, a null or `<html>` element for §8.5.7 —
        and agree exactly on what it is, which is why one field carries all three. */
     lxb_dom_element_t *own_context;
-    lxb_dom_node_t *anchor, *ref, *frag, *node;
+    lxb_dom_node_t *anchor;
+    lxb_dom_node_t *frag;         /* the parse's private root (owned), until FRAG_FRAGMENT has emptied it */
+    lxb_dom_node_t *fragment;     /* §13.4 step 16's DocumentFragment; the flow's delta owns it */
+    NodeInsertState in;           /* FRAG_IN's insert */
+    NodeReplaceAllState ra;       /* FRAG_RA's replace all */
+    NodeReplaceState rp;          /* FRAG_RP's replace */
     /* §8.6.4 set and filter HTML's STEPS 4 AND 8. `san_config` is the canonical configuration the options resolved to, held from
        step 4 (which reads the options, before the parse) until step 8 hands it to the walk that consumes it;
        `sanitize` is whether this member filters at all, which is what tells §8.5.4's innerHTML setter,
@@ -161,19 +168,19 @@ const char *fragment_parse_script_forbidden(int stage, const void *st);
 const char *fragment_markup_cstr(JSContext *ctx, JSValueConst markup);
 
 /* Set the machine up for a parse of `html` into `where` around `anchor`, parsed in `context`'s tree-building
-   context, under §13.2.4.5's `scripting` mode. `html` is COPIED because the JSString it came from is released
-   before the first suspension. The member sets `hdr->stage = FRAG_FEED` and yields. */
+   context, under §13.2.4.5's `scripting` mode, and create §13.4 step 16's fragment in context's node document.
+   `html` is COPIED because the JSString it came from is released before the first suspension. The member sets
+   `hdr->stage = FRAG_FEED` and yields. */
 void fragment_parse_begin(JSContext *ctx, FragmentParse *s, lxb_dom_element_t *context, lxb_dom_node_t *anchor,
-                          int where, const char *html, bool clear_first, bool allow_declarative,
-                          FragScriptingMode scripting);
+                          int where, const char *html, bool allow_declarative, FragScriptingMode scripting);
 
-/* §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.5.7 step 7 / §8.6.4 set and filter HTML step 9 — WHERE
-   THE PARSE GOES NEXT. Exported because §8.6.4's FILTER resumes into it from the other side of the sanitizer
-   walk, and the two must not drift. */
+/* The end of the parse, and of §8.6.4's filter, which resumes into it from the sanitizer walk: FRAG_FRAGMENT
+   next. */
 void fragment_parse_placement(FragmentParse *s, JSStepHdr *hdr);
 
-/* ONE STEP of the parse-and-place. Returns JS_STEP_YIELD while there is more, or 0 when the fragment is in the
-   tree. Every caller is a member body that returns whatever this returns. */
+/* ONE STEP of the parse-and-place. Returns JS_STEP_YIELD while there is more, 0 when the fragment is placed
+   (or, for FRAG_INTO_RETURN, is `fragment`), or JS_STEP_ABRUPT having thrown. Every caller is a member body
+   that returns whatever this returns. */
 int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s);
 
 #endif

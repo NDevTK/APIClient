@@ -1571,11 +1571,8 @@ static const IdlStepDecl RANGE_SURROUND = { rs_step, sizeof(RsState), rs_visit, 
  * this joins innerHTML and insertAdjacentHTML on solve_html_sink — and it is the STRONGEST of the three,
  * because the breakout does not need an `onerror` to fire: a `<script>` in the markup executes on insertion.
  *
- * IT PLACES INTO A DocumentFragment INSTEAD OF A TREE, which is the only structural difference from the five
- * members that came before it, and it needs no new placement kind: HTML §13.4 step 15 creates the fragment
- * the algorithm returns, and FRAG_INTO_CHILDREN with that fragment as the anchor reaches the identical loop.
- * Nothing in it is connected, so §4.2.3's insertion steps reach no `<script>` preparation — which is exactly
- * what "not yet added to document, should not have run" means. */
+ * IT PLACES NOTHING: step 7 returns HTML §13.4 step 16's fragment itself (FRAG_INTO_RETURN). Nothing in it is
+ * connected, so no `<script>` in it is prepared until the page inserts it. */
 static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -1599,7 +1596,6 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
     if (hdr->stage == FRAG_START) {
         RangeBounds *b = range_receiver(hdr->this_val);
         lxb_dom_element_t *el = NULL;
-        lxb_dom_document_fragment_t *out;
         lxb_dom_document_t *doc;
         lxb_dom_node_t *node;
         const char *html;
@@ -1655,18 +1651,7 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
         DCHECK(lxb_dom_interface_node(el)->owner_document == doc,
                "HTML §8.5.7's context element belongs to a document other than the range's — steps 4 and 5 "
                "take the start node or its parent and step 6 creates in this's node document, so all three are "
-               "one document, and HTML §13.4 step 15 creates the returned fragment in it");
-        /* HTML §13.4 "Parsing HTML fragments" STEP 15 — "Let fragment be the result of creating a document
-           fragment given target's node document" — hoisted ahead of the parse because it is what this member
-           RETURNS and because the placement needs it as its anchor. THIS FLOW MADE IT, so the delta owns it
-           and destroys it if the flow is discarded: a fragment comes out of the DOCUMENT's lexbor arena and is
-           reachable from no tree, so without the creation entry every one ever built would sit in that arena
-           with no owner and invisible to the runtime's gc_obj_list walk, which only sees GC objects. */
-        out = lxb_dom_document_fragment_interface_create(doc);
-        CHECK(out != NULL, "HTML §13.4 \"Parsing HTML fragments\" step 15's DocumentFragment could not be "
-                           "created — handing back a null the page cannot tell from a fragment it never asked "
-                           "for is not an option");
-        dom_cow_note_created(lxb_dom_interface_node(out));
+               "one document, and HTML §13.4 step 16 creates the returned fragment in it");
         /* THE SINK, BEFORE THE PARSE and whatever the value turns out to be — see the header above. */
         solve_html_sink(ctx, s->compliant);
         html = fragment_markup_cstr(ctx, s->compliant);
@@ -1676,26 +1661,22 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
            pass. `allowDeclarativeShadowRoots` is not among them, so HTML §8.5.4's fragment parsing algorithm
            steps hand HTML §13.4 the literal `false`: a `<template shadowrootmode>` in this markup stays a
            template, exactly as it does through innerHTML. */
-        fragment_parse_begin(ctx, s, el, lxb_dom_interface_node(out), FRAG_INTO_CHILDREN, html,
-                             /*clear_first*/ false, /*allow_declarative*/ false, FRAG_SCRIPTING_FRAGMENT);
+        fragment_parse_begin(ctx, s, el, NULL, FRAG_INTO_RETURN, html, /*allow_declarative*/ false,
+                             FRAG_SCRIPTING_FRAGMENT);
         JS_FreeCString(ctx, html);
         hdr->stage = FRAG_FEED;
         return JS_STEP_YIELD;
     }
     r = fragment_parse_step(ctx, hdr, s);
-    /* STEP 7's RETURN, taken at the machine's terminal: `anchor` is HTML §13.4 step 15's fragment and the
-       placement has just emptied HTML §13.4 step 12's `root` into it. It is read off the state rather than
-       remembered in a local because every stage between here and FRAG_START is a rest point a park can happen
-       at. */
-    if (r == 0) *presult = node_wrap(ctx, s->anchor);
+    /* STEP 7's RETURN: HTML §13.4 step 24's fragment, which FRAG_FRAGMENT has filled. */
+    if (r == 0) *presult = node_wrap(ctx, s->fragment);
     return r;
 }
 
 static const char *const RANGE_CONTEXTUAL_FRAGMENT_STEPS[] = { FRAG_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* FOUR STAGES: this member never replaces a target's children, so FRAG_CLEAR is past the end of what it
-   declares and the driver says so if the shared machine ever reaches it from here. It never filters either,
-   so §8.6.4's sanitizer stages are past the end as well. */
+/* The shared stages only: this member places nothing and filters nothing, so the placement's and §8.6.4's
+   sanitizer stages are past the end of what it declares. */
 static const IdlStepDecl RANGE_CONTEXTUAL_FRAGMENT = {
     js_range_contextual_fragment, sizeof(FragmentParse), fragment_parse_visit, fragment_parse_release,
     "HTML §8.5.7 Range.createContextualFragment(string)", RANGE_CONTEXTUAL_FRAGMENT_STEPS,

@@ -1,14 +1,14 @@
 /* HTML §13.4 "Parsing HTML fragments" — THE FRAGMENT PARSE, as ONE operation, because there are six members
    that do it and they differ only in where the result goes. `context` is the element whose parsing state the
    fragment is parsed IN — a `<tr>` is dropped anywhere but inside a table, and that is the tree builder's
-   rule, not something a caller chooses. The parsed nodes are handed to the placement, which inserts each
-   through the per-flow chokepoints.
+   rule, not something a caller chooses. The parsed nodes become §13.4's fragment, which the member's DOM §4.2.3
+   algorithm (insert, replace or replace all, each a step machine) places.
    LEXBOR MUST NOT RUN PAGE CODE. That is what lets the parse rest at every byte (the machine below) with no
    continuation of the page's under it: the parser and its position are a function of the markup alone, so a
    fork sheds them and parses again rather than copying them. The tree builder never runs a `<script>` it parses:
    what §13.2.4.5's scripting mode decides is what the FRAG_FEED boundary STAMPS on the ones it produced. Under
    INERT — the default, and what four of the six members take — that stamp is `already started`, which
-   HTML §4.12.1.1 step 1 reads when the placement's insertion steps prepare the element, so the script is dead. Under
+   HTML §4.12.1.1 step 1 reads when insert step 7.7's insertion steps prepare the element, so the script is dead. Under
    FRAGMENT the stamp is not applied and the script runs when the fragment reaches a document, which is the
    whole of what §13.2.4.5 means by "executed as soon as they are inserted".
 
@@ -23,6 +23,7 @@
 #include "quickjs-step.h"
 #include "core/html/fragment_parser.h"
 #include "core/dom/attr_list.h"
+#include "core/dom/node.h"
 #include "core/dom/document.h"       /* §8.5.4's fragment parsing algorithm steps step 2 asks the DOCUMENT */
 #include "core/html/declarative_shadow.h"
 #include "solver/concolic.h"
@@ -119,12 +120,15 @@ void fragment_parse_visit(JSContext *ctx, void *st, JSStepVisit *v)
        another component's ownership. Inert for an HTML parse, whose `xf` is all-zero. */
     xml_fragment_visit(ctx, &s->xf, v);
     sanitizer_walk_visit(ctx, &s->san, v);
+    node_insert_visit(ctx, &s->in, v);
+    node_replace_all_visit(ctx, &s->ra, v);
+    node_replace_visit(ctx, &s->rp, v);
 }
 
-/* WHY A FORK WAITS: after the feed this machine owns the tree the parse produced (`frag`, with `node` and the
-   sanitizer walk's cursors inside it). It is not copied, because no fork needs it: HTML §8.5.4's setter and the
-   members beside it run as one operation in one task, and between the end of the feed and FRAG_DONE nothing runs
-   the page's code — §4.2.3's insertion and removal steps enqueue custom element reactions, which run at the
+/* WHY A FORK WAITS: from the end of the feed until FRAG_FRAGMENT has emptied it, this machine owns the tree the
+   parse produced (`frag`, with the sanitizer walk's cursors inside it). It is not copied, because no fork needs
+   it: HTML §8.5.4's setter and the members beside it run as one operation in one task, and until FRAG_DONE
+   nothing runs the page's code — §4.2.3's insertion and removal steps enqueue custom element reactions, which run at the
    member's [CEReactions] epilogue after this machine returns, and queue mutation records; the post-connection and
    children changed steps, which do run it (a Fragment-mode script under setHTMLUnsafe's runScripts, a `script`
    target's text), are held by the member until FRAG_DONE (idl_args.c's idl_tree_held), as insert's last step
@@ -141,7 +145,7 @@ const char *fragment_parse_unforkable(const void *st)
     if (why != NULL)
         return why;
     if (s->frag != NULL)
-        return "a fragment parse is between its parse and its placement, inside HTML §8.5.4's one operation, "
+        return "a fragment parse is between its parse and its fragment, inside HTML §8.5.4's one operation, "
                "and this machine owns the tree the parse produced — a fork waits for FRAG_DONE (the ladder asks "
                "flow_agent_atomic before any fork rung); a clone that reached this answer is a clone that did "
                "not go through flow_suspension_clone or flow_agents_fork, or page code that ran inside the "
@@ -152,8 +156,14 @@ const char *fragment_parse_unforkable(const void *st)
 
 const char *fragment_parse_script_forbidden(int stage, const void *st)
 {
+    const char *why;
+
     (void)st;
-    if (stage == FRAG_FEED || stage == FRAG_XML || stage == FRAG_PLACE || stage == FRAG_CLEAR ||
+    if ((why = node_insert_script_forbidden(stage, FRAG_IN_TAKE)) ||
+        (why = node_replace_all_script_forbidden(stage, FRAG_RA_RM_RANGES)) ||
+        (why = node_replace_script_forbidden(stage, FRAG_RP_RM_RANGES)))
+        return why;
+    if (stage == FRAG_FEED || stage == FRAG_XML || stage == FRAG_FRAGMENT ||
         (stage >= SAN_CHILD && stage <= SAN_POP))
         return "HTML §8.5.4's fragment parse and placement run no page code between FRAG_START and FRAG_DONE "
                "(§13.2.6.1's willExecuteScript is false under a fragment context, and DOM §4.2.3 insert runs the "
@@ -183,9 +193,8 @@ void fragment_parse_release(JSContext *ctx, void *st)
     /* §8.5.5 step 5's / §8.5.7 step 6's `body` IS NOT FREED HERE ANY MORE — it is declared, so the ONE list
        destroys it after this returns. Freeing it here as well is the second list, and the teardown's own
        fingerprint bracket around this call is what now measures that rather than trusting it. */
-    /* WHATEVER OF THE PARSE IS LEFT. After a completed placement this is NULL, because FRAG_PLACE's terminal
-       destroys the emptied root and gives up its claim there; a placement or a §8.6.4 set and filter HTML filter that threw
-       half-way leaves the un-placed remainder here, still holding nodes. */
+    /* WHATEVER OF THE PARSE IS LEFT. Once FRAG_FRAGMENT has emptied the root this is NULL; a member torn down
+       before then, or a §8.6.4 set and filter HTML filter that threw, leaves the remainder here. */
     if (s->frag) {
         dom_cow_destroy_private(ctx, s->frag, /*with_children*/ true);
         s->frag = NULL;
@@ -214,15 +223,14 @@ const char *fragment_markup_cstr(JSContext *ctx, JSValueConst markup)
 }
 
 void fragment_parse_begin(JSContext *ctx, FragmentParse *s, lxb_dom_element_t *context, lxb_dom_node_t *anchor,
-                       int where, const char *html, bool clear_first, bool allow_declarative,
-                       FragScriptingMode scripting)
+                          int where, const char *html, bool allow_declarative, FragScriptingMode scripting)
 {
-    /* The clear is `replace all within TARGET`, and the target is the anchor — which for a <template> is its
-       content fragment rather than the element. Only the children-replacing member asks for it, which is what
-       lets the placement's reference child be computed before the clear rather than after it. */
-    DCHECK(!clear_first || where == FRAG_INTO_CHILDREN,
-           "a fragment parse asked to replace its target's children at a position that is not FRAG_INTO_CHILDREN — "
-           "the placement's reference child is fixed before the clear, which only holds for an append");
+    lxb_dom_document_fragment_t *fragment;
+
+    DCHECK(where >= FRAG_INTO_CHILDREN && where <= FRAG_INTO_RETURN &&
+           (anchor != NULL) == (where != FRAG_INTO_RETURN),
+           "a fragment parse was begun with a placement fragment_parser.h does not list, or with an anchor that "
+           "disagrees with it: only FRAG_INTO_RETURN places nothing and has no anchor");
     DCHECK(scripting == FRAG_SCRIPTING_INERT || scripting == FRAG_SCRIPTING_FRAGMENT,
            "HTML §8.5.4 \"The innerHTML property\"'s fragment parsing algorithm steps step 1 is \"Assert: "
            "scriptingMode is either Inert or Fragment\", and §13.4 \"Parsing HTML fragments\" step 1 asserts it "
@@ -250,56 +258,75 @@ void fragment_parse_begin(JSContext *ctx, FragmentParse *s, lxb_dom_element_t *c
     s->context = context;
     s->anchor = anchor;
     s->where = (uint8_t)where;
-    s->clear_first = clear_first;
     s->allow_declarative = allow_declarative;
     s->scripting = (uint8_t)scripting;
     s->len = strlen(html);
     s->html = js_malloc(ctx, s->len + 1);
     CHECK(s->html != NULL, "the fragment parse could not copy its markup");
     memcpy(s->html, html, s->len + 1);
-    s->node = NULL;
+    /* §13.4 step 16, in context's node document, which is target's: a ShadowRoot's host and a template's
+       element share their target's. This flow made it, so its delta owns it. */
+    fragment = lxb_dom_document_fragment_interface_create(lxb_dom_interface_node(context)->owner_document);
+    CHECK(fragment != NULL,
+          "HTML §13.4 \"Parsing HTML fragments\" step 16's DocumentFragment could not be created");
+    s->fragment = lxb_dom_interface_node(fragment);
+    dom_cow_note_created(s->fragment);
 }
 
-/* §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.5.7 step 7 / §8.6.4 set and filter HTML step 9 — WHERE
-   THE PARSE GOES NEXT, which is one answer reached from two places: the end of the feed, and the end of
-   §8.6.4's filter between them. Written once because the two must not drift — a filter that resumed at the
-   wrong one of these would place an unsanitized fragment or clear the target twice. */
+/* The end of the parse, reached from the feed, §14.4's take and §8.6.4's filter: §13.4 step 17 hands what lexbor
+   built under `root` to step 16's fragment, one node per step. */
 void fragment_parse_placement(FragmentParse *s, JSStepHdr *hdr)
 {
-    /* THE PARSE ALWAYS PRODUCED ONE. chunk_begin creates the root element before the first byte and only an
-       allocation failure clears it, which is now fatal at the feed — so the `if (!s->frag) go to DONE` this
-       used to open with described a state that cannot arise, and the same test stood in two more places. */
     DCHECK(s->frag != NULL, "the fragment placement was reached with no parsed fragment");
-    if (s->clear_first) {
-        s->node = s->anchor->first_child;
-        hdr->stage = FRAG_CLEAR;
-        return;
-    }
-    s->node = s->frag->first_child;
-    hdr->stage = FRAG_PLACE;
+    hdr->stage = FRAG_FRAGMENT;
 }
 
-/* ONE STEP of the parse-and-place. Returns JS_STEP_YIELD while there is more, or 0 when the fragment is in the
-   tree. Every caller is a member body that returns whatever this returns. */
+/* The member's DOM §4.2.3 algorithm over the filled fragment, which resumes at FRAG_DONE. Returns false having
+   thrown: §8.5.6's append is a pre-insert, and §8.5.5's replace runs replace step 1's validity. */
+static bool fragment_place_start(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
+{
+    lxb_dom_node_t *a = s->anchor;
+
+    switch (s->where) {
+    case FRAG_INTO_REPLACE_ALL:
+        node_replace_all_start(hdr, &s->ra, s->fragment, a, FRAG_RA_RM_RANGES, FRAG_DONE);
+        return true;
+    case FRAG_INTO_REPLACE:
+        if (!node_ensure_pre_insert_valid(ctx, s->fragment, a->parent, a, a)) return false;
+        node_replace_start(hdr, &s->rp, s->fragment, a, a->parent, FRAG_RP_RM_RANGES, FRAG_DONE);
+        return true;
+    case FRAG_INTO_BEFORE:
+        node_insert_start(hdr, &s->in, s->fragment, a->parent, a, false, FRAG_IN_TAKE, FRAG_DONE);
+        return true;
+    case FRAG_INTO_AFTER:
+        node_insert_start(hdr, &s->in, s->fragment, a->parent, a->next, false, FRAG_IN_TAKE, FRAG_DONE);
+        return true;
+    case FRAG_INTO_FIRST_CHILD:
+        node_insert_start(hdr, &s->in, s->fragment, a, a->first_child, false, FRAG_IN_TAKE, FRAG_DONE);
+        return true;
+    case FRAG_INTO_CHILDREN:
+        return node_pre_insert_start(ctx, hdr, &s->in, s->fragment, a, NULL, FRAG_IN_TAKE, FRAG_DONE);
+    case FRAG_INTO_RETURN:
+        hdr->stage = FRAG_DONE;
+        return true;
+    default:
+        DFAILF("a fragment was placed with position %d, which fragment_parser.h does not list", s->where);
+        return false;
+    }
+}
+
+/* ONE STEP of the parse-and-place; see fragment_parser.h. */
 int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
 {
-    switch (hdr->stage) {
-    case FRAG_CLEAR: {
-        /* `Replace all with fragment within target` REMOVES the target's children first, and a page's existing
-           subtree is as big as the page. The parse is already finished by the time this runs, which is the
-           order the setter states. */
-        lxb_dom_node_t *next;
-        if (!s->node) {
-            DCHECK(s->frag != NULL, "the fragment clear finished with no parsed fragment to place");
-            s->node = s->frag->first_child;
-            hdr->stage = FRAG_PLACE;
-            return JS_STEP_YIELD;
-        }
-        next = s->node->next;
-        dom_cow_remove_child(s->node);
-        s->node = next;
-        return JS_STEP_YIELD;
-    }
+    int st = hdr->stage;
+
+    if (st >= FRAG_IN_TAKE && st < FRAG_IN_TAKE + NODE_INSERT_PHASE_N)
+        return node_insert_run(ctx, hdr, &s->in, FRAG_IN_TAKE);
+    if (st >= FRAG_RA_RM_RANGES && st < FRAG_RA_RM_RANGES + NODE_REPLACE_ALL_PHASE_N)
+        return node_replace_all_run(ctx, hdr, &s->ra, FRAG_RA_RM_RANGES);
+    if (st >= FRAG_RP_RM_RANGES && st < FRAG_RP_RM_RANGES + NODE_REPLACE_PHASE_N)
+        return node_replace_run(ctx, hdr, &s->rp, FRAG_RP_RM_RANGES);
+    switch (st) {
     case FRAG_FEED:
         /* HTML §8.5.4's fragment parsing algorithm steps STEP 2, acted on. The answer was taken at
            fragment_parse_begin — the one point every member converges on — and this is the one place it is
@@ -342,8 +369,8 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
             /* WHOSE TREE §13.2.6 IS ABOUT TO BUILD — §13.4 "Parsing HTML fragments" step 3's "Let document be
                a Document node whose type is html", which lexbor creates inside the call above and hangs the
                root element under. It is FLOW-PRIVATE in the strongest sense available: this statement made it,
-               nothing between the two runs the page's code, and the placement below is what moves its contents
-               into a tree another flow can reach — through the capturing chokepoint, one node at a time. The
+               nothing between the two runs the page's code, and FRAG_FRAGMENT is where each of its top-level nodes
+               leaves it, through dom_cow_take_private, for §13.4 step 16's fragment. The
                declaration is keyed on this parse's own tree builder, so it survives the per-byte suspension
                below rather than standing open while a sibling flow runs. */
             dom_cow_parse_declare(s->pc->parser->tree,
@@ -374,16 +401,16 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
         js_free(ctx, s->pc);
         s->pc = NULL;
         CHECK(s->frag != NULL, "the fragment parse produced no root element");
-        /* THE PARSE'S NODES BELONG TO THE REAL DOCUMENT, and everything after this line depends on it: the
-           placement moves them into that document's tree with no §4.5 adopt, and their tag ids and attribute
+        /* THE PARSE'S NODES BELONG TO THE REAL DOCUMENT, and everything after this line depends on it:
+           FRAG_FRAGMENT links them into step 16's fragment with no §4.5 adopt, and their tag ids and attribute
            names are only meaningful against that document's hashes. It holds because §13.4's temporary
            document is created against this one and lxb_dom_document_init INHERITS its arenas — see
            core/html/tree_construction.c, where the same fact is what makes a fork's copy of this parse need no
            §4.5 adopt and re-intern no name, and where it is asserted per copied node. */
         DCHECK(s->frag->owner_document == lxb_dom_interface_node(s->context)->owner_document,
-               "a fragment parse produced nodes belonging to a document other than its context element's — the "
-               "placement below inserts them with no adopt, so their node document would be wrong for every "
-               "flow that reads it");
+               "a fragment parse produced nodes belonging to a document other than its context element's — "
+               "FRAG_FRAGMENT links them into the fragment with no adopt, so their node document would be wrong "
+               "for every flow that reads it");
         /* The same parse boundary the document has: tree construction produces attributes in the NULL
            namespace, and lexbor stamps every one it creates with the ELEMENT's instead. Corrected here,
            before a single node of this fragment is moved into a tree anything can read — and ONCE. It was
@@ -398,14 +425,14 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
              "If the scripting mode is not Fragment, then set the element's parser document to the Document."
            — this engine keeps no parser document on the element (core/html/html_script.h says why: the CALLER
            states it, because the caller is either §13.2.6 tree construction or page code and only one of those
-           can be the parser). Under FRAGMENT the placement below reaches §4.2.3's insertion steps, which pass
+           can be the parser). Under FRAGMENT the placement reaches §4.2.3's insertion steps, which pass
            `parser_inserted` FALSE — which is precisely the section's own note: "The Fragment scripting mode
            treats parser-inserted scripts as if they were not parser-inserted, allowing, for example, executing
            scripts when applying a fragment created by createContextualFragment()."
              "If the parser's scripting mode is Inert, then set the script element's already started to true.
            (fragment case)" — THE ONE THIS BRANCHES ON. That flag is the only thing that stops a placed script
-           from running: the placement goes through dom_cow_append_child, which runs §4.2.3's insertion steps,
-           which prepare an inserted `<script>`, and HTML §4.12.1.1 step 1 is where the flag is read. So under INERT
+           from running: the placement's DOM §4.2.3 insert step 7.7 runs the insertion steps, which prepare an
+           inserted `<script>`, and HTML §4.12.1.1 step 1 is where the flag is read. So under INERT
            the markup's scripts are dead and under FRAGMENT they are live, and NOTHING ELSE about the parse
            differs — which is what makes `range.createContextualFragment("<script>…")` a fragment whose script
            has not run (HTML §4.12.1.1 step 7: "If el is not connected, then return") and which runs the moment the
@@ -465,12 +492,6 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
            `<template>`'s content, a `createContextualFragment` nobody inserts — whose images a browser does
            not load, and would then update the inserted ones a second time. The media walk above is not the
            same case: §4.8.11.2 starts an element created WITH a `src` whether or not it is connected. */
-        /* The reference child is fixed BEFORE anything moves: inserting changes `anchor->next`. The clear that
-           may follow cannot move it either — it only ever empties an append target, which
-           fragment_parse_begin asserts. */
-        s->ref = (s->where == FRAG_INTO_AFTER) ? s->anchor->next
-               : (s->where == FRAG_INTO_FIRST_CHILD) ? s->anchor->first_child
-               : s->anchor;
         /* §8.6.4 set and filter HTML STEP 8, between the parse and the replacement: the fragment is filtered
            while it is still this parse's private tree, which is the only moment at which removing from it is invisible to
            everything else — and the only moment at which a `<script>` the configuration removes has not yet
@@ -492,25 +513,21 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
         if (r != 0)
             return r;   /* YIELD, or ABRUPT having thrown §14.4 step 7's or step 8's "SyntaxError" */
         s->frag = xml_fragment_take(&s->xf);
-        /* THE SAME INVARIANT THE HTML ARM ASSERTS AT ITS OWN BOUNDARY, and for the same reason: the placement
-           moves these nodes into the document with no DOM §4.5 adopt, so their node document must ALREADY be
+        /* THE SAME INVARIANT THE HTML ARM ASSERTS AT ITS OWN BOUNDARY, and for the same reason: FRAG_FRAGMENT
+           links these nodes into the fragment with no DOM §4.5 adopt, so their node document must ALREADY be
            the context's. §14.4's reading would put them in a Document of their own and adopt them at step 11's
            append; core/xml/xml_tree.h's two-argument entry is what lets them be created in the right document
            instead, and this is where that claim is checked rather than trusted. */
         DCHECK(s->frag->owner_document == lxb_dom_interface_node(s->context)->owner_document,
                "HTML §14.4's parse produced nodes belonging to a document other than its context element's — "
-               "the placement below inserts them with no adopt, so their node document would be wrong for "
-               "every flow that reads it");
+               "FRAG_FRAGMENT links them into the fragment with no adopt, so their node document would be wrong "
+               "for every flow that reads it");
         /* NONE OF THE HTML PARSE-BOUNDARY SEAMS RUN FOR THIS TREE, which is core/html/domparser.c's XML arm's
            list and its reasons: dom_attr_normalize_parsed would rewrite namespaces Namespaces in XML §6.2
            "Namespace Defaulting"'s expansion just decided, and §13.2.6.4.4's declarative-shadow conversion and §4.8.11.2's media walk
            are triggers stated over an HTML parser's stack of open elements. The one seam that DOES run is
            §14.2's already-started stamp, and it runs inside §14.4's own machine because that is the standard
-           that owns it.
-           The reference child is fixed BEFORE anything moves, exactly as on the HTML arm. */
-        s->ref = (s->where == FRAG_INTO_AFTER) ? s->anchor->next
-               : (s->where == FRAG_INTO_FIRST_CHILD) ? s->anchor->first_child
-               : s->anchor;
+           that owns it. */
         /* §8.6.4 set and filter HTML STEP 8 reaches the same walk from here, because the filter is a fact
            about the MEMBER and not about which parser produced the tree. */
         if (s->sanitize) {
@@ -523,35 +540,19 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
         return JS_STEP_YIELD;
     }
 
-    case FRAG_PLACE: {
-        /* Everything here moves nodes OUT of what the parse just built, which nothing else has ever seen — see
-           dom_cow.h. `frag` is the declaration, passed to each operation. */
-        lxb_dom_node_t *node = s->node, *next;
-        if (!node) {
-            dom_cow_destroy_private(ctx, s->frag, /*with_children*/ false);
-            /* THE CLAIM IS SPENT HERE, the way a delta entry's is — fragment_parse_release owns whatever `frag` still
-               names, so leaving the pointer behind after this free is the double free that ownership buys. */
-            s->frag = NULL;
-            if (s->where == FRAG_INTO_REPLACE) dom_cow_remove_child(s->anchor);
-            hdr->stage = FRAG_DONE;
-            return 0;
+    case FRAG_FRAGMENT: {
+        /* Both roots are private until here: `frag` is the parse's, and nothing but this machine has seen
+           `fragment`. Each node leaves `frag` through the seam that makes the flow its owner. */
+        lxb_dom_node_t *node = s->frag->first_child;
+
+        if (node) {
+            dom_cow_take_private(s->frag, node);
+            dom_cow_insert_link(s->fragment, node, NULL);
+            return JS_STEP_YIELD;
         }
-        next = node->next;
-        dom_cow_take_private(s->frag, node);   /* out of the private tree; the INSERT below is the shared write */
-        switch (s->where) {
-        case FRAG_INTO_CHILDREN:    dom_cow_append_child(s->anchor, node); break;
-        case FRAG_INTO_BEFORE:
-        case FRAG_INTO_REPLACE:     dom_cow_insert_before(s->anchor, node); break;
-        case FRAG_INTO_AFTER:       if (s->ref) dom_cow_insert_before(s->ref, node);
-                                else dom_cow_append_child(s->anchor->parent, node);
-                                break;
-        case FRAG_INTO_FIRST_CHILD: if (s->ref) dom_cow_insert_before(s->ref, node);
-                                else dom_cow_append_child(s->anchor, node);
-                                break;
-        default: DFAIL("a fragment was placed with an unknown position"); break;
-        }
-        s->node = next;
-        return JS_STEP_YIELD;
+        dom_cow_destroy_private(ctx, s->frag, /*with_children*/ false);
+        s->frag = NULL;   /* the claim is spent: fragment_parse_release owns whatever `frag` still names */
+        return fragment_place_start(ctx, hdr, s) ? JS_STEP_YIELD : JS_STEP_ABRUPT;
     }
     default:
         DCHECK(hdr->stage == FRAG_DONE, "the fragment machine resumed into a stage it does not have");

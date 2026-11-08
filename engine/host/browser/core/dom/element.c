@@ -859,13 +859,12 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                `body` when the parent is a fragment. Step 7 still replaces `this` within THIS'S parent, which
                is the real one either way: step 5 reassigns the local, not the tree. */
             fragment_parse_begin(ctx, s, s->own_context ? s->own_context : lxb_dom_interface_element(n->parent),
-                                 n, FRAG_INTO_REPLACE, html, false, /*allow_declarative*/ false, scripting);
+                                 n, FRAG_INTO_REPLACE, html, /*allow_declarative*/ false, scripting);
         } else if (magic == SHADOW_ROOT_SET_INNER_HTML || magic == SHADOW_ROOT_SET_HTML_UNSAFE) {
             /* §13.4 step 2: "Let context be target if target is an Element; otherwise target's HOST." A shadow
                root has no local name and no tokenizer state of its own, so the markup is parsed exactly as the
                host's children would be, and it REPLACES the shadow root's children. */
-            fragment_parse_begin(ctx, s, shadow_root_host(n), n, FRAG_INTO_CHILDREN, html,
-                                 /*clear_first*/ true, filtered, scripting);
+            fragment_parse_begin(ctx, s, shadow_root_host(n), n, FRAG_INTO_REPLACE_ALL, html, filtered, scripting);
         } else {
             /* §8.5.4 step 2.2 / §8.5.2 setHTMLUnsafe step 2: a <template>'s children are NOT what these
                replace — its TEMPLATE CONTENTS are, which is a separate tree reached through the element. The
@@ -885,8 +884,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                ALL FOUR of its members — a `<template shadowrootmode>` a SAFE member parses becomes a real
                shadow root and is then sanitized like any other tree, which is what step 1.5.6 walks into.
                §8.5.4's innerHTML setter is not one of them and passes false. */
-            fragment_parse_begin(ctx, s, el, target, FRAG_INTO_CHILDREN, html, /*clear_first*/ true, filtered,
-                                 scripting);
+            fragment_parse_begin(ctx, s, el, target, FRAG_INTO_REPLACE_ALL, html, filtered, scripting);
         }
         JS_FreeCString(ctx, html);
         hdr->stage = FRAG_FEED;
@@ -896,8 +894,8 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 }
 
 static const char *const EL_SET_HTML_STEPS[] = {
-    FRAG_STAGES(JS_STEP_STAGE_LABEL) FRAG_STAGE_CLEAR(JS_STEP_STAGE_LABEL)
-    SANITIZE_STAGES(JS_STEP_STAGE_LABEL) NULL
+    FRAG_STAGES(JS_STEP_STAGE_LABEL) FRAG_INSERT_STAGES(JS_STEP_STAGE_LABEL)
+    FRAG_REPLACE_STAGES(JS_STEP_STAGE_LABEL) SANITIZE_STAGES(JS_STEP_STAGE_LABEL) NULL
 };
 
 static const IdlStepDecl EL_SET_HTML_STEP = { js_el_set_html, sizeof(FragmentParse),
@@ -1097,7 +1095,7 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
         /* §8.5.6 invokes the fragment parsing algorithm steps with no scriptingMode, so HTML §8.5.4's default
            INERT applies — an `insertAdjacentHTML`'d `<script>` is marked already started and does not run. */
         fragment_parse_begin(ctx, s, lxb_dom_interface_element(context), n, where, html,
-                             false, false, FRAG_SCRIPTING_INERT);
+                             /*allow_declarative*/ false, FRAG_SCRIPTING_INERT);
         JS_FreeCString(ctx, html);
         hdr->stage = FRAG_FEED;
         return JS_STEP_YIELD;
@@ -1105,7 +1103,9 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
     return fragment_parse_step(ctx, hdr, s);
 }
 
-static const char *const EL_ADJACENT_HTML_STEPS[] = { FRAG_STAGES(JS_STEP_STAGE_LABEL) NULL };
+static const char *const EL_ADJACENT_HTML_STEPS[] = {
+    FRAG_STAGES(JS_STEP_STAGE_LABEL) FRAG_INSERT_STAGES(JS_STEP_STAGE_LABEL) NULL
+};
 
 static const IdlStepDecl EL_ADJACENT_HTML_STEP = {
     js_el_insert_adjacent_html, sizeof(FragmentParse), fragment_parse_visit, fragment_parse_release,
