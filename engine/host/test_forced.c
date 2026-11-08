@@ -1530,6 +1530,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/adoptrest.h"
 #include "fixture/htmlrest.h"
 #include "fixture/htmlclearrest.h"
+#include "fixture/rangerest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2307,6 +2308,7 @@ TF_DOCS[] = {
     { "adoptrest", HTML_ADOPTREST },
     { "htmlrest", HTML_HTMLREST },
     { "htmlclearrest", HTML_HTMLCLEARREST },
+    { "rangerest", HTML_RANGEREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -18087,6 +18089,40 @@ TF_UNIT void probes_htmlclearrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rangerest` document (fixture/rangerest.h). range-extract-rests: the extracting arm's
+   extractContents of a range selecting the box of 100,002 elements rests inside the call (`sliceOverrunGapWork`
+   under one quantum), and the arm then reads the box in the returned fragment whole, both names absent and the
+   range collapsed. range-extract-sibling-tree: the sibling arm reads the box in place and both names present. */
+TF_UNIT void probes_rangerest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1, kt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/rg-done", "p", "1") && param_value_is(js, "/api/rg-done", "c", "100002"),
+             "NOT REACHED: no /api/rg-done?p=1&c=100002 record, so the extraction did not finish with the box whole "
+             "in the fragment");
+    fold_row(&tt, &why, param_value_is(js, "/api/rg-done", "n", "1") && param_value_is(js, "/api/rg-done", "w", "1"),
+             "the extracting arm still found a removed element by name: the name index kept an entry the extraction "
+             "took out of the document tree");
+    fold_row(&tt, &why, param_value_is(js, "/api/rg-done", "k", "1"),
+             "DOM §5.5 extract step 15: the range is not collapsed after the extraction");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: an extractContents of 100,002 "
+             "elements removed them inside one step instead of resting per node");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/rg-kept", "p", "1") && param_value_is(js, "/api/rg-kept", "c", "100002"),
+             "NOT REACHED: no /api/rg-kept?p=1&c=100002 record, so the sibling arm did not read the box in place "
+             "with its children");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/rg-kept", "n", "1") && param_value_is(js, "/api/rg-kept", "w", "1"),
+             "the sibling arm did not find the box's named elements: the extracting arm's name-index upkeep reached "
+             "a flow whose tree still holds them");
+    const Probe rows[] = {
+        { "range-extract-rests", tt, "rgBox", SESS_EXPLORE, why },
+        { "range-extract-sibling-tree", kt, "rgBox", SESS_EXPLORE, kwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `mixinrest` document (fixture/mixinrest.h). mixin-<k>-rests, for append (ap), replaceWith (rw)
    and replaceChildren (rc): the arm's call with the box of 100,002 elements and a string rests inside itself
    (`sliceOverrunGapWork` under one quantum, a fact of the whole document), and the arm then reads the box in the
@@ -30443,6 +30479,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_adoptrest(js, probes, &np);
     probes_htmlrest(js, probes, &np);
     probes_htmlclearrest(js, probes, &np);
+    probes_rangerest(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
