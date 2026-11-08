@@ -6170,6 +6170,18 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             t = (t == IDL_DOMSTRING_NULLABLE) ? IDL_DOMSTRING : IDL_USVSTRING;
         }
 
+        /* `double?` and `long long?`: Web IDL §3.2.20 Nullable types step 3, "if V is null or undefined, then
+           return the IDL nullable type T? value null"; what survives takes the inner type's own conversion. */
+        if (idl_numeric_nullable_inner(t) != IDL_ANY) {
+            if (JS_IsNull(a) || JS_IsUndefined(a)) {
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                *slot = JS_NULL;
+                goto placed;
+            }
+            t = idl_numeric_nullable_inner(t);
+        }
+
         /* [LegacyNullToEmptyString]: null becomes "" rather than "null", and it is part of the TYPE — the
            declaration says so, so no body has to remember it. */
         if (t == IDL_DOMSTRING && m->null_to_empty && JS_IsNull(a)) {

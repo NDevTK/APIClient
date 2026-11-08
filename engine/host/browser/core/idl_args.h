@@ -76,15 +76,12 @@ typedef enum {
     IDL_FLOAT,
     /* `double?` — §3.2.7 under §3.2.20 Nullable types. CookieInit's `DOMHighResTimeStamp? expires = null` needs
        it: ToNumber(null) is 0, the epoch, so IDL_DOUBLE would turn the IDL's own default into a real timestamp.
-       Named residual: only a dictionary-member type. Not covered: a `double?` or `long long?` argument position,
-       which the argument loop's closing DCHECK refuses as "a type this machine does not convert" (release
-       stringifies it). Next diff: a numeric twin of the DOMString?/USVString? null rewrite in the argument
-       loop, using idl_numeric_nullable_inner. Absence shows as that abort, naming the type, at the first call
-       of a member declaring one. */
+       An argument or attribute-setter position converts null and undefined to null and anything else through
+       the inner type (Web Animations' `attribute double? startTime`). */
     IDL_DOUBLE_NULLABLE,
     /* `long long?` — Web IDL §3.2.4.7 long long under §3.2.20; separate from the row above because the inner
        conversion differs (a modulo, not §3.2.7's refusal). CookieInit's `long long? maxAge = null`: a 0 is
-       `Max-Age: 0`, a deletion, while null is no Max-Age at all. IDL_DOUBLE_NULLABLE's residual covers it. */
+       `Max-Age: 0`, a deletion, while null is no Max-Age at all. */
     IDL_LONG_LONG_NULLABLE,
     /* A callback function type — Web IDL §3.2.19 Callback function types: a callable crosses as itself and
        anything else is a TypeError. An absent optional member is not refused. */

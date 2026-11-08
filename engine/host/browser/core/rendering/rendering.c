@@ -26,6 +26,7 @@
 #include "core/css/css_style_declaration.h"   /* step 22 asks the root's author match first */
 #include "core/css/media_query_list.h"
 #include "core/css/top_layer.h"
+#include "core/animation/document_animations.h"
 #include "core/dom/page_visibility.h"
 #include "core/dom/render_blocking.h"
 #include "core/dom/scroll_events.h"
@@ -75,8 +76,7 @@ typedef struct { long none, hidden, blocked, idle; } RenderingExclusions;
 /* ---- steps 2 to 5 ----------------------------------------------------------------------------------------
  *
  * A STEP OF §8.1.7.3 WHOSE SPECIFICATION IS NOT IN THIS BUILD. Eleven of the twenty-three steps are calls into
- * ANOTHER standard — CSSOM View's resize and scroll steps, Web Animations §4.4, Fullscreen, the canvas context
- * lost steps, Resize Observer §3.4, CSS View Transitions §7.2, Intersection Observer §3.2.2 — and this engine
+ * ANOTHER standard — CSSOM View's resize and scroll steps, Fullscreen, the canvas context lost steps, Resize Observer §3.4, CSS View Transitions §7.2, Intersection Observer §3.2.2 — and this engine
  * has none of those standards. Their work-sets are therefore EMPTY BY CONSTRUCTION: the list a step drains is
  * filled by an interface that does not exist, so nothing can have filled it, and the page's own ReferenceError
  * on that interface is the forcing function §NO STUBS asks for.
@@ -114,6 +114,7 @@ static bool doc_has_rendering_work(JSContext *docctx)
     /* visual_update_pending is the step's "would have no visible effect" for a document whose tree changed
        since its last update (core/rendering/visual_update.h). */
     return page_reveal_pending(docctx) || visual_update_pending(docctx) || animation_frame_pending(docctx)
+        || document_animations_pending(docctx)
         || media_query_list_pending(docctx) || intersection_observer_pending(docctx)
         || scroll_events_pending(docctx);
 }
@@ -190,6 +191,9 @@ static JSValue rendering_collect_docs(JSContext *ctx, RenderingExclusions *ex)
     X(UR_MEDIA,  "HTML §8.1.7.3 update the rendering step 10 (for each doc: evaluate media queries and report " \
                  "changes — CSSOM VIEW §4.2 fires `change` at each MediaQueryList whose matches state has "     \
                  "changed, in the order they were created, oldest first), one MediaQueryList per rest")         \
+    X(UR_ANIM,   "HTML §8.1.7.3 update the rendering step 11 (for each doc: update animations and send events "  \
+                 "— Web Animations §4.4 updates doc's timelines and their animations, then dispatches doc's "  \
+                 "pending animation events in their sorted order), one event per rest")                       \
     X(UR_FRAMES, "HTML §8.1.7.3 update the rendering step 14 (for each doc: run the animation frame callbacks " \
                  "with the relative high resolution time given frameTimestamp and doc's relevant global "       \
                  "object — HTML §8.12 Animation frames), one callback per "                                                      \
@@ -231,6 +235,7 @@ typedef struct JSUpdateRendering {
     uint32_t  ndocs, i;     /* the cursor every "for each doc of docs" step shares */
     uint32_t  nframe, k;    /* §8.12 Animation frames step 2's key snapshot for the current doc, and step 3's cursor */
     uint32_t  nmedia, m;    /* §4.2's collection snapshot for the current doc, and its cursor */
+    uint32_t  nanev, av;    /* Web Animations §4.4 step 4's events to dispatch for the current doc, and step 7's cursor */
     /* §13.2's step 2 EXTENT for the current doc, and its cursor. The extent is measured once per document,
        by step 1, because a `scroll` listener that scrolls again APPENDS — and an append cannot move a pair
        already in the list, so an index below the extent names one pair for the whole walk. */
@@ -261,6 +266,7 @@ typedef struct JSUpdateRendering {
     uint8_t   snapped;      /* §8.12 Animation frames step 2 has been taken for docs[i] */
     uint8_t   msnapped;     /* §4.2's collection snapshot has been taken for docs[i] */
     uint8_t   ssnapped;     /* §13.2's step 1 has run and its step 2's extent has been taken for docs[i] */
+    uint8_t   asnapped;     /* Web Animations §4.4 steps 1-5 have run for docs[i] */
     bool      not_canceled;
     /* §8.1.4.6's REPORT AN EXCEPTION, for a callback that threw. The work record is THIS machine's, the way
        abort.h's AbortSignalWork and the dispatch machine's own are their callers' — reporting fires an `error`
@@ -396,15 +402,9 @@ static JSContext *doc_realm(JSContext *ctx, JSUpdateRendering *s)
    of the mechanism: the producer (`matchMedia`) arrived, the DCHECK fired at this exact place in the order, and
    the step it named was built here.
 
-   Steps 11 to 13, asserted in order at the place the algorithm runs them. */
-static void steps_11_to_13(JSContext *docctx)
+   Step 11 is UR_ANIM, below. Steps 12 and 13, asserted in order at the place the algorithm runs them. */
+static void steps_12_to_13(JSContext *docctx)
 {
-    realm_awaits(docctx, "Animation",
-                "update the rendering step 11 UPDATES ANIMATIONS AND SENDS EVENTS (WEB ANIMATIONS §4.4): "
-                "update the timelines, remove replaced animations, PERFORM A FULL MICROTASK CHECKPOINT (§4.4 "
-                "step 3, inside this step), stable-sort the pending animation events and dispatch each — this "
-                "build now has Animation, so step 11 must be written, and its internal checkpoint cannot be "
-                "one stage with anything around it");
     realm_awaits(docctx, "Document.prototype.exitFullscreen",
                 "update the rendering step 12 runs the FULLSCREEN STEPS, firing fullscreenchange/"
                 "fullscreenerror and resolving requestFullscreen()'s promise — this build now has fullscreen, "
@@ -611,6 +611,12 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                page has already been given. The list is emptied at the end of this document's walk exactly as
                it would have been. */
             s->sv++;
+        } else if (s->hdr.stage == UR_ANIM) {
+            s->fphase = 0;
+            JS_FreeValue(ctx, s->ev);
+            JS_FreeValue(ctx, s->target);
+            s->ev = s->target = JS_UNDEFINED;
+            s->av++;                     /* §4.4 step 4 cleared the queue: the event is spent, on to the next */
         } else if (s->hdr.stage == UR_FRAMES) {
             s->cphase = 0;
             JS_FreeValue(ctx, s->fn);
@@ -714,7 +720,8 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
         s->robegun = s->ro16 = 0;
         s->i = s->ndocs = s->nframe = s->k = s->nmedia = s->m = s->nobs = s->ob = 0;
         s->nsev = s->sv = 0;
-        s->fphase = s->cphase = s->snapped = s->msnapped = s->obsnapped = s->ssnapped = 0;
+        s->nanev = s->av = 0;
+        s->fphase = s->cphase = s->snapped = s->msnapped = s->obsnapped = s->ssnapped = s->asnapped = 0;
         STEP_GOTO(s->hdr.stage, UR_REVEAL, &s->cphase, &s->fphase, NULL);
         /* STEP 1: frameTimestamp is the event loop's LAST RENDER OPPORTUNITY TIME — the moment the in-parallel
            loop recorded when it decided there was one, not the moment this task happens to run. */
@@ -906,11 +913,9 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
            unsuspendable span CLAUDE.md forbids wherever author code runs. */
         for (;;) {
             if (s->i >= s->ndocs) {
-                for (s->i = 0; s->i < s->ndocs; s->i++)
-                    steps_11_to_13(doc_realm(ctx, s));
                 s->i = 0;
-                s->snapped = 0;
-                STEP_GOTO(s->hdr.stage, UR_FRAMES, &s->cphase, &s->fphase, NULL);
+                s->asnapped = 0;
+                STEP_GOTO(s->hdr.stage, UR_ANIM, &s->cphase, &s->fphase, NULL);
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -936,6 +941,48 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             JS_FreeValue(docctx, s->target);
             s->ev = s->target = JS_UNDEFINED;
             s->m++;
+        }
+    }
+
+    if (s->hdr.stage == UR_ANIM) {
+        /* STEP 11: "For each doc of docs, update animations and send events for doc, passing in the relative high
+           resolution time given frameTimestamp and doc's relevant global object as the timestamp." Web Animations
+           §4.4 steps 1-5 are core/animation/document_animations.c's; steps 6-7 dispatch, one event per rest,
+           because each dispatch runs the page's listeners. Steps 12 and 13 follow for every doc. */
+        for (;;) {
+            if (s->i >= s->ndocs) {
+                for (s->i = 0; s->i < s->ndocs; s->i++)
+                    steps_12_to_13(doc_realm(ctx, s));
+                s->i = 0;
+                s->snapped = 0;
+                STEP_GOTO(s->hdr.stage, UR_FRAMES, &s->cphase, &s->fphase, NULL);
+                break;
+            }
+            docctx = doc_realm(ctx, s);
+            if (!s->asnapped) {
+                JSValue now = hr_time_relative(docctx, s->frame_ts);
+
+                s->nanev = document_animations_update(docctx, now);
+                JS_FreeValue(docctx, now);
+                s->av = 0;
+                s->asnapped = 1;
+            }
+            if (s->av >= s->nanev) {
+                document_animations_dispatch_end(docctx);
+                s->asnapped = 0;
+                s->i++;
+                continue;
+            }
+            if (s->fphase == 0 && JS_IsUndefined(s->ev))
+                document_animations_event_at(docctx, s->av, &s->target, &s->ev);
+            r = event_target_fire_run(docctx, &s->fphase, STEP_CB(s->cb), s->target, s->ev, JS_UNDEFINED,
+                                      cb_result, &s->not_canceled, out_cb, out_argc);
+            if (r > 0) return r;                     /* parked on the page's animation event listeners */
+            cb_result = JS_UNDEFINED;
+            JS_FreeValue(docctx, s->ev);
+            JS_FreeValue(docctx, s->target);
+            s->ev = s->target = JS_UNDEFINED;
+            s->av++;
         }
     }
 

@@ -7,6 +7,7 @@
 
 #include "check.h"
 #include "core/agent_state.h"
+#include "core/animation/animation_timeline.h"
 #include "solver/dom_cow.h"   /* dom_cow_note_created — a created node belongs to the flow's delta */
 #include "solver/cow.h"       /* cow_capture_host_record: a Document's address is per-flow state that owns a
                                  value, so it goes through the record arm, not the byte one */
@@ -4429,6 +4430,8 @@ void document_install_proto(JSContext *ctx)
        "fullscreen is supported"); a readonly accessor declares nothing at the agent, so it has no init line above
        (core/fullscreen/fullscreen.h). */
     fullscreen_install_document_members(ctx, proto);
+    /* Web Animations §6.9's `timeline`, the default document timeline, installed by the component that owns it. */
+    animation_timeline_install_document_members(ctx, proto);
     /* HTML §3.1.7's `currentScript` and this realm's baseline record holding its initial null, installed by the
        component that owns §4.12.1.1's bracket. */
     document_current_script_install(ctx, proto);

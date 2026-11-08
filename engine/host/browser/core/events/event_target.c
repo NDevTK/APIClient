@@ -1441,11 +1441,12 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
        onblur, onerror, onfocus, onload, onresize and onscroll; onscrollend and onbeforetoggle are NOT among     \
        them, and a prefix or family guess would have taken both. */                                              \
     X("onblur", "blur", EH_GLOBAL | EH_WINDOW_REFLECTING)                                                        \
-    /* `oncancel` is a GlobalEventHandlers name AND HTML §6.10.3 The CloseWatcher interface's own event handler \
-       IDL attribute, over the SAME event type — one row with two memberships, exactly as `onclose` below is   \
+    /* `oncancel` is a GlobalEventHandlers name AND HTML §6.10.3 The CloseWatcher interface's AND Web         \
+       Animations §6.4 Animation's own event handler IDL attribute, over the SAME event type — one row with     \
+       three memberships, exactly as `onclose` below is                                                         \
        GlobalEventHandlers' and two other interfaces'. A second X() row would put the name in this list twice, \
        and every consumer of the list would then see a member that does not exist twice over. */               \
-    X("oncancel", "cancel", EH_GLOBAL | EH_CLOSE_WATCHER)                                                        \
+    X("oncancel", "cancel", EH_GLOBAL | EH_CLOSE_WATCHER | EH_ANIMATION)                                         \
     X("oncanplay", "canplay", EH_GLOBAL)                                                                         \
     X("oncanplaythrough", "canplaythrough", EH_GLOBAL)                                                           \
     /* `onchange` has THREE owners — GlobalEventHandlers, CSSOM VIEW §4.2's MediaQueryList and Permissions       \
@@ -1723,7 +1724,11 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
        dispatches, which is the shape-only member the IDL audit exists to expose. */                             \
     X("onblocked", "blocked", EH_IDB_OPEN_REQUEST)                                                               \
     X("onupgradeneeded", "upgradeneeded", EH_IDB_OPEN_REQUEST)                                                   \
-    X("onversionchange", "versionchange", EH_IDB_DATABASE)
+    X("onversionchange", "versionchange", EH_IDB_DATABASE)                                                   \
+    /* Web Animations §6.4's own `onfinish`, beside `oncancel` above; each fires from its algorithm (§4.5.12's   \
+       finish notification steps, §4.5.14's cancel). `onremove` arrives with §5.5.2's removal, which is the      \
+       one that queues a `remove` event. */                                                                      \
+    X("onfinish", "finish", EH_ANIMATION)
 
 /* The NAMES are string literals, not stringified identifiers, so the IDL gap auditor — which scans a component
    for the property names it installs — can SEE them. Behind a `#n` it saw none of these and reported all ninety

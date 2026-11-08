@@ -20,6 +20,7 @@
 #include "core/css/css_numeric_value.h"
 #include "core/css/css_unit_value.h"
 #include "core/css/media_query_list.h"
+#include "core/animation/animation.h"
 #include "core/dom/abort.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
@@ -281,6 +282,7 @@ static void d_scroll_events(JSContext *c, const PlatformAgent *a) { (void)a; scr
 static void d_media_query_list(JSContext *c, const PlatformAgent *a) { (void)a; media_query_list_init(c); }
 static void d_visual_update(JSContext *c, const PlatformAgent *a) { (void)a; visual_update_init(c); }
 static void d_painted_frame(JSContext *c, const PlatformAgent *a) { (void)a; painted_frame_init(c); }
+static void d_animation(JSContext *c, const PlatformAgent *a) { (void)a; animation_init(c); }
 static void d_rendering(JSContext *c, const PlatformAgent *a) { (void)a; rendering_init(c); }
 static void d_headers(JSContext *c, const PlatformAgent *a) { (void)a; headers_init(c); }
 static void d_response(JSContext *c, const PlatformAgent *a) { (void)a; response_init(c); }
@@ -606,6 +608,7 @@ static void r_nav_history_entry(JSRuntime *rt) { navigation_history_entry_free(r
    no collector entry and no brand site. Every pool entry and realm-value slot in both files starts at -1. */
 static void r_page_reveal(JSRuntime *rt) { page_reveal_free(rt); }
 static void r_media_query_list(JSRuntime *rt) { media_query_list_free(rt); }
+static void r_animation(JSRuntime *rt) { animation_free(rt); }
 static void r_simple_dialogs(JSRuntime *rt) { (void)rt; simple_dialogs_free(); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
@@ -622,6 +625,7 @@ static void i_animation_frame(JSContext *c, JSValueConst g, const PlatformDocume
 static void i_idle_callback(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; idle_callback_install(c, g); }
 static void i_page_reveal(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; page_reveal_install(c, g); }
 static void i_media_query_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; media_query_list_install(c, g); }
+static void i_animation(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; animation_install(c, g); }
 static void i_simple_dialogs(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; simple_dialogs_install(c, g); }
 static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
 static void i_intersection_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; intersection_observer_install(c, g); }
@@ -933,6 +937,9 @@ static const PlatformComponent PLATFORM[] = {
     { "visual_update",       d_visual_update,       NULL,        r_visual_update },
     /* A document's last painted frame, before `rendering`, whose step 22 publishes it. */
     { "painted_frame",       d_painted_frame,       NULL,        r_painted_frame },
+    /* Web Animations, before `rendering`, whose step 11 runs its update animations and send events. It follows
+       `event`, whose prototypes Animation.prototype and AnimationPlaybackEvent.prototype chain to. */
+    { "animation",           d_animation,           i_animation, r_animation },
     /* After the three whose algorithms update-the-rendering's steps 8 and 10 are. */
     { "rendering",           d_rendering,           NULL,        r_rendering },
     /* DOM §3.1 "Interface AbortController" and §3.2 "Interface AbortSignal", ahead of `request`: Fetch §5.4's
@@ -1134,6 +1141,12 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "cancelIdleCallback",    "idle_callback" },
     { "IdleDeadline",          "idle_callback" },
     { "matchMedia",            "media_query_list" },
+    /* Web Animations §6.2-§6.4 and §6.12's interface objects: a page reads `window.Animation` to decide whether the
+       Web Animations API exists. */
+    { "Animation",             "animation" },
+    { "AnimationTimeline",     "animation" },
+    { "DocumentTimeline",      "animation" },
+    { "AnimationPlaybackEvent", "animation" },
     /* CSSOM §8.1's namespace object: a missing install makes `CSS.escape` read `undefined`, and only the call
        throws. */
     { "CSS",                   "css_namespace" },
