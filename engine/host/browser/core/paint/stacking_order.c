@@ -82,30 +82,18 @@ static bool so_is_positioned(lxb_dom_element_t *el)
     return !css_computed_keyword_is(el, "position", CSS_KEYWORD_STATIC);
 }
 
-/* DOES A TRANSFORM APPLY TO THIS BOX — the ONE FACT css-transforms-1 §2 "The Transform Rendering Model"
-   states three different rules over, asked once here so the three cannot come apart. §2's own sentence names
-   both of its conjuncts: "For elements whose layout is governed by the CSS box model, any value other than
-   none for the transform property results in the creation of a stacking context." The VALUE half is the
-   computed one, and the ELEMENT half is css-transforms-1's own transformable element, which is also §3's
-   `Applies to:` line — core/css/css_transform.h derives both and states at length why neither alone is the
-   answer, so this is a read of that component and not a second opinion beside it.
-   THE VALUE IS ASKED FIRST AND THAT IS NOT A COST ORDERING, IT IS WHICH POPULATION MEETS A CRASH.
-   `css_transform_is_transformable` aborts by name for an SVG element under another one — this engine lays out
-   no SVG, so it can neither place such a box nor say which of css-transforms-1's two categories it is in —
-   and this predicate is asked of EVERY element the paint walk meets. Asking the category first would turn
-   every `<svg><rect/></svg>` on every page into that abort, for a question §2's own condition settles without
-   it: a `rect` with no transform gets `none`, and `none` creates no stacking context in either category. The
-   conjunction's truth value does not depend on the order, so what the order decides is only that the crash is
-   reached by the elements that actually DECLARE a transform, which is exactly the case this engine cannot
-   answer for. core/css/css_transform.c's own ancestor walk asks the two the other way round and says why at
-   its site; the two agree on every answer and differ only in that.
-   IT IS ONE FACT AND NOT ONE QUESTION, which is why the three callers below each quote their OWN sentence of
-   §2 rather than reading a predicate named after one of them: §2 says a stacking context is created, says
-   which layer the box is painted in, and says what its stack level is, and those are three questions asked of
-   this single bit. */
+/* DOES A TRANSFORM APPLY TO THIS BOX — the one fact css-transforms-1 §2 "The Transform Rendering Model" states
+   three rules over, asked once here so the three cannot come apart. §2's sentence names both conjuncts: "For
+   elements whose layout is governed by the CSS box model, any value other than none for the transform property
+   results in the creation of a stacking context." The element half is §2 Terminology's first category of
+   transformable element (core/css/css_transform.h), so an SVG element under another one, which is the second
+   category, forms no stacking context by this rule.
+   The three callers below each quote their own sentence of §2 rather than a predicate named after one of
+   them: §2 says a stacking context is created, which layer the box is painted in, and what its stack level is,
+   and those are three questions asked of this single bit. */
 static bool so_transform_applies(lxb_dom_element_t *el)
 {
-    return css_transform_is_transformed(el) && css_transform_is_transformable(el);
+    return css_transform_is_css_box_transformable(el) && css_transform_is_transformed(el);
 }
 
 /* css-contain-2 §3.3 "Layout Containment" and §3.5 "Paint Containment": "The ... containment box creates a

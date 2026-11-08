@@ -104,4 +104,13 @@ CssTransformMatrix css_transform_matrix_current(lxb_dom_element_t *el);
    border box corner. False ("not yet") with the question suspended for the caller's drive. */
 bool css_transform_matrix_current_ask(lxb_dom_element_t *el);
 
+/* css-transforms-1 §4 "The transform-origin Property"'s used value on transformable `el`: its horizontal and
+   vertical offsets from §5's reference box corner with percentages resolved against that box, and its Z
+   offset, in `out[0..2]`. It is the resolved value CSSOM §9 reports ("a resolved value special case property
+   like height"). */
+void css_transform_origin_used(lxb_dom_element_t *el, CssPx out[3]);
+
+/* The layout the entry above reads, asked under a resting drive: false ("not yet") when it was deferred. */
+bool css_transform_origin_used_ask(lxb_dom_element_t *el);
+
 #endif

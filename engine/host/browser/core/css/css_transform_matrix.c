@@ -315,6 +315,50 @@ static void css_tm_list_reads(const CssTransformList *list, bool *x, bool *y)
     }
 }
 
+/* Whether `el`'s reference box is SVG 2's rather than the CSS box model's, and the crash for a percentage that
+   would read it. */
+static bool css_tm_svg_reference_box(lxb_dom_element_t *el, const CssTransformOrigin *o)
+{
+    if (css_transform_category(el) != CSS_TRANSFORMABLE_SVG) return false;
+    if (o->x.kind != CSS_LENGTH_ABSOLUTE || o->y.kind != CSS_LENGTH_ABSOLUTE)
+        DFAIL("css-transforms-1 §4: a percentage transform-origin on an SVG element refers to §5's reference "
+              "box, which for SVG elements without associated CSS layout box is SVG 2's: \"the used value for "
+              "content-box is fill-box and for border-box is stroke-box\", and view-box is the nearest SVG "
+              "viewport. BUILD SVG 2 §8.10 \"Bounding boxes\"' object and stroke bounding boxes and the "
+              "viewport's viewBox size as that reference box");
+    return true;
+}
+
+void css_transform_origin_used(lxb_dom_element_t *el, CssPx out[3])
+{
+    CssTransformOrigin o;
+    CssPx ref[2] = { css_px(0.0), css_px(0.0) };
+    bool svg;
+
+    DCHECK(el != NULL && out != NULL && css_transform_is_transformable(el),
+           "css-transforms-1 §4's used transform-origin was asked of no element, with nowhere to put it, or of "
+           "an element its `Applies to: transformable elements` line excludes");
+    o = css_computed_transform_origin(el);
+    svg = css_tm_svg_reference_box(el, &o);
+    if (!svg && o.x.kind != CSS_LENGTH_ABSOLUTE) ref[0] = css_tm_reference_size(el, false);
+    if (!svg && o.y.kind != CSS_LENGTH_ABSOLUTE) ref[1] = css_tm_reference_size(el, true);
+    out[0] = css_tm_length_px(&o.x, &ref[0]);
+    out[1] = css_tm_length_px(&o.y, &ref[1]);
+    out[2] = o.z;
+}
+
+bool css_transform_origin_used_ask(lxb_dom_element_t *el)
+{
+    CssTransformOrigin o;
+
+    DCHECK(el != NULL && css_transform_is_transformable(el),
+           "css-transforms-1 §4's used transform-origin was asked of no element or of one it does not apply to");
+    o = css_computed_transform_origin(el);
+    if (css_tm_svg_reference_box(el, &o)) return true;
+    return (o.x.kind == CSS_LENGTH_ABSOLUTE || css_tm_reference_size_ask(el, false)) &&
+           (o.y.kind == CSS_LENGTH_ABSOLUTE || css_tm_reference_size_ask(el, true));
+}
+
 /* What `el`'s matrix reads of layout, decided from its computed values alone. `anchored` is false when the
    list's linear part is the identity: §2's origin bracket T(o)·M·T(−o) is then M exactly for every o, and so
    is the conjugation by the element's own position, so neither is read. */
@@ -332,6 +376,19 @@ static void css_tm_plan(lxb_dom_element_t *el, CssTmPlan *p)
     CssTransformMatrix linear;
 
     memset(p, 0, sizeof *p);
+    /* An SVG element under another one maps into its parent's user coordinate system, which is not the CSS
+       layout space the chain is composed in: css-transforms-1 §6.4 "User coordinate space" ("the transform
+       attribute and transform property define a transformation in the current user coordinate system of the
+       parent"), and each viewport-establishing ancestor adds SVG 2 §8.2's equivalent transform. */
+    if (lxb_dom_interface_node(el)->ns == LXB_NS_SVG && css_parent_element(el) != NULL &&
+        lxb_dom_interface_node(css_parent_element(el))->ns == LXB_NS_SVG) {
+        DFAIL("css-transforms-1 §2's current transformation matrix reached an SVG element under another one, "
+              "whose matrix is in its parent's user coordinate system. BUILD SVG 2 §8.2 \"Computing the "
+              "equivalent transform of an SVG viewport\" for each viewport-establishing ancestor and the "
+              "chain from the outermost svg's content box, with SVG 2 §4.4.2 \"Interface SVGGraphicsElement\"'s "
+              "getCTM over the same chain");
+        return;
+    }
     /* §3 "The transform Property"'s `Applies to: transformable elements` first, so a declaration on a box it
        does not apply to moves nothing, as core/css/css_transform.h states. */
     if (!css_transform_is_transformable(el) || !css_computed_transform_list(el, &p->list)) return;

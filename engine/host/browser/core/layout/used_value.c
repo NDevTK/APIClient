@@ -1187,10 +1187,10 @@ static bool uv_cb_positioned(lxb_dom_element_t *el)
 
 /* css-transforms-1 §2 "The Transform Rendering Model": "For elements whose layout is governed by the CSS box model,
    any value other than none for the transform property also causes the element to establish a containing
-   block for all descendants", the transformable element of its §2 "Terminology". */
+   block for all descendants", the first category of its §2 "Terminology"'s transformable element. */
 static bool uv_cb_transformed(lxb_dom_element_t *el)
 {
-    return css_transform_is_transformable(el) && css_transform_is_transformed(el);
+    return css_transform_is_css_box_transformable(el) && css_transform_is_transformed(el);
 }
 
 /* css-contain-2 §3.3 "Layout Containment" and §3.5 "Paint Containment": each box "establishes an absolute
@@ -1215,15 +1215,15 @@ static bool uv_cb_not_root(lxb_dom_element_t *el)
    descendants"), §7 "The transform-style Property" (`preserve-3d` "on a transformable element") and §8 "The
    perspective Property" ("just like the transform property does"). */
 static const UvCbProperty UV_CB_PROPERTIES[] = {
-    { "position",        false, uv_cb_any,                         uv_cb_positioned,  "static" },
-    { "transform",       true,  css_transform_is_transformable,    uv_cb_transformed, "none" },
-    { "contain",         true,  containment_layout_paint_applies,  uv_cb_contained,   "none" },
-    { "translate",       true,  css_transform_is_transformable,    NULL,              "none" },
-    { "rotate",          true,  css_transform_is_transformable,    NULL,              "none" },
-    { "scale",           true,  css_transform_is_transformable,    NULL,              "none" },
-    { "transform-style", true,  css_transform_is_transformable,    NULL,              "flat" },
-    { "perspective",     true,  css_transform_is_transformable,    NULL,              "none" },
-    { "filter",          true,  uv_cb_not_root,                    NULL,              "none" },
+    { "position",         false,  uv_cb_any,                               uv_cb_positioned,   "static" },
+    { "transform",        true,   css_transform_is_css_box_transformable,  uv_cb_transformed,  "none" },
+    { "contain",          true,   containment_layout_paint_applies,        uv_cb_contained,    "none" },
+    { "translate",        true,   css_transform_is_css_box_transformable,  NULL,               "none" },
+    { "rotate",           true,   css_transform_is_css_box_transformable,  NULL,               "none" },
+    { "scale",            true,   css_transform_is_css_box_transformable,  NULL,               "none" },
+    { "transform-style",  true,   css_transform_is_css_box_transformable,  NULL,               "flat" },
+    { "perspective",      true,   css_transform_is_css_box_transformable,  NULL,               "none" },
+    { "filter",           true,   uv_cb_not_root,                          NULL,               "none" },
 };
 
 /* Whether `el` declares row `p` with a value other than its initial one, spelled or through `initial` or

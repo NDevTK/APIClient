@@ -2991,11 +2991,28 @@ static const char *cssd_ua_heading_margin_block(lxb_dom_element_t *el, const lxb
    applies to both the start and end edges". An element the table gives no `display` is `display: inline`,
    the UA sheet's own default. HTML §15.3.1's `noscript` rule is `!important` inside `@media (scripting)`,
    which a `{tag, prop, value}` row has no column for. */
+/* css-transforms-1 §4 "The transform-origin Property": "For SVG elements without associated CSS layout box the
+   initial used value is 0 0 as if the user agent style sheet contained:" `*:not(svg), *:not(foreignObject) > svg
+   { transform-origin: 0 0; }`, whose type selectors are the SVG namespace's. So every SVG element but an `svg`,
+   and an `svg` whose parent is an SVG element other than `foreignObject`. */
+static const char *cssd_ua_svg_transform_origin(lxb_dom_element_t *el, const lxb_char_t *tag, size_t taglen)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(el), *p = n->parent;
+    size_t plen = 0;
+    const lxb_char_t *ptag;
+
+    if (n->ns != LXB_NS_SVG) return NULL;
+    if (!(taglen == 3 && memcmp(tag, "svg", 3) == 0)) return "0 0";
+    if (p == NULL || p->type != LXB_DOM_NODE_TYPE_ELEMENT || p->ns != LXB_NS_SVG) return NULL;
+    ptag = lxb_dom_element_local_name(lxb_dom_interface_element(p), &plen);
+    return plen == 13 && memcmp(ptag, "foreignObject", 13) == 0 ? NULL : "0 0";
+}
+
 static void cssd_ua_collect(lxb_dom_element_t *el, CssCascadedStyle *s, uint32_t seq)
 {
     size_t n = 0;
     const lxb_char_t *tag = lxb_dom_element_local_name(el, &n);
-    const char *display, *font_size, *margin_block;
+    const char *display, *font_size, *margin_block, *svg_origin;
     bool display_important = false, table_display = false;
     CssdUaDecl form[5];
     uint32_t k = 0;
@@ -3043,6 +3060,10 @@ static void cssd_ua_collect(lxb_dom_element_t *el, CssCascadedStyle *s, uint32_t
     for (j = 0; j < nform; j++)
         css_cascaded_style_add(s, form[j].prop, CSS_ORIGIN_UA, form[j].important, false, NULL, 0, seq, k++,
                                form[j].value);
+    svg_origin = cssd_ua_svg_transform_origin(el, tag, n);
+    if (svg_origin != NULL)
+        css_cascaded_style_add_held(s, "transform-origin", CSS_ORIGIN_UA, false, false, NULL, 0, seq, k++,
+                                    svg_origin);
 }
 
 /* THE TABLE'S OWN INVARIANT, asserted once per instance beside the shorthand table's. ONE `{tag, prop}` PAIR

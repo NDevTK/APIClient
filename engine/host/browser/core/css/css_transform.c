@@ -1,5 +1,5 @@
 /* CSS TRANSFORMS 1's element-level facts. See css_transform.h for which edition's section numbers these are,
-   and for why the two facts below are one component rather than a line in each of the three callers. */
+   and for why a consumer asks both. */
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,56 +21,96 @@ static bool css_tr_is_column_box(CssDisplay display)
            css_display_spells(display, CSS_KEYWORD_TABLE_COLUMN_GROUP);
 }
 
-bool css_transform_is_transformable(lxb_dom_element_t *el)
+/* An element's local name is `name`, compared as the parser and `createElementNS` intern it. */
+static bool css_tr_local_name_is(lxb_dom_element_t *el, const char *name)
+{
+    size_t len = 0, k = strlen(name);
+    const lxb_char_t *tag = lxb_dom_element_local_name(el, &len);
+
+    DCHECK(tag != NULL, "an element in the tree has no local name; every element a parser or createElement "
+                        "produces is interned with one");
+    return len == k && memcmp(tag, name, k) == 0;
+}
+
+static bool css_tr_local_name_in(lxb_dom_element_t *el, const char *const *set, size_t n)
+{
+    size_t i;
+
+    for (i = 0; i < n; i++)
+        if (css_tr_local_name_is(el, set[i])) return true;
+    return false;
+}
+
+/* SVG 2 §14.2 "Gradients" and §14.3 "Patterns" list the paint server elements — "paint server elements —
+   ‘linearGradient’, ‘radialGradient’, ‘pattern’" in each content model — and css-transforms-1 §2 adds
+   `clipPath`. SVG 2 §3.2.1 "Definitions"' renderable element "includes the following elements: ‘a’, ‘circle’, ‘ellipse’,
+   ‘foreignObject’, ‘g’, ‘image’, ‘line’, ‘path’, ‘polygon’, ‘polyline’, ‘rect’, ‘svg’, ‘switch’, ‘text’,
+   ‘textPath’, ‘tspan’ and ‘use’; it also includes a ‘symbol’ element that is the instance root of a
+   use-element shadow tree" — this engine builds no use-element shadow tree, so no `symbol` is one. */
+static bool css_tr_svg_category_member(lxb_dom_element_t *el)
+{
+    static const char *const MEMBERS[] = {
+        "linearGradient", "radialGradient", "pattern", "clipPath",
+        "a", "circle", "ellipse", "foreignObject", "g", "image", "line", "path", "polygon", "polyline", "rect",
+        "svg", "switch", "text", "textPath", "tspan", "use",
+    };
+
+    return css_tr_local_name_in(el, MEMBERS, COUNTOF(MEMBERS));
+}
+
+/* "with the exception of any descendant element of text content elements": SVG 2 §11.1.1 "Definitions"' "The
+   SVG text content elements are: ‘text’, ‘textPath’ and ‘tspan’." */
+static bool css_tr_in_svg_text(lxb_dom_element_t *el)
+{
+    static const char *const TEXT_CONTENT[] = { "text", "textPath", "tspan" };
+    lxb_dom_node_t *p;
+
+    for (p = lxb_dom_interface_node(el)->parent;
+         p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT && p->ns == LXB_NS_SVG; p = p->parent)
+        if (css_tr_local_name_in(lxb_dom_interface_element(p), TEXT_CONTENT, COUNTOF(TEXT_CONTENT))) return true;
+    return false;
+}
+
+/* The first category over the CSS box model. */
+static bool css_tr_css_box_category(lxb_dom_element_t *el)
+{
+    CssDisplay d = css_computed_display(el);
+
+    /* "all elements whose layout is GOVERNED BY THE CSS BOX MODEL": css-display-3 §2.5 "Box Generation: the
+       none and contents keywords" gives `contents` no box of its own and `none` no box at all, so neither is
+       in the category before any exclusion is reached. */
+    if (d.kind == CSS_DISPLAY_BOX) return false;
+    /* "except for … table-column boxes, and table-column-group boxes" */
+    if (css_tr_is_column_box(d)) return false;
+    /* "except for NON-REPLACED INLINE BOXES": the computed `display` of `inline` (not `inline-block`, an
+       atomic inline-level box), with HTML §15.4 "Replaced elements"' question answered from the element's
+       state by core/layout/replaced_element.h. */
+    if (css_display_spells(d, CSS_KEYWORD_INLINE)) return replaced_element_of(el).replaced;
+    return true;
+}
+
+CssTransformableCategory css_transform_category(lxb_dom_element_t *el)
 {
     lxb_dom_element_t *parent;
-    CssDisplay d;
-    bool out;
 
     DCHECK(el != NULL, "css-transforms-1 §2 Terminology's transformable-element question was asked with no "
                        "element");
     parent = css_parent_element(el);
-    /* §2's SECOND CATEGORY — "all SVG paint server elements, the clipPath element and SVG renderable elements
-       with the exception of any descendant element of text content elements [SVG2]" — is a membership test
-       over SVG 2's own element classes and not over the CSS box model at all, so answering it out of the
-       computed `display` below would be an answer from the wrong category. THE OUTERMOST `svg` IS NOT THIS
-       CASE: it is a replaced element the CSS box model lays out, so it is the first category and reaches this
-       function through the ordinary path — core/dom/element_view.c states the same split for the same reason.
-       What arrives here is therefore an SVG element UNDER another one, which this engine lays out not at all. */
     if (lxb_dom_interface_node(el)->ns == LXB_NS_SVG && parent != NULL &&
         lxb_dom_interface_node(parent)->ns == LXB_NS_SVG)
-        DFAIL("css-transforms-1 §2 \"Terminology\" puts SVG PAINT SERVER ELEMENTS, the `clipPath` element and "
-              "SVG RENDERABLE ELEMENTS in a second category of transformable element, defined by SVG 2's "
-              "element classes rather than by the CSS box model — and this engine lays out no SVG, so it can "
-              "neither place such an element nor say which class it is in. The two categories are not "
-              "alternative spellings of one test: an SVG renderable element has no margins, borders or "
-              "paddings for CSS 2 §8.1's box model to be stated over, and the exception in §2's own sentence "
-              "(\"any descendant element of text content elements\") is a fact about SVG 2's text model. BUILD "
-              "SVG 2's element classification beside SVG layout, in its own component, the same way "
-              "core/dom/element_view.c's getClientRects step 2 asks for SVG 2's own bounding box rather than a "
-              "special case of the CSS one");
-    /* A RELEASE BUILD CANNOT CLASSIFY AN SVG ELEMENT, so it answers out of the FIRST category below —
-       the one this engine models — exactly as every other member past a DFAIL in this tree does. */
-    d = css_computed_display(el);
-    /* "all elements whose layout is GOVERNED BY THE CSS BOX MODEL" is the category's opening clause, and an
-       element that generates no box is outside it before any exclusion is reached: css-display-3 §2.5 "Box
-       Generation: the none and contents keywords" gives `contents` no box of its own and `none` no box at all
-       ("The element and its descendants generate no boxes or text sequences."). This is not the same statement as the exclusions
-       below — those name boxes that EXIST and that a transform does not apply to — and it matters for the
-       ancestor walk, where a `display: contents` wrapper between a rotated `div` and its child must not stop
-       the walk and must not be reported as the rotated element either. */
-    if (d.kind == CSS_DISPLAY_BOX) out = false;
-    /* "except for … table-column boxes, and table-column-group boxes" */
-    else if (css_tr_is_column_box(d)) out = false;
-    /* "except for NON-REPLACED INLINE BOXES". An inline box is css-display's `inline` outer type with a `flow`
-       inner one — the computed `display` of `inline`, and NOT `inline-block`, which is a `<display-legacy>`
-       for `inline flow-root` and is an atomic inline-level box a transform does apply to. The `non-replaced`
-       half is HTML §15.4 "Replaced elements"' question and core/layout/replaced_element.h answers it from the
-       element's actual state, which is what makes a loading `<img>` transformable and the same `<img>` broken
-       with an `alt` present not. */
-    else if (css_display_spells(d, CSS_KEYWORD_INLINE)) out = replaced_element_of(el).replaced;
-    else out = true;
-    return out;
+        return css_tr_svg_category_member(el) && !css_tr_in_svg_text(el) ? CSS_TRANSFORMABLE_SVG
+                                                                          : CSS_TRANSFORMABLE_NONE;
+    return css_tr_css_box_category(el) ? CSS_TRANSFORMABLE_CSS_BOX : CSS_TRANSFORMABLE_NONE;
+}
+
+bool css_transform_is_transformable(lxb_dom_element_t *el)
+{
+    return css_transform_category(el) != CSS_TRANSFORMABLE_NONE;
+}
+
+bool css_transform_is_css_box_transformable(lxb_dom_element_t *el)
+{
+    return css_transform_category(el) == CSS_TRANSFORMABLE_CSS_BOX;
 }
 
 bool css_transform_is_transformed(lxb_dom_element_t *el)
@@ -94,18 +134,4 @@ bool css_transform_is_transformed(lxb_dom_element_t *el)
     out = strcmp(v, "none") != 0;
     free(v);
     return out;
-}
-
-lxb_dom_element_t *css_transform_applied_self_or_ancestor(lxb_dom_element_t *el)
-{
-    lxb_dom_element_t *on;
-
-    DCHECK(el != NULL, "the transform chain was walked from no element");
-    /* §3's `Applies to:` line is "transformable elements", so BOTH conjuncts are asked of each element in the
-       chain and in this order: an element the property does not apply to is not asked for its computed value
-       at all, which is what keeps a `<span style="transform:rotate(45deg)">` from crashing a consumer over a
-       declaration that moves nothing. */
-    for (on = el; on != NULL; on = css_parent_element(on))
-        if (css_transform_is_transformable(on) && css_transform_is_transformed(on)) return on;
-    return NULL;
 }

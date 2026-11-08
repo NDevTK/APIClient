@@ -9,6 +9,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_logical.h"
 #include "core/css/css_property_applies.h"
+#include "core/css/css_transform.h"
 #include "core/layout/replaced_element.h"
 
 static bool css_pa_in(const char *const *set, unsigned n, const char *v)
@@ -157,6 +158,9 @@ static bool css_property_applies_physical(lxb_dom_element_t *el, const char *nam
     if (css_pa_in(CSS_INSET_PROPERTIES, CSS_PA_N(CSS_INSET_PROPERTIES), name)) {
         return !css_computed_keyword_is(el, "position", CSS_KEYWORD_STATIC);
     }
+    /* css-transforms-1 §4 "The transform-origin Property": "Applies to: transformable elements", either of §2
+       Terminology's categories (core/css/css_transform.h). */
+    if (strcmp(name, "transform-origin") == 0) return css_transform_is_transformable(el);
     is_size = css_pa_in(CSS_SIZE_PROPERTIES, CSS_PA_N(CSS_SIZE_PROPERTIES), name);
     is_margin = css_pa_in(CSS_MARGIN_PROPERTIES, CSS_PA_N(CSS_MARGIN_PROPERTIES), name);
     is_padding = css_pa_in(CSS_PADDING_PROPERTIES, CSS_PA_N(CSS_PADDING_PROPERTIES), name);
@@ -167,16 +171,8 @@ static bool css_property_applies_physical(lxb_dom_element_t *el, const char *nam
               "lengths, the physical insets, the two sizes and the two overflow longhands, and a "
               "FLOW-RELATIVE name never reaches this line at all — the arm at the top of this function maps "
               "it through core/css/css_logical.h and asks again on the physical partner, which is what "
-              "css-logical-1 §4's own `Applies to: Same as <twin>` lines say to do. What CSSOM §9's table "
-              "also routes here and this does not answer is `transform-origin`, whose "
-              "line is `transformable elements` (css-transforms-1 §4 \"The transform-origin Property\"). THE "
-              "DEFINITION OF THAT TERM IS NO LONGER MISSING and this line used to imply it was: "
-              "core/css/css_transform.h states css-transforms-1 §2 \"Terminology\"'s transformable element out "
-              "of the computed `display` and HTML §15.4's replaced-ness, exactly as the lines below are "
-              "stated. What recording the row here would then reach is §9's OTHER conjunct — a USED value for "
-              "`transform-origin`, which core/layout/used_value.h does not carry (it is not one of the ten "
-              "physical box-model lengths) and which css-transforms-1 §5 \"Transform reference box\" resolves "
-              "a percentage against. BUILD that used value, then record the line beside the others");
+              "css-logical-1 §4's own `Applies to: Same as <twin>` lines say to do. RECORD the property's own "
+              "line here beside the others");
         return false;
     }
     display = css_computed_display(el);

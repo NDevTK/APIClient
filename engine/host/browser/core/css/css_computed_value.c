@@ -33,6 +33,7 @@
 #include "core/css/css_syntax_match.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_transform_function.h"
+#include "core/css/css_transform_matrix.h"
 #include "core/css/css_transform_origin.h"
 #include "core/css/css_var.h"
 #include "core/css/font_metrics.h"
@@ -3512,6 +3513,33 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
     return css_resolved_computed(ctx, el, name);
 }
 
+/* css-transforms-1 §4's used transform-origin as CSSOM §6.7.2 writes it: the two offsets in pixels, then the Z
+   offset unless it is a zero no environment fact reaches. False, after the crash, for an offset an environment
+   fact reaches: the string is then a function of several lengths' facts, which core/frame/viewport.h's one
+   seam cannot mint, as `border-spacing`'s arm below states. */
+static bool css_resolved_transform_origin(JSContext *ctx, lxb_dom_element_t *el, JSValue *out)
+{
+    CssPx o[3];
+    char *t[3], text[3 * 64];
+    bool z, env;
+    int i;
+
+    css_transform_origin_used(el, o);
+    z = o[2].env != CSS_ENV_NONE || o[2].px != 0.0;
+    env = o[0].env != CSS_ENV_NONE || o[1].env != CSS_ENV_NONE || o[2].env != CSS_ENV_NONE;
+    if (env) {
+        DFAIL("a used `transform-origin` whose offsets derive from an environment fact reached the page, and its "
+              "string is a function of up to three lengths' facts. BUILD the joint mint at core/frame/viewport.h "
+              "that `border-spacing`'s arm names, and this arm becomes one call to it");
+        return false;
+    }
+    for (i = 0; i < 3; i++) t[i] = css_length_serialize_px(o[i].px);
+    snprintf(text, sizeof text, "%s %s%s%s", t[0], t[1], z ? " " : "", z ? t[2] : "");
+    for (i = 0; i < 3; i++) free(t[i]);
+    *out = JS_NewString(ctx, text);
+    return true;
+}
+
 static JSValue css_resolved_value_held(JSContext *ctx, lxb_dom_element_t *el, const char *name)
 {
     const char *const *lh;
@@ -3544,6 +3572,10 @@ static JSValue css_resolved_longhand_held(JSContext *ctx, lxb_dom_element_t *el,
            core/layout/used_value.h computes it — §10.1's containing block and §10.3.3's equation included —
            crashing by section for the arms that need an intrinsic size. */
         if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) break;
+        if (strcmp(name, "transform-origin") == 0) {
+            if (css_resolved_transform_origin(ctx, el, &out)) return out;
+            break;
+        }
         return css_resolved_px(ctx, used_value_px(el, name));
     case CSS_RESOLVED_USED_IF_POSITIONED:
         /* "If the property applies to a positioned element and the resolved value of the display property is
@@ -3699,6 +3731,7 @@ static bool css_resolved_longhand_ask(lxb_dom_element_t *el, const char *name)
     switch (css_resolved_kind(name)) {
     case CSS_RESOLVED_USED_IF_RENDERED:
         if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) return true;
+        if (strcmp(name, "transform-origin") == 0) return css_transform_origin_used_ask(el);
         return used_value_px_ask(el, name, &px);
     case CSS_RESOLVED_USED_IF_POSITIONED:
         if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) return true;
