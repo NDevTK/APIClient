@@ -38993,6 +38993,57 @@ TF_UNIT void stacking_will_change_selftest(JSContext *ctx)
     printf("@STACK will-change ok=1\n");
 }
 
+/* The stacking contexts of css-color-4 §3.3 "Transparency: the opacity property" ("If a box has opacity less
+   than 1, it forms a stacking context for its children"), filter-effects-1 §5 "Graphic filters: the filter
+   property", filter-effects-2 §2 "Backdrop filters: the backdrop-filter property", compositing-1 §3.4.1 "The
+   mix-blend-mode property" and §3.4.2 "The isolation property", each painted in layer 6 as css-color-4 states
+   for opacity. Each value was checked in Chrome 153.0.8010.12 by overlap with a later in-flow sibling; a
+   declaration outside its property's grammar is dropped, so the earlier valid one stands. */
+TF_UNIT void stacking_effects_selftest(JSContext *ctx)
+{
+    static const struct { const char *style; bool forms; } CASE[] = {
+        { "opacity:.5", true }, { "opacity:50%", true }, { "opacity:0.999", true }, { "opacity:-1", true },
+        { "filter:blur(2px)", true }, { "filter:url(#x)", true }, { "filter:drop-shadow(1px 1px red)", true },
+        { "filter:blur()", true }, { "filter:Blur(1px) url(#a)", true }, { "filter:blur(1px);filter:bogus", true },
+        { "backdrop-filter:blur(0)", true }, { "mix-blend-mode:multiply", true },
+        { "mix-blend-mode:plus-lighter", true }, { "isolation:isolate", true }, { "will-change:opacity", true },
+        { "will-change:filter", true }, { "will-change:backdrop-filter", true },
+        { "will-change:mix-blend-mode", true }, { "will-change:isolation", true },
+        { "", false }, { "opacity:1", false }, { "opacity:2", false }, { "filter:none", false },
+        { "filter:bogus", false }, { "filter:blur(1px 2px)", false }, { "filter:grayscale(-1)", false },
+        { "filter:drop-shadow(1px 1px 2px 3px)", false }, { "backdrop-filter:none", false },
+        { "mix-blend-mode:normal", false }, { "mix-blend-mode:plus-darker", false }, { "isolation:auto", false },
+    };
+    char doc[4096];
+    size_t off, i = 0;
+    lxb_dom_element_t *root;
+    lxb_dom_node_t *box;
+    LayoutJob *job;
+
+    off = (size_t)snprintf(doc, sizeof doc, "<!DOCTYPE html><html><head></head><body>");
+    for (i = 0; i < COUNTOF(CASE); i++)
+        off += (size_t)snprintf(doc + off, sizeof doc - off, "<div style=\"%s\"></div>", CASE[i].style);
+    off += (size_t)snprintf(doc + off, sizeof doc - off, "</body></html>");
+    CHECK(off < sizeof doc, "the effects stacking document outgrew its buffer");
+    root = lxb_dom_document_element(lxb_dom_interface_document(bp_scratch_document(ctx, doc)));
+    CHECK(root != NULL, "the effects stacking document parsed with no root element");
+    job = tf_job_enter();
+    i = 0;
+    for (box = lxb_dom_interface_node(root)->first_child->next->first_child; box != NULL; box = box->next, i++) {
+        lxb_dom_element_t *el = lxb_dom_interface_element(box);
+
+        CHECK(i < COUNTOF(CASE), "the effects stacking document has more body children than it was written with");
+        CHECKF(stacking_context_forms(el) == CASE[i].forms, "a static box declaring `%s` %s a stacking context",
+               CASE[i].style, CASE[i].forms ? "does not form" : "forms");
+        CHECKF(stacking_layer_of(el) == (CASE[i].forms ? STACKING_LAYER_LEVEL_ZERO : STACKING_LAYER_BLOCK),
+               "css-color-4 §3.3: a static box declaring `%s` is painted in layer %d", CASE[i].style,
+               (int)stacking_layer_of(el));
+    }
+    CHECK(i == COUNTOF(CASE), "the effects stacking document has fewer body children than it was written with");
+    tf_job_leave(job);
+    printf("@STACK effects ok=1\n");
+}
+
 /* `<p>` WITH AN INLINE BOX IN IT, BUILT INTO THE FIXTURE'S OWN ACTIVE DOCUMENT AND TAKEN OUT AGAIN — the
    same borrow `tf_pt_paint` above makes, through the same two BASELINE-WRITE entries and for the reason that
    function's banner now states: a host-time write into the presented tree may not go through the capturing
@@ -43586,6 +43637,8 @@ int main(int argc, char **argv) {
     stacking_individual_transform_selftest(ctx);
     /* and css-will-change-1 §2's, over another. */
     stacking_will_change_selftest(ctx);
+    /* and the effect properties' (opacity, filters, blending), over a third. */
+    stacking_effects_selftest(ctx);
     /* AND THE SUB-LIST INSIDE ONE OF THOSE OFFERS — CSS 2.1 §E.2's step 7.2.1, over the boxes in a line box
        rather than over the block that establishes it. It uses `box_paint_text_selftest`'s document and NOT
        the scratch helper the two above use, because a line box cannot be measured on a document that is no
