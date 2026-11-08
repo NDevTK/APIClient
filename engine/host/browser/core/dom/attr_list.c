@@ -479,7 +479,7 @@ lxb_dom_attr_t *dom_attr_write(lxb_dom_element_t *el, const char *ns, const char
  * reader afterwards may rely on. */
 void dom_attr_normalize_parsed(lxb_dom_node_t *root)
 {
-    lxb_dom_node_t *n = root;
+    lxb_dom_node_t *n = root, *content, *host;
 
     if (!root) return;
     /* AND IT IS AN HTML PARSER'S BOUNDARY, ASSERTED HERE RATHER THAN TRUSTED AT THE CALLER. Every sentence
@@ -530,9 +530,21 @@ void dom_attr_normalize_parsed(lxb_dom_node_t *root)
                 if (lxb_dom_tree_observer()) lxb_dom_tree_observer()->attr_added(el, a);
             }
         }
+        /* HTML §13.2.6.4.4 inserts a `<template>`'s markup into its §4.12.3 template contents, which no child
+           link reaches, so the walk enters the content fragment before the element's own children and climbs
+           back out through its host. */
+        content = node_template_content(n);
+        if (content && content->first_child) { n = content->first_child; continue; }
         if (n->first_child) { n = n->first_child; continue; }
-        while (n != root && !n->next) n = n->parent;
-        if (n == root) return;
-        n = n->next;
+        for (;;) {
+            if (n == root) return;
+            if (n->next) { n = n->next; break; }
+            if (n->parent) { n = n->parent; continue; }
+            host = node_template_content_host(n);
+            DCHECK(host != NULL, "the parse-boundary attribute correction walked out of the tree it was given — "
+                                 "the only root it enters other than the top is a <template>'s content");
+            n = host;
+            if (n->first_child) { n = n->first_child; break; }
+        }
     }
 }
