@@ -1,18 +1,18 @@
-/* WebAssembly Core Specification (Release 3.0) §4.6 "Instructions": execution of one function's body from the
+/* WebAssembly Core Specification (Release 3.0) §4.6 "Instructions": execution of an invocation from the
  * module's bytes in place (design note §3a), as a step machine. One step retires one instruction and charges it
  * one engine-work unit (quickjs.h's JS_FlowRetireWork, the unit a JS opcode costs); the caller owns how many
- * steps a rest covers. The whole state is the WasmInterpreter: value and label stacks of plain values, the
- * locals, and every position an offset into the module's bytes or an index into the validator's side table
- * (code_validator.h), so a parked interpreter is a record with no pointer into itself.
- * Blocks find their else and end through the side table, and a branch cuts the stack back to its target's
- * height there, from the frame. Floating point is §7.2's deterministic profile: an arithmetic result that is a
+ * steps a rest covers. The whole state is the WasmInterpreter: operand, label and frame stacks of plain values,
+ * each frame's locals, and every position an offset into the module's bytes or an index into the validator's
+ * side table (code_validator.h), so a parked interpreter is a record with no pointer into itself. A call pushes
+ * a frame and never recurses in C; a branch cuts the stack back to its target's side table height from its
+ * frame. Floating point is §7.2's deterministic profile: an arithmetic result that is a
  * NaN is the positive canonical NaN, and bit operations (abs, neg, copysign, reinterpret) keep bits.
  * The page's bytes have been decoded and validated, so an instruction the validator accepted that this file
  * does not execute is this codebase's gap (CHECK_FAIL), never a refusal.
- * Named residual. Not covered: calls (§4.6.5), globals (§4.6.6), tables (§4.6.7), memory (§4.6.8), and the
- * reference, vector, exception and aggregate instructions. Next diff builds: calls, one frame record per call
- * on a frame stack, then globals and tables. Absence shows as: invoking a function that reaches one of them
- * stops the process at the CHECK_FAIL naming its opcode. */
+ * Named residual. Not covered: host calls (imported functions), call_indirect and call_ref, globals (§4.6.6),
+ * tables (§4.6.7), memory (§4.6.8), and the reference, vector, exception and aggregate instructions. Next diff
+ * builds: globals and tables with an instance record. Absence shows as: invoking a function that reaches one
+ * of them stops the process at the CHECK_FAIL naming its opcode. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 
@@ -49,15 +49,26 @@ typedef struct {
     size_t cont;
 } WasmLabel;
 
+/* §4.2.17's frame of one call: its code entry and where its body ends, the caller's next instruction (SIZE_MAX
+   for the invocation's own frame), its locals (owned), and where its operands and labels begin on the
+   interpreter's stacks. */
+typedef struct {
+    size_t code, end;
+    size_t return_pc;
+    WasmValue *locals;
+    size_t n_locals;
+    size_t val_base, label_base;
+    uint32_t n_results;
+} WasmFrame;
+
 typedef struct {
     const WasmModule *module;    /* borrowed: the decoded module, its bytes and its validated side table */
     const uint8_t *bytes;
     const WasmSideTable *side;
-    size_t code;                 /* the code entry executing, its next instruction, and where its body ends */
-    size_t pc, end;
-    uint32_t n_results;
-    WasmValue *locals;           /* owned */
-    size_t n_locals;
+    size_t pc;                   /* the current frame's next instruction */
+    uint32_t n_results;          /* the invoked function's */
+    WasmFrame *frames;           /* owned: one per call, the current last */
+    size_t n_frames, cap_frames;
     WasmValue *vals;             /* owned: §4.2.17's operand stack */
     size_t n_vals, cap_vals;
     WasmLabel *labels;           /* owned: its labels, the function's at the bottom */

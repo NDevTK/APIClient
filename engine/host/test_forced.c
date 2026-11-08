@@ -6065,10 +6065,41 @@ static void wasm_exec_check(const WasmExecRow *row, const WasmInterpreter *it, W
 /* WebAssembly Core §4.6's interpreter core (core/wasm/interpreter.h) against the testsuite's rows over its
  * subset (fixture/wasm_exec.h). Each row's module is decoded and validated (the side table is validation's), the
  * export found by name, and the invocation run alone, retiring one unit of work per step it counts; then the
- * rows of each module are run again all at once, one step each in turn, and must answer as they did alone. */
+ * rows of each module are run again all at once, one step each in turn, and must answer as they did alone.
+ * fixture/wasm_valid.h's WASM_CALL_ROWS come first: calls the testsuite's subset does not reach. */
 TF_UNIT void wasm_interpreter_selftest(void)
 {
     size_t i = 0;
+
+    for (i = 0; i < COUNTOF(WASM_CALL_ROWS); i++) {
+        const WasmCallRow *row = &WASM_CALL_ROWS[i];
+        const uint8_t *bytes = (const uint8_t *)row->bytes;
+        WasmModuleDecoder d;
+        WasmModuleValidator v;
+        WasmInterpreter it;
+        WasmExecStatus st;
+        size_t e, func = SIZE_MAX;
+
+        wasm_module_decoder_init(&d, bytes, row->len);
+        CHECKF(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the call row %s does not decode", row->src);
+        wasm_module_validator_init(&v, wasm_module_decoder_module(&d), bytes);
+        CHECKF(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the call row %s is invalid", row->src);
+        for (e = 0; e < d.module.n_exports; e++)
+            if (d.module.exports[e].name_size == strlen(row->export_name)
+                && memcmp(bytes + d.module.exports[e].name_offset, row->export_name, strlen(row->export_name)) == 0)
+                func = d.module.exports[e].index;
+        CHECKF(func != SIZE_MAX, "the call row %s has no export %s", row->src, row->export_name);
+        st = wasm_interpreter_begin(&it, &d.module, bytes, wasm_module_validator_side_table(&v), func, NULL, 0);
+        while (st == WASM_EXEC_MORE) st = wasm_interpreter_step(&it);
+        CHECKF(st == WASM_EXEC_DONE && it.n_vals == 1 && it.vals[0].lo == row->result,
+               "%s: answered %s with %zu values, the first %llu; V8 answers %u", row->src,
+               st == WASM_EXEC_DONE ? "a return" : wasm_exec_status_message(st), it.n_vals,
+               it.n_vals ? (unsigned long long)it.vals[0].lo : 0ull, row->result);
+        wasm_interpreter_free(&it);
+        wasm_module_validator_free(&v);
+        wasm_module_decoder_free(&d);
+    }
+    i = 0;
 
     while (i < COUNTOF(WASM_EXEC_ROWS)) {
         const WasmTestsuiteRow *mod = &WASM_TESTSUITE_ROWS[WASM_EXEC_ROWS[i].module];

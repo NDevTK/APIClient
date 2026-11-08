@@ -44,39 +44,102 @@ static bool push_label(WasmInterpreter *it, uint8_t kind, size_t entry, size_t h
     return true;
 }
 
+/* The stack. Validation guarantees every pop has its operand. */
+static uint64_t pop(WasmInterpreter *it)
+{
+    DCHECK(it->n_vals > 0, "a validated WebAssembly body popped an empty operand stack");
+    return it->vals[--it->n_vals].lo;
+}
+
+static bool push(WasmInterpreter *it, uint64_t lo)
+{
+    if (!grow((void **)&it->vals, &it->cap_vals, it->n_vals, sizeof *it->vals)) return false;
+    it->vals[it->n_vals].lo = lo;
+    it->vals[it->n_vals].hi = 0;
+    it->n_vals++;
+    return true;
+}
+
+static WasmFrame *frame(WasmInterpreter *it)
+{
+    DCHECK(it->n_frames > 0, "a WebAssembly instruction ran with no frame");
+    return &it->frames[it->n_frames - 1];
+}
+
+static size_t imported_funcs(const WasmModule *m)
+{
+    size_t n = 0, i;
+
+    for (i = 0; i < m->n_imports; i++) n += m->imports[i].kind == WASM_EXTERN_FUNC;
+    return n;
+}
+
+/* §4.6.5's invocation of defined function `func`: a frame whose locals are the `t->n_params` operands at the
+   top of the stack, then each declared local's default (zero for the number types), and the function's own
+   label. The arguments leave the stack, which the frame's results replace on return. */
+static WasmExecStatus push_frame(WasmInterpreter *it, size_t func, size_t return_pc)
+{
+    const WasmModule *m = it->module;
+    size_t code = func - imported_funcs(m), n, i;
+    const WasmCode *c = &m->codes[code];
+    const WasmSubType *t = &m->types[m->func_types[code]];
+    WasmFrame *f;
+
+    DCHECK(it->n_vals >= t->n_params, "a validated WebAssembly call has fewer operands than its parameters");
+    if (!grow((void **)&it->frames, &it->cap_frames, it->n_frames, sizeof *it->frames)) return WASM_EXEC_NO_ROOM;
+    for (n = t->n_params, i = 0; i < c->n_locals; i++) n += m->locals[c->locals + i].count;
+    f = &it->frames[it->n_frames];
+    memset(f, 0, sizeof *f);
+    f->locals = calloc(n ? n : 1, sizeof *f->locals);
+    if (f->locals == NULL) return WASM_EXEC_NO_ROOM;
+    it->n_frames++;
+    f->code = code;
+    f->end = c->body_offset + c->body_size;
+    f->return_pc = return_pc;
+    f->n_locals = n;
+    f->n_results = (uint32_t)t->n_results;
+    f->val_base = it->n_vals - t->n_params;
+    if (t->n_params) memcpy(f->locals, it->vals + f->val_base, t->n_params * sizeof *f->locals);
+    it->n_vals = f->val_base;
+    f->label_base = it->n_labels;
+    it->pc = c->body_offset;
+    return push_label(it, L_FUNC, SIZE_MAX, f->val_base, f->n_results, f->end) ? WASM_EXEC_MORE
+                                                                                 : WASM_EXEC_NO_ROOM;
+}
+
+/* §4.6.5's return from the current frame: its results replace its arguments, and the caller continues. */
+static WasmExecStatus pop_frame(WasmInterpreter *it)
+{
+    WasmFrame *f = frame(it);
+
+    it->n_labels = f->label_base;
+    it->pc = f->return_pc;
+    free(f->locals);
+    it->n_frames--;
+    return it->n_frames == 0 ? WASM_EXEC_DONE : WASM_EXEC_MORE;
+}
+
 WasmExecStatus wasm_interpreter_begin(WasmInterpreter *it, const WasmModule *m, const uint8_t *bytes,
                                       const WasmSideTable *side, size_t func, const WasmValue *args,
                                       size_t n_args)
 {
-    size_t imported = 0, i, n;
-    const WasmSubType *t;
-    const WasmCode *c;
+    size_t i;
 
     DCHECK(it != NULL && m != NULL && bytes != NULL && side != NULL, "a WebAssembly invocation began without its "
                                                                      "module");
-    for (i = 0; i < m->n_imports; i++) imported += m->imports[i].kind == WASM_EXTERN_FUNC;
-    DCHECKF(func >= imported && func - imported < m->n_codes, "a WebAssembly invocation names function %zu, which "
-            "is not one of the module's %zu defined functions", func, m->n_codes);
+    DCHECKF(func >= imported_funcs(m) && func - imported_funcs(m) < m->n_codes, "a WebAssembly invocation names "
+            "function %zu, which is not one of the module's %zu defined functions", func, m->n_codes);
     memset(it, 0, sizeof *it);
     it->module = m;
     it->bytes = bytes;
     it->side = side;
-    it->code = func - imported;
-    c = &m->codes[it->code];
-    t = &m->types[m->func_types[it->code]];
-    DCHECKF(n_args == t->n_params, "a WebAssembly invocation passed %zu arguments to a function of %zu parameters",
-            n_args, t->n_params);
-    it->pc = c->body_offset;
-    it->end = c->body_offset + c->body_size;
-    it->n_results = (uint32_t)t->n_results;
-    /* §4.7.3's frame: the arguments, then each declared local's default, zero for the number types. */
-    for (n = n_args, i = 0; i < c->n_locals; i++) n += m->locals[c->locals + i].count;
-    it->n_locals = n;
-    it->locals = calloc(n ? n : 1, sizeof *it->locals);
-    if (it->locals == NULL) return WASM_EXEC_NO_ROOM;
-    if (n_args) memcpy(it->locals, args, n_args * sizeof *args);
-    if (!push_label(it, L_FUNC, SIZE_MAX, 0, it->n_results, it->end)) return WASM_EXEC_NO_ROOM;
-    return WASM_EXEC_MORE;
+    DCHECKF(n_args == m->types[m->func_types[func - imported_funcs(m)]].n_params, "a WebAssembly invocation passed "
+            "%zu arguments to a function of %zu parameters", n_args,
+            m->types[m->func_types[func - imported_funcs(m)]].n_params);
+    it->n_results = (uint32_t)m->types[m->func_types[func - imported_funcs(m)]].n_results;
+    for (i = 0; i < n_args; i++)
+        if (!push(it, args[i].lo)) return WASM_EXEC_NO_ROOM;
+    return push_frame(it, func, SIZE_MAX);
 }
 
 /* Bits. */
@@ -103,26 +166,11 @@ static double fmax_wasm(double a, double b, bool *nan)
     return a > b ? a : b;
 }
 
-/* The stack. Validation guarantees every pop has its operand. */
-static uint64_t pop(WasmInterpreter *it)
-{
-    DCHECK(it->n_vals > 0, "a validated WebAssembly body popped an empty operand stack");
-    return it->vals[--it->n_vals].lo;
-}
-
-static bool push(WasmInterpreter *it, uint64_t lo)
-{
-    if (!grow((void **)&it->vals, &it->cap_vals, it->n_vals, sizeof *it->vals)) return false;
-    it->vals[it->n_vals].lo = lo;
-    it->vals[it->n_vals].hi = 0;
-    it->n_vals++;
-    return true;
-}
-
 /* The side table entry of the structured instruction at `at`: the code entry's run is in byte order. */
-static size_t block_entry(const WasmInterpreter *it, size_t at)
+static size_t block_entry(WasmInterpreter *it, size_t at)
 {
-    size_t lo = it->side->code_first[it->code], hi = it->side->code_first[it->code + 1];
+    size_t code = frame(it)->code;
+    size_t lo = it->side->code_first[code], hi = it->side->code_first[code + 1];
 
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
@@ -130,7 +178,7 @@ static size_t block_entry(const WasmInterpreter *it, size_t at)
         if (it->side->blocks[mid].at < at) lo = mid + 1;
         else hi = mid;
     }
-    CHECKF(lo < it->side->code_first[it->code + 1] && it->side->blocks[lo].at == at,
+    CHECKF(lo < it->side->code_first[code + 1] && it->side->blocks[lo].at == at,
            "no side table entry for the block at %zu, which validation records for every block", at);
     return lo;
 }
@@ -142,17 +190,15 @@ static WasmExecStatus branch(WasmInterpreter *it, uint64_t l)
     WasmLabel *t;
     size_t keep;
 
-    DCHECK(l < it->n_labels, "a validated WebAssembly branch names a label past the stack");
+    DCHECK(l < it->n_labels - frame(it)->label_base, "a validated WebAssembly branch names a label past its "
+                                                     "frame's");
     t = &it->labels[it->n_labels - 1 - l];
     DCHECK(it->n_vals >= t->height + t->arity, "a WebAssembly branch has fewer values than its label carries");
     if (t->arity > 0) memmove(it->vals + t->height, it->vals + it->n_vals - t->arity, t->arity * sizeof *it->vals);
     it->n_vals = t->height + t->arity;
     it->pc = t->cont;
     keep = it->n_labels - 1 - l;
-    if (t->kind == L_FUNC) {
-        it->n_labels = 0;
-        return WASM_EXEC_DONE;
-    }
+    if (t->kind == L_FUNC) return pop_frame(it);
     it->n_labels = t->kind == L_LOOP ? keep + 1 : keep;
     return WASM_EXEC_MORE;
 }
@@ -419,7 +465,7 @@ static WasmExecStatus structured(WasmInterpreter *it, const WasmInstruction *in,
         results = (uint32_t)m->types[in->block_index].n_results;
     }
     b = &it->side->blocks[e];
-    height = b->height;
+    height = frame(it)->val_base + b->height;
     if (in->opcode == 0x04 && pop(it) == 0) {
         /* The false arm: past the else, or straight to the end, whose label pop this push is for. */
         it->pc = b->else_at != 0 ? b->else_at + 1 : b->end_at;
@@ -435,7 +481,7 @@ static WasmExecStatus structured(WasmInterpreter *it, const WasmInstruction *in,
    are host work in the opcode unit. */
 static WasmExecStatus br_table(WasmInterpreter *it, const WasmInstruction *in)
 {
-    WasmDecoder r = { it->bytes, it->end, it->pc };
+    WasmDecoder r = { it->bytes, frame(it)->end, it->pc };
     uint32_t i = (uint32_t)pop(it), k, l = 0, target = 0;
 
     for (k = 0; k <= in->list_count; k++) {
@@ -452,12 +498,39 @@ static WasmExecStatus br_table(WasmInterpreter *it, const WasmInstruction *in)
 
 static WasmExecStatus local(WasmInterpreter *it, uint32_t op, uint32_t x)
 {
-    DCHECK(x < it->n_locals, "a validated WebAssembly local index is past the frame's locals");
-    if (op == 0x20) return push(it, it->locals[x].lo) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
+    WasmFrame *f = frame(it);
+
+    DCHECK(x < f->n_locals, "a validated WebAssembly local index is past the frame's locals");
+    if (op == 0x20) return push(it, f->locals[x].lo) ? WASM_EXEC_MORE : WASM_EXEC_NO_ROOM;
     DCHECK(it->n_vals > 0, "a validated WebAssembly local.set popped an empty operand stack");
-    it->locals[x] = it->vals[it->n_vals - 1];
+    f->locals[x] = it->vals[it->n_vals - 1];
     if (op == 0x21) it->n_vals--;
     return WASM_EXEC_MORE;
+}
+
+/* §4.6.5's call and return_call of a defined function. A tail call returns from the current frame first, so
+   its arguments replace the caller's frame and the callee returns to the caller's caller. */
+static WasmExecStatus call(WasmInterpreter *it, const WasmInstruction *in)
+{
+    const WasmModule *m = it->module;
+    size_t func = in->index[0], return_pc = it->pc;
+
+    CHECKF(func >= imported_funcs(m), "the WebAssembly call of imported function %zu is not built in "
+           "interpreter.c (a host call)", func);
+    if (in->opcode == 0x12) {
+        WasmFrame *f = frame(it);
+        size_t n = m->types[m->func_types[func - imported_funcs(m)]].n_params;
+
+        DCHECK(it->n_vals >= f->val_base + n, "a validated WebAssembly return_call has fewer operands than "
+                                              "its callee's parameters");
+        if (n > 0) memmove(it->vals + f->val_base, it->vals + it->n_vals - n, n * sizeof *it->vals);
+        it->n_vals = f->val_base + n;
+        return_pc = f->return_pc;
+        it->n_labels = f->label_base;
+        free(f->locals);
+        it->n_frames--;
+    }
+    return push_frame(it, func, return_pc);
 }
 
 static WasmExecStatus execute(WasmInterpreter *it, const WasmInstruction *in, size_t at)
@@ -482,11 +555,12 @@ static WasmExecStatus execute(WasmInterpreter *it, const WasmInstruction *in, si
     case 0x0C: return branch(it, in->index[0]);
     case 0x0D: return pop(it) != 0 ? branch(it, in->index[0]) : WASM_EXEC_MORE;
     case 0x0E: return br_table(it, in);
-    case 0x0F: return branch(it, it->n_labels - 1);
+    case 0x0F: return branch(it, it->n_labels - 1 - frame(it)->label_base);
+    case 0x10: case 0x12: return call(it, in);
     case 0x1A: pop(it); return WASM_EXEC_MORE;
     case 0x1B: case 0x1C:
         if (in->opcode == 0x1C) {
-            WasmDecoder r = { it->bytes, it->end, it->pc };
+            WasmDecoder r = { it->bytes, frame(it)->end, it->pc };
             WasmValType t;
 
             CHECK(wasm_read_val_type(&r, &t) == WASM_DECODE_DONE, "a select type the decoder accepted did not read");
@@ -525,10 +599,11 @@ static WasmExecStatus execute(WasmInterpreter *it, const WasmInstruction *in, si
     return unop(it, in->opcode);
 }
 
-/* A trap ends the invocation as a return does: no label is left to step. */
+/* A trap ends the invocation as a return does: no frame is left to step. */
 static WasmExecStatus finish(WasmInterpreter *it, WasmExecStatus st)
 {
-    if (st != WASM_EXEC_MORE) it->n_labels = 0;
+    if (st != WASM_EXEC_MORE)
+        while (it->n_frames > 0) free(it->frames[--it->n_frames].locals);
     return st;
 }
 
@@ -540,15 +615,17 @@ WasmExecStatus wasm_interpreter_step(WasmInterpreter *it)
     uint8_t b;
     WasmDecoder r;
 
-    DCHECK(it != NULL && it->n_labels > 0, "a WebAssembly invocation was stepped after it answered");
+    DCHECK(it != NULL && it->n_frames > 0, "a WebAssembly invocation was stepped after it answered");
     JS_FlowRetireWork(1);
     it->retired++;
-    if (it->pc == it->end) return branch(it, it->n_labels - 1);   /* the body's own end returns */
+    if (it->pc == frame(it)->end)   /* the body's own end returns */
+        return finish(it, branch(it, it->n_labels - 1 - frame(it)->label_base));
     at = it->pc;
     b = it->bytes[at];
     if (b == 0x0B) {
         /* An end inside the body closes its innermost block; the values above its height are its results. */
-        DCHECK(it->n_labels > 1, "a WebAssembly end inside a body closes no block, which validation rules out");
+        DCHECK(it->n_labels > frame(it)->label_base + 1, "a WebAssembly end inside a body closes no block, which "
+                                                         "validation rules out");
         it->n_labels--;
         it->pc++;
         return WASM_EXEC_MORE;
@@ -560,7 +637,7 @@ WasmExecStatus wasm_interpreter_step(WasmInterpreter *it)
         return WASM_EXEC_MORE;
     }
     r.in = it->bytes;
-    r.len = it->end;
+    r.len = frame(it)->end;
     r.pos = at;
     CHECK(wasm_read_opcode(&r, &prefix, &op) == WASM_DECODE_DONE
           && wasm_read_immediates(&r, prefix, op, &in) == WASM_DECODE_DONE,
@@ -586,7 +663,8 @@ const char *wasm_exec_status_message(WasmExecStatus st)
 void wasm_interpreter_free(WasmInterpreter *it)
 {
     DCHECK(it != NULL, "a WebAssembly invocation was freed with no interpreter");
-    free(it->locals);
+    while (it->n_frames > 0) free(it->frames[--it->n_frames].locals);
+    free(it->frames);
     free(it->vals);
     free(it->labels);
     memset(it, 0, sizeof *it);
