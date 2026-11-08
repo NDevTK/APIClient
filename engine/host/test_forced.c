@@ -1541,6 +1541,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/willchange.h"
 #include "fixture/csstextderived.h"
 #include "fixture/translatepct.h"
+#include "fixture/transform2d.h"
 #include "fixture/fillwidth.h"
 #include "fixture/jsonlead.h"
 #include "fixture/owedsale.h"
@@ -2263,6 +2264,7 @@ TF_DOCS[] = {
     { "willchange", HTML_WILLCHANGE },
     { "csstextderived", HTML_CSSTEXTDERIVED },
     { "translatepct", HTML_TRANSLATEPCT },
+    { "transform2d", HTML_TRANSFORM2D },
     { "fillwidth", HTML_FILLWIDTH },
     { "jsonlead", HTML_JSONLEAD },
     { "startin", HTML_STARTIN },
@@ -21684,6 +21686,41 @@ TF_UNIT void probes_translatepct(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `transform2d` document (fixture/transform2d.h): css-transforms-1 §2's transformation matrix
+   over §4's transform-origin, §5's reference box and §12's 2D matrices. */
+TF_UNIT void probes_transform2d(const char *js, Probe *tab, int *n) {
+    const char *t2_why = NULL; int t2_tt = 1;
+#define T2_IS(k, v) param_value_is(js, "/api/transform2d", k, v)
+    fold_row(&t2_tt, &t2_why, !!strstr(js, "\"/api/transform2d\""),
+             "NOT REACHED: no /api/transform2d record, so the document aborted before its fetch");
+    fold_row(&t2_tt, &t2_why, T2_IS("r", "110") && T2_IS("rt", "90") && T2_IS("rw", "20"),
+             "css-transforms-1 §4: rotate(90deg) of a 40x20 box at (100, 100) about the initial `50% 50%` is not "
+             "20x40 at (110, 90)");
+    fold_row(&t2_tt, &t2_why, T2_IS("o", "20") && T2_IS("ot", "220") && T2_IS("ow", "20"),
+             "css-transforms-1 §4: scale(0.5) about `right bottom` of a 40px box at (0, 200) is not 20px at (20, 220)");
+    fold_row(&t2_tt, &t2_why, T2_IS("l", "210") && T2_IS("lw", "40"),
+             "css-transforms-1 §2: scale(2) translate(5px) about `0 0` does not post-multiply left to right");
+    fold_row(&t2_tt, &t2_why, T2_IS("k", "290") && T2_IS("kw", "40"),
+             "css-transforms-1 §12: skewX(45deg) of a 20px box at x 300 does not enclose [290, 330]");
+    fold_row(&t2_tt, &t2_why, T2_IS("m", "10") && T2_IS("mt", "320") && T2_IS("mh", "30"),
+             "css-transforms-1 §12: matrix(2, 0, 0, 3, 10, 20) about `0 0` is not a,b,c,d,e,f in §12's order");
+    fold_row(&t2_tt, &t2_why, T2_IS("pc", "90") && T2_IS("pct", "490"),
+             "css-transforms-1 §2: a parent's rotate(0.5turn) about its own centre does not carry its child to "
+             "(90, 490)");
+    fold_row(&t2_tt, &t2_why, T2_IS("c", "205") && T2_IS("cw", "30"),
+             "css-transforms-1 §5: `transform-box: content-box` does not move the origin to the content box's corner");
+    fold_row(&t2_tt, &t2_why, T2_IS("t", "405") && T2_IS("tt", "6"),
+             "css-transforms-1 Terminology's 2D matrix: translate3d(5px, 6px, 0) and three identity 3D functions "
+             "are not one 2D translation");
+    fold_row(&t2_tt, &t2_why, T2_IS("a", "380") && T2_IS("at", "90"),
+             "css-transforms-1 §4: `top left` is not the horizontal-first `0% 0%` its && arm states");
+#undef T2_IS
+    const Probe rows[] = {
+        { "transform-2d-matrix", t2_tt, "/api/transform2d", SESS_EXPLORE, t2_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fillwidth` document (fixture/fillwidth.h): CSS 2.2 §9.4.2's line box width for a run that
    breaks, resolved over §10.1's containing block chain through a flex item's used main size. */
 TF_UNIT void probes_fillwidth(const char *js, Probe *tab, int *n) {
@@ -27991,6 +28028,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_willchange(js, probes, &np);
     probes_csstextderived(js, probes, &np);
     probes_translatepct(js, probes, &np);
+    probes_transform2d(js, probes, &np);
     probes_fillwidth(js, probes, &np);
     probes_jsonlead(js, probes, &np);
     probes_owedsale(js, probes, &np);
