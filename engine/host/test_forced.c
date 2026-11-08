@@ -39194,9 +39194,11 @@ static bool tf_document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSu
     return drew;
 }
 
-/* @GRAPHRT over a published paint frame: the fixture's document is painted and its frame published at
-   generation 1, above the floor of 0, and the frame's object is written, rebuilt and written again. The bytes must
-   agree, and the rebuilt frame must raster the same as the original, mark for mark. Generation 1 is at or below
+/* @GRAPHRT over a published paint frame: the fixture's document, given a red 4x3 canvas so the frame holds a
+   bitmap mark, is painted and its frame published at generation 1, above the floor of 0, and the frame's object is
+   written, rebuilt and written again. The bytes must agree, the original must hold the canvas's red, and the
+   rebuilt frame must raster the same as the original, mark for mark and pixel for pixel. The canvas is removed
+   again, so the document later rows read is the one they were written against. Generation 1 is at or below
    every floor a later sale writes with, so the frame left on the realm's record is baseline to every flow. */
 TF_UNIT void painted_frame_graph_selftest(JSContext *ctx, lxb_html_document_t *dom)
 {
@@ -39211,12 +39213,21 @@ TF_UNIT void painted_frame_graph_selftest(JSContext *ctx, lxb_html_document_t *d
     bool d1, d2;
     int same;
 
+    size_t red = 0;
+
+    JS_FreeValue(ctx, tf_graph_program(ctx,
+        "(function () { var c = document.createElement('canvas'), g; c.width = 4; c.height = 3;"
+        " var d = new ImageData(4, 3); for (var i = 0; i < 48; i += 4) { d.data[i] = 255; d.data[i + 3] = 255; }"
+        " g = c.getContext('2d'); g.putImageData(d, 0, 0);"
+        " document.body.appendChild(c); globalThis.graphCanvas = c; return 0; })()"));
     layout_job_enter(job);
     frame = document_paint_begin(ctx, lxb_dom_interface_document(dom));
     while (document_paint_step(frame)) {}
     document_paint_finish(frame);
     layout_job_leave(job);
     layout_job_free(job);
+    JS_FreeValue(ctx, tf_graph_program(ctx,
+        "(function () { graphCanvas.remove(); delete globalThis.graphCanvas; return 0; })()"));
     JS_SetFlowGen(1);
     painted_frame_publish(ctx, frame);
     JS_SetFlowGen(0);
@@ -39230,7 +39241,12 @@ TF_UNIT void painted_frame_graph_selftest(JSContext *ctx, lxb_html_document_t *d
     same = n1 == n2 && !memcmp(b1, b2, n1);
     d1 = document_paint_raster(painted_frame_of(obj), &s1, &c1);
     d2 = document_paint_raster(painted_frame_of(back[0]), &s2, &c2);
-    printf("@GRAPHRT {\"paintFrameBytes\":%zu,\"identical\":%d,\"marks\":%zu}\n", n1, same, c1.marks);
+    for (size_t k = 0; d1 && k < (size_t)s1.width * (size_t)s1.height; k++)
+        red += s1.px[4 * k] == 255 && s1.px[4 * k + 1] == 0 && s1.px[4 * k + 2] == 0 && s1.px[4 * k + 3] == 255;
+    printf("@GRAPHRT {\"paintFrameBytes\":%zu,\"identical\":%d,\"marks\":%zu,\"red\":%zu}\n", n1, same,
+           c1.marks, red);
+    CHECKF(red > 0, "the painted frame holds none of the canvas's red over %zu marks: the frame has no bitmap mark, "
+           "so the layout's bitmap half is not round-tripped by this row", c1.marks);
     CHECK(same, "a rebuilt graph holding a published paint frame did not write the same bytes as its original");
     CHECK(d1 == d2 && c1.marks == c2.marks && c1.elements == c2.elements && s1.width == s2.width &&
               s1.height == s2.height &&
