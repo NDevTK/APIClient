@@ -1,6 +1,7 @@
 /* THE NODE INTERFACE — DOM §4.4, the base every tree object shares. One JS object per Lexbor node. */
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_NODE_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_NODE_H
+#include "core/dom/node_remove.h"
 #include <lexbor/dom/dom.h>
 #include <stdbool.h>
 #include "quickjs.h"
@@ -77,8 +78,10 @@ void node_install_child_mixin(JSContext *ctx, JSValueConst proto);
    element" declares an overload whose zero-argument entry must act "like its namesake method on the ChildNode
    interface implemented by the HTMLSelectElement ancestor interface Element when it has no arguments", which
    is this and nothing else. It takes the NODE and not the wrapper, because the wrapper is what the mixin's
-   own body already resolved and a second resolution would be a second answer to that too. */
-void node_child_node_remove(lxb_dom_node_t *n);
+   own body already resolved and a second resolution would be a second answer to that too.
+   As a machine's stage: step 1 sets hdr->stage to `after`, and step 2 starts core/dom/node_remove.h's machine on
+   `s`, whose NODE_REMOVE_ALGO_STAGES block the caller declares at `base`. */
+void node_child_node_remove_start(JSStepHdr *hdr, NodeRemoveState *s, lxb_dom_node_t *n, int base, int after);
 /* DOM §4.2.7 Mixin NonDocumentTypeChildNode — previousElementSibling / nextElementSibling, on the two
    interfaces §4.2.7 includes: `Element includes NonDocumentTypeChildNode` and `CharacterData includes
    NonDocumentTypeChildNode`. Deliberately NOT beside ChildNode above: §4.2.7's note keeps these two members

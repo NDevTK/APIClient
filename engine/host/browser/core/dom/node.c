@@ -1637,11 +1637,53 @@ static lxb_dom_node_t *node_convert_into_a_node(JSContext *ctx, lxb_dom_node_t *
    is a NO-OP rather than an error, which is what lets a page call `el.remove()` twice; `dom_cow_remove_child`
    is the removal chokepoint every other mutation in this file goes through, so the per-flow delta captures
    this one exactly as it captures theirs. */
-void node_child_node_remove(lxb_dom_node_t *n)
+void node_child_node_remove_start(JSStepHdr *hdr, NodeRemoveState *s, lxb_dom_node_t *n, int base, int after)
 {
-    if (!n || !n->parent) return;
-    dom_cow_remove_child(n);
+    DCHECK(n != NULL, "ChildNode's remove() was started on no node");
+    if (!n->parent) { hdr->stage = after; return; }                            /* STEP 1 */
+    node_remove_start(hdr, s, n, /*suppress_observers*/ false, base, after);   /* STEP 2 */
 }
+
+/* §4.2.8 remove() as a declared step member over that start. */
+#define NODE_CHILD_REMOVE_STAGES(X) \
+    X(CR_CHECK, "DOM §4.2.8 remove() step 1 (this's parent is null: return)") \
+    NODE_REMOVE_ALGO_STAGES(X, CR, "DOM §4.2.8 remove() step 2") \
+    X(CR_DONE,  "DOM §4.2.8 remove() (this is removed)")
+enum { IDL_STEP_STAGE_BASE(NODE_CHILD_REMOVE_STAGES) NODE_CHILD_REMOVE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NODE_CHILD_REMOVE_STEPS[] = { NODE_CHILD_REMOVE_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_node_child_remove(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeRemoveState *s = st;
+
+    (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    STEP_DISPATCH(NODE_CHILD_REMOVE_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(CR_CHECK);
+    {
+        lxb_dom_node_t *n = node_of(hdr->this_val);
+
+        if (!n) return JS_STEP_DONE;
+        node_child_node_remove_start(hdr, s, n, CR_RANGES, CR_DONE);
+        return JS_STEP_YIELD;
+    }
+
+    STEP_ARM(CR_RANGES); STEP_ARM(CR_ITERATORS); STEP_ARM(CR_DETACH); STEP_ARM(CR_ASSIGNED);
+    STEP_ARM(CR_SLOT_FIND); STEP_ARM(CR_SLOT_PARENT_TREE); STEP_ARM(CR_SLOT_NODE_TREE); STEP_ARM(CR_ROOT);
+    STEP_ARM(CR_DESCENDANTS); STEP_ARM(CR_RECORD); STEP_ARM(CR_CHANGED);
+    return node_remove_run(ctx, hdr, s, CR_RANGES);
+
+    STEP_ARM(CR_DONE);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl NODE_CHILD_REMOVE_STEP = {
+    js_node_child_remove, sizeof(NodeRemoveState), node_remove_child_visit, NULL,
+    "DOM §4.2.8 ChildNode.remove (over §4.2.3 remove)", NODE_CHILD_REMOVE_STEPS
+};
 
 static JSValue js_node_mixin(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
@@ -1653,7 +1695,7 @@ static JSValue js_node_mixin(JSContext *ctx, JSValueConst this_val, int argc, JS
        not an error, which is what lets a page call `el.remove()` twice. */
     if (magic <= 3 && !parent) return JS_UNDEFINED;
 
-    if (magic == 0) { node_child_node_remove(n); return JS_UNDEFINED; }   /* §4.2.8 remove */
+    DCHECK(magic != 0, "ChildNode's remove() reached the variadic mixin body — it is its own step member");
 
     /* §4.2.8 STEP 2 — the VIABLE sibling, computed BEFORE the conversion because the conversion MOVES the
        nodes it is given and a reference child that moves is a reference to nothing. It is the nearest sibling
@@ -5061,7 +5103,7 @@ static void mixin_declare(JSContext *ctx, const NodeMixinMember *tab, unsigned n
             g_mixin_id[tab[k].magic] = tab[k].takes_nodes
                 ? idl_method_id_ext(ctx, MIXIN_NODES, 1, /*variadic*/ true, node_class_id(),
                                     js_node_mixin, tab[k].magic)
-                : idl_method_id(ctx, NULL, 0, js_node_mixin, tab[k].magic);
+                : idl_method_id_step(ctx, NULL, 0, NULL, 0, &NODE_CHILD_REMOVE_STEP, tab[k].magic);
             /* THE SLOT THE LINE ABOVE JUST SET, DECLARED BESIDE IT — and INSIDE this guard rather than beside
                it, which is the one placement that cannot abort. core/agent_state.c refuses a second
                declaration of ONE address by name ("one static was declared as agent state twice"), and this

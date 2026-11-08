@@ -214,16 +214,10 @@ static void remove_an_option(JSContext *ctx, lxb_dom_node_t *select, double inde
  * two steps rather than through a copy here. Installing this member takes that call OFF Element.prototype and
  * answers it here, so the routing has to be exact: it is the same function the mixin body itself calls.
  */
-static JSValue js_select_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+static void select_remove_index(JSContext *ctx, lxb_dom_node_t *n, JSValueConst *argv)
 {
-    lxb_dom_node_t *n = select_receiver(ctx, this_val, "remove");
     double index = 0;
     int have;
-
-    (void)magic;
-    if (!n) return JS_EXCEPTION;
-
-    if (argc == 0) { node_child_node_remove(n); return JS_UNDEFINED; }
 
     /* AN UNKNOWN INDEX IS A FORK THIS BODY CANNOT YET PERFORM, and the shape is core/css/css_rule.h's
        CSS_RULE_INSERT_INDEX exactly — down to the reason the unknown's own EXAMPLE may not decide it. */
@@ -250,7 +244,7 @@ static JSValue js_select_remove(JSContext *ctx, JSValueConst this_val, int argc,
            no sibling component takes a release arm of this algorithm to be handed. Throwing would be this
            engine inventing a failure the standard does not have, on a call a page makes with a value it
            computed. */
-        return JS_UNDEFINED;
+        return;
     }
 
     /* The number the converted `long` denotes. `idl_number_of` is what a body reads a converted numeric slot
@@ -265,8 +259,57 @@ static JSValue js_select_remove(JSContext *ctx, JSValueConst this_val, int argc,
            "idl_number_of found no number for `remove`'s `index`, which is not unknown external input — it "
            "answers 0 only for an unknown carrying no example, and that arm returned above");
     remove_an_option(ctx, n, index);
-    return JS_UNDEFINED;
 }
+
+/* The member: argument count 0 is the ChildNode entry, as a step over core/dom/node.h's one start of it. */
+#define SELECT_REMOVE_STAGES(X) \
+    X(SR_ENTRY, "HTML §4.10.7 select remove() (Web IDL §3.6's entry, by argument count)") \
+    NODE_REMOVE_ALGO_STAGES(X, SR, "HTML §4.10.7 select remove() → DOM §4.2.8 remove() step 2") \
+    X(SR_DONE,  "HTML §4.10.7 select remove() (done)")
+enum { IDL_STEP_STAGE_BASE(SELECT_REMOVE_STAGES) SELECT_REMOVE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const SELECT_REMOVE_STEPS[] = { SELECT_REMOVE_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static void select_remove_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    (void)ctx; (void)st; (void)v;   /* lexbor nodes, the document's; the header holds this */
+}
+
+static int js_select_remove(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeRemoveState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    STEP_DISPATCH(SELECT_REMOVE_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(SR_ENTRY);
+    {
+        lxb_dom_node_t *n = select_receiver(ctx, hdr->this_val, "remove");
+
+        if (!n) return JS_STEP_ABRUPT;
+        if (argc == 0) {
+            node_child_node_remove_start(hdr, s, n, SR_RANGES, SR_DONE);
+            return JS_STEP_YIELD;
+        }
+        select_remove_index(ctx, n, argv);
+        return JS_STEP_DONE;
+    }
+
+    STEP_ARM(SR_RANGES); STEP_ARM(SR_ITERATORS); STEP_ARM(SR_DETACH); STEP_ARM(SR_ASSIGNED);
+    STEP_ARM(SR_SLOT_FIND); STEP_ARM(SR_SLOT_PARENT_TREE); STEP_ARM(SR_SLOT_NODE_TREE); STEP_ARM(SR_ROOT);
+    STEP_ARM(SR_DESCENDANTS); STEP_ARM(SR_RECORD); STEP_ARM(SR_CHANGED);
+    return node_remove_run(ctx, hdr, s, SR_RANGES);
+
+    STEP_ARM(SR_DONE);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl SELECT_REMOVE_STEP = {
+    js_select_remove, sizeof(NodeRemoveState), select_remove_visit, NULL,
+    "HTML §4.10.7 HTMLSelectElement.remove", SELECT_REMOVE_STEPS
+};
 
 void html_select_declare(JSContext *ctx)
 {
@@ -275,7 +318,7 @@ void html_select_declare(JSContext *ctx)
     static const IdlArgType REMOVE_ARGS[1] = { IDL_LONG };
 
     DCHECK(g_id_remove < 0, "html_select_declare ran twice in one agent");
-    g_id_remove = idl_method_id(ctx, REMOVE_ARGS, 1, js_select_remove, 0);
+    g_id_remove = idl_method_id_step(ctx, REMOVE_ARGS, 1, NULL, 0, &SELECT_REMOVE_STEP, 0);
     /* THE SHORTER ENTRY'S OWN OPTIONALITY, which is what §3.6 step 5 measures a zero-argument call against:
        `remove()` declares no position at all, so its "there are none" value is 0 and `select.remove()` is a
        legal call rather than a TypeError. This is also the number Web IDL §3.7.7 Operations' `length` is read
