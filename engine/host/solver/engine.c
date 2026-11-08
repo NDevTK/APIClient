@@ -901,11 +901,15 @@ void engine_set_idle_hook(int (*fn)(JSContext *ctx))
    Counters of different reset scope are not differenced against each other; read per-session values as the
    difference of two censuses. A report only: nothing branches on them. */
 static long g_clock_render_asks, g_clock_timer_asks, g_clock_idle_asks;
+/* The current step's asks of the rendering rung, reset with `g_step_unit` at flow_step's entry and read at the
+   convergence point against the recorded unit's side (solver/step_unit.h). */
+static int g_step_clock_asks;
 
 /* One function per rung rather than a shared helper: the three are different rungs of one `else if` chain, and
    counting them separately is what lets the identity pin the chain's order. */
 static int engine_clock_render_asked(JSContext *ctx) {
     g_clock_render_asks++;
+    g_step_clock_asks++;
     return g_rendering_hook != NULL && g_rendering_hook(ctx, false);
 }
 static int engine_clock_timer_asked(JSContext *ctx) {
@@ -3091,7 +3095,7 @@ static int flow_deliver_head_ready(JSContext *ctx, const Flow *f)
     return ready;
 }
 
-static void flow_deliver(JSContext *ctx, Flow *f)
+static StepUnit flow_deliver(JSContext *ctx, Flow *f)
 {
     JSValue entry, rv, ov;
     const char *record, *origin;
@@ -3137,8 +3141,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
            document; the step unit partitions the same population per arm. It leaves through the arm
            deliver_admits named: the line that read the commitment decides it, once. */
         g_routed_refused++;
-        g_step_unit = verdict;
-        return;
+        return verdict;
     }
     /* The arm that does not receive it is minted before this timeline commits to receiving it, so the arm
        inherits a record that does not yet name this world, and the mint has happened (or been declined) by the
@@ -3214,7 +3217,6 @@ static void flow_deliver(JSContext *ctx, Flow *f)
                "a navigable whose record says this timeline destroyed its active Document still answered with a "
                "realm — the two reads walk one table in one applied delta");
         g_routed_refused++;
-        g_step_unit = STEP_UNIT_ROUTED_TARGET_DESTROYED;
         /* The record is not marked admitted: no timeline heard it, and `_routedZeroDelivery` says so. */
         free(dup);
         JS_FreeCString(ctx, record);
@@ -3222,7 +3224,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
         JS_FreeValue(ctx, rv);
         JS_FreeValue(ctx, ov);
         JS_FreeValue(ctx, entry);
-        return;
+        return STEP_UNIT_ROUTED_TARGET_DESTROYED;
     }
     rctx = doc_realm(doc_id);
     /* The sending document is the head of the world vector: a world is minted by a flow of exactly one
@@ -3275,6 +3277,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
     JS_FreeValue(ctx, rv);
     JS_FreeValue(ctx, ov);
     JS_FreeValue(ctx, entry);
+    return STEP_UNIT_ROUTED_DELIVERY;
 }
 
 /* ---- Asked to perform one: the half with an answer --------------------------------------------------- */
@@ -9649,6 +9652,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
        inheriting the previous step's. Reset per step, because a flow stepped through two arms must read as the
        second. */
     g_step_unit = STEP_UNIT_NONE;
+    g_step_clock_asks = 0;
     /* The step is counted where the name is cleared: an entry has happened and no arm is named. The lifetime
        histogram is counted at the convergence point, so the identity between them can fail. A report only. */
     g_steps++;
@@ -9812,7 +9816,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                per step, oldest first: each becomes a §9.3.3 task at the receiving Window, so tasks are enqueued in
                post order and the scheduler re-ranks between them. */
             if (nu.arm == NEXT_ROUTED_DELIVERY) {
-                g_step_unit = STEP_UNIT_ROUTED_DELIVERY; flow_deliver(ctx, f); return 0; }
+                g_step_unit = flow_deliver(ctx, f); return 0; }
             /* The operation a peer is parked on, before this flow's own programs for the delivery's reason: another
                agent's flow is suspended at it, and it becomes one of this flow's programs. */
             if (nu.arm == NEXT_CROSS_AGENT_OP) {
@@ -10303,8 +10307,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    else is left to run: the replay has gone off the path it was waiting on, and the record is a
                    message this timeline still receives. */
                 if (flow_deliver_pending(f)) {
-                    g_step_unit = STEP_UNIT_ROUTED_DELIVERY;
-                    flow_deliver(ctx, f);
+                    /* Its own unit, below the clock: the verdict names the rung above, and a refusal here is
+                       counted in `g_routed_refused` as there. */
+                    (void)flow_deliver(ctx, f);
+                    g_step_unit = STEP_UNIT_HELD_DELIVERY;
                     return 0;
                 }
                 if (g_referenced) { g_step_unit = STEP_UNIT_AWAIT_PEER; return FLOW_STEP_OWED; }
@@ -11350,16 +11356,11 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
      * STEP_UNIT_RENDERING or STEP_UNIT_TIMER, each of which changes what a zero on `queue-rendering-opportunity`
      * means.
      *
-     * The fourteen units at or below the boundary (RENDERING, TIMER, IDLE_PERIOD, ORPHAN_SEED, ORPHAN_ROUTE,
-     * ORPHAN_RETIRE, AWAIT_FETCH_RECORD, AWAIT_OWED_REPLY, AWAIT_DECLINED, USER_SCROLL, CLOSE_REQUEST, OPEN_AGAIN,
-     * AWAIT_PEER, FINISHED) are each written at one site at or below it, so their sum is the dispatches that descended this
-     * far, which `g_clock_render_asks` counts at the arm; the third assert below is that agreement. `finished` at zero with the sum at zero says
-     * the retirement arm was never asked (a fact about the arms above); with the sum large, it was asked and
-     * something below declined.
-     * Named residual. Not covered: the fourteen-unit list is written here by hand, not derived from the ladder.
-     * Next diff builds: a marker on solver/step_unit.h's list naming which side of the boundary each arm is written
-     * on, from which the sum is derived. Absence shows as: the boundary-sum assert firing after a rung moves across
-     * the clock on purpose, until this list is edited to match. */
+     * The units solver/step_unit.h declares BELOW are written only at or below the boundary, so their sum is the
+     * dispatches that descended this far, which `g_clock_render_asks` counts at the arm; the third assert below
+     * is that agreement, over the lifetime, and the convergence point asserts each step's side. `finished` at
+     * zero with the sum at zero says the retirement arm was never asked (a fact about the arms above); with the
+     * sum large, it was asked and something below declined. */
     DCHECKF(g_clock_timer_asks == g_clock_render_asks - g_step_unit_runs[STEP_UNIT_RENDERING],
             "the rendering rung was reached %ld times and took %ld, so the timer rung one arm below it must "
             "have been reached %ld times and was reached %ld — the two rungs are consecutive arms of one chain, "
@@ -11374,27 +11375,18 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             "STEP_UNIT_TIMER",
             g_clock_timer_asks, g_step_unit_runs[STEP_UNIT_TIMER],
             g_clock_timer_asks - g_step_unit_runs[STEP_UNIT_TIMER], g_clock_idle_asks);
-    /* The sum the banner licenses, the one check that sees a rung cross the boundary; the two asserts above pin
-       the triple's internal adjacency and are blind to anything moving past all three. A unit that descends
-       without joining the list reads the sum too small, one that rises without leaving it too large, a unit
-       written at a second site above the boundary too large, a rung asked twice per step too small. One sum of
-       fourteen rows rather than fourteen containments, because the claim is the partition. ORPHAN_RESUME is absent:
-       engine_orphan_seed returns SEEDED or ROUTED, never RESUMED, so the third outcome of `engine_orphan_unit`
-       belongs to the rung above the boundary. */
+    /* The sum the banner licenses, the check that sees a rung cross the boundary; the two asserts above pin the
+       triple's internal adjacency and are blind to anything moving past all three. One sum rather than a
+       containment per unit, because the claim is the partition. */
     {
-        long below = g_step_unit_runs[STEP_UNIT_RENDERING] + g_step_unit_runs[STEP_UNIT_TIMER] +
-                     g_step_unit_runs[STEP_UNIT_IDLE_PERIOD] + g_step_unit_runs[STEP_UNIT_ORPHAN_SEED] +
-                     g_step_unit_runs[STEP_UNIT_ORPHAN_ROUTE] + g_step_unit_runs[STEP_UNIT_ORPHAN_RETIRE] +
-                     g_step_unit_runs[STEP_UNIT_AWAIT_FETCH_RECORD] +
-                     g_step_unit_runs[STEP_UNIT_AWAIT_OWED_REPLY] + g_step_unit_runs[STEP_UNIT_AWAIT_DECLINED] +
-                     g_step_unit_runs[STEP_UNIT_USER_SCROLL] +
-                     g_step_unit_runs[STEP_UNIT_CLOSE_REQUEST] + g_step_unit_runs[STEP_UNIT_OPEN_AGAIN] +
-                     g_step_unit_runs[STEP_UNIT_AWAIT_PEER] +
-                     g_step_unit_runs[STEP_UNIT_FINISHED];
+        long below = 0;
+
+        for (int u = 0; u < STEP_UNIT_N; u++)
+            if (step_unit_below_clock((StepUnit)u)) below += g_step_unit_runs[u];
         DCHECKF(below == g_clock_render_asks,
-                "the clock boundary was reached %ld times and the fourteen arms at or below it account for %ld — "
-                "every dispatch reaching the rendering rung leaves through one of them, so a unit crossed the boundary, is "
-                "written on both sides of it, or the rung is asked twice per step",
+                "the clock boundary was reached %ld times and the arms solver/step_unit.h declares at or below it "
+                "account for %ld — every dispatch reaching the rendering rung leaves through one of them, so a "
+                "unit is declared on the wrong side or the rung is asked twice per step",
                 g_clock_render_asks, below);
     }
     /* The clock chain's containment in the ladder descents, which a reader comparing
@@ -13176,6 +13168,12 @@ static int engine_sched_slice(int resume) {
                constantly and no member is sitting there when a census is taken", two readings of one zero that
                take opposite work. It decides nothing. */
             g_step_unit_runs[g_step_unit]++;
+            DCHECKF(g_step_clock_asks == step_unit_below_clock(g_step_unit),
+                    "a step recorded `%s`, declared %s the clock boundary in solver/step_unit.h, and asked the "
+                    "rendering rung %d time(s) — a unit at or below the rung is written only after one ask and any "
+                    "other before it, so the unit is written on the wrong side or the rung was asked twice",
+                    step_unit_name(g_step_unit), step_unit_below_clock(g_step_unit) ? "at or below" : "above",
+                    g_step_clock_asks);
             /* The conservation, asserted at the one instant it is exact: flow_step has returned, so every entry
                counted at its reset is recorded here, and the two are counted at different places so that this can
                fail. Here rather than at the publishing accessor, because the step that failed to record itself has

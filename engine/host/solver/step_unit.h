@@ -61,26 +61,30 @@
 
 #include "check.h"
 
-/* THE ONE LIST. `X(id, name)` — `id` becomes `STEP_UNIT_<id>` and `name` is what every reader prints and what
-   the `@COLD` histogram keys its row on, so a rename here is a rename everywhere it is spoken. The names are
-   the ones flow_step already used, verbatim, so a reader who has seen an abort text recognises the row. */
+/* THE ONE LIST. `X(id, name, side)` — `id` becomes `STEP_UNIT_<id>` and `name` is what every reader prints and
+   what the `@COLD` histogram keys its row on, so a rename here is a rename everywhere it is spoken. The names
+   are the ones flow_step already used, verbatim, so a reader who has seen an abort text recognises the row.
+   `side` is where flow_step writes the unit relative to the clock boundary, its rendering rung (HTML §8.1.7.3
+   Processing model): BELOW for the rung and the arms after it in the unframed ladder, which a pass reaches only
+   by asking that rung, ABOVE for every other. Each unit has one side, so an arm whose work is reached on both
+   sides is two units; the scheduler's convergence point asserts each recorded step against its side. */
 #define STEP_UNITS(X)                                                             \
     /* the member has never been stepped, and the reset flow_step enters at */    \
-    X(NONE,               "none")                                                 \
+    X(NONE,               "none", ABOVE)                                          \
     /* the arms that PERFORM work — a step here is progress by definition */      \
-    X(LEAVE_SOURCE_CUT,   "leave-a-snapshot-before-a-source-read")                \
-    X(FORK_PEER_ANSWER,   "fork-over-a-peer-answer")                              \
-    X(LEAVE_ANSWER_STANDBY, "leave-a-standby-for-later-peer-answers")             \
-    X(RETIRE_EXHAUSTED_ASK, "retire-a-request-no-peer-timeline-answers")          \
-    X(FORK_DECLINED_REQ,  "fork-over-a-declined-request")                         \
-    X(FORK_REPLY_SUCCESS, "fork-the-success-of-a-reply-that-was-not-ok")          \
-    X(RESUME_PARKED,      "resume-parked-continuation")                           \
-    X(LINK_CONNECTED,     "link-connected-time")                                  \
-    X(PARSE_END,          "the-end-readiness-interactive")                        \
-    X(PARSE_SPIN,         "the-end-spin-before-a-deferred-script")                \
-    X(PARSE_SPIN_RENDERING, "the-end-spin-queued-a-rendering-opportunity")        \
-    X(ROUTED_DELIVERY,    "routed-delivery")                                      \
-    X(ROUTED_NOT_MINE,    "routed-delivery-not-this-timeline")                    \
+    X(LEAVE_SOURCE_CUT,   "leave-a-snapshot-before-a-source-read", ABOVE)         \
+    X(FORK_PEER_ANSWER,   "fork-over-a-peer-answer", ABOVE)                       \
+    X(LEAVE_ANSWER_STANDBY, "leave-a-standby-for-later-peer-answers", ABOVE)      \
+    X(RETIRE_EXHAUSTED_ASK, "retire-a-request-no-peer-timeline-answers", ABOVE)   \
+    X(FORK_DECLINED_REQ,  "fork-over-a-declined-request", ABOVE)                  \
+    X(FORK_REPLY_SUCCESS, "fork-the-success-of-a-reply-that-was-not-ok", ABOVE)   \
+    X(RESUME_PARKED,      "resume-parked-continuation", ABOVE)                    \
+    X(LINK_CONNECTED,     "link-connected-time", ABOVE)                           \
+    X(PARSE_END,          "the-end-readiness-interactive", ABOVE)                 \
+    X(PARSE_SPIN,         "the-end-spin-before-a-deferred-script", ABOVE)         \
+    X(PARSE_SPIN_RENDERING, "the-end-spin-queued-a-rendering-opportunity", ABOVE) \
+    X(ROUTED_DELIVERY,    "routed-delivery", ABOVE)                               \
+    X(ROUTED_NOT_MINE,    "routed-delivery-not-this-timeline", ABOVE)             \
     /* AND THE OTHER REFUSAL, WHICH IS A DIFFERENT FACT AND NOT A SHADE OF   */ \
     /* THE ROW ABOVE. deliver_admits refuses a record for exactly two        */ \
     /* reasons and its own banner says they "refuse different things": the   */ \
@@ -105,7 +109,7 @@
     /* existed counts foreclosed refusals and one taken after does not, so   */ \
     /* an archived census is not comparable with a new one until this row is */ \
     /* added back into it.                                                   */ \
-    X(ROUTED_PARENT_TOOK, "routed-delivery-the-parent-took")                      \
+    X(ROUTED_PARENT_TOOK, "routed-delivery-the-parent-took", ABOVE)               \
     /* AND THE THIRD REFUSAL, WHICH IS THE ONE THAT CANNOT SAY WHERE THE     */ \
     /* RECORD WENT. The two above both name a flow that holds it — the       */ \
     /* sibling a delivery-time fork minted, or the parent that took the      */ \
@@ -128,7 +132,7 @@
     /* carried this arm before), so an archived census is comparable with a  */ \
     /* new one wherever this row reads zero, which is every session in which */ \
     /* nothing crosses an instance boundary.                                 */ \
-    X(ROUTED_ARM_OWED,    "routed-delivery-an-arm-is-owed")                       \
+    X(ROUTED_ARM_OWED,    "routed-delivery-an-arm-is-owed", ABOVE)                \
     /* AND THE FOURTH REFUSAL, WHICH IS THE ONE WHERE NO FLOW HOLDS THE      */ \
     /* RECORD AFTERWARDS AND THAT IS THE CORRECT ANSWER. The three above     */ \
     /* each name a flow that still has it — the sibling a delivery-time fork */ \
@@ -154,13 +158,13 @@
     /* population ABORTED at solver/engine.c's doc_realm partition, so no    */ \
     /* earlier census can have filed it anywhere at all.                    */ \
     X(ROUTED_TARGET_DESTROYED,                                                    \
-                          "routed-delivery-the-target-document-was-destroyed")    \
-    X(CROSS_AGENT_OP,     "cross-agent-operation")                                \
+                          "routed-delivery-the-target-document-was-destroyed", ABOVE) \
+    X(CROSS_AGENT_OP,     "cross-agent-operation", ABOVE)                         \
     /* an operation from a world this timeline is committed against: consumed */  \
     /* unperformed, as a routed delivery is refused (flow_perform)            */  \
-    X(CROSS_AGENT_OP_NOT_MINE, "cross-agent-operation-not-this-timeline")         \
-    X(MICROTASK,          "microtask-checkpoint")                                 \
-    X(DELIVER_REPLY,      "deliver-one-reply")                                    \
+    X(CROSS_AGENT_OP_NOT_MINE, "cross-agent-operation-not-this-timeline", ABOVE)  \
+    X(MICROTASK,          "microtask-checkpoint", ABOVE)                          \
+    X(DELIVER_REPLY,      "deliver-one-reply", ABOVE)                             \
     /* NO `scheme-fetch-answered` ROW, AND ITS ABSENCE IS A STATEMENT. It named */ \
     /* the exit a flow took when the park it made AT ITS OWN CURSOR answered    */ \
     /* itself — Fetch §4.3 Scheme fetch building a `data:` script's response    */ \
@@ -168,28 +172,28 @@
     /* the element is PREPARED, so the park is made at the row's creation now   */ \
     /* and a scheme-answered entry is taken by `deliver-one-reply` like every   */ \
     /* other answered one. There is no exit left to name.                       */ \
-    X(RUN_TASK,           "run-a-task")                                           \
-    X(LIFECYCLE,          "document-lifecycle-stage")                             \
-    X(RENDERING,          "queue-rendering-opportunity")                          \
-    X(TIMER,              "fire-due-timer")                                       \
+    X(RUN_TASK,           "run-a-task", ABOVE)                                    \
+    X(LIFECYCLE,          "document-lifecycle-stage", ABOVE)                      \
+    X(RENDERING,          "queue-rendering-opportunity", BELOW)                   \
+    X(TIMER,              "fire-due-timer", BELOW)                                \
     /* a due timer older than the reply or callback the step would have run */   \
-    X(TIMER_ARRIVED,      "fire-a-timer-that-arrived-first")                      \
+    X(TIMER_ARRIVED,      "fire-a-timer-that-arrived-first", ABOVE)               \
     /* a timer whose deadline the race put before the next answered arrival */    \
-    X(TIMER_RACED,        "fire-a-timer-before-the-next-arrival")                 \
-    X(IDLE_PERIOD,        "start-or-run-an-idle-period")                         \
+    X(TIMER_RACED,        "fire-a-timer-before-the-next-arrival", ABOVE)          \
+    X(IDLE_PERIOD,        "start-or-run-an-idle-period", BELOW)                  \
     /* NO `unhandled-rejection-notify` ROW, AND ITS ABSENCE IS A STATEMENT. HTML  */ \
     /* §8.1.4.7 Unhandled promise rejections' "notify about rejected promises" is */ \
     /* a step of "perform a microtask checkpoint", which HTML §8.1.7.3 Processing */ \
     /* model defines and the scheduler runs at its own seam — so it is not an arm */ \
     /* of flow_step and costs no pick. It WAS one, at the bottom of this ladder   */ \
     /* behind a per-flow drain that this fixture has never once completed.        */ \
-    X(ORPHAN_SEED,        "seed-one-orphan-flow")                                 \
-    X(ORPHAN_ROUTE,       "hand-a-parked-drive-its-function")                     \
-    X(ORPHAN_RETIRE,      "retire-an-orphan-of-a-destroyed-document")             \
-    X(ORPHAN_RESUME,      "resume-a-parked-orphan-drive")                         \
+    X(ORPHAN_SEED,        "seed-one-orphan-flow", BELOW)                          \
+    X(ORPHAN_ROUTE,       "hand-a-parked-drive-its-function", BELOW)              \
+    X(ORPHAN_RETIRE,      "retire-an-orphan-of-a-destroyed-document", BELOW)      \
+    X(ORPHAN_RESUME,      "resume-a-parked-orphan-drive", ABOVE)                  \
     /* the person scrolling an observed target into view: a modelled act, as  */ \
     /* the close request below is (solver/engine.c's engine_user_scroll)       */ \
-    X(USER_SCROLL,        "scroll-a-target-into-view")                            \
+    X(USER_SCROLL,        "scroll-a-target-into-view", BELOW)                     \
     /* AND THE ARRIVAL NOTHING PERFORMED. HTML §6.10.1 Close requests' preamble  */ \
     /* queues a global task for a potential close request, and this agent has no */ \
     /* user to send one — so the arrival is MODELLED, which is a forced          */ \
@@ -198,10 +202,10 @@
     /* because the questions differ: a frontier seeding drives is reading the    */ \
     /* page's uncalled code, and one modelling close requests is running the     */ \
     /* page's own `cancel` and `close` handlers.                                 */ \
-    X(CLOSE_REQUEST,      "model-a-potential-close-request")                      \
+    X(CLOSE_REQUEST,      "model-a-potential-close-request", BELOW)               \
     /* the attacker opening the page's address again in a new window, an act */ \
     /* of the attacker's the tool performs (solver/engine.c's engine_open_again) */ \
-    X(OPEN_AGAIN,         "open-the-page-again")                                  \
+    X(OPEN_AGAIN,         "open-the-page-again", BELOW)                           \
     /* THE BLOCK THAT STARTS A PROGRAM HAS THREE EXITS AND USED TO HAVE ONE NAME */ \
     /* — §8.1.4.4 "Calling scripts" has TWO entries (run a classic script, run a */ \
     /* module script) and a compile has two outcomes, and `compile-program` was  */ \
@@ -211,9 +215,9 @@
     /* program: a compile that failed, and a module that evaluated. The one      */ \
     /* event the name described was the one event it never counted. See the      */ \
     /* compile site in flow_step for the derivation that replaces it.            */ \
-    X(START_PROGRAM,      "start-a-classic-program")                              \
-    X(EVALUATE_MODULE,    "evaluate-a-module-program")                            \
-    X(NO_COMPILE,         "program-did-not-compile")                              \
+    X(START_PROGRAM,      "start-a-classic-program", ABOVE)                       \
+    X(EVALUATE_MODULE,    "evaluate-a-module-program", ABOVE)                     \
+    X(NO_COMPILE,         "program-did-not-compile", ABOVE)                       \
     /* AND THE COMPILE THAT HANDED THE THREAD BACK PART WAY THROUGH, which is */ \
     /* neither of those and is not an OUTCOME of a compile at all: the parse  */ \
     /* is suspended at an exact production, the row's program has NOT started */ \
@@ -224,7 +228,7 @@
     /* at all. A frontier standing in it is one whose documents are big       */ \
     /* enough that the compile is worth interleaving, which is the state that */ \
     /* used to be indistinguishable from a step that simply took a long time. */ \
-    X(COMPILE_YIELDED,    "compile-handed-the-thread-back")                       \
+    X(COMPILE_YIELDED,    "compile-handed-the-thread-back", ABOVE)                \
     /* AND THE SAME EVENT ON §8.1.4.4 "Calling scripts"' OTHER ENTRY, WHICH IS   */ \
     /* ITS OWN ROW AND NOT A SHADE OF THE ONE ABOVE — a DECISION, because the    */ \
     /* obvious answer is to share that row and sharing it makes two landed       */ \
@@ -258,7 +262,7 @@
     /* why only the classic arm is bracketed. A counter with no reader is the    */ \
     /* write-with-no-reader defect, and this row IS the reader.                  */ \
     X(MODULE_COMPILE_YIELDED,                                                     \
-                          "module-compile-handed-the-thread-back")                \
+                          "module-compile-handed-the-thread-back", ABOVE)         \
     /* AND THE ROW THAT NEVER HAD A PROGRAM TO COMPILE, which is a different  */ \
     /* event and not a shade of the one above: `program-did-not-compile` is a */ \
     /* PARSER verdict on bytes that arrived, and this is HTML §4.12.1.1       */ \
@@ -267,19 +271,19 @@
     /* under NO_COMPILE it would report a page's 404'd chunk as a syntax      */ \
     /* error, and the work each names is at opposite ends of the engine: one  */ \
     /* is at the compile and one is at the network.                           */ \
-    X(SCRIPT_LOAD_FAILED, "script-load-failed")                                   \
+    X(SCRIPT_LOAD_FAILED, "script-load-failed", ABOVE)                            \
     /* HTML §4.12.1.1 "execute the script element"'s `importmap` arm: a row  */ \
     /* that registers an import map and runs nothing, or installs the report  */ \
     /* of its parse result's error to rethrow.                                */ \
-    X(REGISTER_IMPORT_MAP, "register-an-import-map")                              \
-    X(RESUME_PROGRAM,     "resume-program")                                       \
+    X(REGISTER_IMPORT_MAP, "register-an-import-map", ABOVE)                       \
+    X(RESUME_PROGRAM,     "resume-program", ABOVE)                                \
     /* a step of an agent other than the window's (a dedicated worker's):     */ \
     /* its parked continuation, its program, or one of its queued jobs        */ \
-    X(AGENT_RESUME_PARKED, "another-agent-resume-parked-continuation")            \
-    X(AGENT_RESUME_PROGRAM, "another-agent-resume-program")                       \
-    X(AGENT_EVAL_MODULE,  "another-agent-evaluate-module")                        \
-    X(AGENT_COMPILE_PROGRAM, "another-agent-compile-classic-program")             \
-    X(AGENT_RUN_JOB,      "another-agent-run-a-job")                              \
+    X(AGENT_RESUME_PARKED, "another-agent-resume-parked-continuation", ABOVE)     \
+    X(AGENT_RESUME_PROGRAM, "another-agent-resume-program", ABOVE)                \
+    X(AGENT_EVAL_MODULE,  "another-agent-evaluate-module", ABOVE)                 \
+    X(AGENT_COMPILE_PROGRAM, "another-agent-compile-classic-program", ABOVE)      \
+    X(AGENT_RUN_JOB,      "another-agent-run-a-job", ABOVE)                       \
     /* AND THE RESUME HAS FOUR OUTCOMES AND HAD ONE NAME, which is the SAME   */ \
     /* defect as the block above and one rung lower down. A resume ends in    */ \
     /* exactly one of the four states flow_step already branches on: the      */ \
@@ -307,9 +311,9 @@
     /* that did not end. `report an exception` is HTML §8.1.4.6 "Runtime      */ \
     /* script errors"' own algorithm name, which is why the row is spelled    */ \
     /* that way rather than after the frame it installs.                      */ \
-    X(END_FRAME,          "resume-ended-its-frame")                               \
-    X(REPORT_EXCEPTION,   "report-an-exception")                                  \
-    X(DETACH_PROGRAM,     "program-detached-its-base")                            \
+    X(END_FRAME,          "resume-ended-its-frame", ABOVE)                        \
+    X(REPORT_EXCEPTION,   "report-an-exception", ABOVE)                           \
+    X(DETACH_PROGRAM,     "program-detached-its-base", ABOVE)                     \
     /* AND THE THREE A START REACHES, which are the same three outcomes over  */ \
     /* the OTHER entry of HTML §8.1.4.4 "Calling scripts" and not shades of   */ \
     /* the rows above. `start-a-classic-program` spanned all four of a        */ \
@@ -330,9 +334,9 @@
     /* predicate there is written as a predicate: the day a started frame     */ \
     /* detaches, an unconditional assignment would silently take that step    */ \
     /* out of the row HTML §4.12.1.1 position advances are counted in.               */ \
-    X(START_ENDED_FRAME,  "start-ended-its-frame")                               \
-    X(START_REPORTED,     "start-reported-an-exception")                         \
-    X(START_DETACHED,     "start-detached-its-base")                             \
+    X(START_ENDED_FRAME,  "start-ended-its-frame", ABOVE)                        \
+    X(START_REPORTED,     "start-reported-an-exception", ABOVE)                  \
+    X(START_DETACHED,     "start-detached-its-base", ABOVE)                      \
     /* AND THE ONE SPLIT OF THE TWO FRAME-LIVE ROWS ABOVE, which is the half   */ \
     /* a reader of `resume-program` most needs and the half neither row can    */ \
     /* state. A resume that returns with its frame LIVE is one of two things   */ \
@@ -358,14 +362,14 @@
     /* added back into it. That is the same trade the start split made, made   */ \
     /* for the same reason and recorded so the next reader of an old number    */ \
     /* does not difference two populations.                                    */ \
-    X(RESUME_BLOCKED,     "resume-blocked-on-a-host-answer")                     \
-    X(START_BLOCKED,      "start-blocked-on-a-host-answer")                      \
+    X(RESUME_BLOCKED,     "resume-blocked-on-a-host-answer", ABOVE)              \
+    X(START_BLOCKED,      "start-blocked-on-a-host-answer", ABOVE)               \
     /* …and the arms that perform NO work: five flavours of waiting, and done. */ \
     /* The count said THREE and the list held four, which is the cheapest      */ \
     /* check there is and needs no tree: a number beside its own enumeration.  */ \
-    X(AWAIT_FETCH_RECORD, "await-fetch-record")                                   \
-    X(HOST_BLOCKED,       "host-blocked")                                         \
-    X(AWAIT_OWED_REPLY,   "await-owed-reply")                                     \
+    X(AWAIT_FETCH_RECORD, "await-fetch-record", BELOW)                            \
+    X(HOST_BLOCKED,       "host-blocked", ABOVE)                                  \
+    X(AWAIT_OWED_REPLY,   "await-owed-reply", BELOW)                              \
     /* THE SAME ARM AND THE SAME VERDICT AS THE ROW ABOVE, AND THE OPPOSITE   */ \
     /* FACT. flow_step reaches both through `pending_outstanding` — a refused */ \
     /* entry is still owed TO THE FLOW, which is what keeps the timeline from */ \
@@ -376,11 +380,15 @@
     /* It is §@S's search-not-yet-solved, waiting on a per-origin widening in */ \
     /* a LATER SESSION, and it is the one resting arm whose residue has to be */ \
     /* WRITTEN DOWN rather than paid — see engine_sched_slice's close.        */ \
-    X(AWAIT_DECLINED,     "await-a-refused-request")                              \
-    X(AWAIT_PEER,         "await-peer-operation")                                 \
-    X(FINISHED,           "finished")
+    X(AWAIT_DECLINED,     "await-a-refused-request", BELOW)                       \
+    /* a record an arm held for its replay to reach, delivered at the finish */ \
+    /* branch once nothing else is left to run; whatever deliver_admits     */ \
+    /* answers, the step is this one arm (ROUTED_DELIVERY is the rung above) */ \
+    X(HELD_DELIVERY,      "held-delivery", BELOW)                                 \
+    X(AWAIT_PEER,         "await-peer-operation", BELOW)                          \
+    X(FINISHED,           "finished", BELOW)
 
-#define STEP_UNIT_ENUM(id, name) STEP_UNIT_##id,
+#define STEP_UNIT_ENUM(id, name, side) STEP_UNIT_##id,
 typedef enum { STEP_UNITS(STEP_UNIT_ENUM) STEP_UNIT_N } StepUnit;
 #undef STEP_UNIT_ENUM
 
@@ -396,7 +404,7 @@ typedef enum { STEP_UNITS(STEP_UNIT_ENUM) STEP_UNIT_N } StepUnit;
    and an arm added above widens it in the same edit that adds it.
    One row is `"<name>":<long>,` — a quote, the name, a quote, a colon, up to 20 digits of `long`, a comma —
    so 24 characters beside the name; plus the two braces and the terminator. */
-#define STEP_UNIT_WIDTH(id, name) + (sizeof(name) - 1) + 24
+#define STEP_UNIT_WIDTH(id, name, side) + (sizeof(name) - 1) + 24
 enum { STEP_UNITS_JSON_MAX = 2 STEP_UNITS(STEP_UNIT_WIDTH) + 1 };
 #undef STEP_UNIT_WIDTH
 
@@ -405,7 +413,7 @@ enum { STEP_UNITS_JSON_MAX = 2 STEP_UNITS(STEP_UNIT_WIDTH) + 1 };
    is complete by construction and a missing case is not expressible. `static inline` because the whole body is
    the list and every translation unit that prints one should print the same bytes — there is no state here to
    have one copy of. */
-#define STEP_UNIT_CASE(id, name) case STEP_UNIT_##id: return name;
+#define STEP_UNIT_CASE(id, name, side) case STEP_UNIT_##id: return name;
 static inline const char *step_unit_name(StepUnit u)
 {
     switch (u) { STEP_UNITS(STEP_UNIT_CASE) case STEP_UNIT_N: break; }
@@ -416,5 +424,17 @@ static inline const char *step_unit_name(StepUnit u)
     return "(not a step unit)";
 }
 #undef STEP_UNIT_CASE
+
+/* Whether `u` is written at or below the clock boundary, from the same list. */
+#define STEP_UNIT_SIDE_ABOVE 0
+#define STEP_UNIT_SIDE_BELOW 1
+#define STEP_UNIT_SIDE_CASE(id, name, side) case STEP_UNIT_##id: return STEP_UNIT_SIDE_##side;
+static inline int step_unit_below_clock(StepUnit u)
+{
+    switch (u) { STEP_UNITS(STEP_UNIT_SIDE_CASE) case STEP_UNIT_N: break; }
+    DFAIL("a clock side was asked of a value outside solver/step_unit.h's list");
+    return 0;
+}
+#undef STEP_UNIT_SIDE_CASE
 
 #endif
