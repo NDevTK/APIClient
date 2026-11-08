@@ -4,7 +4,10 @@
    none) witnesses the arm where element 0 holds element 3's value; a fill whose value the fragment chooses (0
    where it chooses none) witnesses the arm where element 2 holds 9. Over `[5, 0, 5, 0]`, indexOf (§23.2.3.17),
    lastIndexOf (§23.2.3.20) and includes (§23.2.3.16) from the fragment's fromIndex witness the arms answering 2,
-   0 and false. No arm the fragment leaves at its default reaches any of these. Each witness fetch carries a
+   0 and false. A set (§23.2.3.26) of an array-like and of a typed array at the fragment's offset (0 where it
+   chooses none) witnesses the arms where element 2 and element 3 hold 9, and a two-element set into a
+   two-element view witnesses an arm throwing RangeError. No arm the fragment leaves at its default reaches any of
+   these. Each witness fetch carries a
    constant.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
@@ -28,6 +31,12 @@ static const char HTML_TAINDEX[] =
     "if (taiD.indexOf(5, taiN || 0) === 2) fetch('/api/tai-index2');"
     "if (taiD.lastIndexOf(5, taiN || 3) === 0) fetch('/api/tai-last0');"
     "if (!taiD.includes(5, taiN || 0)) fetch('/api/tai-incl-none');"
+    "var taiE = new Uint8Array(4); taiE.set([9], taiN || 0);"
+    "if (taiE[2] === 9) fetch('/api/tai-set2');"
+    "var taiF = new Uint8Array(4); taiF.set(new Uint8Array([9]), taiN || 0);"
+    "if (taiF[3] === 9) fetch('/api/tai-setta3');"
+    "try { new Uint8Array(2).set([1, 2], taiN || 0); }"
+    "catch (e) { if (e instanceof RangeError) fetch('/api/tai-set-range'); }"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

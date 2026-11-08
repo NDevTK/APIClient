@@ -21389,11 +21389,12 @@ TF_UNIT void probes_fileparse_taslice(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `taindex` document (fixture/taindex.h): fill and copyWithin over an index or a value the
-   fragment supplies reach the arm only that unknown can put there. */
+/* The rows of the `taindex` document (fixture/taindex.h): fill, copyWithin, the searches and set over an index or
+   a value the fragment supplies reach the arm only that unknown can put there. */
 TF_UNIT void probes_taindex(const char *js, Probe *tab, int *n) {
     const char *fi_why = NULL, *cp_why = NULL, *fv_why = NULL, *ix_why = NULL, *lx_why = NULL, *in_why = NULL;
-    int fi_tt = 1, cp_tt = 1, fv_tt = 1, ix_tt = 1, lx_tt = 1, in_tt = 1;
+    const char *sa_why = NULL, *st_why = NULL, *sr_why = NULL;
+    int fi_tt = 1, cp_tt = 1, fv_tt = 1, ix_tt = 1, lx_tt = 1, in_tt = 1, sa_tt = 1, st_tt = 1, sr_tt = 1;
 
     fold_row(&fi_tt, &fi_why, !!strstr(js, "\"/api/tai-fill5\""),
              "NOT REACHED: there is no /api/tai-fill5 record, so no arm of a fill from the fragment's start put the "
@@ -21413,6 +21414,15 @@ TF_UNIT void probes_taindex(const char *js, Probe *tab, int *n) {
     fold_row(&in_tt, &in_why, !!strstr(js, "\"/api/tai-incl-none\""),
              "NOT REACHED: there is no /api/tai-incl-none record, so no arm of includes from the fragment's "
              "fromIndex started past the last occurrence");
+    fold_row(&sa_tt, &sa_why, !!strstr(js, "\"/api/tai-set2\""),
+             "NOT REACHED: there is no /api/tai-set2 record, so no arm of an array-like set at the fragment's "
+             "offset put 9 at element 2");
+    fold_row(&st_tt, &st_why, !!strstr(js, "\"/api/tai-setta3\""),
+             "NOT REACHED: there is no /api/tai-setta3 record, so no arm of a typed-array set at the fragment's "
+             "offset put 9 at element 3");
+    fold_row(&sr_tt, &sr_why, !!strstr(js, "\"/api/tai-set-range\""),
+             "NOT REACHED: there is no /api/tai-set-range record, so no arm of a set at the fragment's offset "
+             "threw the RangeError of an offset out of range");
     const Probe rows[] = {
         { "tai-fill5", fi_tt, "/api/tai-fill5", SESS_EXPLORE, fi_why },
         { "tai-copy4", cp_tt, "/api/tai-copy4", SESS_EXPLORE, cp_why },
@@ -21420,6 +21430,9 @@ TF_UNIT void probes_taindex(const char *js, Probe *tab, int *n) {
         { "tai-index2", ix_tt, "/api/tai-index2", SESS_EXPLORE, ix_why },
         { "tai-last0", lx_tt, "/api/tai-last0", SESS_EXPLORE, lx_why },
         { "tai-incl-none", in_tt, "/api/tai-incl-none", SESS_EXPLORE, in_why },
+        { "tai-set2", sa_tt, "/api/tai-set2", SESS_EXPLORE, sa_why },
+        { "tai-setta3", st_tt, "/api/tai-setta3", SESS_EXPLORE, st_why },
+        { "tai-set-range", sr_tt, "/api/tai-set-range", SESS_EXPLORE, sr_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
