@@ -508,6 +508,8 @@ void dom_attr_normalize_parsed(lxb_dom_node_t *root)
             lxb_dom_element_t *el = lxb_dom_interface_element(n);
             lxb_dom_attr_t *a;
             for (a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
+                /* The attribute's name changes in place, so the tree observer sees it leave and return. */
+                if (lxb_dom_tree_observer()) lxb_dom_tree_observer()->attr_removing(el, a);
                 if (a->node.ns == n->ns) a->node.ns = LXB_NS__UNDEF;
                 /* §4.9.1: with a null prefix the two names ARE one. A stored qualified name that differs is
                    the SVG adjust having replaced half of it, and the qualified half is the one HTML's table
@@ -525,6 +527,7 @@ void dom_attr_normalize_parsed(lxb_dom_node_t *root)
                                                                          owner_document,
                                                                          (const char *)q, qlen);
                 }
+                if (lxb_dom_tree_observer()) lxb_dom_tree_observer()->attr_added(el, a);
             }
         }
         if (n->first_child) { n = n->first_child; continue; }
