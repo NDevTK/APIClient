@@ -24,13 +24,15 @@
  * driven job rests only inside its own flow's member call, where that flow writes nothing and every other
  * flow's writes stay in that flow's delta. A host-time baseline write while a driven job is alive is
  * refused at solver/dom_cow.c for the same reason. */
-/* NAMED RESIDUAL, the synchronous job. Not covered: a layout entry that is not a step machine owning a driven
- * job (as CSSOM VIEW §6's members in core/dom/element_view.c, HTML §4.8.3's img dimensions and update the
- * rendering step 22's paint are) runs on the thread's synchronous job, which never rests, so a page's flow
- * cannot be preempted while it lays out; a computed value read with no job at all is refused
- * (css_computed_style_require_record). Next: the drives the layout drive census finds with no `_ask` twin
- * (flex_cross_size_anonymous_lines, line_box_glyphs) as asks under the caller's resting drive.
- * How its absence shows: a flow's slice overrun inside a layout member with `_layoutJobRests` flat. */
+/* NAMED RESIDUAL, the drives that do not rest. Not covered: a reader that cannot pass "not yet" up drives its
+ * ask to the answer on a drive that does not rest, inside the entered job: paint's line_box_glyphs and
+ * block_flow_anonymous_boxes (core/paint/document_paint.c states that half), the flex baselines'
+ * flex_cross_size_anonymous_lines, and the read twins (intrinsic_inline_run_sizes,
+ * block_flow_establishes_inline_context) where no resting drive is innermost. The thread's synchronous job
+ * serves a layout entry with no entered job and never rests; the step machines that lay out enter a driven
+ * job, as test_forced.c's self-tests do through tf_job_enter, so a read on it is an entry that does not. Next:
+ * each such reader asked under the caller's resting drive, and the synchronous job deleted behind an assert at
+ * lj_current that a job is entered. How its absence shows: a flow's slice overrun inside a layout member with `_layoutJobRests` flat. */
 
 /* The resting drive. `scrollIntoView`'s step machine is the drive of its scrolling-area walk: a node's
  * border-box origin through CSS 2.1 §10.1's second case and through §9.4.2's line boxes (the establishing box,
