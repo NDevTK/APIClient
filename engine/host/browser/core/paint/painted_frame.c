@@ -11,17 +11,6 @@ static JSClassID  g_slot = JS_INVALID_CLASS_ID;      /* the per-realm record (a 
 static JSAtom     g_atom_frame = JS_ATOM_NULL;
 static JSRuntime *g_rt;                              /* the runtime this component was declared in */
 
-/* The collector dispatched here through the class, so the opaque is read without the static the release
-   resets (core/agent_state.h). */
-static void pf_finalizer(JSRuntime *rt, JSValue v)
-{
-    JSClassID id;
-    DocumentPaintFrame *f = JS_GetAnyOpaque(v, &id);
-
-    (void)rt;
-    if (f != NULL) document_paint_frame_free(f);
-}
-
 /* This realm's record, OWNED. */
 static JSValue pf_record(JSContext *docctx)
 {
@@ -81,7 +70,7 @@ const DocumentPaintFrame *painted_frame_last(JSContext *docctx)
 
 void painted_frame_init(JSContext *ctx)
 {
-    JSClassDef def = { "DocumentPaintFrame", .finalizer = pf_finalizer };
+    JSClassDef def = { "DocumentPaintFrame", .record = &DOCUMENT_PAINT_FRAME_LAYOUT };
 
     DCHECK(g_rt == NULL, "painted_frame_init ran twice — one declaration per agent");
     g_rt = JS_GetRuntime(ctx);

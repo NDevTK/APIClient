@@ -219,6 +219,25 @@ static bool dl_rect_extents_are_non_negative(const DisplayMark *m)
     return m->rect[2].px >= 0.0 && m->rect[3].px >= 0.0;
 }
 
+void display_list_seal(DisplayList *dl)
+{
+    DCHECK(dl != NULL, "a display list was sealed through no list");
+    if (dl->n < dl->cap) {
+        DisplayMark *v = dl->n ? lexbor_realloc(dl->v, dl->n * sizeof *v) : NULL;
+        CHECK(v != NULL || dl->n == 0, "a display list could not give back its spare capacity");
+        if (dl->n == 0) free(dl->v);
+        dl->v = v;
+        dl->cap = dl->n;
+    }
+    if (dl->img_n < dl->img_cap) {
+        DisplayBitmap *v = dl->img_n ? lexbor_realloc(dl->img, dl->img_n * sizeof *v) : NULL;
+        CHECK(v != NULL || dl->img_n == 0, "a display list could not give back its spare bitmap capacity");
+        if (dl->img_n == 0) free(dl->img);
+        dl->img = v;
+        dl->img_cap = dl->img_n;
+    }
+}
+
 void display_list_init(DisplayList *dl)
 {
     DCHECK(dl != NULL, "a display list was initialised through no list");

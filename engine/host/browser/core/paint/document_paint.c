@@ -154,15 +154,56 @@ bool document_paint_ready(DocumentPaintFrame *f)
 void document_paint_finish(DocumentPaintFrame *f)
 {
     DCHECK(f != NULL, "a paint was finished through nothing");
-    if (f->walk == NULL) return;
-    /* A false answer is a painter that met an operand it could not compute and stopped; every mark it laid
-       stays in the list, so the frame is a partial picture rather than none. */
-    f->complete = box_paint_end(f->walk);
-    f->walk = NULL;
-    f->elements = dp_element_count(f->ctx, f->root);
+    if (f->walk != NULL) {
+        /* A false answer is a painter that met an operand it could not compute and stopped; every mark it laid
+           stays in the list, so the frame is a partial picture rather than none. */
+        f->complete = box_paint_end(f->walk);
+        f->walk = NULL;
+        f->elements = dp_element_count(f->ctx, f->root);
+    }
+    /* A finished frame is immutable and holds nothing borrowed, which is what DOCUMENT_PAINT_FRAME_LAYOUT
+       states for a frame an object owns. */
     f->ctx = NULL;
     f->root = NULL;
+    display_list_seal(&f->dl);
 }
+
+/* The layout of a finished frame (quickjs.h's JSRecordLayout), by which a published frame's object releases,
+   marks and writes it: the display list's marks and its bitmaps with their pixels, each array exactly its count
+   (display_list_seal), and the three pointers a frame holds only while it paints. */
+static uint32_t dp_bitmap_bytes(const void *r)
+{
+    return (uint32_t)((const DisplayBitmap *)r)->n;
+}
+static const JSRecordField DP_BITMAP_FIELDS[] = {
+    { offsetof(DisplayBitmap, rgba), JS_REC_POD_ARRAY, 1, dp_bitmap_bytes, NULL },
+};
+static const JSRecordLayout DP_BITMAP_LAYOUT = { sizeof(DisplayBitmap), NULL, 0, DP_BITMAP_FIELDS, 1, NULL };
+static uint32_t dp_marks(const void *r)
+{
+    const DocumentPaintFrame *f = r;
+    DCHECK(f->dl.cap == f->dl.n, "a published frame's marks hold spare capacity — document_paint_finish seals them");
+    return (uint32_t)f->dl.n;
+}
+static uint32_t dp_bitmaps(const void *r)
+{
+    const DocumentPaintFrame *f = r;
+    DCHECK(f->dl.img_cap == f->dl.img_n,
+           "a published frame's bitmaps hold spare capacity — document_paint_finish seals them");
+    return (uint32_t)f->dl.img_n;
+}
+static const JSRecordField DP_FRAME_FIELDS[] = {
+    { offsetof(DocumentPaintFrame, dl) + offsetof(DisplayList, v), JS_REC_POD_ARRAY, sizeof(DisplayMark),
+      dp_marks, NULL },
+    { offsetof(DocumentPaintFrame, dl) + offsetof(DisplayList, img), JS_REC_INLINE_ARRAY, 0, dp_bitmaps,
+      &DP_BITMAP_LAYOUT },
+    { offsetof(DocumentPaintFrame, walk), JS_REC_NULL, 0, NULL, NULL },
+    { offsetof(DocumentPaintFrame, ctx), JS_REC_NULL, 0, NULL, NULL },
+    { offsetof(DocumentPaintFrame, root), JS_REC_NULL, 0, NULL, NULL },
+};
+const JSRecordLayout DOCUMENT_PAINT_FRAME_LAYOUT = {
+    sizeof(DocumentPaintFrame), NULL, 0, DP_FRAME_FIELDS, 5, NULL
+};
 
 bool document_paint_finished(const DocumentPaintFrame *f)
 {

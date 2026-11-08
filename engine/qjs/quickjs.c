@@ -7350,7 +7350,7 @@ static void js_record_field_check(const JSRecordField *f, const JSRecordLayout *
     DCHECKF((size_t)f->off + (f->kind == JS_REC_VALUE_IF ? sizeof(JSValue) : sizeof(void *)) <= l->size,
             "a record layout names a field at offset %u past the end of its %zu-byte record", (unsigned)f->off,
             l->size);
-    DCHECKF(f->kind <= JS_REC_INTERNED && (array || f->kind == JS_REC_VALUE_IF) == (f->count != NULL) &&
+    DCHECKF(f->kind <= JS_REC_NULL && (array || f->kind == JS_REC_VALUE_IF) == (f->count != NULL) &&
             rec == (f->sub != NULL) && (f->kind == JS_REC_POD_ARRAY) == (f->elem_size != 0),
             "a record layout's field at offset %u (kind %d) lacks the count, sub-layout or element size its kind "
             "needs, or carries one it does not", (unsigned)f->off, (int)f->kind);
@@ -7382,6 +7382,10 @@ static void js_record_release(JSRuntime *rt, void *rec, const JSRecordLayout *l)
         switch ((JSRecordKind)f->kind) {
         case JS_REC_VALUE_IF:
             if (f->count(rec)) JS_FreeValueRT(rt, *(JSValue *)(b + f->off));
+            continue;
+        case JS_REC_NULL:
+            DCHECKF(ptr == NULL, "a record released by its owner still holds the pointer at offset %u, which its "
+                    "layout says it gives up before an object owns it", (unsigned)f->off);
             continue;
         case JS_REC_INTERNED:
             continue;
@@ -7444,7 +7448,7 @@ static void js_record_mark(JSRuntime *rt, const void *rec, const JSRecordLayout 
         case JS_REC_RECORD:
             if (ptr) js_record_mark(rt, ptr, f->sub, mark_func);
             break;
-        case JS_REC_CSTR: case JS_REC_POD_ARRAY: case JS_REC_CSTR_ARRAY: case JS_REC_INTERNED:
+        case JS_REC_CSTR: case JS_REC_POD_ARRAY: case JS_REC_CSTR_ARRAY: case JS_REC_INTERNED: case JS_REC_NULL:
             break;
         }
     }
@@ -57045,6 +57049,11 @@ static void fg_record(FGWriter *w, FGBuf *out, const void *rec, const JSRecordLa
             continue;
         }
         if (f->kind == JS_REC_CSTR || f->kind == JS_REC_INTERNED) { fg_cstr(out, ptr); continue; }
+        if (f->kind == JS_REC_NULL) {
+            DCHECKF(ptr == NULL, "flow graph: an owned record still holds the pointer at offset %u, which its layout "
+                    "says it gives up before an object owns it", (unsigned)f->off);
+            continue;
+        }
         if (!ptr) { fg_u8(out, 'N'); continue; }
         fg_u8(out, 'P');
         if (f->kind == JS_REC_RECORD) { fg_record(w, out, ptr, f->sub); continue; }
@@ -57061,7 +57070,7 @@ static void fg_record(FGWriter *w, FGBuf *out, const void *rec, const JSRecordLa
                 if (e) { fg_u8(out, 'P'); fg_record(w, out, e, f->sub); } else fg_u8(out, 'N');
                 break;
             }
-            case JS_REC_CSTR: case JS_REC_RECORD: case JS_REC_VALUE_IF: case JS_REC_INTERNED:
+            case JS_REC_CSTR: case JS_REC_RECORD: case JS_REC_VALUE_IF: case JS_REC_INTERNED: case JS_REC_NULL:
                 DCHECKF(false, "flow graph: a record field of kind %d reached the array arm", (int)f->kind);
             }
         }
@@ -57463,6 +57472,7 @@ static void fg_rrecord_into(FGReader *r, void *rec, size_t sz, const JSRecordLay
             continue;
         }
         if (f->kind == JS_REC_CSTR) { *slot = fg_rcstr(r, l); continue; }
+        if (f->kind == JS_REC_NULL) continue;   /* the zeroed bytes it was written as */
         if (f->kind == JS_REC_INTERNED) {
             char *c = fg_rcstr(r, l);
             *slot = c ? (void *)js_ab_codec_intern(r->ctx->rt, (const uint8_t *)c, (uint32_t)strlen(c)) : NULL;
@@ -57493,7 +57503,7 @@ static void fg_rrecord_into(FGReader *r, void *rec, size_t sz, const JSRecordLay
                     CHECK(t == 'P' || t == 'N', "flow graph: a record's pointer element carries an unknown tag");
                     ((void **)arr)[k] = t == 'P' ? fg_rrecord(r, f->sub) : NULL;
                     break;
-                case JS_REC_CSTR: case JS_REC_RECORD: case JS_REC_VALUE_IF: case JS_REC_INTERNED:
+                case JS_REC_CSTR: case JS_REC_RECORD: case JS_REC_VALUE_IF: case JS_REC_INTERNED: case JS_REC_NULL:
                     DCHECKF(false, "flow graph: a record field of kind %d reached the array arm", (int)f->kind);
                 }
             }

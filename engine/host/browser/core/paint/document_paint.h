@@ -92,6 +92,8 @@ bool document_paint_ready(DocumentPaintFrame *f);
 void document_paint_finish(DocumentPaintFrame *f);
 bool document_paint_finished(const DocumentPaintFrame *f);
 void document_paint_frame_free(DocumentPaintFrame *f);
+/* A finished frame's record layout, which the object that publishes it is declared with. */
+extern const JSRecordLayout DOCUMENT_PAINT_FRAME_LAYOUT;
 
 /* Rasterize `f` into `out`, writing what the paint and the raster did to `count`. False where the frame holds no
    rendered region, and then `out` is a zero-area surface and every field of `count` is zero. `out` is

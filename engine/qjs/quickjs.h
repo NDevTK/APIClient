@@ -1123,6 +1123,7 @@ typedef enum JSRecordKind {
     JS_REC_RECORD,        /* an owned pointer to one record laid out by `sub`, or NULL */
     JS_REC_VALUE_IF,      /* JSValue: owned where `count` answers nonzero, and not a value otherwise */
     JS_REC_INTERNED,      /* const char *: a name the runtime interns and owns (js_ab_codec_intern), or NULL */
+    JS_REC_NULL,          /* a pointer the record holds only before an object owns it, NULL from then on */
 } JSRecordKind;
 typedef struct JSRecordField {
     uint16_t off;

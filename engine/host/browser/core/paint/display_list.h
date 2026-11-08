@@ -415,6 +415,10 @@ void display_list_init(DisplayList *dl);
    builder that frees on its own failure path and again at its exit is correct. */
 void display_list_free(DisplayList *dl);
 
+/* Gives back the spare capacity of both arrays, so each holds exactly its count: what a finished frame's list,
+   which nothing appends to again, is held as (core/paint/document_paint.c), and what its record layout counts. */
+void display_list_seal(DisplayList *dl);
+
 /* APPENDS A COPY of `mark` to the end — which is the ONLY way ink enters a list, so the sequence a list holds
    is the sequence its builder produced and there is no second road for a mark to arrive out of order. */
 void display_list_append(DisplayList *dl, const DisplayMark *mark);
