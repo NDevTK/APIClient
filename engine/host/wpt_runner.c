@@ -3190,6 +3190,7 @@ static int wpt_child_main(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    concolic_install_required();
     /* Line-buffered, so an abort cannot discard what the file already reported: a DCHECK ends the process with
        abort(), which does not flush stdio, and stdout is a pipe here, so it would otherwise be fully buffered and
        the driver would read a file that reported results as one that produced nothing. */

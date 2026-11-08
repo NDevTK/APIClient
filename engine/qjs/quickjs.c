@@ -5303,6 +5303,11 @@ JSContext *JS_NewContextRaw(JSRuntime *rt)
     JSContext *ctx;
     int i;
 
+#define JS_CONCOLIC_CHECK_INSTALLED(m)                                                                       \
+    CHECK(g_concolic.m != NULL, "a realm was built on a thread whose host installed no JSConcolicHooks." #m   \
+                                "; it is in JS_CONCOLIC_REQUIRED, which every host installs before a realm");
+    JS_CONCOLIC_REQUIRED(JS_CONCOLIC_CHECK_INSTALLED)
+#undef JS_CONCOLIC_CHECK_INSTALLED
     ctx = js_mallocz_rt(rt, sizeof(JSContext));
     if (!ctx)
         return NULL;
@@ -36385,6 +36390,17 @@ void JS_FlowBudgetArm(void) { flow_budget_arm(); }
 void JS_SetTimeTravelHooks(const JSTimeTravelHooks *h) { g_time_travel = *h; }
 void JS_SetConcolicHooks(const JSConcolicHooks *h)
 {
+#define JS_CONCOLIC_CHECK_REQUIRED(m)                                                                        \
+    CHECK(h->m != NULL, "a JSConcolicHooks table without ." #m " was installed; it is in JS_CONCOLIC_REQUIRED, "  \
+                        "the members every table carries");
+#define JS_CONCOLIC_CHECK_VALUE(m)                                                                           \
+    CHECK(h->is == NULL || h->m != NULL,                                                                     \
+          "a JSConcolicHooks table with an .is was installed without ." #m "; it is in "                    \
+          "JS_CONCOLIC_VALUE_SEMANTICS, the members the engine calls on an unknown");
+    JS_CONCOLIC_REQUIRED(JS_CONCOLIC_CHECK_REQUIRED)
+    JS_CONCOLIC_VALUE_SEMANTICS(JS_CONCOLIC_CHECK_VALUE)
+#undef JS_CONCOLIC_CHECK_REQUIRED
+#undef JS_CONCOLIC_CHECK_VALUE
     g_concolic = *h;
     if (!g_concolic.is) g_concolic.is = js_concolic_none_is;
 }
@@ -109984,8 +110000,8 @@ static JSValue js_math_random(JSContext *ctx, JSValueConst this_val,
     JSValue v;
 
     CHECK(g_concolic.random != NULL,
-          "Math.random was called under a host that installed no JSConcolicHooks.random; the engine holds no "
-          "generator of its own, so every host installs one before it builds a realm");
+          "Math.random was called under a host that installed no JSConcolicHooks.random, a member of "
+          "JS_CONCOLIC_REQUIRED: the engine holds no generator of its own");
     v = g_concolic.random(ctx);
     DCHECK(JS_IsNumber(v) || (g_concolic.is(v)),
            "JSConcolicHooks.random answered neither a Number nor an unknown");
@@ -126219,8 +126235,8 @@ static JSValue js_date_current_time(JSContext *ctx)
     JSValue v;
 
     CHECK(g_concolic.clock != NULL,
-          "the current time was asked under a host that installed no JSConcolicHooks.clock; the engine reads "
-          "no clock of its own, so every host installs one before it builds a realm");
+          "the current time was asked under a host that installed no JSConcolicHooks.clock, a member of "
+          "JS_CONCOLIC_REQUIRED: the engine reads no clock of its own");
     v = g_concolic.clock(ctx);
     DCHECK((g_concolic.is(v)) ||
            (JS_IsNumber(v) && (JS_VALUE_GET_NORM_TAG(v) != JS_TAG_FLOAT64 ||

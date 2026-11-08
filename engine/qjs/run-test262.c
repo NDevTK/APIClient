@@ -126,10 +126,38 @@ static void run262_enqueue_timeout(JSContext *realm, JSValueConst job, double ms
     list_add_tail(&t->link, t_timeouts);
 }
 
+/* Where this runtime's current time starts, and the state of its Math.random generator: both set when the
+   runtime is installed, so a test reads the same values on every run of it. */
+static _Thread_local double t_epoch_ms;
+static _Thread_local uint64_t t_random_state;
+
+/* ECMAScript §21.3.2.28 Math.random ( ) for this host: SplitMix64, scaled onto [+0, 1) by its high 53 bits. */
+static JSValue run262_random(JSContext *ctx)
+{
+    uint64_t z = (t_random_state += 0x9E3779B97F4A7C15ull);
+
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    return JS_NewFloat64(ctx, (double)(z >> 11) * 0x1p-53);
+}
+
+/* ECMAScript §21.4.2.1's current time for this host: the agents' clock (run262_now) from a fixed epoch, as the
+   integral time value §21.4.1.1 requires. */
+static JSValue run262_clock(JSContext *ctx)
+{
+    return JS_NewFloat64(ctx, floor(t_epoch_ms + run262_now()));
+}
+
 static void run262_host_install(JSRuntime *rt)
 {
     static const JSHostJobHooks hooks = { .enqueue_generic = run262_enqueue_generic,
                                           .enqueue_timeout = run262_enqueue_timeout, .now = run262_host_now };
+    static const JSConcolicHooks concolic = { .random = run262_random, .clock = run262_clock };
+    /* 2025-01-01T00:00:00Z: any time value serves, and a fixed one keeps every run of a test alike. */
+    t_epoch_ms = 1735689600000.0;
+    t_random_state = 0;
+    JS_SetConcolicHooks(&concolic);
     t_timeouts = malloc(sizeof(*t_timeouts));
     if (!t_timeouts)
         fatal(1, "no memory for the timeout list");

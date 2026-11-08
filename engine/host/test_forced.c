@@ -44804,6 +44804,7 @@ static void native_ceiling_arm(void) {
 }
 
 int main(int argc, char **argv) {
+    concolic_install_required();
     JSRuntime *rt;
     native_ceiling_arm();
     /* The attacker's site (solver/concolic.h's concolic_set_attacker_site): the host the person verifying

@@ -622,6 +622,7 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
     /* The list is not freed here: §7.4.5 reads this response twice, for the navigation params above and for the
        computed type that decides which kind of Document its bytes load as, at the parse below. */
 
+    concolic_install_required();
     g_rt = JS_NewRuntime();
     CHECK(g_rt != NULL, "the runtime allocation failed: a dropped engine loses the whole frontier");
     JS_SetMaxStackSize(g_rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the 8MB wasm stack */

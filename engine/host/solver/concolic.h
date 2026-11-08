@@ -382,6 +382,10 @@ int concolic_src_delivering(const char *src);
    host where a concolic can be reached: without it every operator falls through to the ordinary-object path
    and the first coercion throws "toPrimitive" out of an expression the page never wrote. */
 void concolic_install_hooks(void);
+/* Installs the table every runtime starts from: the members of quickjs.h's JS_CONCOLIC_REQUIRED (Math.random's
+   path-derived generator and the visitor's clock) and no value semantics, so no value is unknown. Each host calls
+   it before its first realm; concolic_install_hooks replaces it, and concolic_free returns to it. */
+void concolic_install_required(void);
 /* IS THIS HOST EXPLORING? Where concolic values COME FROM — a different decision from what they DO. A global
    that was never set becomes unknown server-injected input rather than a ReferenceError, and a browser value
    an attacker controls becomes a source rather than the plain value the spec computes. A conformance host

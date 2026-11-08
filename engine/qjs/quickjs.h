@@ -3177,6 +3177,15 @@ typedef struct JSConcolicHooks {
        integral Number, or an unknown whose example is one. Required: the engine reads no clock. */
     JSValue (*clock)(JSContext *ctx);
 } JSConcolicHooks;
+/* The members every table carries: the engine has no answer of its own to give in their place, so a realm is
+   built only on a thread whose table holds them, and JS_SetConcolicHooks refuses a table without them. */
+#define JS_CONCOLIC_REQUIRED(X) X(random) X(clock)
+/* The members the engine calls once `is` has answered that a value is an unknown, with no answer of its own:
+   a table with an `is` carries every one. A table without one answers that no value is unknown. */
+#define JS_CONCOLIC_VALUE_SEMANTICS(X)                                                                       \
+    X(add) X(cmp) X(rel) X(derived) X(example) X(call) X(type_fix) X(key_read) X(key_domain_holds)           \
+    X(key_domain_missed) X(key_domain_stated) X(string_domain) X(string_keep_prefix) X(string_unit_map)      \
+    X(string_class)
 JS_EXTERN void JS_SetConcolicHooks(const JSConcolicHooks *hooks);
 
 /* CAN THE INJECTED-STATE CHANNEL NAME THIS KEY? The channel is a server writing a RECORD OF FIELDS into the

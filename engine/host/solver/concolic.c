@@ -10234,6 +10234,13 @@ void concolic_install_hooks(void)
     JS_SetConcolicHooks(&g_hooks);
 }
 
+void concolic_install_required(void)
+{
+    static const JSConcolicHooks required = { .random = concolic_random_hook, .clock = hr_time_wall_now };
+
+    JS_SetConcolicHooks(&required);
+}
+
 /* Whether this host explores. One statement, because every consequence is one decision: an unset global
    becomes unknown server-injected input rather than a ReferenceError, and a browser value the attacker
    controls becomes a source rather than the plain string the address computed. A host that does not explore
@@ -10252,14 +10259,12 @@ static int g_source_overlay;
    static base table keeps its initializer for a later concolic_install_hooks. */
 static void source_overlay_withdraw(void)
 {
-    static const JSConcolicHooks none;
-
     g_hooks.absent = NULL;
     g_hooks.absent_unresolved = NULL;
     g_hooks.present = NULL;
     g_hooks.publish = NULL;
     g_source_overlay = SOURCE_OVERLAY_UNDECLARED;
-    JS_SetConcolicHooks(&none);
+    concolic_install_required();
 }
 /* The same answer, for a component that mints a source of its own (see the header). Not folded into
    concolic_source_wrap, which also files the value in the attacker-delivery registry and counts it as attacker
