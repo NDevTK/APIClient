@@ -1654,6 +1654,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fillwidth.h"
 #include "fixture/flatshadow.h"
 #include "fixture/longline.h"
+#include "fixture/blocklead.h"
 #include "fixture/jsonlead.h"
 #include "fixture/owedsale.h"
 #include "fixture/startin.h"
@@ -2435,6 +2436,7 @@ TF_DOCS[] = {
     { "fillwidth", HTML_FILLWIDTH },
     { "flatshadow", HTML_FLATSHADOW },
     { "longline", HTML_LONGLINE },
+    { "blocklead", HTML_BLOCKLEAD },
     { "jsonlead", HTML_JSONLEAD },
     { "startin", HTML_STARTIN },
     { "staticinline", HTML_STATICINLINE },
@@ -23698,6 +23700,23 @@ TF_UNIT void probes_longline(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `blocklead` document (fixture/blocklead.h): the stack walk's style ask over a child sequence
+   led by a block-level box, under getBoundingClientRect's resting drive. */
+TF_UNIT void probes_blocklead(const char *js, Probe *tab, int *n) {
+    const char *bl_why = NULL; int bl_tt = 1;
+    fold_row(&bl_tt, &bl_why, !!strstr(js, "\"/api/blocklead\""),
+             "NOT REACHED: no /api/blocklead record, so the document aborted before its fetch");
+    fold_row(&bl_tt, &bl_why, param_value_is(js, "/api/blocklead", "x", "20") &&
+                              param_value_is(js, "/api/blocklead", "y", "37") &&
+                              param_value_is(js, "/api/blocklead", "h", "37"),
+             "CSS 2.2 §9.2.1.1: the last empty inline box after the block is not the point (20, 37) on the 30px "
+             "image's baseline, in a 37px container");
+    const Probe rows[] = {
+        { "block-lead", bl_tt, "/api/blocklead", SESS_EXPLORE, bl_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `jsonlead` document (fixture/jsonlead.h): ECMAScript §25.5.2 JSON.parse over a JSON text
    derived from an attacker source. */
 TF_UNIT void probes_jsonlead(const char *js, Probe *tab, int *n) {
@@ -30086,6 +30105,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fillwidth(js, probes, &np);
     probes_flatshadow(js, probes, &np);
     probes_longline(js, probes, &np);
+    probes_blocklead(js, probes, &np);
     probes_jsonlead(js, probes, &np);
     probes_owedsale(js, probes, &np);
     probes_startin(js, probes, &np);
