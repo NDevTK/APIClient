@@ -22855,9 +22855,9 @@ TF_UNIT void probes_perspective(const char *js, Probe *tab, int *n) {
    in a client rectangle, against Chrome 153.0.8010.12. */
 TF_UNIT void probes_perspectivew(const char *js, Probe *tab, int *n) {
     const char *pw_why = NULL; int pw_tt = 1;
-#define PW_IS(k, v) param_value_is(js, "/api/perspectivew", k, v)
-    fold_row(&pw_tt, &pw_why, !!strstr(js, "\"/api/perspectivew\""),
-             "NOT REACHED: no /api/perspectivew record, so the document aborted before its fetch");
+#define PW_IS(k, v) param_value_is(js, "/api/behindviewer", k, v)
+    fold_row(&pw_tt, &pw_why, !!strstr(js, "\"/api/behindviewer\""),
+             "NOT REACHED: no /api/behindviewer record, so the document aborted before its fetch");
     fold_row(&pw_tt, &pw_why, PW_IS("n", "0_0_100_100"),
              "css-transforms-2 §4.2: a box at w = -1 does not map its corners through the division by w");
     fold_row(&pw_tt, &pw_why, PW_IS("z", "0_0_100_100"),
@@ -22866,7 +22866,7 @@ TF_UNIT void probes_perspectivew(const char *js, Probe *tab, int *n) {
              "css-transforms-2 §4.2: a box whose w changes sign across it does not enclose its four divided corners");
 #undef PW_IS
     const Probe rows[] = {
-        { "perspective-w", pw_tt, "/api/perspectivew", SESS_EXPLORE, pw_why },
+        { "perspective-w", pw_tt, "/api/behindviewer", SESS_EXPLORE, pw_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

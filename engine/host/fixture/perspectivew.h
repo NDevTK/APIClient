@@ -23,7 +23,7 @@ static const char HTML_PERSPECTIVEW[] =
     "<script>"
     "function pw(id) { var r = document.getElementById(id).getBoundingClientRect();"
     "                  return [r.x, r.y, r.width, r.height].map(Math.round).join('_'); }"
-    "fetch('/api/perspectivew?n=' + pw('n') + '&z=' + pw('z') + '&m=' + pw('m'));"
+    "fetch('/api/behindviewer?n=' + pw('n') + '&z=' + pw('z') + '&m=' + pw('m'));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
