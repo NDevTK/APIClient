@@ -1546,6 +1546,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/svgtransformable.h"
 #include "fixture/svgtransformattr.h"
 #include "fixture/transform3d.h"
+#include "fixture/indivtransform.h"
 #include "fixture/fillwidth.h"
 #include "fixture/jsonlead.h"
 #include "fixture/owedsale.h"
@@ -2273,6 +2274,7 @@ TF_DOCS[] = {
     { "svgtransformable", HTML_SVGTRANSFORMABLE },
     { "svgtransformattr", HTML_SVGTRANSFORMATTR },
     { "transform3d", HTML_TRANSFORM3D },
+    { "indivtransform", HTML_INDIVTRANSFORM },
     { "fillwidth", HTML_FILLWIDTH },
     { "jsonlead", HTML_JSONLEAD },
     { "startin", HTML_STARTIN },
@@ -22154,6 +22156,28 @@ TF_UNIT void probes_transform3d(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `indivtransform` document (fixture/indivtransform.h): css-transforms-2 §5's translate, rotate
+   and scale properties, in §6's order. */
+TF_UNIT void probes_indivtransform(const char *js, Probe *tab, int *n) {
+    const char *it_why = NULL; int it_tt = 1;
+#define IT_IS(k, v) param_value_is(js, "/api/indivtransform", k, v)
+    fold_row(&it_tt, &it_why, !!strstr(js, "\"/api/indivtransform\""),
+             "NOT REACHED: no /api/indivtransform record, so the document aborted before its fetch");
+    fold_row(&it_tt, &it_why, IT_IS("t", "10") && IT_IS("tt", "20") && IT_IS("r", "110") && IT_IS("rt", "90") &&
+                              IT_IS("rw", "20") && IT_IS("s", "195") && IT_IS("sw", "20"),
+             "css-transforms-2 §5: translate, rotate or scale alone does not map the box as its function would");
+    fold_row(&it_tt, &it_why, IT_IS("o", "315") && IT_IS("ot", "5") && IT_IS("ow", "10"),
+             "css-transforms-2 §6: translate, then rotate, then transform, inside the origin bracket, is not the "
+             "order the matrix composes");
+    fold_row(&it_tt, &it_why, IT_IS("ct", "10px_20px") && IT_IS("cr", "90deg") && IT_IS("cs", "2"),
+             "css-transforms-2 §5: a computed translate, rotate or scale does not read back in its own grammar");
+#undef IT_IS
+    const Probe rows[] = {
+        { "individual-transforms", it_tt, "/api/indivtransform", SESS_EXPLORE, it_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fillwidth` document (fixture/fillwidth.h): CSS 2.2 §9.4.2's line box width for a run that
    breaks, resolved over §10.1's containing block chain through a flex item's used main size. */
 TF_UNIT void probes_fillwidth(const char *js, Probe *tab, int *n) {
@@ -28466,6 +28490,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_svgtransformable(js, probes, &np);
     probes_svgtransformattr(js, probes, &np);
     probes_transform3d(js, probes, &np);
+    probes_indivtransform(js, probes, &np);
     probes_fillwidth(js, probes, &np);
     probes_jsonlead(js, probes, &np);
     probes_owedsale(js, probes, &np);
