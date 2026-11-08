@@ -50,6 +50,7 @@
 #include "core/events/event_target.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "core/timing/thread_work.h"
 
 static int g_ready;
 static int g_id_assigned_nodes = -1, g_id_assigned_elements = -1, g_id_assign = -1;
@@ -401,9 +402,10 @@ static void assign_slottables_for_a_tree(JSContext *ctx, lxb_dom_node_t *root)
        nodes and each of those nodes kept naming it as its assigned slot — which §4.4's get the parent then
        answered with, sending the event path into a detached subtree. The condition belongs at the INSERTION
        call site, where it is a fact about that caller (see slot_insert_steps), and it is stated there. */
-    if (slot_is(root)) assign_slottables(ctx, root);
-    for (n = node_next_in(root, root); n; n = node_next_in(n, root))
+    for (n = root; n; n = node_next_in(n, root)) {
+        thread_work_charge(THREAD_WORK_DOM_WALK, 1);   /* a walk of the page's tree is engine work */
         if (slot_is(n)) assign_slottables(ctx, n);
+    }
 }
 
 void slot_assign_for_a_tree(JSContext *ctx, lxb_dom_node_t *root)

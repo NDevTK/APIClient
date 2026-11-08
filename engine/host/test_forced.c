@@ -1470,6 +1470,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/keydomain.h"
 #include "fixture/keydomainwalk.h"
 #include "fixture/removerest.h"
+#include "fixture/slotrest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2208,6 +2209,7 @@ TF_DOCS[] = {
     { "keydomain", HTML_KEYDOMAIN },
     { "keydomainwalk", HTML_KEYDOMAINWALK },
     { "removerest", HTML_REMOVEREST },
+    { "slotrest", HTML_SLOTREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -17259,6 +17261,29 @@ TF_UNIT void probes_removerest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The row of the `slotrest` document (fixture/slotrest.h): a removeChild from a shadow root whose remove step
+   10.1 walks the shadow root's 100,000 remaining nodes rests inside the call, read from `sliceOverrunGapWork`,
+   which must stay under one quantum, and the removed slot no longer holds the host's span. */
+TF_UNIT void probes_slotrest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/sr-done", "c", "100000"),
+             "NOT REACHED: no /api/sr-done?c=100000 record, so the removal did not finish with the shadow tree whole");
+    fold_row(&tt, &why, param_value_is(js, "/api/sr-done", "w", "1") && param_value_is(js, "/api/sr-done", "a", "1"),
+             "the span was not assigned to the slot before the removal, or still was after it: remove step 10.2 did "
+             "not empty the removed slot");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: remove step 10.1's assign slottables "
+             "for a tree walked the shadow root's 100,000 nodes inside one step instead of resting per node");
+    const Probe rows[] = {
+        { "removechild-slot-tree-rests", tt, "srHost", SESS_EXPLORE, why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The row of the `keydomainwalk` document (fixture/keydomainwalk.h): 200 unknown-key reads of a Document and a
    WindowProxy over 2,000 unnamed elements charge no walk of them. */
 static long kdw_census(const char *js, const char *key);
@@ -29119,6 +29144,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_keydomain(js, probes, &np);
     probes_keydomainwalk(js, probes, &np);
     probes_removerest(js, probes, &np);
+    probes_slotrest(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
