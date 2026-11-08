@@ -43,7 +43,7 @@
 #include "core/events/report_exception.h"
 #include "core/timing/event_loop.h"   /* whether the clock's licence was wanted and refused — see event_loop_advance_census */
 #include "core/rendering/rendering.h"   /* why §8.1.7.3's in-parallel half declined — the `renderingDeclined*` rows */
-#include "core/animation/animatable.h"   /* getAnimations' style change walk — the `waStyleChange*` rows */
+#include "core/animation/style_change_event.h"   /* the style change event's walk — the `waStyleChange*` rows */
 #include "core/timing/thread_work.h"   /* the thread work that clock does not see — see the `tw*` rows */
 #include "solver/reclaim.h"
 
@@ -1744,8 +1744,8 @@ char *result_cold_json(void) {
         METRIC_SET(tw_script_parse_us, tw.cpu_us[THREAD_WORK_SCRIPT_PARSE]);
         METRIC_SET(tw_regexp_compile_bytes, (long long)JS_RegExpCompileBytesLife());
         METRIC_SET(tw_regexp_compile_rests, (long long)JS_RegExpCompileRestsLife());
-        METRIC_SET(wa_style_change_elements, (long long)animatable_style_change_elements_life());
-        METRIC_SET(wa_style_change_rests, (long long)animatable_style_change_rests_life());
+        METRIC_SET(wa_style_change_elements, (long long)style_change_walk_elements_life());
+        METRIC_SET(wa_style_change_rests, (long long)style_change_walk_rests_life());
         METRIC_SET(tw_decode_spans, tw.spans[THREAD_WORK_DECODE]);
         METRIC_SET(tw_decode_bytes, (long long)tw.bytes[THREAD_WORK_DECODE]);
         METRIC_SET(tw_decode_us, tw.cpu_us[THREAD_WORK_DECODE]);

@@ -33,6 +33,12 @@ uint32_t document_animations_list_append(JSContext *ctx);
 /* Every animation associated with one of this realm's Document's timelines, timeline by timeline. OWNED. */
 JSValue document_animations_all(JSContext *ctx);
 
+/* Has a cascade input of the running flow been written since this Document's last whole style change event, so
+   that update the rendering step 16.2.1's recalculation has CSS animations to update? True before the first. */
+bool document_animations_style_stale(JSContext *docctx);
+/* The whole style change event over this Document has run at the running flow's cascade input generation. */
+void document_animations_style_resolved(JSContext *docctx);
+
 /* HTML §8.1.7.3 step 4's "no visible effect" term for this document: an animation of it owes a pending task,
    a finish its timeline has not reached, or an event the queue holds. */
 bool document_animations_pending(JSContext *docctx);

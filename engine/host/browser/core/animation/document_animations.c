@@ -115,6 +115,38 @@ JSValue document_animations_all(JSContext *ctx)
     return as;
 }
 
+/* The running flow's cascade input generation (solver/flow.h), and whether a flow is running to answer it. */
+static bool da_cascade_generation(uint64_t *gen)
+{
+    *gen = 0;
+    return flow_running_cascade_writes(gen) != NULL;
+}
+
+bool document_animations_style_stale(JSContext *docctx)
+{
+    JSValue record = document_animations_record(docctx), v = JS_GetPropertyStr(docctx, record, "styledGen");
+    uint64_t gen;
+    double at = 0;
+    bool stale = true;
+
+    if (da_cascade_generation(&gen) && JS_IsNumber(v)) {
+        JS_ToFloat64(docctx, &at, v);
+        stale = at != (double)gen;
+    }
+    JS_FreeValue(docctx, v);
+    JS_FreeValue(docctx, record);
+    return stale;
+}
+
+void document_animations_style_resolved(JSContext *docctx)
+{
+    JSValue record = document_animations_record(docctx);
+    uint64_t gen;
+
+    if (da_cascade_generation(&gen)) JS_SetPropertyStr(docctx, record, "styledGen", JS_NewFloat64(docctx, (double)gen));
+    JS_FreeValue(docctx, record);
+}
+
 bool document_animations_pending(JSContext *docctx)
 {
     JSValue record = document_animations_record(docctx), q = da_list(docctx, record, "events");
@@ -257,6 +289,7 @@ static void da_install_record(JSContext *ctx)
     JS_SetPropertyStr(ctx, r, "events", JS_NewArray(ctx));
     JS_SetPropertyStr(ctx, r, "dispatching", JS_NewArray(ctx));
     JS_SetPropertyStr(ctx, r, "listed", JS_NewUint32(ctx, 0));
+    JS_SetPropertyStr(ctx, r, "styledGen", JS_NULL);
     realm_value_set(ctx, g_slot, r);
 }
 

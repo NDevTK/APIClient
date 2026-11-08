@@ -27,6 +27,7 @@
 #include "core/css/media_query_list.h"
 #include "core/css/top_layer.h"
 #include "core/animation/document_animations.h"
+#include "core/animation/style_change_event.h"
 #include "core/dom/page_visibility.h"
 #include "core/dom/render_blocking.h"
 #include "core/dom/scroll_events.h"
@@ -267,6 +268,7 @@ typedef struct JSUpdateRendering {
     uint8_t   msnapped;     /* §4.2's collection snapshot has been taken for docs[i] */
     uint8_t   ssnapped;     /* §13.2's step 1 has run and its step 2's extent has been taken for docs[i] */
     uint8_t   asnapped;     /* Web Animations §4.4 steps 1-5 have run for docs[i] */
+    struct StyleChangeWalk *swalk;   /* step 16.2.1's style change event over docs[i] while it rests (a cache) */
     bool      not_canceled;
     /* §8.1.4.6's REPORT AN EXCEPTION, for a callback that threw. The work record is THIS machine's, the way
        abort.h's AbortSignalWork and the dispatch machine's own are their callers' — reporting fires an `error`
@@ -354,6 +356,7 @@ static void js_update_rendering_visit(JSContext *ctx, void *st, JSStepVisit *v)
     STEP_CB_FOREACH(s->cb, k)
         v->val(ctx, &s->cb[k]);
     v->cache(ctx, (void **)&s->paint, ur_paint_destroy);
+    v->cache(ctx, (void **)&s->swalk, style_change_walk_destroy);
 }
 
 static JSValue js_update_rendering_fini(JSContext *ctx, void *st, bool take_result)
@@ -451,14 +454,34 @@ static void steps_12_to_13(JSContext *docctx)
      16.2.7   "Otherwise, break."
      16.3     "If doc has skipped resize observations, then deliver resize loop error given doc."
 
-   STEP 16.2.1 IS A DERIVATION AND NOT AN ELISION, which is why there is no call for it below. "Recalculate
-   styles and update layout" is a FLUSH, and a flush is only work where there is something cached to be stale:
-   this engine derives every used value AT THE READ (core/layout/used_value.h computes from the cascade and the
-   box tree on each ask, and core/css/css_computed_value.h the same one level up), so the geometry §3.4.1 reads
-   one line later has already been recalculated by the act of reading it. The observable content of the step is
-   that a callback's DOM mutation is visible to the NEXT turn's gather, and it is — the mutation went into the
-   flow's COW delta and the next read walks the mutated tree. The day a layout CACHE lands, this step becomes a
-   call and this paragraph becomes wrong, which is what makes it a claim rather than a shrug. */
+   STEP 16.2.1's values are derived at the read and its one effect is the style change event. "Recalculate
+   styles and update layout" flushes nothing cached: this engine derives every used and computed value at the
+   read (core/layout/used_value.h, core/css/css_computed_value.h), so the geometry §3.4.1 reads next is current.
+   What resolving style does produce is CSS Animations' animations (core/animation/css_animations.h), so the step
+   runs the style change event's resting walk over doc (ur_style_recalc) when a cascade input was written since
+   its last one. */
+
+/* Step 16.2.1's style change event over docs[i]'s document, run when doc's cascade inputs moved since its last
+   one. Returns a step code for the machine to return, or 0 when doc's CSS animations are current. */
+static int ur_style_recalc(JSContext *ctx, JSUpdateRendering *s, JSContext *docctx)
+{
+    int rc;
+
+    if (s->swalk == NULL) {
+        lxb_dom_document_t *doc = document_associated(docctx);
+
+        if (!document_animations_style_stale(docctx)) return 0;
+        DCHECK(doc != NULL, "update the rendering step 16.2.1 reached a document whose realm has none — step 2's "
+                            "list holds fully active documents");
+        s->swalk = style_change_walk_new(lxb_dom_interface_node(doc), false, true);
+    }
+    rc = style_change_walk_run(ctx, &s->hdr, s->swalk);
+    if (rc) return rc;
+    style_change_walk_destroy(ctx, s->swalk);
+    s->swalk = NULL;
+    document_animations_style_resolved(docctx);
+    return 0;
+}
 
 /* WHERE docs[i] STANDS INSIDE STEP 16. The step is three parts per document, and they are NOT three stages,
    because §8.1.7.3 runs all three of them for docs[0] before docs[1]'s 16.1: a stage per part would deliver
@@ -1094,8 +1117,9 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
 
             if (s->ro16 == UR16_LOOP) {
                 if (!s->robegun) {
-                    /* STEP 16.2.1 is a derivation — see above; there is nothing to flush.
-                       STEPS 16.2.2 THROUGH 16.2.4 ARE A WORK-SET THAT IS EMPTY BY CONSTRUCTION, asserted
+                    r = ur_style_recalc(ctx, s, docctx);             /* STEP 16.2.1 — see above */
+                    if (r) return r;
+                    /* STEPS 16.2.2 THROUGH 16.2.4 ARE A WORK-SET THAT IS EMPTY BY CONSTRUCTION, asserted
                        two-sidedly rather than skipped. 16.2.3 walks "each element element with 'auto' used
                        value of 'content-visibility'", and this engine's cascade carries no such property at
                        all, so that walk has nothing to visit, `hadInitialVisibleContentVisibilityDetermination`

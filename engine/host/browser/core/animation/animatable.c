@@ -9,22 +9,12 @@
 #include "core/animation/animation.h"
 #include "core/animation/css_animations.h"
 #include "core/animation/document_animations.h"
+#include "core/animation/style_change_event.h"
 #include "core/dom/element.h"
-#include "core/css/css_style_declaration.h"
-#include "core/dom/named_walk.h"
 #include "core/dom/node.h"
 #include "core/idl_args.h"
-#include "core/layout/layout_job.h"
-#include "core/timing/thread_work.h"
-#include "solver/rest_unit.h"
 
 static int g_id_element = -1, g_id_root = -1;
-/* Lifetime counts over the process, read by the result document's census and by nothing that decides. */
-static unsigned long long g_walk_elements, g_walk_rests;
-
-unsigned long long animatable_style_change_elements_life(void) { return g_walk_elements; }
-unsigned long long animatable_style_change_rests_life(void) { return g_walk_rests; }
-
 static uint32_t an_len(JSContext *ctx, JSValueConst arr)
 {
     JSValue len = JS_GetPropertyStr(ctx, arr, "length");
@@ -33,27 +23,6 @@ static uint32_t an_len(JSContext *ctx, JSValueConst arr)
     JS_ToUint32(ctx, &n, len);
     JS_FreeValue(ctx, len);
     return n;
-}
-
-/* The element the walk updates after `n`, or NULL: `root` itself first when it is an element the call targets,
-   then, for a subtree, its descendant elements in tree order. */
-static lxb_dom_node_t *walk_next(lxb_dom_node_t *n, lxb_dom_node_t *root, bool self, bool subtree)
-{
-    if (n == NULL) {
-        if (self) return root;
-        return subtree ? named_walk_successor(root, root) : NULL;
-    }
-    return subtree ? named_walk_successor(n, root) : NULL;
-}
-
-/* Is `el`'s style readable now: its author match and its ancestors', which its `display: none` test reads? */
-static bool walk_style_ask(lxb_dom_node_t *el)
-{
-    lxb_dom_node_t *e;
-
-    for (e = el; e != NULL && e->type == LXB_DOM_NODE_TYPE_ELEMENT; e = e->parent)
-        if (!cssom_style_ask(lxb_dom_interface_element(e))) return false;
-    return true;
 }
 
 /* Is the animation's associated effect's target `root` or below it (an inclusive descendant when `inclusive`,
@@ -107,10 +76,8 @@ static JSValue relevant_animations(JSContext *ctx, lxb_dom_node_t *root, bool in
     return out;
 }
 
-/* §6.8 and §6.10's getAnimations() as one step machine owning a layout job: the style change event updates one
-   element at a time under a resting drive, charged as a DOM walk, and the machine rests where the drive's
-   allowance is spent or an element's author match parks; then the relevant animations are answered. A selector
-   the cascade cannot decide forks the flow (layout_job_fork). */
+/* §6.8 and §6.10's getAnimations() as one step machine: the style change event's resting walk
+   (core/animation/style_change_event.h) over the target, then the relevant animations. */
 #define GA_STAGES(X) \
     X(GA_WALK, "Web Animations §6.8 getAnimations() / §6.10 getAnimations() (the style change event over the " \
                "target's elements under a resting drive, then the relevant animations in composite order)")
@@ -118,16 +85,14 @@ enum { IDL_STEP_STAGE_BASE(GA_STAGES) GA_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const GA_STEPS[] = { GA_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
-    LayoutJob      *job;      /* owned, declared through layout_job_step_ops; NULL before the first activation */
-    lxb_dom_node_t *cursor;   /* the element the walk updates next, the running flow's node shared by address */
-    uint8_t         started;  /* the walk has taken its first element (a NULL cursor after it is the end) */
+    StyleChangeWalk *walk;   /* the style change event's walk, a cache; NULL before the first activation */
 } GaState;
 
 static void ga_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     GaState *s = st;
 
-    v->tree(ctx, (void **)&s->job, NULL, 0, &layout_job_step_ops);
+    v->cache(ctx, (void **)&s->walk, style_change_walk_destroy);
 }
 
 enum { GA_ELEMENT = 0, GA_ROOT = 1 };
@@ -136,9 +101,8 @@ static int js_get_animations_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
                                   JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     GaState *s = st;
-    bool root_form = idl_step_magic(hdr) == GA_ROOT, self = !root_form, subtree = root_form, done = false;
+    bool root_form = idl_step_magic(hdr) == GA_ROOT, self = !root_form, subtree = root_form;
     lxb_dom_node_t *target = node_of(hdr->this_val);
-    LayoutJobDrive d;
     int rc;
 
     (void)cb_result; (void)out_cb; (void)out_argc;
@@ -163,42 +127,9 @@ static int js_get_animations_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
         JS_FreeValue(ctx, pseudo);
         subtree = idl_dict_bool(ctx, options, "subtree");
     }
-    if (s->job == NULL) s->job = layout_job_new();
-    rc = layout_job_fork(ctx, hdr, s->job);
+    if (s->walk == NULL) s->walk = style_change_walk_new(target, self, subtree);
+    rc = style_change_walk_run(ctx, hdr, s->walk);
     if (rc) return rc;
-    if (!s->started) {
-        s->cursor = walk_next(NULL, target, self, subtree);
-        s->started = 1;
-    }
-    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
-    layout_job_enter(s->job);
-    layout_job_drive_begin_resting(&d);
-    for (;;) {
-        if (s->cursor == NULL) { done = true; break; }
-        if (!walk_style_ask(s->cursor)) {
-            DCHECK(layout_job_drive_spent(&d), "getAnimations' style change event parked an author match with the "
-                                               "drive's allowance unspent, so its next activation would ask the "
-                                               "same thing over the same state for ever");
-            break;
-        }
-        thread_work_charge(THREAD_WORK_DOM_WALK, 1);
-        css_animations_update(lxb_dom_interface_element(s->cursor));
-        g_walk_elements++;
-        s->cursor = walk_next(s->cursor, target, self, subtree);
-        if (layout_job_drive_spent(&d)) break;
-    }
-    layout_job_drive_end(&d);
-    layout_job_leave(s->job);
-    rest_unit_end();
-    if (layout_job_declined(s->job)) {
-        rc = layout_job_fork(ctx, hdr, s->job);
-        return rc ? rc : JS_STEP_YIELD;
-    }
-    if (!done) {
-        layout_job_rested(s->job);
-        g_walk_rests++;
-        return JS_STEP_YIELD;
-    }
     *presult = relevant_animations(ctx, target, self, subtree);
     return JS_STEP_DONE;
 }

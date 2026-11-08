@@ -7,10 +7,12 @@
  * composite order" its order. An element's animations are held on its wrapper, in `animation-name` order, so every
  * update is the running flow's own write.
  *
- * Named residual: the update runs at the style change event Web Animations §6.8's getAnimations() triggers, and at no
- * other. The next diff runs it at every style change event, update-the-rendering's style recalculation first. Its
- * absence shows as a CSSAnimation's start time dating from the first getAnimations() call rather than from the
- * first style resolution, and as no CSSAnimation existing for an element nobody asked about. */
+ * The update runs at the style change events getAnimations() triggers and at update the rendering step 16.2.1,
+ * the latter whenever a cascade input was written since the Document's last one (document_animations_style_stale).
+ * Named residual: an environment change that moves computed values with no cascade input write (a viewport resize
+ * flipping a media query) does not mark the Document stale. The next diff raises the cascade input generation at
+ * the environment facts a media query reads. Its absence shows as an animation a resize turns on or off appearing
+ * only after the page next writes a cascade input. */
 #ifndef ENGINE_HOST_BROWSER_CORE_ANIMATION_CSS_ANIMATIONS_H
 #define ENGINE_HOST_BROWSER_CORE_ANIMATION_CSS_ANIMATIONS_H
 
