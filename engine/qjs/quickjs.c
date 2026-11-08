@@ -1543,7 +1543,7 @@ typedef struct JSFunctionBytecode {
        no state to decode and nothing downstream can tell the two apart, which is the property a sentinel is
        usually missing. */
     uint64_t locator;
-    /* This body's request sites (js_net_sites_build), sorted by `pc` and owned; NULL with a zero count when it
+    /* This body's request sites (js_net_sites_scan), sorted by `pc` and owned; NULL with a zero count when it
        has none. A site is an OP_get_var whose spelling the host claimed as a network door's entry, and `hit`
        is set the first time any flow executes it. It is shared across flows on purpose: it answers "has some
        flow reached it", a census no flow reads. The body is on `rt->net_site_bodies` through `net_site_link`
@@ -60420,7 +60420,7 @@ typedef struct JSFunctionDef {
 
     /* The spellings variable resolution reported as a network door's entry (the reports that set
        `spells_net_entry`): `base` is the free identifier and `member` the adjacent field, or JS_ATOM_NULL for
-       the bare name. Distinct pairs, atoms owned; js_net_sites_build reads them against the final bytecode. */
+       the bare name. Distinct pairs, atoms owned; js_net_sites_scan reads them against the final bytecode. */
     struct JSNetSpelling { JSAtom base, member; } *net_spell;
     int net_spell_count;
     int net_spell_size;
@@ -76066,7 +76066,7 @@ static void free_bytecode_atoms(JSRuntime *rt,
 #ifndef QJS_DISABLE_PARSER
 
 /* Records one spelling the host claimed as a door's entry for this body, once per distinct pair. The atoms
-   are duplicated because js_net_sites_build reads them after pass 3, which may have dropped the only
+   are duplicated because js_net_sites_scan reads them after pass 3, which may have dropped the only
    occurrence (dead code) and with it the bytecode's own reference. */
 static void js_net_spell_add(JSContext *ctx, JSFunctionDef *fd, JSAtom base, JSAtom member)
 {
@@ -78072,6 +78072,127 @@ static __exception int add_closure_variables(JSContext *ctx, JSFunctionDef *s,
     return 0;
 }
 
+/* compute the maximum stack size needed by the function */
+typedef struct StackSizeState {
+    int bc_len;
+    int stack_len_max;
+    uint16_t *stack_level_tab;
+    int32_t *catch_pos_tab;
+    int *pc_stack;
+    int pc_stack_len;
+    int pc_stack_size;
+} StackSizeState;
+
+/* The passes of one definition's code generation, in the order they run. */
+typedef enum JSCodegenPass {
+    CG_PASS_VARS,      /* resolve_variables */
+    CG_PASS_LABELS,    /* resolve_labels' instruction walk */
+    CG_PASS_JUMPS,     /* resolve_labels' jump shrinking */
+    CG_PASS_PATCH,     /* resolve_labels' jump offset patch */
+    CG_PASS_PC2LINE,   /* compute_pc2line_info */
+    CG_PASS_STACK,     /* compute_stack_size */
+    CG_PASS_SITES,     /* js_net_sites_scan */
+    CG_PASS_BUILD,     /* js_create_function_post: the bytecode object */
+} JSCodegenPass;
+
+/* A compile's code generation (js_create_function), owned by the compile so that it rests: the definition tree's
+   worklist, the walk's place in it, and the state of the one pass in flight. A pass polls between two units of
+   its input (an instruction, a jump, a source position, a definition) and, when the policy takes the thread,
+   returns CG_RESTED with every loop-carried value here; the next stint re-enters it at that unit. */
+typedef struct JSCodegen {
+    JSParseState *ps;          /* the compile's parse: its seam and its budget countdown answer the poll */
+    JSFunctionDef *root;
+    struct list_head order;    /* every other definition, parents before children */
+    struct list_head *pre;     /* the next definition whose prologue runs, &order once all have */
+    bool root_pre_done;
+    bool bodies;               /* every prologue has run */
+    bool failed;
+    JSFunctionDef *cur;        /* the definition whose passes are in flight, NULL between two */
+    JSFunctionDef *cur_par;    /* ...and the parent and constant-pool slot its result goes into */
+    int cur_slot;
+    JSCodegenPass pass;
+    bool begun;                /* the pass in flight has set itself up */
+    int from;                  /* the cursor this stint entered the pass at */
+    int pos, line_num, col_num, patch_offsets;
+    uint32_t last_pc;
+    bool dead;                 /* the instructions from `pos` on are unreachable up to a referenced label */
+    int dead_line, dead_col;
+    DynBuf out;
+    StackSizeState ss;
+    int stack_size;
+    uint16_t *level_tab;
+    struct JSNetSite *sites;
+    int site_count, site_size;
+    JSValue result;
+} JSCodegen;
+
+#define CG_RESTED 1
+
+static uint64_t g_codegen_input, g_codegen_rests;
+uint64_t JS_FlowCodegenInputLife(void) { return g_codegen_input; }
+uint64_t JS_FlowCodegenRestsLife(void) { return g_codegen_rests; }
+
+/* One unit of a pass's input, retired as engine work in the opcode unit: a pass processes it as the dispatch
+   processes an opcode. */
+static inline void js_codegen_charge(uint64_t units)
+{
+    g_codegen_input += units;
+    g_flow_work_retired += units;
+}
+
+/* Does the pass give the thread back before the unit at `cursor`: the parse's own question
+   (js_parse_want_yield), asked only once the stint has processed a unit, so every stint makes progress. */
+static bool js_codegen_rest(JSCodegen *cg, int cursor)
+{
+    if (cursor == cg->from || !js_parse_want_yield(cg->ps))
+        return false;
+    g_codegen_rests++;
+    return true;
+}
+
+/* One instruction of unreachable code after a jump, return or throw: true when the instruction at `pos` is
+   dead and is consumed (its label references dropped, its atoms freed), false at a label something still
+   jumps to, which ends the dead code. */
+static bool dead_code_step(JSFunctionDef *s, const uint8_t *bc_buf, int pos, int *linep, int *colp)
+{
+    int op = bc_buf[pos], label;
+    JSAtom atom;
+
+    if (op == OP_source_loc) {
+        *linep = get_u32(bc_buf + pos + 1);
+        *colp = get_u32(bc_buf + pos + 5);
+        return true;
+    }
+    if (op == OP_label) {
+        label = get_u32(bc_buf + pos + 1);
+        if (update_label(s, label, 0) > 0)
+            return false;
+        DCHECK(s->label_slots[label].first_reloc == NULL, "s->label_slots[label].first_reloc == NULL");
+        return true;
+    }
+    switch(opcode_info[op].fmt) {
+    case OP_FMT_label:
+    case OP_FMT_label_u16:
+        label = get_u32(bc_buf + pos + 1);
+        update_label(s, label, -1);
+        break;
+    case OP_FMT_atom_label_u8:
+    case OP_FMT_atom_label_u16:
+        label = get_u32(bc_buf + pos + 5);
+        update_label(s, label, -1);
+        /* fall thru */
+    case OP_FMT_atom:
+    case OP_FMT_atom_u8:
+    case OP_FMT_atom_u16:
+        atom = get_u32(bc_buf + pos + 1);
+        JS_FreeAtom(s->ctx, atom);
+        break;
+    default:
+        break;
+    }
+    return true;
+}
+
 typedef struct CodeContext {
     const uint8_t *bc_buf; /* code buffer */
     int bc_len;   /* length of the code buffer */
@@ -78402,50 +78523,6 @@ static void instantiate_hoisted_definitions(JSContext *ctx, JSFunctionDef *s, Dy
     s->global_var_size = 0;
 }
 
-static int skip_dead_code(JSFunctionDef *s, const uint8_t *bc_buf, int bc_len,
-                          int pos, int *linep, int *colp)
-{
-    int op, len, label;
-
-    for (; pos < bc_len; pos += len) {
-        op = bc_buf[pos];
-        len = opcode_info[op].size;
-        if (op == OP_source_loc) {
-            *linep = get_u32(bc_buf + pos + 1);
-            *colp = get_u32(bc_buf + pos + 5);
-        } else if (op == OP_label) {
-            label = get_u32(bc_buf + pos + 1);
-            if (update_label(s, label, 0) > 0)
-                break;
-            DCHECK(s->label_slots[label].first_reloc == NULL, "s->label_slots[label].first_reloc == NULL");
-        } else {
-            /* XXX: output a warning for unreachable code? */
-            JSAtom atom;
-            switch(opcode_info[op].fmt) {
-            case OP_FMT_label:
-            case OP_FMT_label_u16:
-                label = get_u32(bc_buf + pos + 1);
-                update_label(s, label, -1);
-                break;
-            case OP_FMT_atom_label_u8:
-            case OP_FMT_atom_label_u16:
-                label = get_u32(bc_buf + pos + 5);
-                update_label(s, label, -1);
-                /* fall thru */
-            case OP_FMT_atom:
-            case OP_FMT_atom_u8:
-            case OP_FMT_atom_u16:
-                atom = get_u32(bc_buf + pos + 1);
-                JS_FreeAtom(s->ctx, atom);
-                break;
-            default:
-                break;
-            }
-        }
-    }
-    return pos;
-}
-
 static int get_label_pos(JSFunctionDef *s, int label)
 {
     int i, pos;
@@ -78473,7 +78550,24 @@ static int get_label_pos(JSFunctionDef *s, int label)
 
 /* convert global variable accesses to local variables or closure
    variables when necessary */
-static __exception int resolve_variables(JSContext *ctx, JSFunctionDef *s)
+/* Ends pass 2 over `s` with its output `bc_out` holding everything before `pos`: the input from `pos` on is
+   copied through unchanged, so every atom has exactly one owner and the definition's teardown releases them. */
+static void resolve_variables_abandon(JSFunctionDef *s, DynBuf *bc_out, int pos)
+{
+    const uint8_t *bc_buf = s->byte_code.buf;
+    int bc_len = s->byte_code.size, len;
+
+    for (; pos < bc_len; pos += len) {
+        len = opcode_info[bc_buf[pos]].size;
+        dbuf_put(bc_out, bc_buf + pos, len);
+    }
+    dbuf_free(&s->byte_code);
+    s->byte_code = *bc_out;
+}
+
+/* Pass 2: resolves every scope-addressed variable access to its storage, expands scope entry and exit, and
+   drops dead code. Answers 0, -1 (the exception is pending) or CG_RESTED with its cursor on `cg`. */
+static __exception int resolve_variables(JSContext *ctx, JSFunctionDef *s, JSCodegen *cg)
 {
     int pos, pos_next, bc_len, op, len, i, idx, line_num, col_num;
     uint8_t *bc_buf;
@@ -78484,10 +78578,18 @@ static __exception int resolve_variables(JSContext *ctx, JSFunctionDef *s)
 
     cc.bc_buf = bc_buf = s->byte_code.buf;
     cc.bc_len = bc_len = s->byte_code.size;
+    if (cg->begun) {
+        bc_out = cg->out;
+        pos = cg->pos;
+        line_num = cg->line_num;
+        col_num = cg->col_num;
+        goto resume;
+    }
     js_dbuf_init(ctx, &bc_out);
 
     /* first pass for runtime checks (must be done before the
        variables are created) */
+    js_codegen_charge(s->global_var_count);
     for(i = 0; i < s->global_var_count; i++) {
         JSGlobalVar *hf = &s->global_vars[i];
         int flags;
@@ -78527,10 +78629,36 @@ static __exception int resolve_variables(JSContext *ctx, JSFunctionDef *s)
 
     line_num = 0; /* avoid warning */
     col_num = 0;
-    for (pos = 0; pos < bc_len; pos = pos_next) {
+    pos = 0;
+    cg->begun = true;
+    cg->dead = false;
+ resume:
+    cg->from = pos;
+    for (; pos < bc_len; pos = pos_next) {
+        if (js_codegen_rest(cg, pos)) {
+            cg->out = bc_out;
+            cg->pos = pos;
+            cg->line_num = line_num;
+            cg->col_num = col_num;
+            return CG_RESTED;
+        }
+        js_codegen_charge(1);
         op = bc_buf[pos];
         len = opcode_info[op].size;
         pos_next = pos + len;
+        if (cg->dead) {
+            if (dead_code_step(s, bc_buf, pos, &cg->dead_line, &cg->dead_col))
+                continue;
+            cg->dead = false;
+            if (cg->dead_line >= 0 && (line_num != cg->dead_line || col_num != cg->dead_col)) {
+                line_num = cg->dead_line;
+                col_num = cg->dead_col;
+                s->source_loc_size++;
+                dbuf_putc(&bc_out, OP_source_loc);
+                dbuf_put_u32(&bc_out, line_num);
+                dbuf_put_u32(&bc_out, col_num);
+            }
+        }
         switch(op) {
         case OP_source_loc:
             line_num = get_u32(bc_buf + pos + 1);
@@ -78644,26 +78772,12 @@ static __exception int resolve_variables(JSContext *ctx, JSFunctionDef *s)
         case OP_throw:
         case OP_throw_error:
         case OP_ret:
-            {
-                /* remove dead code */
-                int line = -1;
-                int col = -1;
-                dbuf_put(&bc_out, bc_buf + pos, len);
-                pos = skip_dead_code(s, bc_buf, bc_len, pos + len,
-                                     &line, &col);
-                pos_next = pos;
-                if (line < 0 || pos >= bc_len)
-                    break;
-                if (line_num != line || col_num != col) {
-                    line_num = line;
-                    col_num = col;
-                    s->source_loc_size++;
-                    dbuf_putc(&bc_out, OP_source_loc);
-                    dbuf_put_u32(&bc_out, line_num);
-                    dbuf_put_u32(&bc_out, col_num);
-                }
-                break;
-            }
+            /* the code up to the next referenced label is dead; the loop drops it one instruction at a time */
+            dbuf_put(&bc_out, bc_buf + pos, len);
+            cg->dead = true;
+            cg->dead_line = -1;
+            cg->dead_col = -1;
+            break;
             goto no_change;
 
         case OP_label:
@@ -78887,6 +79001,8 @@ static __exception int resolve_variables(JSContext *ctx, JSFunctionDef *s)
     }
 
     /* set the new byte code */
+    cg->begun = false;
+    js_dbuf_init(ctx, &cg->out);
     dbuf_free(&s->byte_code);
     s->byte_code = bc_out;
     if (dbuf_error(&s->byte_code)) {
@@ -78895,16 +79011,8 @@ static __exception int resolve_variables(JSContext *ctx, JSFunctionDef *s)
     }
     return 0;
  fail:
-    /* continue the copy to keep the atom refcounts consistent */
-    /* XXX: find a better solution ? */
-    for (; pos < bc_len; pos = pos_next) {
-        op = bc_buf[pos];
-        len = opcode_info[op].size;
-        pos_next = pos + len;
-        dbuf_put(&bc_out, bc_buf + pos, len);
-    }
-    dbuf_free(&s->byte_code);
-    s->byte_code = bc_out;
+    cg->begun = false;
+    resolve_variables_abandon(s, &bc_out, pos);
     return -1;
 }
 
@@ -78930,16 +79038,36 @@ static void add_pc2line_info(JSFunctionDef *s, uint32_t pc,
     s->col_number_last = col_num;
 }
 
-static void compute_pc2line_info(JSFunctionDef *s)
+/* Encodes the source positions pass 3 recorded into the pc2line table, then releases them. Answers 0 or
+   CG_RESTED. */
+static int compute_pc2line_info(JSFunctionDef *s, JSCodegen *cg)
 {
     if (s->source_loc_slots) {
-        int last_line_num = s->line_num;
-        int last_col_num = s->col_num;
-        uint32_t last_pc = 0;
+        int last_line_num, last_col_num;
+        uint32_t last_pc;
         int i;
 
-        js_dbuf_init(s->ctx, &s->pc2line);
-        for (i = 0; i < s->source_loc_count; i++) {
+        if (!cg->begun) {
+            cg->begun = true;
+            cg->pos = 0;
+            cg->line_num = s->line_num;
+            cg->col_num = s->col_num;
+            cg->last_pc = 0;
+            js_dbuf_init(s->ctx, &s->pc2line);
+        }
+        last_line_num = cg->line_num;
+        last_col_num = cg->col_num;
+        last_pc = cg->last_pc;
+        cg->from = cg->pos;
+        for (i = cg->pos; i < s->source_loc_count; i++) {
+            if (js_codegen_rest(cg, i)) {
+                cg->pos = i;
+                cg->line_num = last_line_num;
+                cg->col_num = last_col_num;
+                cg->last_pc = last_pc;
+                return CG_RESTED;
+            }
+            js_codegen_charge(1);
             uint32_t pc = s->source_loc_slots[i].pc;
             int line_num = s->source_loc_slots[i].line_num;
             int col_num = s->source_loc_slots[i].col_num;
@@ -78975,6 +79103,10 @@ static void compute_pc2line_info(JSFunctionDef *s)
             last_col_num = col_num;
         }
     }
+    cg->begun = false;
+    js_free(s->ctx, s->source_loc_slots);
+    s->source_loc_slots = NULL;
+    return 0;
 }
 
 static RelocEntry *add_reloc(JSContext *ctx, LabelSlot *ls, uint32_t addr, int size)
@@ -79155,10 +79287,34 @@ static void put_short_code(JSFunctionDef *s, DynBuf *bc_out, int op, int idx)
     dbuf_put_u16(bc_out, idx);
 }
 
-/* peephole optimizations and resolve goto/labels */
-static __exception int resolve_labels(JSContext *ctx, JSFunctionDef *s)
+/* Ends pass 3 over `s` with its short-opcode output `bc_out` and its input consumed before `pos`: each atom is
+   released from the one buffer that owns it, and the relocations still pending are freed. */
+static void resolve_labels_abandon(JSContext *ctx, JSFunctionDef *s, DynBuf *bc_out, int pos)
 {
-    int pos, pos_next, bc_len, op, op1, len, i, line_num, col_num, patch_offsets;
+    int i;
+
+    free_bytecode_atoms(ctx->rt, bc_out->buf, bc_out->size, true);
+    dbuf_free(bc_out);
+    js_dbuf_init(ctx, bc_out);
+    if (pos < (int)s->byte_code.size)
+        free_bytecode_atoms(ctx->rt, s->byte_code.buf + pos, s->byte_code.size - pos, false);
+    dbuf_free(&s->byte_code);
+    js_dbuf_init(ctx, &s->byte_code);
+    for (i = 0; s->label_slots && i < s->label_count; i++) {
+        RelocEntry *re, *re_next;
+        for (re = s->label_slots[i].first_reloc; re != NULL; re = re_next) {
+            re_next = re->next;
+            js_free(ctx, re);
+        }
+        s->label_slots[i].first_reloc = NULL;
+    }
+}
+
+/* Pass 3's instruction walk: peephole optimizations and short jumps, the output left on `cg->out` for the jump
+   shrinking and patch that follow. Answers 0, -1 or CG_RESTED. */
+static __exception int resolve_labels(JSContext *ctx, JSFunctionDef *s, JSCodegen *cg)
+{
+    int pos, pos_next, bc_len, op, op1, len, i, line_num, col_num;
     const uint8_t *bc_buf;
     DynBuf bc_out;
     LabelSlot *label_slots, *ls;
@@ -79169,11 +79325,17 @@ static __exception int resolve_labels(JSContext *ctx, JSFunctionDef *s)
 
     label_slots = s->label_slots;
 
-    line_num = s->line_num;
-    col_num = s->col_num;
-
     cc.bc_buf = bc_buf = s->byte_code.buf;
     cc.bc_len = bc_len = s->byte_code.size;
+    if (cg->begun) {
+        bc_out = cg->out;
+        pos = cg->pos;
+        line_num = cg->line_num;
+        col_num = cg->col_num;
+        goto resume;
+    }
+    line_num = s->line_num;
+    col_num = s->col_num;
     js_dbuf_init(ctx, &bc_out);
 
     if (s->jump_size) {
@@ -79260,11 +79422,29 @@ static __exception int resolve_labels(JSContext *ctx, JSFunctionDef *s)
         put_short_code(s, &bc_out, OP_put_loc, s->arg_var_object_idx);
     }
 
-    for (pos = 0; pos < bc_len; pos = pos_next) {
+    pos = 0;
+    cg->begun = true;
+    cg->dead = false;
+ resume:
+    cg->from = pos;
+    for (; pos < bc_len; pos = pos_next) {
         int val;
+        if (js_codegen_rest(cg, pos)) {
+            cg->out = bc_out;
+            cg->pos = pos;
+            cg->line_num = line_num;
+            cg->col_num = col_num;
+            return CG_RESTED;
+        }
+        js_codegen_charge(1);
         op = bc_buf[pos];
         len = opcode_info[op].size;
         pos_next = pos + len;
+        if (cg->dead) {
+            if (dead_code_step(s, bc_buf, pos, &line_num, &col_num))
+                continue;
+            cg->dead = false;
+        }
         switch(op) {
         case OP_source_loc:
             /* line number info (for debug). We put it in a separate
@@ -79315,8 +79495,8 @@ static __exception int resolve_labels(JSContext *ctx, JSFunctionDef *s)
                     if (cc.col_num >= 0) col_num = cc.col_num;
                     add_pc2line_info(s, bc_out.size, line_num, col_num);
                     put_short_code(s, &bc_out, op + 1, argc);
-                    pos_next = skip_dead_code(s, bc_buf, bc_len, cc.pos,
-                                              &line_num, &col_num);
+                    pos_next = cc.pos;
+                    cg->dead = true;
                     break;
                 }
                 add_pc2line_info(s, bc_out.size, line_num, col_num);
@@ -79330,8 +79510,7 @@ static __exception int resolve_labels(JSContext *ctx, JSFunctionDef *s)
         case OP_return_async:
         case OP_throw:
         case OP_throw_error:
-            pos_next = skip_dead_code(s, bc_buf, bc_len, pos_next,
-                                      &line_num, &col_num);
+            cg->dead = true;
             goto no_change;
 
         case OP_goto:
@@ -79351,8 +79530,7 @@ static __exception int resolve_labels(JSContext *ctx, JSFunctionDef *s)
                     update_label(s, label, -1);
                     add_pc2line_info(s, bc_out.size, line_num, col_num);
                     dbuf_putc(&bc_out, op1);
-                    pos_next = skip_dead_code(s, bc_buf, bc_len, pos_next,
-                                              &line_num, &col_num);
+                    cg->dead = true;
                     break;
                 }
                 /* XXX: should duplicate single instructions followed by goto or return */
@@ -79398,10 +79576,8 @@ static __exception int resolve_labels(JSContext *ctx, JSFunctionDef *s)
             }
         has_label:
             add_pc2line_info(s, bc_out.size, line_num, col_num);
-            if (op == OP_goto) {
-                pos_next = skip_dead_code(s, bc_buf, bc_len, pos_next,
-                                          &line_num, &col_num);
-            }
+            if (op == OP_goto)
+                cg->dead = true;
             DCHECK(label >= 0 && label < s->label_count, "label >= 0 && label < s->label_count");
             ls = &label_slots[label];
             jp = &s->jump_slots[s->jump_count++];
@@ -79978,14 +80154,39 @@ static __exception int resolve_labels(JSContext *ctx, JSFunctionDef *s)
     for(i = 0; i < s->label_count; i++) {
         DCHECK(label_slots[i].first_reloc == NULL, "label_slots[i].first_reloc == NULL");
     }
+    cg->begun = false;
+    cg->out = bc_out;
+    return 0;
+ fail:
+    cg->begun = false;
+    resolve_labels_abandon(ctx, s, &bc_out, pos_next);
+    return -1;
+}
 
-    /* more jump optimizations */
-    patch_offsets = 0;
-    for (i = 0, jp = s->jump_slots; i < s->jump_count; i++, jp++) {
+/* Pass 3's jump shrinking over `cg->out`: a jump whose distance fits a shorter form takes it and every address
+   after it moves back. Answers 0 or CG_RESTED. */
+static int resolve_jumps(JSFunctionDef *s, JSCodegen *cg)
+{
+    DynBuf *bc_out = &cg->out;
+    JumpSlot *jp;
+    int i, op;
+
+    if (!cg->begun) {
+        cg->begun = true;
+        cg->pos = 0;
+        cg->patch_offsets = 0;
+    }
+    cg->from = cg->pos;
+    for (i = cg->pos, jp = s->jump_slots + i; i < s->jump_count; i++, jp++) {
         LabelSlot *ls;
         JumpSlot *jp1;
         int j, pos, diff, delta;
 
+        if (js_codegen_rest(cg, i)) {
+            cg->pos = i;
+            return CG_RESTED;
+        }
+        js_codegen_charge(1);
         delta = 3;
         switch (op = jp->op) {
         case OP_goto16:
@@ -79997,26 +80198,28 @@ static __exception int resolve_labels(JSContext *ctx, JSFunctionDef *s)
             pos = jp->pos;
             diff = s->label_slots[jp->label].addr - pos;
             if (diff >= -128 && diff <= 127 + delta) {
-                //put_u8(bc_out.buf + pos, diff);
+                //put_u8(bc_out->buf + pos, diff);
                 jp->size = 1;
                 if (op == OP_goto16) {
-                    bc_out.buf[pos - 1] = jp->op = OP_goto8;
+                    bc_out->buf[pos - 1] = jp->op = OP_goto8;
                 } else {
-                    bc_out.buf[pos - 1] = jp->op = OP_if_false8 + (op - OP_if_false);
+                    bc_out->buf[pos - 1] = jp->op = OP_if_false8 + (op - OP_if_false);
                 }
                 goto shrink;
             } else
             if (diff == (int16_t)diff && op == OP_goto) {
-                //put_u16(bc_out.buf + pos, diff);
+                //put_u16(bc_out->buf + pos, diff);
                 jp->size = 2;
                 delta = 2;
-                bc_out.buf[pos - 1] = jp->op = OP_goto16;
+                bc_out->buf[pos - 1] = jp->op = OP_goto16;
             shrink:
                 /* XXX: should reduce complexity, using 2 finger copy scheme */
-                memmove(bc_out.buf + pos + jp->size, bc_out.buf + pos + jp->size + delta,
-                        bc_out.size - pos - jp->size - delta);
-                bc_out.size -= delta;
-                patch_offsets++;
+                memmove(bc_out->buf + pos + jp->size, bc_out->buf + pos + jp->size + delta,
+                        bc_out->size - pos - jp->size - delta);
+                bc_out->size -= delta;
+                cg->patch_offsets++;
+                js_codegen_charge((uint64_t)s->label_count + (uint64_t)(s->jump_count - i - 1) +
+                                  (uint64_t)s->source_loc_count);
                 for (j = 0, ls = s->label_slots; j < s->label_count; j++, ls++) {
                     if (ls->addr > pos)
                         ls->addr -= delta;
@@ -80034,60 +80237,58 @@ static __exception int resolve_labels(JSContext *ctx, JSFunctionDef *s)
             break;
         }
     }
+    cg->begun = false;
+    return 0;
+}
 
-    if (patch_offsets) {
-        JumpSlot *jp1;
-        int j;
-        for (j = 0, jp1 = s->jump_slots; j < s->jump_count; j++, jp1++) {
-            int diff1 = s->label_slots[jp1->label].addr - jp1->pos;
-            switch (jp1->size) {
-            case 1:
-                put_u8(bc_out.buf + jp1->pos, diff1);
-                break;
-            case 2:
-                put_u16(bc_out.buf + jp1->pos, diff1);
-                break;
-            case 4:
-                put_u32(bc_out.buf + jp1->pos, diff1);
-                break;
-            }
+/* Pass 3's offset patch, when the shrinking moved anything, and its end: the jump and label tables are released
+   and `cg->out` becomes the definition's short-opcode bytecode. Answers 0, -1 or CG_RESTED. */
+static __exception int resolve_jumps_patch(JSContext *ctx, JSFunctionDef *s, JSCodegen *cg)
+{
+    JumpSlot *jp1;
+    int j;
+
+    if (!cg->begun) {
+        cg->begun = true;
+        cg->pos = 0;
+    }
+    cg->from = cg->pos;
+    for (j = cg->pos, jp1 = s->jump_slots + j; cg->patch_offsets && j < s->jump_count; j++, jp1++) {
+        int diff1;
+        if (js_codegen_rest(cg, j)) {
+            cg->pos = j;
+            return CG_RESTED;
+        }
+        js_codegen_charge(1);
+        diff1 = s->label_slots[jp1->label].addr - jp1->pos;
+        switch (jp1->size) {
+        case 1:
+            put_u8(cg->out.buf + jp1->pos, diff1);
+            break;
+        case 2:
+            put_u16(cg->out.buf + jp1->pos, diff1);
+            break;
+        case 4:
+            put_u32(cg->out.buf + jp1->pos, diff1);
+            break;
         }
     }
-
+    cg->begun = false;
     js_free(ctx, s->jump_slots);
     s->jump_slots = NULL;
     js_free(ctx, s->label_slots);
     s->label_slots = NULL;
-    /* XXX: should delay until copying to runtime bytecode function */
-    compute_pc2line_info(s);
-    js_free(ctx, s->source_loc_slots);
-    s->source_loc_slots = NULL;
     /* set the new byte code */
     dbuf_free(&s->byte_code);
-    s->byte_code = bc_out;
+    s->byte_code = cg->out;
+    js_dbuf_init(ctx, &cg->out);
     s->use_short_opcodes = true;
     if (dbuf_error(&s->byte_code)) {
         JS_ThrowOutOfMemory(ctx);
         return -1;
     }
     return 0;
- fail:
-    /* XXX: not safe */
-    dbuf_free(&bc_out);
-    return -1;
 }
-
-/* compute the maximum stack size needed by the function */
-
-typedef struct StackSizeState {
-    int bc_len;
-    int stack_len_max;
-    uint16_t *stack_level_tab;
-    int32_t *catch_pos_tab;
-    int *pc_stack;
-    int pc_stack_len;
-    int pc_stack_size;
-} StackSizeState;
 
 /* 'op' is only used for error indication */
 static __exception int ss_check(JSContext *ctx, StackSizeState *s,
@@ -80131,29 +80332,38 @@ static __exception int ss_check(JSContext *ctx, StackSizeState *s,
     return 0;
 }
 
-/* `plevel_tab` receives the per-pc operand-depth table this walk builds — see
-   JSFunctionBytecode.stack_level_tab, which is where it lives afterwards and why it is kept. In release there is
-   no reader for it, so it is freed here and the out-param answers NULL: the table is a DEV instrument, never a
-   thing the interpreter's correctness depends on. */
-static __exception int compute_stack_size(JSContext *ctx,
-                                          JSFunctionDef *fd,
-                                          int *pstack_size,
-                                          uint16_t **plevel_tab)
+/* Frees a stack-size walk's tables. */
+static void compute_stack_size_abandon(JSContext *ctx, StackSizeState *s)
 {
-    StackSizeState s_s, *s = &s_s;
+    js_free(ctx, s->pc_stack);
+    js_free(ctx, s->catch_pos_tab);
+    js_free(ctx, s->stack_level_tab);
+    memset(s, 0, sizeof(*s));
+}
+
+/* The maximum operand stack depth of `fd`'s final bytecode, by a worklist walk of its control flow, into
+   `cg->stack_size`. `cg->level_tab` receives the per-pc operand-depth table the walk builds — see
+   JSFunctionBytecode.stack_level_tab, which is where it lives afterwards and why it is kept. In release there is
+   no reader for it, so it is freed here and answers NULL: the table is a DEV instrument, never a thing the
+   interpreter's correctness depends on. Answers 0, -1 or CG_RESTED, the worklist parked on `cg->ss`. */
+static __exception int compute_stack_size(JSContext *ctx, JSFunctionDef *fd, JSCodegen *cg)
+{
+    StackSizeState *s = &cg->ss;
     int i, diff, n_pop, pos_next, stack_len, pos, op, catch_pos, catch_level;
     const JSOpCode *oi;
     const uint8_t *bc_buf;
 
     bc_buf = fd->byte_code.buf;
+    if (cg->begun)
+        goto resume;
+    memset(s, 0, sizeof(*s));
     s->bc_len = fd->byte_code.size;
     /* bc_len > 0 */
     s->stack_level_tab = js_malloc(ctx, sizeof(s->stack_level_tab[0]) *
                                    s->bc_len);
     if (!s->stack_level_tab)
         return -1;
-    for(i = 0; i < s->bc_len; i++)
-        s->stack_level_tab[i] = 0xffff;
+    memset(s->stack_level_tab, 0xff, sizeof(s->stack_level_tab[0]) * s->bc_len);   /* 0xffff: unexplored */
     s->pc_stack = NULL;
     s->catch_pos_tab = js_malloc(ctx, sizeof(s->catch_pos_tab[0]) * s->bc_len);
     if (!s->catch_pos_tab)
@@ -80166,8 +80376,15 @@ static __exception int compute_stack_size(JSContext *ctx,
     /* breadth-first graph exploration */
     if (ss_check(ctx, s, 0, OP_invalid, 0, -1))
         goto fail;
-
+    cg->begun = true;
+    cg->pos = 0;
+ resume:
+    cg->from = cg->pos;
     while (s->pc_stack_len > 0) {
+        if (js_codegen_rest(cg, cg->pos))
+            return CG_RESTED;
+        cg->pos++;
+        js_codegen_charge(1);
         pos = s->pc_stack[--s->pc_stack_len];
         stack_len = s->stack_level_tab[pos];
         catch_pos = s->catch_pos_tab[pos];
@@ -80319,22 +80536,23 @@ static __exception int compute_stack_size(JSContext *ctx,
             goto fail;
     done_insn: ;
     }
+    cg->begun = false;
     js_free(ctx, s->pc_stack);
     js_free(ctx, s->catch_pos_tab);
 #if APICLIENT_DEV
-    *plevel_tab = s->stack_level_tab;   /* HANDED OVER to the bytecode; freed by free_function_bytecode */
+    cg->level_tab = s->stack_level_tab;   /* HANDED OVER to the bytecode; freed by free_function_bytecode */
 #else
-    *plevel_tab = NULL;
+    cg->level_tab = NULL;
     js_free(ctx, s->stack_level_tab);
 #endif
-    *pstack_size = s->stack_len_max;
+    cg->stack_size = s->stack_len_max;
+    memset(s, 0, sizeof(*s));
     return 0;
  fail:
-    js_free(ctx, s->pc_stack);
-    js_free(ctx, s->catch_pos_tab);
-    js_free(ctx, s->stack_level_tab);
-    *plevel_tab = NULL;
-    *pstack_size = 0;
+    cg->begun = false;
+    compute_stack_size_abandon(ctx, s);
+    cg->level_tab = NULL;
+    cg->stack_size = 0;
     return -1;
 }
 
@@ -80451,88 +80669,163 @@ static bool js_net_site_spelled(const JSFunctionDef *fd, const uint8_t *buf, uin
     return false;
 }
 
-/* Builds `b`'s request-site table from its final bytecode, in pc order, and links `b` on the runtime's list.
-   Pass 3 drops dead code, so a spelling whose every occurrence was unreachable yields no site. A census, not
-   a result: no consumer of this table decides anything. */
-static void js_net_sites_build(JSContext *ctx, JSFunctionBytecode *b, const JSFunctionDef *fd)
+/* Releases what the pass in flight over `fd` holds, and whatever finished passes left on `cg` for the build, so
+   the definition's own teardown finds every atom with one owner. */
+static void js_codegen_abandon_pass(JSContext *ctx, JSFunctionDef *fd, JSCodegen *cg)
 {
-    const uint8_t *buf = b->byte_code_buf;
-    uint32_t len = (uint32_t)b->byte_code_len, p;
-    int n, pass;
+    switch (cg->pass) {
+    case CG_PASS_VARS:
+        if (cg->begun) {
+            resolve_variables_abandon(fd, &cg->out, cg->pos);
+            js_dbuf_init(ctx, &cg->out);
+        }
+        break;
+    case CG_PASS_LABELS:
+        if (cg->begun)
+            resolve_labels_abandon(ctx, fd, &cg->out, cg->pos);
+        break;
+    case CG_PASS_JUMPS:
+    case CG_PASS_PATCH:
+        resolve_labels_abandon(ctx, fd, &cg->out, fd->byte_code.size);
+        break;
+    case CG_PASS_STACK:
+        if (cg->begun)
+            compute_stack_size_abandon(ctx, &cg->ss);
+        break;
+    default:
+        break;
+    }
+    cg->begun = false;
+    js_free(ctx, cg->level_tab);
+    cg->level_tab = NULL;
+    js_free(ctx, cg->sites);
+    cg->sites = NULL;
+    cg->site_count = cg->site_size = 0;
+}
 
-    DCHECKF(fd->net_spell_count == 0 || b->spells_net_entry,
+/* The request-site scan of `fd`'s final bytecode, in pc order, into `cg->sites`. Pass 3 drops dead code, so a
+   spelling whose every occurrence was unreachable yields no site. A census, not a result: no consumer of this
+   table decides anything. Answers 0 or CG_RESTED. */
+static int js_net_sites_scan(JSContext *ctx, JSFunctionDef *fd, JSCodegen *cg)
+{
+    const uint8_t *buf = fd->byte_code.buf;
+    uint32_t len = (uint32_t)fd->byte_code.size, p;
+
+    DCHECKF(fd->net_spell_count == 0 || fd->spells_net_entry,
             "a body recorded %d door spellings and does not carry spells_net_entry; both are written by the "
             "same two reports in resolve_scope_var", fd->net_spell_count);
     if (fd->net_spell_count == 0)
-        return;
-    for (pass = 0; pass < 2; pass++) {
-        n = 0;
-        for (p = 0; p < len; p += short_opcode_info(buf[p]).size) {
-            DCHECKF(short_opcode_info(buf[p]).size > 0 && p + short_opcode_info(buf[p]).size <= len,
-                    "the final bytecode decode stopped at byte %u of %u", p, len);
-            if (buf[p] != OP_get_var || !js_net_site_spelled(fd, buf, len, p))
-                continue;
-            if (pass)
-                b->net_sites[n] = (struct JSNetSite){ .pc = p, .hit = 0 };
-            n++;
-        }
-        if (pass || n == 0)
-            break;
-        b->net_sites = js_malloc(ctx, (size_t)n * sizeof(b->net_sites[0]));
-        CHECK(b->net_sites != NULL, "out of memory building a body's request-site table");
+        return 0;
+    if (!cg->begun) {
+        cg->begun = true;
+        cg->pos = 0;
     }
-    if (n == 0)
-        return;
-    b->net_site_count = n;
-    ctx->rt->net_sites_compiled += (uint64_t)n;
-    list_add_tail(&b->net_site_link, &ctx->rt->net_site_bodies);
+    cg->from = cg->pos;
+    for (p = (uint32_t)cg->pos; p < len; p += short_opcode_info(buf[p]).size) {
+        if (js_codegen_rest(cg, (int)p)) {
+            cg->pos = (int)p;
+            return CG_RESTED;
+        }
+        js_codegen_charge(1);
+        DCHECKF(short_opcode_info(buf[p]).size > 0 && p + short_opcode_info(buf[p]).size <= len,
+                "the final bytecode decode stopped at byte %u of %u", p, len);
+        if (buf[p] != OP_get_var || !js_net_site_spelled(fd, buf, len, p))
+            continue;
+        CHECK(!js_resize_array(ctx, (void **)&cg->sites, sizeof(cg->sites[0]), &cg->site_size,
+                               cg->site_count + 1),
+              "out of memory building a body's request-site table");
+        cg->sites[cg->site_count++] = (struct JSNetSite){ .pc = p, .hit = 0 };
+    }
+    cg->begun = false;
+    return 0;
 }
 
-/* Everything AFTER the children exist: this definition's own code generation, which reads fd->cpool — the slots
-   its children's results were written into. Frees `fd` on both paths, exactly as the recursive version did. */
-static JSValue js_create_function_post(JSContext *ctx, JSFunctionDef *fd)
+static JSValue js_create_function_post(JSContext *ctx, JSFunctionDef *fd, JSCodegen *cg);
+
+/* Runs `fd`'s passes from the one in flight on, then builds its bytecode object into `cg->result`. Answers 0,
+   -1 (the exception is pending and `fd` is freed) or CG_RESTED. Reads fd->cpool, the slots its children's
+   results were written into, so it runs after all of them. */
+static int js_create_function_passes(JSContext *ctx, JSFunctionDef *fd, JSCodegen *cg)
+{
+    int r = 0;
+
+    for (;;) {
+        switch (cg->pass) {
+        case CG_PASS_VARS:
+#ifdef ENABLE_DUMPS // JS_DUMP_BYTECODE_PASS1
+            if (!cg->begun && check_dump_flag(ctx->rt, JS_DUMP_BYTECODE_PASS1)) {
+                printf("pass 1\n");
+                dump_byte_code(ctx, 1, fd->byte_code.buf, fd->byte_code.size,
+                               fd->args, fd->arg_count, fd->vars, fd->var_count,
+                               fd->closure_var, fd->closure_var_count,
+                               fd->cpool, fd->cpool_count, fd->source, fd->line_num,
+                               fd->label_slots, NULL, 0);
+                printf("\n");
+            }
+#endif
+            r = resolve_variables(ctx, fd, cg);
+            break;
+        case CG_PASS_LABELS:
+#ifdef ENABLE_DUMPS // JS_DUMP_BYTECODE_PASS2
+            if (!cg->begun && check_dump_flag(ctx->rt, JS_DUMP_BYTECODE_PASS2)) {
+                printf("pass 2\n");
+                dump_byte_code(ctx, 2, fd->byte_code.buf, fd->byte_code.size,
+                               fd->args, fd->arg_count, fd->vars, fd->var_count,
+                               fd->closure_var, fd->closure_var_count,
+                               fd->cpool, fd->cpool_count, fd->source, fd->line_num,
+                               fd->label_slots, NULL, 0);
+                printf("\n");
+            }
+#endif
+            r = resolve_labels(ctx, fd, cg);
+            break;
+        case CG_PASS_JUMPS:
+            r = resolve_jumps(fd, cg);
+            break;
+        case CG_PASS_PATCH:
+            r = resolve_jumps_patch(ctx, fd, cg);
+            break;
+        case CG_PASS_PC2LINE:
+            r = compute_pc2line_info(fd, cg);
+            break;
+        case CG_PASS_STACK:
+            r = compute_stack_size(ctx, fd, cg);
+            break;
+        case CG_PASS_SITES:
+            r = js_net_sites_scan(ctx, fd, cg);
+            break;
+        case CG_PASS_BUILD:
+            cg->result = js_create_function_post(ctx, fd, cg);   /* frees `fd` either way */
+            cg->pass = CG_PASS_VARS;
+            return JS_IsException(cg->result) ? -1 : 0;
+        }
+        if (r == CG_RESTED)
+            return CG_RESTED;
+        if (r < 0) {
+            js_codegen_abandon_pass(ctx, fd, cg);
+            cg->pass = CG_PASS_VARS;
+            js_free_function_def(ctx, fd);
+            return -1;
+        }
+        DCHECK(!cg->begun, "a pass answered done with its own state still marked in flight");
+        cg->pass++;
+    }
+}
+
+/* The bytecode object of `fd`, whose passes have all run: the tables they left on `cg` are handed to it. Frees
+   `fd` on both paths. */
+static JSValue js_create_function_post(JSContext *ctx, JSFunctionDef *fd, JSCodegen *cg)
 {
     JSValue func_obj;
     JSFunctionBytecode *b;
     struct list_head *el, *el1;
-    uint16_t *level_tab = NULL;   /* compute_stack_size's per-pc depth table; handed to `b` below */
-    int stack_size, idx;
+    uint16_t *level_tab = cg->level_tab;   /* compute_stack_size's per-pc depth table; handed to `b` below */
+    int stack_size = cg->stack_size, idx;
     int function_size, byte_code_offset, cpool_offset;
     int closure_var_offset, vardefs_offset;
     (void)el; (void)el1;
 
-#ifdef ENABLE_DUMPS // JS_DUMP_BYTECODE_PASS1
-    if (check_dump_flag(ctx->rt, JS_DUMP_BYTECODE_PASS1)) {
-        printf("pass 1\n");
-        dump_byte_code(ctx, 1, fd->byte_code.buf, fd->byte_code.size,
-                       fd->args, fd->arg_count, fd->vars, fd->var_count,
-                       fd->closure_var, fd->closure_var_count,
-                       fd->cpool, fd->cpool_count, fd->source, fd->line_num,
-                       fd->label_slots, NULL, 0);
-        printf("\n");
-    }
-#endif
-
-    if (resolve_variables(ctx, fd))
-        goto fail;
-
-#ifdef ENABLE_DUMPS // JS_DUMP_BYTECODE_PASS2
-    if (check_dump_flag(ctx->rt, JS_DUMP_BYTECODE_PASS2)) {
-        printf("pass 2\n");
-        dump_byte_code(ctx, 2, fd->byte_code.buf, fd->byte_code.size,
-                       fd->args, fd->arg_count, fd->vars, fd->var_count,
-                       fd->closure_var, fd->closure_var_count,
-                       fd->cpool, fd->cpool_count, fd->source, fd->line_num,
-                       fd->label_slots, NULL, 0);
-        printf("\n");
-    }
-#endif
-
-    if (resolve_labels(ctx, fd))
-        goto fail;
-
-    if (compute_stack_size(ctx, fd, &stack_size, &level_tab) < 0)
-        goto fail;
+    cg->level_tab = NULL;
 
     function_size = sizeof(*b);
     cpool_offset = function_size;
@@ -80605,7 +80898,16 @@ static JSValue js_create_function_post(JSContext *ctx, JSFunctionDef *fd)
        facts belong to the SCRIPT and ride down the nest, and this one belongs to THIS body's own text. A nested
        function that spells a door's entry name says nothing about the body that declares it. */
     b->spells_net_entry = fd->spells_net_entry;
-    js_net_sites_build(ctx, b, fd);
+    if (cg->site_count) {
+        b->net_sites = cg->sites;
+        b->net_site_count = cg->site_count;
+        ctx->rt->net_sites_compiled += (uint64_t)cg->site_count;
+        list_add_tail(&b->net_site_link, &ctx->rt->net_site_bodies);
+    } else {
+        js_free(ctx, cg->sites);
+    }
+    cg->sites = NULL;
+    cg->site_count = cg->site_size = 0;
     js_net_spell_free(ctx, fd);
     b->eval_origin = fd->eval_origin;   /* HANDED OVER, like filename above; the def no longer owns it */
     fd->eval_origin = JS_ATOM_NULL;
@@ -80672,87 +80974,137 @@ static JSValue js_create_function_post(JSContext *ctx, JSFunctionDef *fd)
     js_free(ctx, fd);
     return JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, b);
  fail:
-    js_free(ctx, level_tab);   /* NULL once `b` adopted it, and on every path that never reached the walk */
+    js_free(ctx, level_tab);   /* NULL once `b` adopted it */
+    js_free(ctx, cg->sites);
+    cg->sites = NULL;
+    cg->site_count = cg->site_size = 0;
     js_free_function_def(ctx, fd);
     return JS_EXCEPTION;
 }
 
-/* THE DEFINITION TREE, ITERATIVELY. Generating a function generated each child by recursing, so compiling cost
-   one C frame per level of the page's own function nesting — the depth the PARSER was flattened to reach, which
-   had simply moved here. `"function f(){".repeat(n)` passes at 20 000 and died at 60 000.
-   IT IS TWO PHASES AND NOT A REVERSE WALK, because the interleaving matters in both directions: a node's
-   PROLOGUE must run before its children exist (they resolve closure variables by walking up to it), and its
-   BODY must run after all of them (it reads the cpool slots their results were written into). So the tree is
-   visited top-down for the prologues — breadth-first, which puts every parent before its children — and then in
-   reverse for the bodies, which is children-before-parents. A sibling's body landing later than in the
-   recursion changes nothing: nothing a prologue reads belongs to a sibling.
-   The root is never linked into the worklist, so its own link stays whatever its parent left; every descendant
-   is self-linked before release for the reason js_free_function_def's walk is — the one-node teardown unlinks
-   from its parent itself. */
-static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
+/* THE DEFINITION TREE, ITERATIVELY AND RESTING. It is two phases and not a reverse walk, because the interleaving
+   matters in both directions: a node's PROLOGUE must run before its children exist (they resolve closure
+   variables by walking up to it), and its BODY must run after all of them (it reads the cpool slots their
+   results were written into). So the tree is visited breadth-first for the prologues, each node's children
+   appended to `cg->order` as it is visited, which puts every parent before its children, and then in reverse for
+   the bodies, children before parents. Nothing a prologue reads belongs to a sibling.
+   The root is never linked into the worklist; every descendant is self-linked before release for the reason
+   js_free_function_def's walk is: the one-node teardown unlinks from its parent itself. */
+static void js_codegen_begin(JSCodegen *cg, JSParseState *ps, JSFunctionDef *fd)
 {
-    struct list_head order, *el, *el1, *cursor;
-    JSFunctionDef *cur;
-    bool failed = false;
+    memset(cg, 0, sizeof(*cg));
+    cg->ps = ps;
+    cg->root = fd;
+    cg->result = JS_UNDEFINED;
+    init_list_head(&cg->order);
+    cg->pre = &cg->order;
+    js_dbuf_init(ps->ctx, &cg->out);
+}
 
-    init_list_head(&order);
-    cur = fd;
-    cursor = &order;
-    for (;;) {
+/* One stint of the code generation `cg` holds: 0 when the root's bytecode object is in `cg->result`, -1 when a
+   definition failed (the exception is pending and every definition is freed), CG_RESTED when the policy took
+   the thread. A failed walk takes no rest: what is left is teardown. */
+static int js_create_function_step(JSContext *ctx, JSCodegen *cg)
+{
+    struct list_head *el, *el1;
+    JSFunctionDef *cur;
+    int done = 0, r;
+
+    /* prologues, parents first */
+    while (!cg->bodies) {
+        if (!cg->root_pre_done) {
+            cur = cg->root;
+        } else if (cg->pre->next == &cg->order) {
+            cg->bodies = true;
+            break;
+        } else {
+            cur = list_entry(cg->pre->next, JSFunctionDef, link);
+        }
+        if (!cg->failed && done > 0 && js_parse_want_yield(cg->ps)) {
+            g_codegen_rests++;
+            return CG_RESTED;
+        }
+        if (cg->root_pre_done)
+            cg->pre = cg->pre->next;
+        cg->root_pre_done = true;
+        js_codegen_charge(1 + (uint64_t)cur->var_count + (uint64_t)cur->scope_count);
         list_for_each_safe(el, el1, &cur->child_list) {
             JSFunctionDef *kid = list_entry(el, JSFunctionDef, link);
             list_del(&kid->link);
-            list_add_tail(&kid->link, &order);
+            list_add_tail(&kid->link, &cg->order);
         }
-        cursor = cursor->next;
-        if (cursor == &order)
-            break;
-        cur = list_entry(cursor, JSFunctionDef, link);
-    }
-
-    /* prologues, parents first */
-    if (js_create_function_pre(ctx, fd) < 0)
-        failed = true;
-    if (!failed) {
-        list_for_each(el, &order) {
-            if (js_create_function_pre(ctx, list_entry(el, JSFunctionDef, link)) < 0) {
-                failed = true;
-                break;
-            }
-        }
+        if (!cg->failed && js_create_function_pre(ctx, cur) < 0)
+            cg->failed = true;
+        done++;
     }
 
     /* bodies, children first; each result goes into the slot its parent reserved for it */
-    while (!list_empty(&order)) {
-        JSFunctionDef *par;
-        JSValue f;
-        int slot;
-
-        cur = list_entry(order.prev, JSFunctionDef, link);
-        list_del(&cur->link);
-        init_list_head(&cur->link);
-        par = cur->parent;
-        slot = cur->parent_cpool_idx;
-        if (failed) {
-            js_free_function_def_one(ctx, cur);
+    for (;;) {
+        cur = cg->cur;
+        if (cur == NULL) {
+            if (!cg->failed && done > 0 && js_parse_want_yield(cg->ps)) {
+                g_codegen_rests++;
+                return CG_RESTED;
+            }
+            if (list_empty(&cg->order)) {
+                cur = cg->root;
+                cg->cur_par = NULL;
+                cg->cur_slot = -1;
+            } else {
+                cur = list_entry(cg->order.prev, JSFunctionDef, link);
+                list_del(&cur->link);
+                init_list_head(&cur->link);
+                cg->cur_par = cur->parent;
+                cg->cur_slot = cur->parent_cpool_idx;
+            }
+            if (cg->failed) {
+                if (cur == cg->root) {
+                    js_free_function_def(ctx, cur);   /* its children are gone; this releases the root itself */
+                    return -1;
+                }
+                js_free_function_def_one(ctx, cur);
+                continue;
+            }
+            cg->cur = cur;
+            cg->pass = CG_PASS_VARS;
+        }
+        r = js_create_function_passes(ctx, cur, cg);   /* frees `cur` unless it rests */
+        if (r == CG_RESTED)
+            return CG_RESTED;
+        cg->cur = NULL;
+        done++;
+        if (r < 0) {
+            if (cur == cg->root)
+                return -1;
+            cg->failed = true;
             continue;
         }
-        f = js_create_function_post(ctx, cur);   /* frees `cur` either way */
-        if (JS_IsException(f)) {
-            failed = true;
-            continue;
-        }
-        DCHECK(par != NULL && slot >= 0,
+        if (cur == cg->root)
+            return 0;
+        DCHECK(cg->cur_par != NULL && cg->cur_slot >= 0,
                "a non-root function definition reached code generation with no parent slot to be stored in");
-        par->cpool[slot] = f;
+        cg->cur_par->cpool[cg->cur_slot] = cg->result;
+        cg->result = JS_UNDEFINED;
     }
-
-    if (failed) {
-        js_free_function_def(ctx, fd);   /* its children are gone; this releases the root itself */
-        return JS_EXCEPTION;
-    }
-    return js_create_function_post(ctx, fd);
 }
+
+/* Throws away a code generation nobody will finish: the pass in flight is abandoned and every definition not
+   yet built is freed; those already built are released with their parents' constant pools. */
+static void js_codegen_drop(JSContext *ctx, JSCodegen *cg)
+{
+    JSFunctionDef *cur = cg->cur;
+
+    cg->failed = true;
+    if (cur != NULL) {
+        js_codegen_abandon_pass(ctx, cur, cg);
+        cg->cur = NULL;
+        js_free_function_def(ctx, cur);
+        if (cur == cg->root)
+            return;
+    }
+    js_create_function_step(ctx, cg);
+}
+
 
 #endif // QJS_DISABLE_PARSER
 
@@ -81331,6 +81683,9 @@ struct JSEvalCompile {
     JSStackFrame *sf;
     JSValueConst this_obj;
     int flags;
+    /* the code generation after the parse, in flight when `codegen` is set */
+    bool codegen;
+    JSCodegen cg;
 };
 
 /* The failure tail both halves share. It is one function rather than a label in each because the two halves
@@ -81344,7 +81699,8 @@ static JSValue js_eval_compile_fail(JSContext *ctx, JSEvalCompile *ec)
     return JS_EXCEPTION;
 }
 
-static JSValue js_eval_compile_finish(JSContext *ctx, JSEvalCompile *ec, int err);
+static JSValue js_eval_compile_finish(JSContext *ctx, JSEvalCompile *ec, int err, JSEvalCompile **slot);
+static JSValue js_eval_compile_codegen(JSContext *ctx, JSEvalCompile *ec, JSEvalCompile **slot);
 
 /* THE ANSWER AFTER ONE STINT OF PARSING. JS_UNINITIALIZED is the suspended marker and is not a value any eval
    can produce, so it cannot be confused with a result the way a NULL or an undefined could; the carrier reads
@@ -81360,7 +81716,7 @@ static JSValue js_eval_compile_step(JSContext *ctx, JSEvalCompile *ec, int err, 
         *slot = ec;
         return JS_UNINITIALIZED;
     }
-    return js_eval_compile_finish(ctx, ec, err);
+    return js_eval_compile_finish(ctx, ec, err, slot);
 }
 
 /* Continue a compile the scheduler took the thread from. */
@@ -81371,6 +81727,8 @@ static JSValue js_eval_compile_continue(JSContext *ctx, JSEvalCompile **slot)
     int err;
     DCHECK(ec != NULL, "a compile was continued with nothing parked");
     *slot = NULL;
+    if (ec->codegen)
+        return js_eval_compile_codegen(ctx, ec, slot);
     g_eval_compile_slot = NULL;
     err = js_parse_program(&ec->s, true);
     g_eval_compile_slot = outer;
@@ -81384,6 +81742,13 @@ static void js_eval_compile_drop(JSContext *ctx, JSEvalCompile **slot)
     if (!ec)
         return;
     *slot = NULL;
+    if (ec->codegen) {
+        js_codegen_drop(ctx, &ec->cg);
+        if (ec->m)
+            js_free_module_def(ctx, ec->m);
+        js_free(ctx, ec);
+        return;
+    }
     js_parse_descent_abandon(ctx, &ec->s);
     free_token(&ec->s, &ec->s.token);
     if (ec->fd)
@@ -81553,12 +81918,11 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
 /* THE TAIL, WHICH RUNS WHENEVER THE PARSE FINALLY FINISHES — on the first stint or on the tenth. Nothing here
    reads a C local of the activation that started the compile, because there may not have been one for a long
    time; everything is on the state the parse carried. */
-static JSValue js_eval_compile_finish(JSContext *ctx, JSEvalCompile *ec, int err)
+static JSValue js_eval_compile_finish(JSContext *ctx, JSEvalCompile *ec, int err, JSEvalCompile **slot)
 {
     JSParseState *s = &ec->s;
     JSFunctionDef *fd = ec->fd;
     JSModuleDef *m = ec->m;
-    JSValue fun_obj, ret_val;
 
     if (err) {
         free_token(s, &s->token);
@@ -81577,10 +81941,33 @@ static JSValue js_eval_compile_finish(JSContext *ctx, JSEvalCompile *ec, int err
     js_parse_digest_to(s, s->buf_end);
     fd->script_digest = s->digest ? s->digest : 1;
     /* create the function object and all the enclosed functions */
-    fun_obj = js_create_function(ctx, fd);
-    ec->fd = NULL;   /* consumed by js_create_function on BOTH of its exits */
-    if (JS_IsException(fun_obj))
+    js_codegen_begin(&ec->cg, s, fd);
+    ec->fd = NULL;   /* the code generation owns the definition tree on every exit */
+    ec->codegen = true;
+    return js_eval_compile_codegen(ctx, ec, slot);
+}
+
+/* One stint of the code generation, and the tail once it is done. A stint that rests parks the compile in the
+   carrier exactly as a parse that handed the thread back does. */
+static JSValue js_eval_compile_codegen(JSContext *ctx, JSEvalCompile *ec, JSEvalCompile **slot)
+{
+    JSModuleDef *m = ec->m;
+    JSValue fun_obj, ret_val;
+    int r = js_create_function_step(ctx, &ec->cg);
+
+    if (r == CG_RESTED) {
+        DCHECK(slot != NULL && ec->s.pd_can_yield,
+               "a code generation rested with no carrier to hand it to — its poll answers yes only in a parse that "
+               "was told it could hand back");
+        DCHECK(*slot == NULL, "a carrier slot already held a suspended compile");
+        *slot = ec;
+        return JS_UNINITIALIZED;
+    }
+    ec->codegen = false;
+    if (r < 0)
         return js_eval_compile_fail(ctx, ec);
+    fun_obj = ec->cg.result;
+    ec->cg.result = JS_UNDEFINED;
     /* 16.2.1.7.1 ParseModule ENDS HERE. It produces a Source Text Module Record with [[RequestedModules]] filled
        in from the parse and [[LoadedModules]] EMPTY — it loads nothing, because loading is 16.2.1.6.1.1 and it
        is a later phase that returns a promise. A js_resolve_module call stood here and asked the host for every

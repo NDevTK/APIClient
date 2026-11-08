@@ -338,6 +338,10 @@ METRIC(tw_script_parse_us, "twScriptParseUs", LIFETIME, "us", PROCESS, "core/tim
    inside a RegExp machine took (quickjs.c's lre_compile_poll). */
 METRIC(tw_regexp_compile_bytes, "twRegexpCompileBytes", LIFETIME, "byte", PROCESS, "qjs/quickjs.c", INT)
 METRIC(tw_regexp_compile_rests, "twRegexpCompileRests", LIFETIME, "rest", PROCESS, "qjs/quickjs.c", INT)
+/* …the input units a compile's code generation processed, each charged as one unit of work (an instruction, a jump,
+   a source position, a definition's variables and scopes), and the rests it took (quickjs.c's js_codegen_rest). */
+METRIC(tw_script_codegen_input, "twScriptCodegenInput", LIFETIME, "unit", PROCESS, "qjs/quickjs.c", INT)
+METRIC(tw_script_codegen_rests, "twScriptCodegenRests", LIFETIME, "rest", PROCESS, "qjs/quickjs.c", INT)
 /* …the elements the style change event's walks updated, and the rests they took (getAnimations()' and update the
    rendering step 16.2.1's). */
 METRIC(wa_style_change_elements, "waStyleChangeElements", LIFETIME, "element", PROCESS,

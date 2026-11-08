@@ -474,9 +474,9 @@ typedef struct Flow {
     FlowAgent *agents;
     int n_agents;
     int cur_agent;
-    /* This flow's program still being parsed, NULL when there is none (quickjs.h's JS_FlowCompileStep and
-     * JS_FlowEvalModule take it). The compile of the row at `script_i` is O(a length the page chose), so it
-     * suspends, and a parse that gave the thread back waits here. It is not a second frame: while it stands the
+    /* This flow's program still being compiled, NULL when there is none (quickjs.h's JS_FlowCompileStep and
+     * JS_FlowEvalModule take it). The compile of the row at `script_i` (its parse, then its code generation) is
+     * O(a length the page chose), so it suspends, and a compile that gave the thread back waits here. It is not a second frame: while it stands the
      * row's program has not started, `frame` is NULL and the cursor has not moved.
      * Not cold-tier state: the suspended parse is a graph of raw pointers the cold tier cannot serialize, and a
      * recipe replays the document, which re-compiles; flow_release frees it. A fork never carries one, because a

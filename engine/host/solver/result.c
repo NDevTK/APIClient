@@ -1744,6 +1744,8 @@ char *result_cold_json(void) {
         METRIC_SET(tw_script_parse_us, tw.cpu_us[THREAD_WORK_SCRIPT_PARSE]);
         METRIC_SET(tw_regexp_compile_bytes, (long long)JS_RegExpCompileBytesLife());
         METRIC_SET(tw_regexp_compile_rests, (long long)JS_RegExpCompileRestsLife());
+        METRIC_SET(tw_script_codegen_input, (long long)JS_FlowCodegenInputLife());
+        METRIC_SET(tw_script_codegen_rests, (long long)JS_FlowCodegenRestsLife());
         METRIC_SET(wa_style_change_elements, (long long)style_change_walk_elements_life());
         METRIC_SET(wa_style_change_rests, (long long)style_change_walk_rests_life());
         METRIC_SET(tw_decode_spans, tw.spans[THREAD_WORK_DECODE]);

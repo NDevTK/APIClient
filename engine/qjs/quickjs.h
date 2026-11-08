@@ -2264,6 +2264,10 @@ JS_EXTERN uint64_t JS_FlowParseBytesLife(void);
 /* Pattern bytes regexp compiles have consumed, and the rests a resting compile took, over the process (a report). */
 JS_EXTERN uint64_t JS_RegExpCompileBytesLife(void);
 JS_EXTERN uint64_t JS_RegExpCompileRestsLife(void);
+/* Input units a compile's code generation processed, each retired as one unit of work, and the rests it took,
+   over the process (a report). */
+JS_EXTERN uint64_t JS_FlowCodegenInputLife(void);
+JS_EXTERN uint64_t JS_FlowCodegenRestsLife(void);
 
 /* APIClient TIME-TRAVEL (record/replay) hooks — the RECORD boundary of the COW time-travel executor.
    A flow's live state is (shared baseline ∘ its per-flow COW delta); rewinding a flow reverses that delta,
