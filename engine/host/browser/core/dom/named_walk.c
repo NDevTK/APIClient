@@ -67,17 +67,40 @@ bool named_walk_next_indexed(JSContext *ctx, NamedWalk *w, lxb_dom_node_t *doc, 
     return false;
 }
 
-bool named_walk_names_in_domain_at(JSContext *ctx, lxb_dom_element_t *el, const lxb_char_t *const v[],
-                                   const size_t len[], int k, NamedWalkIs is, const void *ud, JSValueConst key,
-                                   const char *file, int line)
+bool named_walk_next_domain_indexed(JSContext *ctx, NamedWalk *w, lxb_dom_node_t *doc, lxb_dom_node_t *root,
+                                    NamedWalkIs is, const void *ud, JSValueConst key)
 {
-    DCHECK(el != NULL && is != NULL && k >= 0 && k <= 2, "a named-name domain test was handed no element or rule");
-    for (int i = 0; i < k; i++) {
-        DCHECKF(is(ctx, el, (const char *)v[i], len[i], ud),
-                "%s:%d: a name the rule's names list gives an element is not one its named lookup answers for it, "
-                "so the domain answer and the [[Get]] it stands for are two facts", file, line);
-        if (concolic_key_domain_holds(ctx, key, (const char *)v[i], len[i])) return true;
+    size_t nv = document_name_index_values(doc), len, k;
+    const char *v;
+    lxb_dom_element_t *const *els;
+
+    DCHECK(w != NULL && root != NULL && is != NULL, "a domain walk was stepped with no state, root or rule");
+    DCHECK(w->count == 0 && (w->root == NULL || w->root == root),
+           "a domain walk was stepped after it found a name, or over a root other than the one it began with");
+    if (!w->root) w->root = root;
+    DCHECKF(w->pos <= nv, "a domain walk resumed at value %zu of %zu: the values are the tree's function, so the "
+            "world it resumed in is not the one it parked in", w->pos, nv);
+    if (w->pos == nv) return false;
+    v = document_name_index_value_at(doc, w->pos, &len);
+    thread_work_charge(THREAD_WORK_DOM_WALK, 1);
+    if (w->sub == 0) {
+        if (concolic_key_domain_holds(ctx, key, v, len)) w->sub = 1;
+        else w->pos++;
+        return true;
     }
-    (void)file; (void)line;
-    return false;
+    k = document_name_index_list(doc, v, len, &els);
+    DCHECKF(w->sub <= k, "a domain walk resumed at element %zu of a %zu-element list", w->sub, k);
+    {
+        lxb_dom_element_t *el = els[w->sub - 1];
+        lxb_dom_node_t *x = lxb_dom_interface_node(el);
+
+        while (x != NULL && x != root) x = x->parent;
+        if (x != NULL && is(ctx, el, v, len, ud)) {
+            w->count = 1;
+            w->first = lxb_dom_interface_node(el);
+            return false;
+        }
+    }
+    if (++w->sub > k) { w->sub = 0; w->pos++; }
+    return true;
 }

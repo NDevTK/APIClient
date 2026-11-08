@@ -30,9 +30,20 @@ typedef struct {
     size_t   count, cap;
 } DniSlot;
 
+/* A value held by some element, in the map's ordered list of held values. The key bytes are the slot's, which a
+   rehash moves by value, so the pointer stays valid. */
+typedef struct {
+    const char *key;
+    size_t      len;
+} DniHeld;
+
 typedef struct DniMap {
     DniSlot *slots;
     size_t   cap, used;   /* cap a power of two; used counts keyed slots */
+    /* The values with a non-empty list, ordered by their bytes: a function of the tree, so a resting walk over the
+       values resumes at the same one. */
+    DniHeld *held;
+    size_t   nheld, cap_held;
     lxb_dom_document_t *doc;
     struct DniMap *prev, *next;   /* every live document's, from its creation to its destroy */
 } DniMap;
@@ -117,6 +128,52 @@ static size_t dni_lower_bound(const DniSlot *s, lxb_dom_element_t *el)
     return lo;
 }
 
+/* Byte order of two values, the shorter first on a common prefix. */
+static int dni_bytes_cmp(const char *a, size_t al, const char *b, size_t bl)
+{
+    int c = memcmp(a, b, al < bl ? al : bl);
+
+    return c != 0 ? c : (al < bl ? -1 : al > bl ? 1 : 0);
+}
+
+/* The first position of `m`'s held values not ordered before `k`. */
+static size_t dni_held_at(const DniMap *m, const char *k, size_t n)
+{
+    size_t lo = 0, hi = m->nheld;
+
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+
+        if (dni_bytes_cmp(m->held[mid].key, m->held[mid].len, k, n) < 0) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
+}
+
+/* `s`'s value entered (its list became non-empty) or left (it became empty) the held values. */
+static void dni_held_update(DniMap *m, const DniSlot *s, bool entered)
+{
+    size_t at = dni_held_at(m, s->key, s->len);
+
+    if (entered) {
+        DCHECK(at == m->nheld || dni_bytes_cmp(m->held[at].key, m->held[at].len, s->key, s->len) != 0,
+               "a value entered a name index's held values twice");
+        if (m->nheld == m->cap_held) {
+            m->cap_held = m->cap_held ? m->cap_held * 2 : 16;
+            m->held = realloc(m->held, m->cap_held * sizeof *m->held);
+            CHECK(m->held != NULL, "dom-name-index-oom: the held values could not grow");
+        }
+        memmove(&m->held[at + 1], &m->held[at], (m->nheld - at) * sizeof *m->held);
+        m->held[at].key = s->key;
+        m->held[at].len = s->len;
+        m->nheld++;
+        return;
+    }
+    DCHECK(at < m->nheld && m->held[at].key == s->key, "a value left a name index's held values it is not among");
+    memmove(&m->held[at], &m->held[at + 1], (m->nheld - at - 1) * sizeof *m->held);
+    m->nheld--;
+}
+
 /* Enter `el` into `m`'s list for the `n` bytes of `v` (delta +1) or take one entry of it out (delta -1). The list's
    order is a function of the tree, so a resumed walk's position in it names the same element. */
 static void dni_map_adjust(DniMap *m, const lxb_char_t *v, size_t n, lxb_dom_element_t *el, int delta)
@@ -150,14 +207,14 @@ static void dni_map_adjust(DniMap *m, const lxb_char_t *v, size_t n, lxb_dom_ele
         }
         memmove(&s->els[at + 1], &s->els[at], (s->count - at) * sizeof *s->els);
         s->els[at] = el;
-        s->count++;
+        if (s->count++ == 0) dni_held_update(m, s, true);
         return;
     }
     DCHECK(at < s->count && s->els[at] == el,
            "an element left a name's list it is not on: a tree or attribute write reached the tree through a "
            "primitive lexbor's tree observer does not see");
     memmove(&s->els[at], &s->els[at + 1], (s->count - at - 1) * sizeof *s->els);
-    s->count--;
+    if (--s->count == 0) dni_held_update(m, s, false);
 }
 
 static void dni_adjust(lxb_dom_document_t *doc, const lxb_char_t *v, size_t n, lxb_dom_element_t *el, int delta)
@@ -257,6 +314,7 @@ static void dni_map_free(DniMap *m)
 {
     for (size_t i = 0; i < m->cap; i++) { free(m->slots[i].key); free(m->slots[i].els); }
     free(m->slots);
+    free(m->held);
     free(m);
 }
 
@@ -316,6 +374,25 @@ size_t document_name_index_list(lxb_dom_node_t *doc, const char *name, size_t n,
     return s->count;
 }
 
+size_t document_name_index_values(lxb_dom_node_t *doc)
+{
+    DniMap *m;
+
+    DCHECK(doc != NULL && doc->type == LXB_DOM_NODE_TYPE_DOCUMENT, "a name index's values were asked of no document");
+    m = lxb_dom_interface_document(doc)->name_index;
+    DCHECK(m != NULL, "a document's name index was asked and the document has none");
+    return m->nheld;
+}
+
+const char *document_name_index_value_at(lxb_dom_node_t *doc, size_t i, size_t *len)
+{
+    DniMap *m = lxb_dom_interface_document(doc)->name_index;
+
+    DCHECKF(m != NULL && i < m->nheld, "a name index's value %zu was asked of %zu", i, m ? m->nheld : (size_t)0);
+    *len = m->held[i].len;
+    return m->held[i].key;
+}
+
 bool document_name_index_holds(lxb_dom_node_t *doc, const char *name, size_t n)
 {
     lxb_dom_element_t *const *els;
@@ -366,6 +443,11 @@ void document_name_index_verify_all_at(const char *file, int line)
         }
         in_index = (s = dni_first_unequal(m, &re, &other)) != NULL;
         if (!in_index) s = dni_first_unequal(&re, m, &other);
+        DCHECKF(s != NULL || re.nheld == m->nheld, "%s:%d: a document's name index holds %zu values and its tree "
+                "%zu", file, line, m->nheld, re.nheld);
+        for (size_t i = 0; s == NULL && i < m->nheld; i++)
+            DCHECKF(dni_bytes_cmp(m->held[i].key, m->held[i].len, re.held[i].key, re.held[i].len) == 0,
+                    "%s:%d: a document's name index orders its held values unlike its tree's at %zu", file, line, i);
         DCHECKF(s == NULL,
                 "%s:%d: a document's name index disagrees with its tree at `%.*s`: the %s lists %zu elements and "
                 "the %s %zu, or both list them in another order, so a tree or attribute write reached the tree "
@@ -374,6 +456,7 @@ void document_name_index_verify_all_at(const char *file, int line)
                 other);
         for (size_t i = 0; i < re.cap; i++) { free(re.slots[i].key); free(re.slots[i].els); }
         free(re.slots);
+        free(re.held);
     }
     g_steps = 0;   /* the recount's comparisons are a dev check, charged to no flow */
 #else

@@ -95,17 +95,6 @@ static bool dn_is(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_
     return document_named_element_is(el, name, n);
 }
 
-/* Whether `el` is a named element with a name in the domain of the unknown key `*ud`. */
-static bool dn_in_domain(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_t n, const void *ud)
-{
-    const lxb_char_t *v[2];
-    size_t len[2];
-    int k = dn_names(el, v, len);
-
-    (void)name; (void)n;
-    return named_walk_names_in_domain(ctx, el, v, len, k, dn_is, NULL, *(const JSValueConst *)ud);
-}
-
 /* The Document node a Document wrapper stands for. */
 static lxb_dom_node_t *dn_document(JSValueConst obj)
 {
@@ -218,8 +207,9 @@ static int dn_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
 static const IdlStepDecl DN_DECL = { dn_step, sizeof(NamedWalk), dn_walk_visit, NULL, DN_ALGORITHM, DN_STEPS };
 
 /* ---- whether a supported name lies in an unknown key's domain, as a step machine ----------------------------
-   §3.1.7's supported property names asked of a domain rather than of one name: the same named elements, walked
-   in tree order one per entry, answering true at the first whose name lies in the domain. */
+   §3.1.7's supported property names asked of a domain rather than of one name: the name index's held values in
+   byte order, each tested against the domain and, when it lies there, its listed elements as named elements by
+   it, one per entry, answering true at the first. */
 #define DND_ALGORITHM "HTML §3.1.7 DOM tree accessors: a Document's supported property names in an unknown key's domain"
 #define DND_STAGES(X) X(DND_WALK, DND_ALGORITHM)
 enum { IDL_STEP_STAGE_BASE(DND_STAGES) DND_STAGES(JS_STEP_STAGE_ENUM) };
@@ -238,7 +228,7 @@ static int dn_domain_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     DCHECK(hdr->stage == DND_WALK && argc == 4 && concolic_key_domain_stated(ctx, argv[1]) &&
                JS_VALUE_GET_TAG(argv[3]) == JS_TAG_INT && JS_VALUE_GET_INT(argv[3]) == 3,
            "the Document named-name domain step was called with a shape the keyed entry does not issue");
-    if (named_walk_next(ctx, s, dn_document(argv[0]), dn_in_domain, NULL, 0, &argv[1]) && s->count == 0)
+    if (named_walk_next_domain_indexed(ctx, s, dn_document(argv[0]), dn_document(argv[0]), dn_is, NULL, argv[1]))
         return JS_STEP_YIELD;
     *presult = JS_NewBool(ctx, s->count > 0);
     return JS_STEP_DONE;

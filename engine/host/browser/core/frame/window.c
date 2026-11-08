@@ -1196,7 +1196,8 @@ static const IdlStepDecl WN_DECL = {
 
 /* ---- whether a supported name lies in an unknown key's domain, as a step machine ----------------------------
    §7.2.2.3's supported property names asked of a domain rather than of one name: a child navigable's target
-   name, or a named element's name, walked in tree order one per entry. A connected region of unknown markup may
+   name, or a named element's name over the name index's held values (named_walk_next_domain_indexed), one per
+   entry. A connected region of unknown markup may
    name anything, so it answers true; no name list is built ([[OwnPropertyKeys]] is not what is asked). */
 #define WND_ALGORITHM "HTML §7.2.2.3 Named access on the Window object: supported property names in an unknown key's domain"
 #define WND_STAGES(X) X(WND_WALK, WND_ALGORITHM)
@@ -1213,17 +1214,6 @@ typedef struct {
 static void win_domain_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     (void)ctx; (void)st; (void)v;
-}
-
-/* Whether `el` is a named element with a name in the domain of the unknown key `*ud`. */
-static bool win_named_in_domain(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_t n, const void *ud)
-{
-    const lxb_char_t *v[2];
-    size_t len[2];
-    int k = collections_window_named_names(el, v, len);
-
-    (void)name; (void)n;
-    return named_walk_names_in_domain(ctx, el, v, len, k, win_named_is, NULL, *(const JSValueConst *)ud);
 }
 
 /* f(obj, key, undefined, 3), the keyed entry's GP_KEYDOMAIN ask (JSClassExoticMethods.key_domain_step). */
@@ -1262,7 +1252,8 @@ static int win_named_domain_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
         }
     }
     root = document_root_node(ctx);
-    if (root && named_walk_next(ctx, &s->walk, root, win_named_in_domain, NULL, 0, &argv[1]) && s->walk.count == 0)
+    if (root && named_walk_next_domain_indexed(ctx, &s->walk, win_document_node(ctx), root, win_named_is, NULL,
+                                               argv[1]))
         return JS_STEP_YIELD;
     *presult = JS_NewBool(ctx, s->walk.count > 0);
     return JS_STEP_DONE;

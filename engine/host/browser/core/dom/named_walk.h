@@ -22,7 +22,7 @@ typedef bool (*NamedWalkIs)(JSContext *ctx, lxb_dom_element_t *el, const char *n
    only, so a step state holding one needs no visit. */
 typedef struct {
     lxb_dom_node_t *root, *cursor, *first;
-    size_t pos;
+    size_t pos, sub;   /* an indexed walk's list position; a domain walk's value and, past 0, element + 1 */
     int count;
 } NamedWalk;
 
@@ -43,14 +43,12 @@ bool named_walk_next(JSContext *ctx, NamedWalk *w, lxb_dom_node_t *root, NamedWa
 bool named_walk_next_indexed(JSContext *ctx, NamedWalk *w, lxb_dom_node_t *doc, lxb_dom_node_t *root,
                              NamedWalkIs is, const char *name, size_t n, const void *ud);
 
-/* Whether any of the `k` names a named-element rule gives `el` (`v[i]`, `len[i]` bytes) lies in the domain of the
-   unknown String key `key` (concolic_key_domain_holds). Every name is asserted to be one the rule's own lookup
-   `is` (with `ud`) answers for `el`, so the domain answer and the named lookup stay one fact; `file`/`line` are
-   the caller's. */
-bool named_walk_names_in_domain_at(JSContext *ctx, lxb_dom_element_t *el, const lxb_char_t *const v[],
-                                   const size_t len[], int k, NamedWalkIs is, const void *ud, JSValueConst key,
-                                   const char *file, int line);
-#define named_walk_names_in_domain(ctx, el, v, len, k, is, ud, key) \
-    named_walk_names_in_domain_at((ctx), (el), (v), (len), (k), (is), (ud), (key), __FILE__, __LINE__)
+/* Whether a name `doc`'s name index holds lies in the domain of the unknown String key `key`
+   (concolic_key_domain_holds) and is a name `is` answers for one of its listed elements within `root`, asked one
+   value or one listed element per call, each charged as one visited element. True while the walk has more to ask
+   (the caller rests); false once it ran out of values or found one (`count` 1, `first` the element). The values
+   are in byte order, a function of the tree, so a resume in the same world continues at the same value. */
+bool named_walk_next_domain_indexed(JSContext *ctx, NamedWalk *w, lxb_dom_node_t *doc, lxb_dom_node_t *root,
+                                    NamedWalkIs is, const void *ud, JSValueConst key);
 
 #endif

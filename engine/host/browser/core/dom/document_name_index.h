@@ -18,6 +18,11 @@ bool document_name_index_holds(lxb_dom_node_t *doc, const char *name, size_t n);
    twice, adjacently), in tree order: their count, and the list at `*out`, borrowed until the next tree write. */
 size_t document_name_index_list(lxb_dom_node_t *doc, const char *name, size_t n, lxb_dom_element_t *const **out);
 
+/* The values some element of `doc`'s tree carries, ordered by their bytes, a function of the tree: how many, and
+   the `i`th (`*len` bytes, borrowed until the next tree write). */
+size_t document_name_index_values(lxb_dom_node_t *doc);
+const char *document_name_index_value_at(lxb_dom_node_t *doc, size_t i, size_t *len);
+
 /* Dev builds: recount every live document's id and name values from its tree and assert each equals its
    index, naming the first value that differs and the caller's site. The index's correctness rests on every
    tree write passing an observed primitive; this states it at rest points (a session's close, a cold resume). */
