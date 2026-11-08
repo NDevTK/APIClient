@@ -43,7 +43,7 @@ static bool ta_digits(TaCursor *c)
     return c->p > s;
 }
 
-/* A CSS Syntax §4.3.12 "Consume a number" `<number-token>`: an optional sign, digits with an optional fraction
+/* A CSS Syntax §4.3.13 "Consume a number" `<number-token>`: an optional sign, digits with an optional fraction
    or a fraction alone, and an optional exponent. False moves nothing. */
 static bool ta_number(TaCursor *c, double *out)
 {
