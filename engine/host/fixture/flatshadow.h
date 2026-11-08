@@ -18,7 +18,7 @@ static const char HTML_FLATSHADOW[] =
     "<div style=\"padding-left:5px\"><slot></slot></div></template>"
     "<div id=fsSlotted style=\"width:17px;height:19px\"></div></div>"
     "<script>"
-    "var fsP = document.getElementById('fsHost').shadowRoot.getElementById('fsPad').getBoundingClientRect();"
+    "var fsP = document.getElementById('fsHost').shadowRoot.firstElementChild.getBoundingClientRect();"
     "var fsS = document.getElementById('fsSlotted').getBoundingClientRect();"
     "fetch('/api/flatshadow?px=' + fsP.left + '&pw=' + fsP.width + '&py=' + fsP.top +"
     "      '&sx=' + fsS.left + '&sy=' + fsS.top + '&sw=' + fsS.width);"
