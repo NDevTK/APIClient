@@ -499,20 +499,9 @@ JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed)
  * one each. A delta entry appears only where a flow WRITES, and the only writer is §3.1's perform a scroll, so
  * a flow that never scrolled carries nothing about the scroll position at all.
  *
- * WHAT THIS RETIRES, RESTATED IN CAPITALS SO NOBODY RE-DERIVES IT. Three arguments stood here and each was the
- * reason `scrollX` answered zero. THE FIRST: THIS ENGINE GENERATES NO BOXES. THE SECOND: THE ONLY BOX WITH
- * GEOMETRY IS THE ICB, SO NO DESCENDANT'S MARGIN EDGE EXTENDS §2's SCROLLING AREA PAST IT, AND A SCROLLING BOX
- * WHOSE SCROLLING AREA IS ITS OWN SIZE HAS ONE VALID POSITION. The diff that built §2's viewport row retired
- * those two. THE THIRD SURVIVED THEM AND IS WHAT THIS DIFF RETIRES: A SCROLL POSITION MOVES ONLY WHEN §3.1's
- * PERFORM A SCROLL RUNS, AND NOTHING IN THIS ENGINE REACHES ONE. §3.1 is written; the position moves; the zero
- * below is now just the value a document starts at. All three corrections are one defect — a sentence about
- * what this engine cannot do, outliving the day it could not do it, and read by everyone downstream as the
- * reason not to look.
- *
- * WHAT IS STILL MISSING IS NOT IN THIS FILE. §3.1 changes the position and then CRASHES, because CSSOM VIEW
- * §13.2 "Scrolling" has no list for the `scroll` and `scrollend` a moved viewport owes and HTML §8.1.7.3
- * "Processing model" update-the-rendering step 9 has no drain — perform_scroll.c names both at the site. So a
- * dev build reaches a non-zero position and aborts there; nothing here is waiting on anything. */
+ * §3.1's perform a scroll is the position's one writer. A moved viewport's `scroll` and `scrollend` are queued
+ * by core/dom/scroll_events.h (CSSOM View §13.2 "Scrolling") and fired by HTML §8.1.7.3 "Processing model"'s
+ * update the rendering, which runs the scroll steps. */
 
 /* The record's two fields are the position, and they are the ONLY writable state this component holds about
    the viewport. `viewport_install` builds it with the realm, so every realm has one before any member of §4
