@@ -126313,63 +126313,64 @@ int JS_AddIntrinsicEval(JSContext *ctx)
 
 /* BigInt */
 
-static JSValue JS_ToBigIntCtorFree(JSContext *ctx, JSValue val)
+/* §21.2.1.1.1 NumberToBigInt ( number ): a RangeError for a Number that is not integral, else ℤ(ℝ(number)). */
+static JSValue js_number_to_bigint(JSContext *ctx, double d)
 {
-    uint32_t tag;
+    int res;
+    JSBigInt *r = js_bigint_from_float64(ctx, &res, d);
 
- redo:
-    tag = JS_VALUE_GET_NORM_TAG(val);
-    switch(tag) {
-    case JS_TAG_INT:
-    case JS_TAG_BOOL:
-        val = JS_NewBigInt64(ctx, JS_VALUE_GET_INT(val));
-        break;
-    case JS_TAG_SHORT_BIG_INT:
-    case JS_TAG_BIG_INT:
-        break;
-    case JS_TAG_FLOAT64:
-        {
-            double d = JS_VALUE_GET_FLOAT64(val);
-            JSBigInt *r;
-            int res;
-            r = js_bigint_from_float64(ctx, &res, d);
-            if (!r) {
-                if (res == 0) {
-                    val = JS_EXCEPTION;
-                } else if (res == 1) {
-                    val = JS_ThrowRangeError(ctx, "cannot convert to BigInt: not an integer");
-                } else {
-                    val = JS_ThrowRangeError(ctx, "cannot convert NaN or Infinity to BigInt");                }
-            } else {
-                val = JS_CompactBigInt(ctx, r);
-            }
-        }
-        break;
-    case JS_TAG_STRING:
-    case JS_TAG_STRING_ROPE:
-        val = JS_StringToBigIntErr(ctx, val);
-        break;
-    case JS_TAG_OBJECT:
-        val = JS_ToPrimitiveFree(ctx, val, HINT_NUMBER);
-        if (JS_IsException(val))
-            break;
-        goto redo;
-    case JS_TAG_NULL:
-    case JS_TAG_UNDEFINED:
-    default:
-        JS_FreeValue(ctx, val);
-        return JS_ThrowTypeError(ctx, "cannot convert to BigInt");
-    }
-    return val;
+    if (r)
+        return JS_CompactBigInt(ctx, r);
+    if (res == 0)
+        return JS_EXCEPTION;
+    return JS_ThrowRangeError(ctx, res == 1 ? "cannot convert to BigInt: not an integer"
+                                            : "cannot convert NaN or Infinity to BigInt");
 }
 
+/* Steps 3 and 4 of §21.2.1.1 BigInt ( value ) over `prim`, step 2's primitive (consumed): a Number goes through
+   NumberToBigInt, anything else through §7.1.15 ToBigInt, whose own ToPrimitive is the identity on it. */
+static JSValue js_bigint_of_primitive(JSContext *ctx, JSValue prim)
+{
+    DCHECK(JS_VALUE_GET_TAG(prim) != JS_TAG_OBJECT,
+           "BigInt's steps 3-4 were handed an Object — step 2's ToPrimitive answers a primitive or throws");
+    switch (JS_VALUE_GET_NORM_TAG(prim)) {
+    case JS_TAG_INT:
+        return JS_NewBigInt64(ctx, JS_VALUE_GET_INT(prim));
+    case JS_TAG_FLOAT64:
+        return js_number_to_bigint(ctx, JS_VALUE_GET_FLOAT64(prim));
+    default:
+        return JS_ToBigIntFree(ctx, prim);
+    }
+}
+
+/* §21.2.1.1 BigInt ( value ). Step 2's ToPrimitive is the declaration's (js_bigint_ctor_def's PRIMARGS), which
+   over an unknown is the identity, so an unknown arrives here uncoerced and the result is derived from it,
+   carrying what steps 3-4 produce from its example. */
 static JSValue js_bigint_constructor(JSContext *ctx,
                                      JSValueConst new_target,
                                      int argc, JSValueConst *argv)
 {
+    JSValue ex;
+
     if (!JS_IsUndefined(new_target))
         return JS_ThrowTypeErrorNotAConstructor(ctx, new_target);
-    return JS_ToBigIntCtorFree(ctx, js_dup(argv[0]));
+    ex = js_concolic_operand(ctx, argv[0]);
+    if (!JS_IsUninitialized(ex)) {
+        JSValue real, c;
+
+        if (js_concolic_codec_operand(argv[0], ex)) {
+            real = js_bigint_of_primitive(ctx, ex);
+        } else {
+            JS_FreeValue(ctx, ex);
+            real = JS_UNDEFINED;
+        }
+        c = js_concolic_derive(ctx, argv[0], "21.2.1.1 BigInt ( value )", real);
+        DCHECK(!JS_IsUninitialized(c),
+               "the concolic derivation declined an operand this function had already recognised as unknown "
+               "external input — the value semantics were installed without the builtin-derivation hook");
+        return c;
+    }
+    return js_bigint_of_primitive(ctx, js_dup(argv[0]));
 }
 
 static JSValue js_thisBigIntValue(JSContext *ctx, JSValueConst this_val)
