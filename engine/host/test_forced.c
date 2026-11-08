@@ -8172,6 +8172,52 @@ TF_UNIT void insert_walk_selftest(JSContext *ctx)
            (unsigned long long)charged[0], (unsigned long long)charged[1]);
 }
 
+/* DOM §4.5 adopt's step 3 walk is engine work: adoptNode of a detached `<div>` holding 1,000 `<i>` from one inert
+   document into another is charged at least one THREAD_WORK_DOM_WALK unit per node, and appendChild of a second
+   such subtree across the two documents at least five (adopt's walk beside insert_walk_selftest's four), the same
+   under both schedules. Each subtree is built by one program and moved by the next. */
+static const char *TF_ADOPT_WALK_SETUP_SRC =
+    "(function(){ var x = document.implementation.createHTMLDocument(''), d = x.createElement('div'), i;"
+    " for (i = 0; i < 1000; i++) d.appendChild(x.createElement('i'));"
+    " self.__tfAdoptWalk = [x, d, document.implementation.createHTMLDocument('')]; return 1; })()";
+static const char *TF_ADOPT_WALK_SRC[2] = {
+    "(function(){ var w = self.__tfAdoptWalk; delete self.__tfAdoptWalk;"
+    " w[2].adoptNode(w[1]); return w[1].lastChild.ownerDocument === w[2] ? 1 : -1; })()",
+    "(function(){ var w = self.__tfAdoptWalk; delete self.__tfAdoptWalk;"
+    " w[2].body.appendChild(w[1]); return w[1].lastChild.ownerDocument === w[2] ? 1 : -1; })()",
+};
+
+TF_UNIT void adopt_walk_selftest(JSContext *ctx)
+{
+    static const JSFlowControlHooks *const SCHED[2] = { &TF_DIFF_DECLINE, &TF_DIFF_FORCE };
+    static const uint64_t FLOOR[2] = { 1001, 5 * 1001 };
+    static const char *const WHAT[2] = { "an adoptNode", "a cross-document appendChild" };
+    uint64_t charged[2][2];
+
+    for (int m = 0; m < 2; m++) {
+        for (int k = 0; k < 2; k++) {
+            ThreadWorkCensus before, now;
+            int susp, mach;
+            int32_t got;
+
+            got = tf_step_diff_run(ctx, TF_ADOPT_WALK_SETUP_SRC, "adopt-walk-setup", SCHED[k], &susp, &mach);
+            CHECK(got == 1, "the adopt-walk fixture's detached subtree could not be built");
+            thread_work_census(&before);
+            got = tf_step_diff_run(ctx, TF_ADOPT_WALK_SRC[m], "adopt-walk", SCHED[k], &susp, &mach);
+            thread_work_census(&now);
+            CHECKF(got == 1, "%s of a 1,001-node subtree answered %d (schedule %s)", WHAT[m], (int)got,
+                   k ? "forced" : "declined");
+            charged[m][k] = now.charged_input[THREAD_WORK_DOM_WALK] - before.charged_input[THREAD_WORK_DOM_WALK];
+        }
+        JS_SetFlowControlHooks(&TF_DIFF_NONE);
+        CHECKF(charged[m][0] >= FLOOR[m] && charged[m][1] == charged[m][0],
+               "%s of a 1,001-node subtree into another document was charged %llu DOM-walk nodes declined and %llu "
+               "forced, not at least %llu under both: DOM §4.5 adopt's step 3 walk charged nothing, or a resume "
+               "re-ran a parked walk", WHAT[m], (unsigned long long)charged[m][0],
+               (unsigned long long)charged[m][1], (unsigned long long)FLOOR[m]);
+    }
+}
+
 /* DOM §4.2.10's live collections rest per node: the same reads of 300 detached elements answer the same under a
    schedule declining every offer and one taking every offer, and the walks are charged the same nodes under both,
    so a resume continues a parked walk rather than re-running it. `k3` is a `<b>`, so namedItem over the `<i>`
@@ -44241,6 +44287,8 @@ int main(int argc, char **argv) {
     collection_walk_selftest(ctx);
     /* DOM §4.2.3 insert's walks of the inserted subtree are charged per node; needs the document. */
     insert_walk_selftest(ctx);
+    /* DOM §4.5 adopt's step 3 walk is charged per node; needs the document. */
+    adopt_walk_selftest(ctx);
     /* HTML §4.12.5.1.16's ROUND TRIP, immediately after the union arms and for the same two reasons: it needs
        a REALM and the DOCUMENT, which the block above establishes, and it must stand BEFORE the time-travel
        hooks below so its canvas and its bitmap belong to the pre-boot baseline rather than to whichever flow
