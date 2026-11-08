@@ -6106,6 +6106,37 @@ static size_t wasm_export_index(const WasmModule *m, const uint8_t *bytes, WasmE
     CHECK_FAIL("a WebAssembly selftest module lacks an export its row names");
 }
 
+/* The wasm selftests' host functions, by the number a WasmFuncInstance carries: spectest's print functions
+ * (0 to 6, which print nothing here and return nothing) and WASM_HOST_CALL_ROWS' add (100). */
+enum { WASM_SELFTEST_HOST_ADD = 100 };
+
+static WasmExecStatus wasm_host_answer(WasmInterpreter *it)
+{
+    const WasmFuncInstance *f = &it->store->funcs[it->host.func];
+    WasmValue sum = { 0, 0 };
+
+    CHECKF(f->is_host && (f->host < 7 || f->host == WASM_SELFTEST_HOST_ADD), "a WebAssembly selftest called host "
+           "function %u, which no selftest defines", f->host);
+    if (f->host < 7) return wasm_interpreter_return(it, NULL, 0);
+    sum.lo = (uint32_t)(it->vals[it->n_vals - 2].lo + it->vals[it->n_vals - 1].lo);
+    return wasm_interpreter_return(it, &sum, 1);
+}
+
+/* An invocation that answered `st` is still running. */
+static bool wasm_running(WasmExecStatus st)
+{
+    return st == WASM_EXEC_MORE || st == WASM_EXEC_FORK || st == WASM_EXEC_HOST_CALL;
+}
+
+/* The status after `st`: a step, the choice (`example` or the assumption against it), or the host call's
+   answer. */
+static WasmExecStatus wasm_next(WasmInterpreter *it, WasmExecStatus st, bool example)
+{
+    if (st == WASM_EXEC_FORK) return wasm_interpreter_choose(it, example);
+    if (st == WASM_EXEC_HOST_CALL) return wasm_host_answer(it);
+    return wasm_interpreter_step(it);
+}
+
 /* f3268fa9's interpreter/host/spectest.ml as a host in one store: its print functions (types from
  * WASM_SPECTEST_TYPES), its constant globals of 666 and 666.6, and its two tables of 10 to 20 null funcrefs. */
 typedef struct {
@@ -6268,7 +6299,7 @@ static void wasm_link_selftest(void)
             if (name == NULL) continue;
             st = wasm_interpreter_begin(&it, in, wasm_export_index(in->module, in->bytes, WASM_EXTERN_FUNC, name),
                                         NULL, 0);
-            while (st == WASM_EXEC_MORE) st = wasm_interpreter_step(&it);
+            while (wasm_running(st)) st = wasm_next(&it, st, true);
             CHECKF(st == WASM_EXEC_DONE && it.n_vals == 1 && it.vals[0].lo == want,
                    "the link row %s: %s answered %s with %zu values, the first %llu; the row expects %u", row->src,
                    name, st == WASM_EXEC_DONE ? "a return" : wasm_exec_status_message(st), it.n_vals,
@@ -6285,6 +6316,100 @@ static void wasm_link_selftest(void)
     wasm_module_decoder_free(&ed);
     wasm_spectest_free(&host);
     wasm_store_free(&store);
+}
+
+/* A copy of `it`'s whole record into `to`, every array its own, as a cold park and resume would make: an
+ * interpreter whose state lived anywhere but its record resumes from the copy differently. */
+static void wasm_interpreter_park(WasmInterpreter *to, const WasmInterpreter *it)
+{
+    size_t k;
+
+    *to = *it;
+    to->frames = malloc((it->cap_frames ? it->cap_frames : 1) * sizeof *to->frames);
+    to->vals = malloc((it->cap_vals ? it->cap_vals : 1) * sizeof *to->vals);
+    to->labels = malloc((it->cap_labels ? it->cap_labels : 1) * sizeof *to->labels);
+    CHECK(to->frames && to->vals && to->labels, "a parked WebAssembly interpreter could not be allocated");
+    if (it->n_frames) memcpy(to->frames, it->frames, it->n_frames * sizeof *to->frames);
+    if (it->n_vals) memcpy(to->vals, it->vals, it->n_vals * sizeof *to->vals);
+    if (it->n_labels) memcpy(to->labels, it->labels, it->n_labels * sizeof *to->labels);
+    for (k = 0; k < it->n_frames; k++) {
+        to->frames[k].locals = malloc((it->frames[k].n_locals ? it->frames[k].n_locals : 1) * sizeof(WasmValue));
+        CHECK(to->frames[k].locals != NULL, "a parked WebAssembly frame could not be allocated");
+        if (it->frames[k].n_locals)
+            memcpy(to->frames[k].locals, it->frames[k].locals, it->frames[k].n_locals * sizeof(WasmValue));
+    }
+}
+
+/* WASM_HOST_CALL_ROWS: each invocation run alone, its record parked (copied, the original freed) at every host
+ * call and resumed from the copy, then on two instances stepped in turn; each answers its result after its
+ * count of host calls. Each import is its own host function, typed by the importer's own type space. */
+static void wasm_host_call_selftest(void)
+{
+    const uint8_t *bytes = (const uint8_t *)WASM_HOST_CALLER;
+    WasmModuleDecoder d;
+    WasmModuleValidator v;
+    WasmInstance inst[2];
+    WasmStore store;
+    size_t types, k, i, externs[2][2];
+
+    wasm_module_decoder_init(&d, bytes, WASM_HOST_CALLER_LEN);
+    CHECK(wasm_module_decoder_run(&d) == WASM_DECODE_DONE, "the host call module does not decode");
+    wasm_module_validator_init(&v, &d.module, bytes, wasm_agent_types());
+    CHECK(wasm_module_validator_run(&v) == WASM_VALIDATE_DONE, "the host call module is invalid");
+    wasm_store_init(&store);
+    types = wasm_store_add_types(&store, &v.ctx.types);
+    for (k = 0; k < 2; k++) {
+        WasmExecStatus st;
+
+        for (i = 0; i < 2; i++) {
+            WasmFuncInstance f = { true, SIZE_MAX, SIZE_MAX, WASM_SELFTEST_HOST_ADD, types,
+                                   d.module.imports[i].index };
+
+            externs[k][i] = wasm_store_add_func(&store, f);
+        }
+        st = wasm_instance_begin(&inst[k], &store, &d.module, bytes, wasm_module_validator_side_table(&v),
+                                 &v.ctx.types, externs[k], 2);
+        while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst[k]);
+        CHECKF(st == WASM_EXEC_DONE, "the host call module's instantiation answered \"%s\"",
+               wasm_exec_status_message(st));
+    }
+    for (i = 0; i < COUNTOF(WASM_HOST_CALL_ROWS); i++) {
+        const WasmHostCallRow *row = &WASM_HOST_CALL_ROWS[i];
+        size_t func = wasm_export_index(&d.module, bytes, WASM_EXTERN_FUNC, row->export_name);
+        WasmValue args[2] = { { row->a, 0 }, { row->b, 0 } };
+        WasmInterpreter it, parked, two[2];
+        WasmExecStatus st, sts[2];
+        uint32_t calls = 0;
+
+        st = wasm_interpreter_begin(&it, &inst[0], func, args, row->n_args);
+        while (wasm_running(st)) {
+            if (st == WASM_EXEC_HOST_CALL) {
+                calls++;
+                wasm_interpreter_park(&parked, &it);
+                wasm_interpreter_free(&it);
+                it = parked;
+            }
+            st = wasm_next(&it, st, true);
+        }
+        CHECKF(st == WASM_EXEC_DONE && it.n_vals == 1 && it.vals[0].lo == row->result && calls == row->calls,
+               "the host call row %s answered %s, %llu after %u host calls; it is %u after %u", row->export_name,
+               st == WASM_EXEC_DONE ? "a return" : wasm_exec_status_message(st),
+               it.n_vals ? (unsigned long long)it.vals[0].lo : 0ull, calls, row->result, row->calls);
+        wasm_interpreter_free(&it);
+        for (k = 0; k < 2; k++) sts[k] = wasm_interpreter_begin(&two[k], &inst[k], func, args, row->n_args);
+        while (wasm_running(sts[0]) || wasm_running(sts[1]))
+            for (k = 0; k < 2; k++)
+                if (wasm_running(sts[k])) sts[k] = wasm_next(&two[k], sts[k], true);
+        for (k = 0; k < 2; k++) {
+            CHECKF(sts[k] == WASM_EXEC_DONE && two[k].n_vals == 1 && two[k].vals[0].lo == row->result,
+                   "the host call row %s answered otherwise stepped among another instance's", row->export_name);
+            wasm_interpreter_free(&two[k]);
+        }
+    }
+    for (k = 0; k < 2; k++) wasm_instance_free(&inst[k]);
+    wasm_store_free(&store);
+    wasm_module_validator_free(&v);
+    wasm_module_decoder_free(&d);
 }
 
 /* WASM_CROSS_INSTANCE_ROWS: a call_indirect in one instance of a function of another module's instance, its type
@@ -6323,7 +6448,7 @@ static void wasm_cross_instance_selftest(void)
         store.tables[t].elems[0].lo = (uint64_t)f + 1;
         st = wasm_interpreter_begin(&it, &inst[1], wasm_export_index(&d[1].module, bytes[1], WASM_EXTERN_FUNC,
                                                                       row->call), NULL, 0);
-        while (st == WASM_EXEC_MORE) st = wasm_interpreter_step(&it);
+        while (wasm_running(st)) st = wasm_next(&it, st, true);
         if (row->trap)
             CHECKF(st == WASM_EXEC_TRAP_INDIRECT_TYPE, "%s: answered %s, not the indirect call's type trap",
                    row->src, wasm_exec_status_message(st));
@@ -6347,14 +6472,16 @@ static void wasm_cross_instance_selftest(void)
  * export found by name; each instance's commands run in order on an instance of their own, each retiring one
  * unit of work per step it counts, and again on two more instances, one step of each in turn, which must answer
  * as the first did. A grow's choice runs its example arm, the success the testsuite asserts.
- * fixture/wasm_valid.h's WASM_CROSS_INSTANCE_ROWS, WASM_LINK_ROWS and WASM_INVOKE_ROWS come first: what the
- * testsuite's rows in scope do not reach. A module's imports are the spectest host's. */
+ * fixture/wasm_valid.h's WASM_CROSS_INSTANCE_ROWS, WASM_LINK_ROWS, WASM_HOST_CALL_ROWS and WASM_INVOKE_ROWS come
+ * first: what the testsuite's rows in scope do not reach. A module's imports are the spectest host's, whose
+ * calls wasm_host_answer answers. */
 TF_UNIT void wasm_interpreter_selftest(void)
 {
     size_t i = 0;
 
     wasm_cross_instance_selftest();
     wasm_link_selftest();
+    wasm_host_call_selftest();
     for (i = 0; i < COUNTOF(WASM_INVOKE_ROWS); i++) {
         const WasmInvokeRow *row = &WASM_INVOKE_ROWS[i];
         const uint8_t *bytes = (const uint8_t *)row->bytes;
@@ -6381,8 +6508,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
         while (st == WASM_EXEC_MORE) st = wasm_instance_step(&inst);
         CHECKF(st == WASM_EXEC_DONE, "%s: the instantiation answered \"%s\"", row->src, wasm_exec_status_message(st));
         st = wasm_interpreter_begin(&it, &inst, func, NULL, 0);
-        while (st == WASM_EXEC_MORE || st == WASM_EXEC_FORK)
-            st = st == WASM_EXEC_FORK ? wasm_interpreter_choose(&it, !row->assume) : wasm_interpreter_step(&it);
+        while (wasm_running(st)) st = wasm_next(&it, st, !row->assume);
         CHECKF(st == WASM_EXEC_DONE && it.n_vals == 1 && it.vals[0].lo == row->result,
                "%s: answered %s with %zu values, the first %llu; the row expects %u", row->src,
                st == WASM_EXEC_DONE ? "a return" : wasm_exec_status_message(st), it.n_vals,
@@ -6445,8 +6571,7 @@ TF_UNIT void wasm_interpreter_selftest(void)
             for (a = 0; a < row->n_args; a++) args[a].lo = WASM_EXEC_VALUES[row->args + a].bits;
             before = JS_FlowPeekRetiredWork();
             st = wasm_interpreter_begin(&alone, &inst[0], func, args, row->n_args);
-            while (st == WASM_EXEC_MORE || st == WASM_EXEC_FORK)
-                st = st == WASM_EXEC_FORK ? wasm_interpreter_choose(&alone, true) : wasm_interpreter_step(&alone);
+            while (wasm_running(st)) st = wasm_next(&alone, st, true);
             CHECKF(JS_FlowPeekRetiredWork() - before == alone.retired && alone.retired > 0,
                    "%s: the interpreter retired %llu units of work for %llu instructions", row->src,
                    (unsigned long long)(JS_FlowPeekRetiredWork() - before), (unsigned long long)alone.retired);
@@ -6454,12 +6579,9 @@ TF_UNIT void wasm_interpreter_selftest(void)
             wasm_interpreter_free(&alone);
             for (k = 0; k < 2; k++)
                 sts[k] = wasm_interpreter_begin(&two[k], &inst[1 + k], func, args, row->n_args);
-            while (sts[0] == WASM_EXEC_MORE || sts[1] == WASM_EXEC_MORE || sts[0] == WASM_EXEC_FORK
-                   || sts[1] == WASM_EXEC_FORK)
-                for (k = 0; k < 2; k++) {
-                    if (sts[k] == WASM_EXEC_FORK) sts[k] = wasm_interpreter_choose(&two[k], true);
-                    else if (sts[k] == WASM_EXEC_MORE) sts[k] = wasm_interpreter_step(&two[k]);
-                }
+            while (wasm_running(sts[0]) || wasm_running(sts[1]))
+                for (k = 0; k < 2; k++)
+                    if (wasm_running(sts[k])) sts[k] = wasm_next(&two[k], sts[k], true);
             for (k = 0; k < 2; k++) {
                 wasm_exec_check(row, &two[k], sts[k]);
                 wasm_interpreter_free(&two[k]);

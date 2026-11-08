@@ -241,4 +241,39 @@ static const WasmLinkRow WASM_LINK_ROWS[] = {
       false, NULL, 0, NULL, 0 },
 };
 
+/* Host call rows (interpreter.h's WasmHostCall): a module importing "host" "add" twice, as (func (param i32 i32)
+ * (result i32)), each import its own host function (as the JS API creates one per import), answered with the
+ * sum. g calls add(x, 100); t2 return_calls add(4, 4); the table holds the first add. Converted from text by
+ * f3268fa9's reference interpreter (`-d -o`); node 22's V8, with add as a JS function, answers each as written.
+ * `calls` is how many host calls the invocation makes; "direct" invokes the re-exported import itself. */
+#define WASM_HOST_CALLER_LEN 269
+static const char WASM_HOST_CALLER[] =
+      "\000\141\163\155\001\000\000\000\001\220\200\200\200\000\003\140\002\177\177\001\177\140\001\177"
+      "\001\177\140\000\001\177\002\227\200\200\200\000\002\004\150\157\163\164\003\141\144\144\000\000"
+      "\004\150\157\163\164\003\141\144\144\000\000\003\210\200\200\200\000\007\001\002\002\002\002\002"
+      "\002\004\205\200\200\200\000\001\160\001\001\001\007\272\200\200\200\000\006\006\156\145\163\164"
+      "\145\144\000\004\004\164\141\151\154\000\005\012\164\141\151\154\156\145\163\164\145\144\000\006"
+      "\010\151\156\144\151\162\145\143\164\000\007\005\164\167\151\143\145\000\010\006\144\151\162\145"
+      "\143\164\000\000\011\211\200\200\200\000\001\004\101\000\013\001\322\000\013\012\344\200\200\200"
+      "\000\007\211\200\200\200\000\000\040\000\101\344\000\020\000\013\210\200\200\200\000\000\101\004"
+      "\101\004\022\000\013\211\200\200\200\000\000\101\005\020\002\101\001\152\013\210\200\200\200\000"
+      "\000\101\002\101\003\022\000\013\207\200\200\200\000\000\020\003\101\012\154\013\213\200\200\200"
+      "\000\000\101\007\101\010\101\000\021\000\000\013\214\200\200\200\000\000\101\001\101\002\020\000"
+      "\101\036\020\001\013";
+
+typedef struct {
+    const char *export_name;
+    uint32_t n_args, a, b;
+    uint32_t result, calls;
+} WasmHostCallRow;
+
+static const WasmHostCallRow WASM_HOST_CALL_ROWS[] = {
+    { "nested", 0, 0, 0, 106, 1 },      /* add(5, 100) inside g, plus 1 */
+    { "tail", 0, 0, 0, 5, 1 },          /* a return_call of the host from the invocation's own frame */
+    { "tailnested", 0, 0, 0, 80, 1 },   /* t2's return_call of the host returns to t2's caller */
+    { "indirect", 0, 0, 0, 15, 1 },     /* call_indirect of the host function in the table */
+    { "twice", 0, 0, 0, 33, 2 },        /* add2(add(1, 2), 30) */
+    { "direct", 2, 20, 22, 42, 1 },
+};
+
 #endif

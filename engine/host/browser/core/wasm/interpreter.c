@@ -91,7 +91,16 @@ static WasmExecStatus push_frame(WasmInterpreter *it, size_t func, size_t return
 
     DCHECK(func < it->store->n_funcs, "a WebAssembly call names a function address past the store's");
     fi = &it->store->funcs[func];
-    CHECKF(!fi->is_host, "the WebAssembly call of host function %u is not built in interpreter.c", fi->host);
+    if (fi->is_host) {
+        t = &it->store->types[fi->types]->module->types[fi->type];
+        DCHECK(it->n_vals >= t->n_params, "a validated WebAssembly call has fewer operands than its parameters");
+        it->host.pending = true;
+        it->host.func = func;
+        it->host.n_args = (uint32_t)t->n_params;
+        it->host.n_results = (uint32_t)t->n_results;
+        it->pc = return_pc;
+        return WASM_EXEC_HOST_CALL;
+    }
     m = it->store->instances[fi->inst]->module;
     c = &m->codes[fi->code];
     t = &m->types[m->func_types[fi->code]];
@@ -169,16 +178,18 @@ WasmExecStatus wasm_interpreter_begin_expr(WasmInterpreter *it, WasmInstance *in
 WasmExecStatus wasm_interpreter_begin(WasmInterpreter *it, WasmInstance *inst, size_t func, const WasmValue *args,
                                       size_t n_args)
 {
-    const WasmModule *m = inst->module;
-    size_t i, code;
+    const WasmFuncInstance *fi;
+    const WasmSubType *t;
+    size_t i;
 
     begin(it, inst);
-    DCHECKF(func >= inst->imported_funcs && func - inst->imported_funcs < m->n_codes, "a WebAssembly invocation "
-            "names function %zu, which is not one of the module's %zu defined functions", func, m->n_codes);
-    code = func - inst->imported_funcs;
-    DCHECKF(n_args == m->types[m->func_types[code]].n_params, "a WebAssembly invocation passed %zu arguments to a "
-            "function of %zu parameters", n_args, m->types[m->func_types[code]].n_params);
-    it->n_results = (uint32_t)m->types[m->func_types[code]].n_results;
+    DCHECKF(func < inst->imported_funcs + inst->module->n_codes, "a WebAssembly invocation names function %zu, "
+            "past the instance's %zu", func, inst->imported_funcs + inst->module->n_codes);
+    fi = &inst->store->funcs[inst->funcs[func]];
+    t = &inst->store->types[fi->types]->module->types[fi->type];
+    DCHECKF(n_args == t->n_params, "a WebAssembly invocation passed %zu arguments to a function of %zu "
+            "parameters", n_args, t->n_params);
+    it->n_results = (uint32_t)t->n_results;
     for (i = 0; i < n_args; i++)
         if (!push(it, args[i].lo)) return WASM_EXEC_NO_ROOM;
     return push_frame(it, inst->funcs[func], SIZE_MAX);
@@ -572,8 +583,6 @@ static WasmExecStatus call(WasmInterpreter *it, size_t func, bool tail)
         WasmFrame *f = frame(it);
         size_t n = it->store->types[fi->types]->module->types[fi->type].n_params;
 
-        CHECKF(!fi->is_host, "the WebAssembly tail call of host function %u is not built in interpreter.c",
-               fi->host);
         DCHECK(it->n_vals >= f->val_base + n, "a validated WebAssembly return_call has fewer operands than "
                                               "its callee's parameters");
         if (n > 0) memmove(it->vals + f->val_base, it->vals + it->n_vals - n, n * sizeof *it->vals);
@@ -873,9 +882,27 @@ static WasmExecStatus execute(WasmInterpreter *it, const WasmInstruction *in, si
 /* A trap ends the invocation as a return does: no frame is left to step. A FORK leaves it standing. */
 static WasmExecStatus finish(WasmInterpreter *it, WasmExecStatus st)
 {
-    if (st != WASM_EXEC_MORE && st != WASM_EXEC_FORK)
+    if (st != WASM_EXEC_MORE && st != WASM_EXEC_FORK && st != WASM_EXEC_HOST_CALL)
         while (it->n_frames > 0) free(it->frames[--it->n_frames].locals);
     return st;
+}
+
+WasmExecStatus wasm_interpreter_return(WasmInterpreter *it, const WasmValue *results, size_t n)
+{
+    size_t i;
+
+    DCHECK(it != NULL && it->host.pending, "a WebAssembly host call was answered with none pending");
+    DCHECKF(n == it->host.n_results && (n == 0 || results != NULL), "a WebAssembly host call of %u results was "
+            "answered with %zu", it->host.n_results, n);
+    DCHECK(it->n_vals >= it->host.n_args, "a WebAssembly host call's arguments left the stack before its answer");
+    it->host.pending = false;
+    it->n_vals -= it->host.n_args;
+    for (i = 0; i < n; i++) {
+        if (!grow((void **)&it->vals, &it->cap_vals, it->n_vals, sizeof *it->vals))
+            return finish(it, WASM_EXEC_NO_ROOM);
+        it->vals[it->n_vals++] = results[i];
+    }
+    return it->n_frames == 0 ? WASM_EXEC_DONE : WASM_EXEC_MORE;
 }
 
 WasmExecStatus wasm_interpreter_step(WasmInterpreter *it)
@@ -888,6 +915,7 @@ WasmExecStatus wasm_interpreter_step(WasmInterpreter *it)
 
     DCHECK(it != NULL && it->n_frames > 0, "a WebAssembly invocation was stepped after it answered");
     DCHECK(it->choice.kind == 0, "a WebAssembly invocation was stepped with a choice pending");
+    DCHECK(!it->host.pending, "a WebAssembly invocation was stepped with a host call pending");
     JS_FlowRetireWork(1);
     it->retired++;
     if (it->bulk.n > 0) return bulk_step(it);
@@ -924,7 +952,8 @@ const char *wasm_exec_status_message(WasmExecStatus st)
     switch (st) {
     case WASM_EXEC_DONE:
     case WASM_EXEC_MORE:
-    case WASM_EXEC_FORK:                return NULL;
+    case WASM_EXEC_FORK:
+    case WASM_EXEC_HOST_CALL:           return NULL;
     case WASM_EXEC_TRAP_UNREACHABLE:    return "unreachable executed";
     case WASM_EXEC_TRAP_DIVIDE_BY_ZERO: return "integer divide by zero";
     case WASM_EXEC_TRAP_OVERFLOW:       return "integer overflow";

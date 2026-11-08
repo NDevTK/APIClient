@@ -9,10 +9,10 @@
  * NaN is the positive canonical NaN, and bit operations (abs, neg, copysign, reinterpret) keep bits.
  * The page's bytes have been decoded and validated, so an instruction the validator accepted that this file
  * does not execute is this codebase's gap (CHECK_FAIL), never a refusal.
- * Named residual. Not covered: calls of host functions, memory (§4.6.8), and the vector, exception and
- * aggregate instructions and the references other than functions'. Next diff builds: host function calls.
+ * Named residual. Not covered: a host function that throws (exceptions), memory (§4.6.8), and the vector,
+ * exception and aggregate instructions and the references other than functions'. Next diff builds: memory.
  * Absence shows as: invoking a function that reaches one of them stops the process at the CHECK_FAIL naming
- * it. */
+ * it; a host throw has no answer to give. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_INTERPRETER_H
 
@@ -29,6 +29,7 @@ typedef enum {
     WASM_EXEC_DONE = 0,               /* the function returned; its results are the stack */
     WASM_EXEC_MORE,                   /* a step ended; step again */
     WASM_EXEC_FORK,                   /* the environment chooses (see WasmChoice); choose before stepping */
+    WASM_EXEC_HOST_CALL,              /* a host function is called (see WasmHostCall); answer before stepping */
     WASM_EXEC_TRAP_UNREACHABLE,       /* §4.6.2's unreachable */
     WASM_EXEC_TRAP_DIVIDE_BY_ZERO,    /* §4.3.2's idiv and irem of a zero divisor */
     WASM_EXEC_TRAP_OVERFLOW,          /* §4.3.2's idiv_s of the minimum by -1, §4.3.4's trunc out of range */
@@ -86,10 +87,21 @@ typedef struct {
     uint64_t n;
 } WasmChoice;
 
+/* §4.6.5's invocation of a host function (§4.4.10's host function, Release 3.0 §4.6.5 "invoke"), handed to the
+   caller: the step answers HOST_CALL with the function's `n_args` arguments at the top of the operand stack, every
+   other part of the state already where the call returns to, and wasm_interpreter_return resumes with its
+   `n_results` results. `pending` is false when none is outstanding. */
+typedef struct {
+    bool pending;
+    size_t func;                 /* the host function's store address */
+    uint32_t n_args, n_results;
+} WasmHostCall;
+
 typedef struct {
     WasmStore *store;            /* borrowed: every frame's instance is the store's, by its address */
     WasmBulk bulk;
     WasmChoice choice;
+    WasmHostCall host;
     size_t pc;                   /* the current frame's next instruction */
     uint32_t n_results;          /* the invoked function's */
     WasmFrame *frames;           /* owned: one per call, the current last */
@@ -102,8 +114,8 @@ typedef struct {
     uint64_t trap_index;         /* the element index a call_indirect trap names */
 } WasmInterpreter;
 
-/* Begin §4.7.3's invocation of defined function `func` (an index of the function index space, past the imports)
-   of instance `inst` (instance.h), which has answered DONE. `args` are the function type's parameters, in
+/* Begin §4.7.3's invocation of function `func` (an index of the function index space; an imported host
+   function answers HOST_CALL at once) of instance `inst` (instance.h), which has answered DONE. `args` are the function type's parameters, in
    order, whose count the caller has matched. NO_ROOM when the locals cannot be allocated. */
 WasmExecStatus wasm_interpreter_begin(WasmInterpreter *it, WasmInstance *inst, size_t func, const WasmValue *args,
                                       size_t n_args);
@@ -113,6 +125,9 @@ WasmExecStatus wasm_interpreter_begin_expr(WasmInterpreter *it, WasmInstance *in
 /* Retire one instruction. MORE, then DONE (the results are vals[0, n_results)) or a trap; stepping again is
    misuse (asserted). */
 WasmExecStatus wasm_interpreter_step(WasmInterpreter *it);
+/* Resume after HOST_CALL with the host function's results, `n` of them as its type declares: the arguments
+   leave the stack and the results take their place. MORE, or DONE when the call was the invocation's last act. */
+WasmExecStatus wasm_interpreter_return(WasmInterpreter *it, const WasmValue *results, size_t n);
 /* Resume after FORK with the example arm (the grow succeeds; its storage is a CHECK where it cannot be had) or
    the assumption against it (the grow answers -1). */
 WasmExecStatus wasm_interpreter_choose(WasmInterpreter *it, bool example);
