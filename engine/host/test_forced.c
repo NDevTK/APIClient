@@ -597,6 +597,22 @@ static JSValue js_append_child(JSContext *ctx, JSValueConst this_val, int argc, 
     }
     return JS_UNDEFINED;
 }
+/* `gcNow()`: run one whole collection of the session's runtime (JS_RunGC) in whichever timeline is applied. The
+   fixture runner drives no collector slices of its own, so a row that needs a collection at a known point asks for
+   it. A fixture's own surface. */
+static JSValue js_gc_now(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val; (void)argc; (void)argv;
+    JS_RunGC(JS_GetRuntime(ctx));
+    return JS_UNDEFINED;
+}
+
+/* `childRealmCount()`: the agent's live child realms (navigable_realm_count), for a row that asks whether a frame's
+   realm was reclaimed. A fixture's own surface. */
+static JSValue js_child_realm_count(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val; (void)argc; (void)argv;
+    return JS_NewInt32(ctx, navigable_realm_count());
+}
+
 /* the DOM READ host-edge: the LAST child's data-mark — the CURRENT flow's view of the tree (per-flow). */
 static JSValue js_last_child_mark(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val; (void)argc; (void)argv;
@@ -1744,6 +1760,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/msgimgload.h"
 #include "fixture/getiterfork.h"
 #include "fixture/flexscroll.h"
+#include "fixture/realmfree.h"
 #include "fixture/xwinfwd.h"
 #include "fixture/msgprefix.h"
 #include "fixture/prefixjoin.h"
@@ -2547,6 +2564,7 @@ TF_DOCS[] = {
     { "rxsearch", HTML_RXSEARCH },
     { "getiterfork", HTML_GETITERFORK },
     { "flexscroll", HTML_FLEXSCROLL },
+    { "realmfree", HTML_REALMFREE },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -9605,6 +9623,8 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
        wrong door and the step member is the only part that was wanted. Nothing about the object changes. */
     tf_global_define(ctx, g, "appendChild", idl_step_function(ctx, "appendChild", g_id_append_child));
     tf_global_define(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
+    tf_global_define(ctx, g, "gcNow", JS_NewCFunction(ctx, js_gc_now, "gcNow", 0));   /* a collection at a known point */
+    tf_global_define(ctx, g, "childRealmCount", JS_NewCFunction(ctx, js_child_realm_count, "childRealmCount", 0));
     tf_global_define(ctx, g, "wasmMemoryNew", JS_NewCFunction(ctx, js_wasm_memory_new, "wasmMemoryNew", 1));
     tf_global_define(ctx, g, "wasmStoreNew", JS_NewCFunction(ctx, js_wasm_store_new, "wasmStoreNew", 0));
     tf_global_define(ctx, g, "wasmStoreOp", JS_NewCFunction(ctx, js_wasm_store_op, "wasmStoreOp", 4));
@@ -20876,6 +20896,24 @@ TF_UNIT void probes_flexscroll(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `realmfree` document (fixture/realmfree.h): the '#rf' arm's frame realm, materialized after that
+   timeline forked and destroyed with its frame, is gone after the collection. */
+TF_UNIT void probes_realmfree(const char *js, Probe *tab, int *n) {
+    const char *c_why = NULL, *z_why = NULL;
+    int c_tt = 1, z_tt = 1;
+    fold_row(&c_tt, &c_why, !!strstr(js, "\"/api/rf-count\""),
+             "NOT REACHED: there is no /api/rf-count record, so the '#rf' arm never reached the task after its "
+             "collection");
+    fold_row(&z_tt, &z_why, param_value_is(js, "/api/rf-count", "n", "0"),
+             "the '#rf' arm's frame realm survived the collection after its frame was removed: /api/rf-count does "
+             "not carry n=0, so something still holds the destroyed Document's realm");
+    const Probe rows[] = {
+        { "rf-counted", c_tt, "rfArm", SESS_EXPLORE, c_why },
+        { "rf-reclaimed", z_tt, "rfArm", SESS_EXPLORE, z_why, .gate = "rf-counted" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `uriclass` document (fixture/uriclass.h): an encoded unknown holds only the units Encode
    produces, so a RegExp over a unit outside them is decided, and one over a unit inside them forks. */
 TF_UNIT void probes_uriclass(const char *js, Probe *tab, int *n) {
@@ -30225,6 +30263,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_msgimgload(js, probes, &np);
     probes_getiterfork(js, probes, &np);
     probes_flexscroll(js, probes, &np);
+    probes_realmfree(js, probes, &np);
     probes_xwinfwd(js, probes, &np);
     probes_msgprefix(js, probes, &np);
     probes_prefixjoin(js, probes, &np);
