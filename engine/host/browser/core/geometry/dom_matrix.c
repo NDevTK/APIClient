@@ -3,8 +3,9 @@
  * The sixteen elements are stored in §6.3's column-major order: element m{i}{j} is `m[(i-1)*4 + (j-1)]`, which is
  * the entry in row j and column i of the matrix as a column vector is pre-multiplied by it (§2.1), so m41 and m42
  * are the translation. Every algorithm computes on the elements' examples in doubles; where any operand is
- * unknown external input each result element is concolic_new_derived over the operands and the element's index,
- * and a decision inside an algorithm (is 2D, a non-finite element) is taken on the examples. */
+ * unknown external input each result element is concolic_new_derived over the operands and the element's index.
+ * A decision over an unknown value forks through step_fork_run where its member is a step machine (§6.4's
+ * setters); the sites still deciding on the example state a named residual each. */
 #include <ctype.h>
 #include <math.h>
 #include <stdbool.h>
@@ -470,7 +471,11 @@ static void dm_parsed_values(JSContext *ctx, JSValueConst src, const double a[16
     }
 }
 
-/* The string `v` (a String, or unknown input whose example is one) parsed into `m`, or a SyntaxError. */
+/* The string `v` (a String, or unknown input whose example is one) parsed into `m`, or a SyntaxError.
+   Named residual. Not covered: over an unknown string, §6.2's failure and its 2dTransform are decided by the
+   example's parse. Next diff builds: the constructor and setMatrixValue as step members asking step_fork_run
+   over `v` with three completions (2D, 3D, SyntaxError), the example's parse as the real one. How its absence
+   shows: no flow over an unknown matrix string reaches a `catch` of its SyntaxError, or the matrix3d arm. */
 static int dm_parse_value(JSContext *ctx, JSValueConst v, JSValue m[16], bool *two_d)
 {
     double a[16];
@@ -543,7 +548,11 @@ static bool dm_same_value_zero(double x, double y)
 }
 
 /* §6.1's "validate and fixup" over a converted DOMMatrixInit `init`, then "create a DOMMatrix from the
-   dictionary": the sixteen elements into `m` and is 2D, or -1 with the TypeError live. */
+   dictionary": the sixteen elements into `m` and is 2D, or -1 with the TypeError live.
+   Named residual. Not covered: over an unknown member, the SameValueZero test of each alias pair and each 3D
+   member's identity test are decided by the examples. Next diff builds: fromMatrix and the dictionary-taking
+   methods as step members asking step_fork_run per test, as §6.4's setters do. How its absence shows: no flow
+   over an unknown DOMMatrixInit member reaches the TypeError, or the 3D arm when its example is the identity. */
 static int dm_from_init(JSContext *ctx, JSValueConst init, JSValue m[16], bool *is2d)
 {
     static const struct { const char *alias, *name; int k; double dflt; } PAIRS[6] = {
@@ -689,24 +698,78 @@ static JSValue js_dm_get(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_DupValue(ctx, b->m[DM_ATTR_ELEMENT[magic]]);
 }
 
-/* §6.4: setting m13 "must set the m13 element to the new value and, if the new value is not 0 or -0, set is 2D
-   to false", m33 and m44 the same against 1, and the six 2D elements and their aliases set the element alone. */
-static JSValue js_dm_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
-{
-    DomMatrixBox *b = dm_this(ctx, this_val);
-    int k;
-    double d;
+/* §6.4's setters as one step machine: the one stage asks whether a 3D element's new value is its identity value,
+   which forks where the value is unknown external input. */
+#define DMSET_STAGES(X) \
+    X(DMSET_IS2D, "Geometry Interfaces §6.4 setting m13 through m44 (set the element, and set is 2D to false " \
+                  "unless the new value is the element's identity value)")
+enum { IDL_STEP_STAGE_BASE(DMSET_STAGES) DMSET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DMSET_STEPS[] = { DMSET_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    if (!b) return JS_EXCEPTION;
+/* The state owns nothing: the value is the machine's converted argument and the record is the receiver's. */
+typedef struct {
+    uint8_t none;
+} DmSetState;
+
+static void dm_set_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    (void)ctx; (void)st; (void)v;
+}
+
+/* The outcome question per element, indexed by element: NULL for the six 2D elements, which set no is 2D. Its
+   completion 0 is "the value is the identity value", which leaves is 2D alone. */
+static const char *const DM_SET_IDENTITY_OP[16] = {
+    NULL, NULL, "DOMMatrix §6.4 m13 is 0 or -0", "DOMMatrix §6.4 m14 is 0 or -0",
+    NULL, NULL, "DOMMatrix §6.4 m23 is 0 or -0", "DOMMatrix §6.4 m24 is 0 or -0",
+    "DOMMatrix §6.4 m31 is 0 or -0", "DOMMatrix §6.4 m32 is 0 or -0", "DOMMatrix §6.4 m33 is 1",
+    "DOMMatrix §6.4 m34 is 0 or -0", NULL, NULL, "DOMMatrix §6.4 m43 is 0 or -0", "DOMMatrix §6.4 m44 is 1",
+};
+
+/* §6.4: setting m13 "must set the m13 element to the new value and, if the new value is not 0 or -0, set is 2D
+   to false", m33 and m44 the same against 1, and the six 2D elements and their aliases set the element alone.
+   An unknown value takes both arms; the arm its example reaches is the real one. */
+static int js_dm_set_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                          JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    DomMatrixBox *b = dm_this(ctx, hdr->this_val);
+    int magic = idl_step_magic(hdr), k, arm = 0, rc;
+    JSValueConst val;
+
+    (void)st; (void)cb_result; (void)out_cb; (void)out_argc;
+    STEP_DISPATCH(DMSET_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(DMSET_IS2D);
+    if (!b) return JS_STEP_ABRUPT;
     DCHECK(magic >= 0 && magic < 22, "a DOMMatrix setter ran with a magic §6.4 does not declare");
+    DCHECK(argc == 1, "a setter machine ran with other than its one converted value");
     k = DM_ATTR_ELEMENT[magic];
-    if (k == 2 || k == 3 || (k >= 6 && k <= 11) || k == 14 || k == 15) {
-        d = dm_example(ctx, val);
-        if (!(d == ((k == 10 || k == 15) ? 1.0 : 0.0))) b->is2d = false;
+    val = argv[0];
+    if (DM_SET_IDENTITY_OP[k] != NULL) {
+        double identity = (k == 10 || k == 15) ? 1.0 : 0.0;
+
+        if (concolic_is(val)) {
+            DmOps o;
+            double d;
+
+            dm_ops_init(&o);
+            d = dm_read(ctx, &o, val);
+            rc = step_fork_run(ctx, hdr, val, DM_SET_IDENTITY_OP[k], 2,
+                               o.exact ? (d == identity ? 0 : 1) : JS_OUTCOME_REAL_UNSTATED, &arm);
+            if (rc) return rc;
+            DCHECK(arm == 0 || arm == 1, "a two-armed outcome fork answered with neither arm");
+        }
+        else arm = dm_example(ctx, val) == identity ? 0 : 1;
+        if (arm == 1) b->is2d = false;
     }
     dm_set_element(ctx, b, k, JS_DupValue(ctx, val));
-    return JS_UNDEFINED;
+    *presult = JS_UNDEFINED;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl DM_SET_DECL = {
+    js_dm_set_step, sizeof(DmSetState), dm_set_visit, NULL,
+    "Geometry Interfaces §6.4 The DOMMatrix interfaces' attribute setters", DMSET_STEPS
+};
 
 static JSValue js_dm_is2d(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -753,7 +816,11 @@ static const char *const DM_OP_NAME[DM_OP_COUNT] = {
 };
 
 /* The `*Self` algorithm `op` performed on `b` with the method's arguments: -1 with a throw live (a dictionary
-   validate and fixup refused). */
+   validate and fixup refused).
+   Named residual. Not covered: over an unknown argument or element, each "set is 2D to false" test (tz, scaleZ,
+   rotX and rotY, the axis) and invertSelf's invertibility are decided by the examples. Next diff builds: the
+   methods as step members asking step_fork_run per test, as §6.4's setters do. How its absence shows: no flow
+   over an unknown argument reaches is2D false when the example is 2D, or the not-invertible arm. */
 static int dm_perform(JSContext *ctx, DomMatrixBox *b, DmOp op, int argc, JSValueConst *argv)
 {
     DmOps o;
@@ -1007,7 +1074,11 @@ static JSValue js_dm_to_array(JSContext *ctx, JSValueConst this_val, int argc, J
     return arr;
 }
 
-/* §6.5's stringification behavior. */
+/* §6.5's stringification behavior.
+   Named residual. Not covered: over an unknown element, the non-finite test is decided by the examples, and
+   skipped where one has none. Next diff builds: the stringifier as a step member asking step_fork_run over the
+   elements with two completions, the InvalidStateError second. How its absence shows: no flow over an unknown
+   element reaches a `catch` of the InvalidStateError. */
 static JSValue js_dm_to_string(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     static const int TWO_D[6] = { 0, 1, 4, 5, 12, 13 };
@@ -1175,7 +1246,8 @@ void dom_matrix_init(JSContext *ctx)
             (DM_METHODS[i].nargs > 0 && DM_METHODS[i].body != js_dm_set_matrix_value))
             idl_optional_from(0);
     }
-    for (i = 0; i < 22; i++) g_id_set[i] = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false, js_dm_set, (int)i);
+    for (i = 0; i < 22; i++)
+        g_id_set[i] = idl_setter_id_step(ctx, IDL_UNRESTRICTED_DOUBLE, false, &DM_SET_DECL, (int)i);
 
     agent_state_class("dom_matrix", &g_ro_class, "§6's DOMMatrixReadOnly class, and the declaration latch");
     agent_state_class("dom_matrix", &g_mx_class, "§6's DOMMatrix class");
