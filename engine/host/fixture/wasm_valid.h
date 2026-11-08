@@ -1,8 +1,9 @@
 /* Hand-built WebAssembly module-validation rows for test_forced.c's wasm_module_validator_selftest; the spec
  * testsuite's are fixture/wasm_testsuite.h's. Each row decodes (core/wasm/module_decoder.h) and is then validated;
  * `expect` is the refusal's message, matched by prefix, and NULL is a valid module. They are built over Release
- * 3.0 §3.2 and §3.5, each with interpreter/valid/valid.ml's message by reading; node 22's V8 agrees with every
- * verdict but the table of 2^32 elements, whose u64 limits it does not decode (no table64). */
+ * 3.0 §3.2, §3.3 and §3.5, each with interpreter/valid/valid.ml's message by reading; node 22's V8 agrees with
+ * every verdict but the table of 2^32 elements, whose u64 limits it does not decode (no table64). The §3.3 rows
+ * need a walk over two supertypes, which no testsuite row needs; f3268fa9's reference interpreter agrees. */
 #ifndef ENGINE_HOST_FIXTURE_WASM_VALID_H
 #define ENGINE_HOST_FIXTURE_WASM_VALID_H
 
@@ -51,6 +52,12 @@ static const WasmBinaryRow WASM_VALIDATE_ROWS[] = {
     { "an element segment of an unknown table", 35, "unknown table 1",
       "\000\141\163\155\001\000\000\000\001\004\001\140\000\000\003\002\001\000\011\011\001\002"
       "\001\101\000\013\000\001\000\012\004\001\002\000\013" },
+    { "a field whose type matches its supertype's through two supertypes", 40, NULL,
+      "\000\141\163\155\001\000\000\000\001\036\005\120\000\137\000\120\001\000\137\000\120\001"
+      "\001\137\000\120\000\137\001\143\000\000\120\001\003\137\001\143\002\000" },
+    { "a field whose type is above its supertype's", 40, "sub type 4 does not match super type 3",
+      "\000\141\163\155\001\000\000\000\001\036\005\120\000\137\000\120\001\000\137\000\120\001"
+      "\001\137\000\120\000\137\001\143\002\000\120\001\003\137\001\143\000\000" },
 };
 
 #endif
