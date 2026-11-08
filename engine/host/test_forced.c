@@ -88,6 +88,7 @@
                                       context — the half that DOES need a document, and the one
                                       document in this fixture that has a realm is `main`'s; see
                                       box_paint_selftest */
+#include "core/paint/stacking_order.h"
 #include "core/paint/document_paint.h"   /* and the two halves JOINED: a DOCUMENT to an image, which is
                                            the assembly neither of the two above will make — see
                                            box_paint_selftest's `@PAINT document` row */
@@ -38179,6 +38180,47 @@ TF_UNIT void box_paint_scratch_selftest(JSContext *ctx)
     display_list_free(&dl);
 }
 
+/* css-transforms-2 §5's individual transforms each form a stacking context: "all other values (including
+   “identity” transforms like translate: 0px) create a stacking context and containing block for all
+   descendants, per usual for transforms", and `none` does not. css-transforms-1 §2 "The Transform Rendering
+   Model" places such a static box at level 0, so it is in layer 6 of its parent context. `#c` is `transform`,
+   the positive control; `#n` declares all three as `none`, the negative one. */
+TF_UNIT void stacking_individual_transform_selftest(JSContext *ctx)
+{
+    static const char DOC[] = "<!DOCTYPE html><html><head></head><body>"
+                              "<div style=\"translate:0px\"><div style=\"position:absolute;z-index:1\"></div></div>"
+                              "<div style=\"rotate:45deg\"></div><div style=\"scale:2\"></div>"
+                              "<div style=\"transform:rotate(1deg)\"></div>"
+                              "<div style=\"translate:none;rotate:none;scale:none\"></div></body></html>";
+    static const char *const NAME[] = { "translate", "rotate", "scale", "transform", "none" };
+    lxb_dom_element_t *root = lxb_dom_document_element(lxb_dom_interface_document(bp_scratch_document(ctx, DOC)));
+    lxb_dom_node_t *body, *box;
+    LayoutJob *job;
+    size_t i = 0;
+
+    CHECK(root != NULL, "the stacking-context document parsed with no root element");
+    job = tf_job_enter();
+    body = lxb_dom_interface_node(root)->first_child->next;
+    for (box = body->first_child; box != NULL; box = box->next, i++) {
+        lxb_dom_element_t *el = lxb_dom_interface_element(box);
+        bool expect = i < 4;
+
+        CHECK(i < COUNTOF(NAME), "the stacking-context document has more body children than it was written with");
+        CHECKF(stacking_context_forms(el) == expect,
+               "css-transforms-2 §5: a static box declaring `%s` %s a stacking context", NAME[i],
+               expect ? "does not form" : "forms");
+        CHECKF(stacking_layer_of(el) == (expect ? STACKING_LAYER_LEVEL_ZERO : STACKING_LAYER_BLOCK),
+               "css-transforms-1 §2: a static box declaring `%s` is painted in layer %d", NAME[i],
+               (int)stacking_layer_of(el));
+    }
+    CHECK(i == COUNTOF(NAME), "the stacking-context document has fewer body children than it was written with");
+    CHECK(stacking_context_of(lxb_dom_interface_element(body->first_child->first_child)) ==
+              lxb_dom_interface_element(body->first_child),
+          "css-transforms-2 §5: a positioned child of a `translate` box belongs to a stacking context above it");
+    tf_job_leave(job);
+    printf("@STACK individual-transforms ok=1\n");
+}
+
 /* `<p>` WITH AN INLINE BOX IN IT, BUILT INTO THE FIXTURE'S OWN ACTIVE DOCUMENT AND TAKEN OUT AGAIN — the
    same borrow `tf_pt_paint` above makes, through the same two BASELINE-WRITE entries and for the reason that
    function's banner now states: a host-time write into the presented tree may not go through the capturing
@@ -42765,6 +42807,8 @@ int main(int argc, char **argv) {
        function for why that is one `document_new` rather than the three-call realm sequence, and for which
        two of core/paint/box_paint.c's three arms still append nothing and what each is waiting on. */
     box_paint_scratch_selftest(ctx);
+    /* css-transforms-2 §5's stacking contexts, over a document this file writes. */
+    stacking_individual_transform_selftest(ctx);
     /* AND THE SUB-LIST INSIDE ONE OF THOSE OFFERS — CSS 2.1 §E.2's step 7.2.1, over the boxes in a line box
        rather than over the block that establishes it. It uses `box_paint_text_selftest`'s document and NOT
        the scratch helper the two above use, because a line box cannot be measured on a document that is no
