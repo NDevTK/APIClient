@@ -92,6 +92,8 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
    and `createElementNS(null, "div")` is how a page asks for the null namespace, so it must not be ToString'd to
    `null`. Not shared with IDL_2STR, because createProcessingInstruction's two arguments are both non-nullable. */
 static const IdlArgType IDL_NSSTR_STR[2] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRING };
+#include "core/dom/node_insert.h"
+#include "core/dom/node_replace.h"
 #include "core/dom/node.h"
 #include <lexbor/css/css.h>
 #include <lexbor/selectors/selectors.h>
@@ -3087,43 +3089,21 @@ static JSValue js_doc_html_members(JSContext *ctx, JSValueConst this_val, int ma
     return doc_child_text_stripped(ctx, doc_first_in_tree(doc, LXB_NS_HTML, "title"));
 }
 
-/* DOM §4.4's string replace all, where both §3.1.7 setter branches end: remove every child through the per-flow
-   chokepoint, then append one Text node only if the string is not empty (a page reading `firstChild` can tell). */
-static void doc_string_replace_all(JSContext *ctx, lxb_dom_node_t *el, const char *s, size_t len)
-{
-    lxb_dom_node_t *n, *next;
-
-    (void)ctx;
-    for (n = el->first_child; n; n = next) {
-        next = n->next;
-        dom_cow_remove_child(n);
-    }
-    if (len) {
-        lxb_dom_text_t *t = lxb_dom_document_create_text_node(el->owner_document,
-                                                              (const lxb_char_t *)s, len);
-        CHECK(t != NULL, "document.title=: the title's Text node could not be allocated");
-        dom_cow_note_created(lxb_dom_interface_node(t));
-        dom_cow_append_child(el, lxb_dom_interface_node(t));
-    }
-}
-
-/* §3.1.7's `title` setter and §3.2.6.4's `dir` setter: "the steps corresponding to the first matching condition", in
-   the standard's order, ending with its "Otherwise: do nothing". magic 0 = title, 1 = dir. */
+/* §3.2.6.4's `dir` setter: "If there is no such element, then the attribute must return the empty string and do
+   nothing on setting." The filter is the getter's, so the content attribute takes the string as written. */
 static JSValue js_doc_set_html_member(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     Document *d = doc_receiver(ctx, this_val);
-    lxb_dom_node_t *doc, *de, *el;
+    lxb_dom_node_t *de;
     const char *s;
     size_t len = 0;
 
     if (!d) return JS_EXCEPTION;
+    DCHECK(magic == DOC_DIR, "a Document string setter was declared with a magic this table does not name");
     DCHECK(JS_IsString(val) || concolic_is(val),
            "a Document string setter reached its body unconverted — the IDL declaration is what converts it, "
            "and running the page's toString from here is the drive-to-completion the flow machinery avoids");
-    doc = lxb_dom_interface_node(d->dom);
-    de = document_document_element_of(doc);
-    /* Unknown external input has no bytes: the shape is what the tree carries, as for `textContent =`, so a title
-       set from attacker input reads back as its source. */
+    de = document_document_element_of(lxb_dom_interface_node(d->dom));
     if (concolic_is(val)) {
         s = concolic_shape_c(val);
         if (!s) s = "";
@@ -3132,52 +3112,149 @@ static JSValue js_doc_set_html_member(JSContext *ctx, JSValueConst this_val, JSV
         s = JS_ToCStringLen(ctx, &len, val);
         if (!s) return JS_EXCEPTION;
     }
-
-    if (magic == DOC_DIR) {
-        /* §3.2.6.4: "If there is no such element, then the attribute must return the empty string and do nothing on
-           setting." The filter is the getter's, so the content attribute takes the string as written. */
-        if (de && de->ns == LXB_NS_HTML)
-            dom_cow_set_attribute(lxb_dom_interface_element(de), "dir", s, len, JS_UNDEFINED);
-        goto done;
-    }
-    DCHECK(magic == DOC_TITLE, "a Document string setter was declared with a magic this table does not name");
-    if (de && de->ns == LXB_NS_SVG) {
-        /* The SVG arm: reuse the first SVG `title` child, or create one as the document element's first child, the
-           standard's position (before the graphics a renderer reads it in front of). */
-        el = doc_first_child_ns(de, LXB_NS_SVG, "title");
-        if (!el) {
-            lxb_dom_element_t *made = element_create_ns(lxb_dom_interface_document(d->dom),
-                                                        "http://www.w3.org/2000/svg", 26, "title", 5, NULL, 0);
-            el = lxb_dom_interface_node(made);
-            dom_cow_note_created(el);
-            if (de->first_child) dom_cow_insert_before(de->first_child, el);
-            else dom_cow_append_child(de, el);
-        }
-        doc_string_replace_all(ctx, el, s, len);
-        goto done;
-    }
-    if (de && de->ns == LXB_NS_HTML) {
-        lxb_dom_node_t *head = lxb_dom_interface_node(lxb_html_document_head_element(lxb_html_interface_document(doc)));
-        el = doc_first_in_tree(doc, LXB_NS_HTML, "title");
-        /* "If the title element is null and the head element is null, then return": a `<frameset>` document, whose
-           title is dropped. */
-        if (!el && !head) goto done;
-        if (!el) {
-            /* The HTML namespace, named: this arm is guarded by `de->ns == LXB_NS_HTML`, so the created `title`
-               belongs in that namespace. */
-            lxb_dom_element_t *made = document_create_element_html(lxb_dom_interface_document(d->dom),
-                                                                   "title", 5);
-            el = lxb_dom_interface_node(made);
-            dom_cow_note_created(el);
-            dom_cow_append_child(head, el);
-        }
-        doc_string_replace_all(ctx, el, s, len);
-    }
-    /* "Otherwise: do nothing": a document element in neither namespace, or none. */
-done:
+    if (de && de->ns == LXB_NS_HTML)
+        dom_cow_set_attribute(lxb_dom_interface_element(de), "dir", s, len, JS_UNDEFINED);
     if (!concolic_is(val)) JS_FreeCString(ctx, s);
     return JS_UNDEFINED;
 }
+
+/* §3.1.7's `title` setter: "the steps corresponding to the first matching condition", in the standard's order,
+   ending with its "Otherwise: do nothing". A created title element is inserted through core/dom/node_insert.h's
+   machine, and both arms end in DOM §4.2.3 string replace all, core/dom/node_replace.h's replace all over the
+   Text node, so each rests per node. */
+#define DOC_TITLE_SET_STAGES(X) \
+    X(DTS_START, "HTML §3.1.7 title setter (the matching condition; the title element; DOM §4.2.3 string " \
+                 "replace all steps 1-2)") \
+    NODE_INSERT_ALGO_STAGES(X, DTS_IN, "HTML §3.1.7 title setter (insert or append the created title element)") \
+    X(DTS_REPLACE, "HTML §3.1.7 title setter → DOM §4.2.3 string replace all step 3") \
+    NODE_REPLACE_ALL_ALGO_STAGES(X, DTS_RA, "HTML §3.1.7 title setter → DOM §4.2.3 string replace all step 3") \
+    X(DTS_DONE,  "HTML §3.1.7 title setter (done)")
+enum { IDL_STEP_STAGE_BASE(DOC_TITLE_SET_STAGES) DOC_TITLE_SET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DOC_TITLE_SET_STEPS[] = { DOC_TITLE_SET_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    lxb_dom_node_t *el, *text;   /* the title element; string replace all's node, NULL for the empty string */
+    NodeInsertState in;
+    NodeReplaceAllState ra;
+} DocTitleSetState;
+
+static void doc_title_set_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    DocTitleSetState *s = st;
+
+    node_insert_visit(ctx, &s->in, v);
+    node_replace_all_visit(ctx, &s->ra, v);
+}
+
+static const char *doc_title_set_script_forbidden(int stage, const void *st)
+{
+    const char *why;
+
+    (void)st;
+    if ((why = node_insert_script_forbidden(stage, DTS_IN_TAKE))) return why;
+    return node_replace_all_script_forbidden(stage, DTS_RA_RM_RANGES);
+}
+
+static int js_doc_set_title(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    DocTitleSetState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    STEP_DISPATCH(DOC_TITLE_SET_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(DTS_START);
+    {
+        Document *d = doc_receiver(ctx, hdr->this_val);
+        lxb_dom_node_t *doc, *de, *into = NULL, *ref = NULL;
+        JSValueConst val;
+        const char *str;
+        size_t len = 0;
+
+        if (!d) return JS_STEP_ABRUPT;
+        DCHECK(argc == 1, "document.title= reached its body without the value its declaration converts");
+        val = argv[0];
+        DCHECK(JS_IsString(val) || concolic_is(val),
+               "document.title= reached its body unconverted — the IDL declaration is what converts it");
+        doc = lxb_dom_interface_node(d->dom);
+        de = document_document_element_of(doc);
+        if (de && de->ns == LXB_NS_SVG) {
+            /* The SVG arm: the first SVG `title` child, or a created one inserted as the document element's
+               first child. */
+            s->el = doc_first_child_ns(de, LXB_NS_SVG, "title");
+            if (!s->el) {
+                s->el = lxb_dom_interface_node(element_create_ns(lxb_dom_interface_document(d->dom),
+                                                                 "http://www.w3.org/2000/svg", 26, "title", 5,
+                                                                 NULL, 0));
+                dom_cow_note_created(s->el);
+                into = de;
+                ref = de->first_child;
+            }
+        } else if (de && de->ns == LXB_NS_HTML) {
+            lxb_dom_node_t *head = lxb_dom_interface_node(lxb_html_document_head_element(
+                lxb_html_interface_document(doc)));
+
+            s->el = doc_first_in_tree(doc, LXB_NS_HTML, "title");
+            /* "If the title element is null and the head element is null, then return": a `<frameset>`
+               document, whose title is dropped. */
+            if (!s->el && !head) return JS_STEP_DONE;
+            if (!s->el) {
+                s->el = lxb_dom_interface_node(document_create_element_html(lxb_dom_interface_document(d->dom),
+                                                                            "title", 5));
+                dom_cow_note_created(s->el);
+                into = head;                                  /* append element to the head element */
+            }
+        } else {
+            return JS_STEP_DONE;   /* "Otherwise: do nothing": a document element in neither namespace, or none */
+        }
+        /* Unknown external input has no bytes: the shape is what the tree carries, as for `textContent =`. */
+        if (concolic_is(val)) {
+            str = concolic_shape_c(val);
+            if (!str) str = "";
+            len = strlen(str);
+        } else {
+            str = JS_ToCStringLen(ctx, &len, val);
+            if (!str) return JS_STEP_ABRUPT;
+        }
+        if (len) {                                            /* string replace all STEPS 1-2 */
+            lxb_dom_text_t *t = lxb_dom_document_create_text_node(s->el->owner_document,
+                                                                  (const lxb_char_t *)str, len);
+
+            CHECK(t != NULL, "document.title=: the title's Text node could not be allocated");
+            s->text = lxb_dom_interface_node(t);
+            dom_cow_note_created(s->text);
+        }
+        if (!concolic_is(val)) JS_FreeCString(ctx, str);
+        if (into) {
+            node_insert_start(hdr, &s->in, s->el, into, ref, /*suppress_observers*/ false, DTS_IN_TAKE,
+                              DTS_REPLACE);
+            return JS_STEP_YIELD;
+        }
+        hdr->stage = DTS_REPLACE;
+        return JS_STEP_YIELD;
+    }
+
+    NODE_INSERT_ALGO_STAGES(JS_STEP_STAGE_ARM, DTS_IN, "")
+    return node_insert_run(ctx, hdr, &s->in, DTS_IN_TAKE);
+
+    STEP_ARM(DTS_REPLACE);
+    node_replace_all_start(hdr, &s->ra, s->text, s->el, DTS_RA_RM_RANGES, DTS_DONE);   /* STEP 3 */
+    return JS_STEP_YIELD;
+
+    NODE_REPLACE_ALL_ALGO_STAGES(JS_STEP_STAGE_ARM, DTS_RA, "")
+    return node_replace_all_run(ctx, hdr, &s->ra, DTS_RA_RM_RANGES);
+
+    STEP_ARM(DTS_DONE);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl DOC_TITLE_SET_STEP = {
+    js_doc_set_title, sizeof(DocTitleSetState), doc_title_set_visit, NULL,
+    "HTML §3.1.7 Document.title setter (over DOM §4.2.3 insert and string replace all)", DOC_TITLE_SET_STEPS,
+    .script_forbidden = doc_title_set_script_forbidden
+};
 
 /* §4.5's two traverser factories, `createNodeIterator(root, whatToShow, filter)` and `createTreeWalker(...)`,
    one body with a magic. Neither runs page code once its arguments are converted, so they are plain C and
@@ -3353,7 +3430,7 @@ static void document_declare_members(JSContext *ctx)
     }
     /* §3.1.1's `[CEReactions] attribute DOMString title` and `[CEReactions] attribute DOMString dir`; the args
        machine's epilogue drains the reactions the element creation and insertions enqueue. */
-    g_id_title_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_doc_set_html_member, DOC_TITLE);
+    g_id_title_set = idl_setter_id_step(ctx, IDL_DOMSTRING, false, &DOC_TITLE_SET_STEP, DOC_TITLE);
     g_id_dir_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_doc_set_html_member, DOC_DIR);
     /* HTML §3.1.1 "The Document object"'s `[PutForwards=href, LegacyUnforgeable] readonly attribute Location?
        location`: the forwarding is Web IDL's, not location.c's, so `document.location = url` and `window.location

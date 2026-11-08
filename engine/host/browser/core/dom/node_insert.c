@@ -54,6 +54,15 @@ void node_insert_start(JSStepHdr *hdr, NodeInsertState *s, lxb_dom_node_t *node,
     hdr->stage = base + NODE_INSERT_PHASE_RANGES;
 }
 
+bool node_pre_insert_start(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, lxb_dom_node_t *node,
+                           lxb_dom_node_t *parent, lxb_dom_node_t *child, int base, int after)
+{
+    if (!node_ensure_pre_insert_valid(ctx, node, parent, child, NULL)) return false;   /* STEP 1 */
+    if (child == node) child = node->next;                                              /* STEPS 2-3 */
+    node_insert_start(hdr, s, node, parent, child, false, base, after);                 /* STEP 4 */
+    return true;
+}
+
 void node_insert_keep_nodes(NodeInsertState *s)
 {
     DCHECK(s->parent != NULL && !s->done, "an insert's nodes were kept for one that is not running");

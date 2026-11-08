@@ -1116,18 +1116,6 @@ bool node_ensure_pre_insert_valid(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_
     return true;
 }
 
-/* §4.2.3 "pre-insert" — validity, then the reference child, then insert. FOUR STEPS AND A RETURN, and the
-   reason it is a function rather than three lines at each caller is that the three lines were NOT at each
-   caller: seven members inserted with no validity check at all. */
-bool node_pre_insert(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent, lxb_dom_node_t *child)
-{
-    if (!node_ensure_pre_insert_valid(ctx, node, parent, child, NULL)) return false;   /* STEP 1, childrenToExclude « » */
-    /* STEPS 2-3 are node_insert_at's `if (ref == node) ref = node->next`, decided there because the fragment
-       arm needs the same adjustment and a caller cannot make it after the fragment has been emptied. */
-    node_insert_at(parent, node, child);                                        /* STEP 4 */
-    return true;
-}
-
 void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref)
 {
     if (node_is_document_fragment(node)) {
@@ -1396,9 +1384,7 @@ static int js_node_pre_insert(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
             DCHECK(child != NULL || JS_IsNull(argv[1]),
                    "insertBefore's `Node? child` reached the body as neither a node nor the IDL null");
         }
-        if (!node_ensure_pre_insert_valid(ctx, node, parent, child, NULL)) return JS_STEP_ABRUPT;   /* STEP 1 */
-        if (child == node) child = node->next;                                                   /* STEPS 2-3 */
-        node_insert_start(hdr, s, node, parent, child, false, PI_TAKE, PI_RETURN);                   /* STEP 4 */
+        if (!node_pre_insert_start(ctx, hdr, s, node, parent, child, PI_TAKE, PI_RETURN)) return JS_STEP_ABRUPT;
         return JS_STEP_YIELD;
     }
 
@@ -1642,16 +1628,6 @@ static const char *node_mixin_script_forbidden(int stage, const void *st)
     return node_replace_all_script_forbidden(stage, MX_RA_RM_RANGES);
 }
 
-/* §4.2.3 pre-insert steps 1-3, then step 4's insert through the machine. Returns false having thrown. */
-static bool node_mixin_pre_insert(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *in, lxb_dom_node_t *node,
-                                  lxb_dom_node_t *parent, lxb_dom_node_t *child, int after)
-{
-    if (!node_ensure_pre_insert_valid(ctx, node, parent, child, NULL)) return false;   /* STEP 1 */
-    if (child == node) child = node->next;                                              /* STEPS 2-3 */
-    node_insert_start(hdr, in, node, parent, child, false, MX_IN_TAKE, after);          /* STEP 4 */
-    return true;
-}
-
 static int js_node_mixin(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                          JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -1705,41 +1681,30 @@ static int js_node_mixin(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
         lxb_dom_node_t *x = node_from_arg(ctx, n, argv[s->i++]);
 
         if (!x) return JS_STEP_ABRUPT;
-        if (!node_mixin_pre_insert(ctx, hdr, &s->in, x, s->node, NULL, MX_CONVERT)) return JS_STEP_ABRUPT;
-        return JS_STEP_YIELD;
+        return node_pre_insert_start(ctx, hdr, &s->in, x, s->node, NULL, MX_IN_TAKE, MX_CONVERT) ? JS_STEP_YIELD
+                                                                                                 : JS_STEP_ABRUPT;
     }
     hdr->stage = MX_INSERT;                                                     /* STEP 5 */
     return JS_STEP_YIELD;
 
     STEP_ARM(MX_INSERT);
-    switch (magic) {
-    case 1:                                                                     /* before STEPS 5-6 */
-        if (!node_mixin_pre_insert(ctx, hdr, &s->in, s->node, s->parent,
-                                   s->viable ? s->viable->next : s->parent->first_child, MX_DONE))
-            return JS_STEP_ABRUPT;
-        return JS_STEP_YIELD;
-    case 2:                                                                     /* after STEP 5 */
-        if (!node_mixin_pre_insert(ctx, hdr, &s->in, s->node, s->parent, s->viable, MX_DONE))
-            return JS_STEP_ABRUPT;
-        return JS_STEP_YIELD;
-    case 3:
-        if (n->parent == s->parent) {                                           /* replaceWith STEP 5 */
+    {
+        lxb_dom_node_t *into = s->parent, *ref = s->viable;
+
+        if (magic == 3 && n->parent == s->parent) {                             /* replaceWith STEP 5 */
             if (!node_ensure_pre_insert_valid(ctx, s->node, s->parent, n, n)) return JS_STEP_ABRUPT;
             node_replace_start(hdr, &s->rp, s->node, n, s->parent, MX_RP_RM_RANGES, MX_DONE);
             return JS_STEP_YIELD;
         }
-        if (!node_mixin_pre_insert(ctx, hdr, &s->in, s->node, s->parent, s->viable, MX_DONE))   /* STEP 6 */
-            return JS_STEP_ABRUPT;
-        return JS_STEP_YIELD;
-    case 4:                                                                     /* append STEP 2 */
-        if (!node_mixin_pre_insert(ctx, hdr, &s->in, s->node, n, NULL, MX_DONE)) return JS_STEP_ABRUPT;
-        return JS_STEP_YIELD;
-    case 5:                                                                     /* prepend STEP 2 */
-        if (!node_mixin_pre_insert(ctx, hdr, &s->in, s->node, n, n->first_child, MX_DONE)) return JS_STEP_ABRUPT;
-        return JS_STEP_YIELD;
-    default:                                                                    /* replaceChildren STEPS 2-3 */
-        if (!node_ensure_pre_insert_valid(ctx, s->node, n, NULL, NULL)) return JS_STEP_ABRUPT;
-        node_replace_all_start(hdr, &s->ra, s->node, n, MX_RA_RM_RANGES, MX_DONE);
+        if (magic == 6) {                                                       /* replaceChildren STEPS 2-3 */
+            if (!node_ensure_pre_insert_valid(ctx, s->node, n, NULL, NULL)) return JS_STEP_ABRUPT;
+            node_replace_all_start(hdr, &s->ra, s->node, n, MX_RA_RM_RANGES, MX_DONE);
+            return JS_STEP_YIELD;
+        }
+        /* before steps 5-6, after step 5, replaceWith step 6, append and prepend step 2. */
+        if (magic == 1) ref = s->viable ? s->viable->next : s->parent->first_child;
+        if (magic >= 4) { into = n; ref = magic == 5 ? n->first_child : NULL; }
+        if (!node_pre_insert_start(ctx, hdr, &s->in, s->node, into, ref, MX_IN_TAKE, MX_DONE)) return JS_STEP_ABRUPT;
         return JS_STEP_YIELD;
     }
 

@@ -39,6 +39,7 @@
 #include "core/dom/node_filter.h"
 #include "core/dom/range.h"
 #include "core/idl_args.h"
+#include "core/dom/node_insert.h"   /* §4.2.3 insert, the machine insert adjacent runs */
 #include "core/realm.h"
 #include "core/events/event_target.h"
 #include "core/events/pointer_capture.h"
@@ -1111,65 +1112,96 @@ static const IdlStepDecl EL_ADJACENT_HTML_STEP = {
     .script_forbidden = fragment_parse_script_forbidden
 };
 
-/* §4.9 insertAdjacentElement / insertAdjacentText — the two that take a node the caller already has, or a
-   string this turns into one. magic 1 = element, 2 = text. */
-static JSValue js_el_insert_adjacent(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                     int magic)
-{
-    lxb_dom_element_t *el = element_of_value(this_val);
-    lxb_dom_node_t *n;
-    int where;
-    bool outside;
+/* DOM §4.9 insertAdjacentElement / insertAdjacentText as one declared step member: "insert adjacent" is one
+   pre-insert, whose insert is core/dom/node_insert.h's machine. magic 1 = element, 2 = text. */
+#define EL_ADJACENT_STAGES(X) \
+    X(ADJ_START,  "DOM §4.9 insertAdjacentElement / insertAdjacentText (where; the Text node; insert adjacent's " \
+                  "parent is null: return null)") \
+    NODE_INSERT_ALGO_STAGES(X, ADJ_IN, "DOM §4.9 insert adjacent → DOM §4.2.3 pre-insert step 4") \
+    X(ADJ_RETURN, "DOM §4.9 insertAdjacentElement / insertAdjacentText (return)")
+enum { IDL_STEP_STAGE_BASE(EL_ADJACENT_STAGES) EL_ADJACENT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const EL_ADJACENT_STEPS[] = { EL_ADJACENT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    if (!el || argc < 2) return JS_UNDEFINED;
-    n = lxb_dom_interface_node(el);
-    if (!adjacent_where(ctx, argv[0], &where, &outside)) return JS_EXCEPTION;
+static void el_adjacent_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    node_insert_visit(ctx, st, v);
+}
+
+static const char *el_adjacent_script_forbidden(int stage, const void *st)
+{
+    (void)st;
+    return node_insert_script_forbidden(stage, ADJ_IN_TAKE);
+}
+
+static int js_el_insert_adjacent(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeInsertState *s = st;
+    int magic = idl_step_magic(hdr);
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    STEP_DISPATCH(EL_ADJACENT_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(ADJ_START);
     {
-        lxb_dom_node_t *added, *ref, *into;
+        lxb_dom_element_t *el = element_of_value(hdr->this_val);
+        lxb_dom_node_t *n, *added, *ref, *into;
+        int where;
+        bool outside;
+
+        if (!el) return JS_STEP_DONE;
+        DCHECK(argc == 2, "insertAdjacentElement/Text reached its body without its two declared arguments");
+        n = lxb_dom_interface_node(el);
+        if (!adjacent_where(ctx, argv[0], &where, &outside)) return JS_STEP_ABRUPT;
         if (magic == 1) {
             added = node_of(argv[1]);
-            /* §4.9 declares this position `Element`, and the declaration brands it against the node class and
-               narrows it with element_is — so §3.2.15's TypeError has already been thrown for anything else
-               and this body cannot be reached with one. The test that stood here answered for every NODE. */
             DCHECK(added != NULL && added->type == LXB_DOM_NODE_TYPE_ELEMENT,
                    "insertAdjacentElement's `element` reached its body as something that is not an element — "
                    "the declaration brands it, so §3.2.15 owes the TypeError before step 1");
         } else {
-            const char *s;
+            const char *str;
             size_t slen = 0;
             lxb_dom_text_t *t;
-            s = JS_ToCStringLen(ctx, &slen, argv[1]);
-            if (!s) return JS_EXCEPTION;
-            t = lxb_dom_document_create_text_node(n->owner_document, (const lxb_char_t *)s, slen);
-            JS_FreeCString(ctx, s);
-            if (!t) return JS_UNDEFINED;
+
+            str = JS_ToCStringLen(ctx, &slen, argv[1]);
+            if (!str) return JS_STEP_ABRUPT;
+            t = lxb_dom_document_create_text_node(n->owner_document, (const lxb_char_t *)str, slen);
+            JS_FreeCString(ctx, str);
+            CHECK(t != NULL, "insertAdjacentText could not create its Text node");
             added = lxb_dom_interface_node(t);
             dom_cow_note_created(added);   /* this flow made it: the delta owns it and destroys it on discard */
         }
-        /* §4.9 "insert adjacent" — FOUR PRE-INSERTS, not four raw tree writes. Each arm of the standard's list
-           says "return the result of pre-inserting node into X before Y", so the node is adopted into the
-           right document and §4.2.3's eleven validity steps decide the answer. Writing the links directly is
-           what let `document.documentElement.insertAdjacentText("beforebegin", "x")` put a Text node beside
-           <html> instead of throwing, and it skipped the adopt as well, so an element from another document
-           landed in this tree still naming its old one. */
-        switch (where) {
+        switch (where) {                    /* insert adjacent: each arm is one pre-insert */
         case FRAG_INTO_BEFORE:      into = n->parent; ref = n;               break;
         case FRAG_INTO_AFTER:       into = n->parent; ref = n->next;         break;
         case FRAG_INTO_FIRST_CHILD: into = n;         ref = n->first_child;  break;
         case FRAG_INTO_CHILDREN:    into = n;         ref = NULL;            break;
         default: DFAIL("insertAdjacent ran with a position adjacent_where does not produce");
-                 return JS_UNDEFINED;
+                 return JS_STEP_ABRUPT;
         }
-        /* The two OUTSIDE arms open with "if element's parent is null, return null" — a return, not a throw,
-           which is the whole of what distinguishes these two members from insertAdjacentHTML's step 3. §4.9's
-           IDL returns `Element?` from one and `undefined` from the other, so the null is the ELEMENT member's
-           answer and the text member simply returns. */
-        if (!into) return magic == 1 ? JS_NULL : JS_UNDEFINED;
-        if (!node_pre_insert(ctx, added, into, ref)) return JS_EXCEPTION;
-        /* §4.9: insertAdjacentElement returns the inserted node; insertAdjacentText returns undefined. */
-        return magic == 1 ? JS_DupValue(ctx, argv[1]) : JS_UNDEFINED;
+        /* The two outside arms return null when element's parent is null; insertAdjacentText's IDL returns
+           `undefined`, so that member returns it. */
+        if (!into) { *presult = magic == 1 ? JS_NULL : JS_UNDEFINED; return JS_STEP_DONE; }
+        if (!node_pre_insert_start(ctx, hdr, s, added, into, ref, ADJ_IN_TAKE, ADJ_RETURN)) return JS_STEP_ABRUPT;
+        return JS_STEP_YIELD;
     }
+
+    NODE_INSERT_ALGO_STAGES(JS_STEP_STAGE_ARM, ADJ_IN, "")
+    return node_insert_run(ctx, hdr, s, ADJ_IN_TAKE);
+
+    STEP_ARM(ADJ_RETURN);
+    /* insertAdjacentElement returns the inserted element; insertAdjacentText returns undefined. */
+    if (magic == 1) *presult = JS_DupValue(ctx, argv[1]);
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl EL_ADJACENT_STEP = {
+    js_el_insert_adjacent, sizeof(NodeInsertState), el_adjacent_visit, NULL,
+    "DOM §4.9 Element.insertAdjacentElement and insertAdjacentText (over §4.2.3 pre-insert)", EL_ADJACENT_STEPS,
+    .script_forbidden = el_adjacent_script_forbidden
+};
 
 /* §4.9 removeAttribute / hasAttribute / toggleAttribute / hasAttributes / getAttributeNames — the rest of the
    attribute family. removeAttribute in particular had no implementation at all, so a boolean reflection had no
@@ -3294,10 +3326,10 @@ void element_init(JSContext *ctx)
        into a Text node). */
     g_id_adj_html = idl_method_id_step(ctx, ADJ_HTML, 2, NULL, 0, &EL_ADJACENT_HTML_STEP, 0);
     idl_iface_brand(trusted_type_class(TRUSTED_TYPE_HTML));
-    g_id_adj_el = idl_method_id(ctx, ADJ_ELEMENT, 2, js_el_insert_adjacent, 1);
+    g_id_adj_el = idl_method_id_step(ctx, ADJ_ELEMENT, 2, NULL, 0, &EL_ADJACENT_STEP, 1);
     idl_iface_brand(node_class_id());
     idl_iface_narrow(element_is);
-    g_id_adj_text = idl_method_id(ctx, IDL_2STR, 2, js_el_insert_adjacent, 2);
+    g_id_adj_text = idl_method_id_step(ctx, IDL_2STR, 2, NULL, 0, &EL_ADJACENT_STEP, 2);
     g_id_has_attrs = idl_method_id(ctx, NULL, 0, js_el_attr_list, 0);
     g_id_attr_names = idl_method_id(ctx, NULL, 0, js_el_attr_list, 1);
     /* §4.9's namespace-keyed family. `DOMString? namespace` is the FIRST argument of every one of them, and it

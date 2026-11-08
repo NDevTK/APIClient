@@ -251,21 +251,9 @@ void node_adopt_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *
    the fragment rule is how fragments quietly stop working. `ref` NULL appends. */
 void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref);
 
-/* §4.2.3's "PRE-INSERT" — "ensure pre-insert validity" and then insert, which is what every member the standard
-   states over pre-insert must run and what raw `node_insert_at` skips. Exported because §4.9's "insert adjacent"
-   is four pre-inserts and lives in element.c: writing the tree links there instead is how
-   `document.documentElement.insertAdjacentText("beforebegin", "x")` came to put a Text node beside <html>
-   rather than throwing. `child` NULL appends. Returns false HAVING THROWN. */
-bool node_pre_insert(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent, lxb_dom_node_t *child);
-
-/* §4.2.3's "ENSURE PRE-INSERT VALIDITY" ON ITS OWN, for the one caller that needs the check WITHOUT the insert:
-   §5.5's "insert a node into a live range" step 6 names it, and then does its own insert around a Text split, a
-   reference-node fixup and a live-range offset. `exclude` is `childrenToExclude` and is the standard's own « »
-   (NULL) or « child »; nothing else. Returns false HAVING THROWN.
-   IT IS EXPORTED SO THERE IS ONE COPY. range.c carried a SECOND full transcription of the eleven steps, and
-   the two had already drifted in three places — its step 2 was the plain ancestor rather than §4.2.2's
-   host-including one, and its steps 6 and 8 tested only `TEXT`, so a CDATASection (which §4.12 Interface
-   CDATASection declares `: Text`) passed both. Two transcriptions of one algorithm is one edit away from two answers. */
+/* DOM §4.2.3 "ensure pre-insert validity", for pre-insert (node_insert.h's node_pre_insert_start), replace's step
+   1, replaceChildren's step 2 and §5.5's "insert a node into a live range" step 6. `exclude` is
+   childrenToExclude: the standard's « » (NULL) or « child ». Returns false having thrown. */
 bool node_ensure_pre_insert_valid(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent,
                                   lxb_dom_node_t *child, lxb_dom_node_t *exclude);
 

@@ -173,7 +173,8 @@ static JSValue js_select_length(JSContext *ctx, JSValueConst this_val, int magic
  * §4.10.7 names — of which "options are added or removed" is one. Running it here as well would be a second
  * site for one write.
  */
-static void remove_an_option(JSContext *ctx, lxb_dom_node_t *select, double index)
+/* Steps 1-3: the option step 4 removes, or NULL where step 1 or 2 returns. */
+static lxb_dom_node_t *remove_an_option(JSContext *ctx, lxb_dom_node_t *select, double index)
 {
     JSValue list = html_form_select_option_list(ctx, select);
     uint32_t len = option_list_len(ctx, list);
@@ -183,12 +184,11 @@ static void remove_an_option(JSContext *ctx, lxb_dom_node_t *select, double inde
     /* STEPS 1 AND 2. The comparison is over the DOUBLE the conversion produced and not over a cast of it: Web
        IDL §3.2.4.5 long is ConvertToInt(V, 32, "signed"), so the value is any integer in [-2**31, 2**31-1] and
        a negative one is an ordinary call rather than an error — `select.remove(-1)` is step 2's return arm. */
-    if (len == 0 || !(index >= 0) || !(index < (double)len)) { JS_FreeValue(ctx, list); return; }
+    if (len == 0 || !(index >= 0) || !(index < (double)len)) { JS_FreeValue(ctx, list); return NULL; }
 
     element = JS_GetPropertyUint32(ctx, list, (uint32_t)index);      /* STEP 3 */
     n = node_of(element);
-    /* STEP 4. `dom_cow_remove_child` is the removal chokepoint every tree mutation in this engine goes
-       through, so the per-flow COW delta captures this one as it captures theirs.
+    /* STEP 4 is the caller's, through the remove machine.
        THE PARENT IS THIS CODEBASE'S OWN INVARIANT AND NOT PAGE INPUT, which is what makes an assert the right
        thing here and the wrong thing at the argument above: §4.10.7's walk descends from the select, so every
        node it returns is a DESCENDANT of it and has a parent by construction. */
@@ -196,9 +196,9 @@ static void remove_an_option(JSContext *ctx, lxb_dom_node_t *select, double inde
            "§4.10.7's list of options held an entry that is not a node with a parent — the walk descends from "
            "the select itself, so every option it returns is a descendant of it and §2.6.4.3's remove an "
            "option step 4 has a parent node to remove from");
-    dom_cow_remove_child(n);
     JS_FreeValue(ctx, element);
     JS_FreeValue(ctx, list);
+    return n;
 }
 
 /* §4.10.7's `remove`, BOTH ENTRIES, with Web IDL §3.6 steps 3-4 read off `argc`.
@@ -214,7 +214,8 @@ static void remove_an_option(JSContext *ctx, lxb_dom_node_t *select, double inde
  * two steps rather than through a copy here. Installing this member takes that call OFF Element.prototype and
  * answers it here, so the routing has to be exact: it is the same function the mixin body itself calls.
  */
-static void select_remove_index(JSContext *ctx, lxb_dom_node_t *n, JSValueConst *argv)
+/* The option remove(index) removes, or NULL. */
+static lxb_dom_node_t *select_remove_index(JSContext *ctx, lxb_dom_node_t *n, JSValueConst *argv)
 {
     double index = 0;
     int have;
@@ -244,7 +245,7 @@ static void select_remove_index(JSContext *ctx, lxb_dom_node_t *n, JSValueConst 
            no sibling component takes a release arm of this algorithm to be handed. Throwing would be this
            engine inventing a failure the standard does not have, on a call a page makes with a value it
            computed. */
-        return;
+        return NULL;
     }
 
     /* The number the converted `long` denotes. `idl_number_of` is what a body reads a converted numeric slot
@@ -258,13 +259,14 @@ static void select_remove_index(JSContext *ctx, lxb_dom_node_t *n, JSValueConst 
     DCHECK(have == 1,
            "idl_number_of found no number for `remove`'s `index`, which is not unknown external input — it "
            "answers 0 only for an unknown carrying no example, and that arm returned above");
-    remove_an_option(ctx, n, index);
+    return remove_an_option(ctx, n, index);
 }
 
 /* The member: argument count 0 is the ChildNode entry, as a step over core/dom/node.h's one start of it. */
 #define SELECT_REMOVE_STAGES(X) \
     X(SR_ENTRY, "HTML §4.10.7 select remove() (Web IDL §3.6's entry, by argument count)") \
-    NODE_REMOVE_ALGO_STAGES(X, SR, "HTML §4.10.7 select remove() → DOM §4.2.8 remove() step 2") \
+    NODE_REMOVE_ALGO_STAGES(X, SR, "HTML §4.10.7 select remove() → DOM §4.2.8 remove() step 2, or HTML §2.6.4.3 " \
+                                   "remove an option step 4") \
     X(SR_DONE,  "HTML §4.10.7 select remove() (done)")
 enum { IDL_STEP_STAGE_BASE(SELECT_REMOVE_STAGES) SELECT_REMOVE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const SELECT_REMOVE_STEPS[] = { SELECT_REMOVE_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -293,13 +295,13 @@ static int js_select_remove(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             node_child_node_remove_start(hdr, s, n, SR_RANGES, SR_DONE);
             return JS_STEP_YIELD;
         }
-        select_remove_index(ctx, n, argv);
-        return JS_STEP_DONE;
+        n = select_remove_index(ctx, n, argv);
+        if (!n) return JS_STEP_DONE;
+        node_remove_start(hdr, s, n, /*suppress_observers*/ false, SR_RANGES, SR_DONE);   /* STEP 4 */
+        return JS_STEP_YIELD;
     }
 
-    STEP_ARM(SR_RANGES); STEP_ARM(SR_ITERATORS); STEP_ARM(SR_DETACH); STEP_ARM(SR_ASSIGNED);
-    STEP_ARM(SR_SLOT_FIND); STEP_ARM(SR_SLOT_PARENT_TREE); STEP_ARM(SR_SLOT_NODE_TREE); STEP_ARM(SR_ROOT);
-    STEP_ARM(SR_DESCENDANTS); STEP_ARM(SR_RECORD); STEP_ARM(SR_CHANGED);
+    NODE_REMOVE_ALGO_STAGES(JS_STEP_STAGE_ARM, SR, "")
     return node_remove_run(ctx, hdr, s, SR_RANGES);
 
     STEP_ARM(SR_DONE);

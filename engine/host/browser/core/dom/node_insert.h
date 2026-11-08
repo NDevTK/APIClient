@@ -66,6 +66,11 @@ void node_insert_start(JSStepHdr *hdr, NodeInsertState *s, lxb_dom_node_t *node,
 /* One stage of the insert; JS_STEP_YIELD at every rest, with hdr->stage at `after` once step 9 is done. It makes
    no request and cannot throw. */
 int node_insert_run(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, int base);
+/* DOM §4.2.3 pre-insert: steps 1-3 (ensure pre-insert validity, which throws; referenceChild), then step 4's
+   insert started as node_insert_start does, without suppressObservers. Returns false having thrown, with nothing
+   started. Step 5's return is the caller's. */
+bool node_pre_insert_start(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, lxb_dom_node_t *node,
+                           lxb_dom_node_t *parent, lxb_dom_node_t *child, int base, int after);
 /* Keep a fragment's nodes as wrappers past the insert, for a caller whose own record names them (replace step
    10, replace all step 7); called right after node_insert_start. */
 void node_insert_keep_nodes(NodeInsertState *s);
