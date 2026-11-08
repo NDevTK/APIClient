@@ -1441,7 +1441,8 @@ static int js_node_remove_child(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     STEP_ARM(RC_DETACH);
     STEP_ARM(RC_ASSIGNED);
     STEP_ARM(RC_SLOT_FIND);
-    STEP_ARM(RC_SLOT_ASSIGN);
+    STEP_ARM(RC_SLOT_PARENT_TREE);
+    STEP_ARM(RC_SLOT_NODE_TREE);
     STEP_ARM(RC_ROOT);
     STEP_ARM(RC_DESCENDANTS);
     STEP_ARM(RC_RECORD);

@@ -89,8 +89,9 @@ int node_remove_run(JSContext *ctx, JSStepHdr *hdr, NodeRemoveState *s, int base
 
     case NODE_REMOVE_PHASE_SLOT_FIND:                                          /* STEP 10 */
         if (s->cursor && slot_is(s->cursor)) {
-            s->cursor = NULL;
-            hdr->stage = base + NODE_REMOVE_PHASE_SLOT_ASSIGN;
+            s->tree_root = node_root(s->parent);
+            s->cursor = s->tree_root;
+            hdr->stage = base + NODE_REMOVE_PHASE_SLOT_PARENT_TREE;
             return JS_STEP_YIELD;
         }
         if (s->cursor) {
@@ -101,8 +102,22 @@ int node_remove_run(JSContext *ctx, JSStepHdr *hdr, NodeRemoveState *s, int base
         hdr->stage = base + NODE_REMOVE_PHASE_ROOT;
         return JS_STEP_YIELD;
 
-    case NODE_REMOVE_PHASE_SLOT_ASSIGN:
-        slot_removed_tree_steps(ctx, s->node, s->parent);                      /* STEPS 10.1-10.2 */
+    case NODE_REMOVE_PHASE_SLOT_PARENT_TREE:                                   /* STEP 10.1 */
+        if (s->cursor) {
+            slot_assign_tree_node(ctx, s->cursor);
+            s->cursor = node_next_in(s->cursor, s->tree_root);
+            return JS_STEP_YIELD;
+        }
+        s->cursor = s->node;
+        hdr->stage = base + NODE_REMOVE_PHASE_SLOT_NODE_TREE;
+        return JS_STEP_YIELD;
+
+    case NODE_REMOVE_PHASE_SLOT_NODE_TREE:                                     /* STEP 10.2 */
+        if (s->cursor) {
+            slot_assign_tree_node(ctx, s->cursor);
+            s->cursor = node_next_in(s->cursor, s->node);
+            return JS_STEP_YIELD;
+        }
         hdr->stage = base + NODE_REMOVE_PHASE_ROOT;
         return JS_STEP_YIELD;
 

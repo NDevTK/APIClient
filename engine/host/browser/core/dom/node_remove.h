@@ -23,8 +23,10 @@
     X(P##_ASSIGNED,    W " → DOM §4.2.3 remove steps 8-9 (node's assigned slot; parent's slot change)") \
     X(P##_SLOT_FIND,   W " → DOM §4.2.3 remove step 10 (whether node has an inclusive descendant that is a slot, " \
                          "one node per step)") \
-    X(P##_SLOT_ASSIGN, W " → DOM §4.2.3 remove steps 10.1-10.2 (assign slottables for a tree with parent's root " \
-                         "and with node)") \
+    X(P##_SLOT_PARENT_TREE, W " → DOM §4.2.3 remove step 10.1 (assign slottables for a tree with parent's " \
+                              "root, one node of it per step)") \
+    X(P##_SLOT_NODE_TREE, W " → DOM §4.2.3 remove step 10.2 (assign slottables for a tree with node, one node of " \
+                            "it per step)") \
     X(P##_ROOT,        W " → DOM §4.2.3 remove steps 11-13 (the removing steps with node; isParentConnected; " \
                          "node's disconnectedCallback)") \
     X(P##_DESCENDANTS, W " → DOM §4.2.3 remove step 14 (one shadow-including descendant per step: its removing " \
@@ -38,7 +40,8 @@ enum { NODE_REMOVE_ALGO_STAGES(JS_STEP_STAGE_ENUM, NODE_REMOVE_PHASE, "") NODE_R
 typedef struct NodeRemoveState {
     lxb_dom_node_t *node, *parent;
     lxb_dom_node_t *old_prev, *old_next;   /* steps 5-6 */
-    lxb_dom_node_t *cursor;                /* the walk of the stage standing, in node's subtree */
+    lxb_dom_node_t *cursor;                /* the walk of the stage standing */
+    lxb_dom_node_t *tree_root;             /* step 10.1's root, parent's root */
     lxb_dom_document_t *index_doc;         /* the document whose tree node is in, or NULL */
     int after;
     uint8_t parent_connected;              /* step 12's isParentConnected */

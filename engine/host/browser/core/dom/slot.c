@@ -402,10 +402,18 @@ static void assign_slottables_for_a_tree(JSContext *ctx, lxb_dom_node_t *root)
        nodes and each of those nodes kept naming it as its assigned slot — which §4.4's get the parent then
        answered with, sending the event path into a detached subtree. The condition belongs at the INSERTION
        call site, where it is a fact about that caller (see slot_insert_steps), and it is stated there. */
-    for (n = root; n; n = node_next_in(n, root)) {
-        thread_work_charge(THREAD_WORK_DOM_WALK, 1);   /* a walk of the page's tree is engine work */
-        if (slot_is(n)) assign_slottables(ctx, n);
-    }
+    for (n = root; n; n = node_next_in(n, root)) slot_assign_tree_node(ctx, n);
+}
+
+/* Named residual. Not covered: assign slottables for one slot runs find slottables whole inside the node's step,
+   a walk of the host's children each asking find a slot, itself a walk of the shadow tree. Next: those two walks
+   one node per step under the machine that drives this. Absence shows as one step of a slot assignment whose
+   time grows with the host's children times the shadow tree's nodes, with no work charged for either. */
+void slot_assign_tree_node(JSContext *ctx, lxb_dom_node_t *n)
+{
+    DCHECK(g_ready && n != NULL, "§4.2.2.4's assign slottables for a tree ran before slot_init or over no node");
+    thread_work_charge(THREAD_WORK_DOM_WALK, 1);   /* a walk of the page's tree is engine work */
+    if (slot_is(n)) assign_slottables(ctx, n);
 }
 
 void slot_assign_for_a_tree(JSContext *ctx, lxb_dom_node_t *root)
@@ -507,21 +515,16 @@ bool slot_removed_tree_steps_apply(lxb_dom_node_t *parent)
     return shadow_root_is(node_root(parent));
 }
 
-void slot_removed_tree_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent)
-{
-    DCHECK(g_ready && node != NULL && parent != NULL && node->parent != parent,
-           "§4.2.3 remove's step 10 ran before slot_init, for no node or parent, or before step 7's detach");
-    /* Both, because the removed subtree's slots now hold nothing and the tree it left may have a different slot
-       answering for the same name. */
-    assign_slottables_for_a_tree(ctx, node_root(parent));
-    assign_slottables_for_a_tree(ctx, node);
-}
-
 void slot_removed_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent)
 {
     if (!node || !parent) return;
     slot_removed_assigned_steps(ctx, node, parent);
-    if (slot_removed_tree_steps_apply(parent) && has_inclusive_slot(node)) slot_removed_tree_steps(ctx, node, parent);
+    /* Step 10, both runs, because the removed subtree's slots now hold nothing and the tree it left may have a
+       different slot answering for the same name. */
+    if (slot_removed_tree_steps_apply(parent) && has_inclusive_slot(node)) {
+        assign_slottables_for_a_tree(ctx, node_root(parent));
+        assign_slottables_for_a_tree(ctx, node);
+    }
 }
 
 void slot_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local)
