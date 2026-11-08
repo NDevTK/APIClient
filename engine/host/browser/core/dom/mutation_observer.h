@@ -78,18 +78,6 @@ void mutation_observer_move_steps(JSContext *ctx, lxb_dom_node_t *node,
                                   lxb_dom_node_t *old_parent, lxb_dom_node_t *old_prev, lxb_dom_node_t *old_next,
                                   lxb_dom_node_t *new_parent, lxb_dom_node_t *new_prev, lxb_dom_node_t *child);
 
-/* §4.2.3's `suppressObservers`, as a SCOPE. Insert and replace are each ONE operation in the standard and N
-   tree writes here, so the per-node hook queued N records where a browser queues one. `parent` is the
-   operation's parent — the target of the record this scope will queue — and `suppressed` is the one child the
-   operation removes with suppressObservers set (replace's `child`; NULL for insert). `from` is the FRAGMENT
-   whose children insert step 4 removes, which gets its own record — NULL for replace, whose inner insert
-   scope supplies it when the replacement is a fragment. Every OTHER removal seen inside the scope belongs to
-   a different algorithm — adopt's step 2 — and is left to the per-node path so it keeps its own record, its
-   old siblings and its order. Nests for `replaceChild(fragment, child)`; inert when no observer is
-   registered. */
-void mutation_observer_batch_begin(lxb_dom_node_t *parent, lxb_dom_node_t *suppressed,
-                                  lxb_dom_node_t *from);
-void mutation_observer_batch_end(void);
 
 /* §4.10's "REPLACE DATA" step 4 — "queue a mutation record of `characterData` for node with null, null, node's
    data, « », « », null and null". Fired by the character-data chokepoint, BEFORE the write, because `node's

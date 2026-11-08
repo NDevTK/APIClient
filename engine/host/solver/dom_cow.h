@@ -297,6 +297,9 @@ void dom_cow_parse_release(lxb_html_tree_t *tree);
  * from HERE would close it for a SHARED parse and not for a private one — one parse behaving two ways
  * according to a declaration that is about isolation and says nothing about the DOM's steps. */
 void dom_cow_install_tree_construction(void);
+/* A parser's append of a parentless node into a SHARED tree (HTML §13.2.6's table above, and HTML §14.2's XML
+   tree builder): captured for the delta, and, as tree construction is not DOM §4.2.3 insert, no tree hook. */
+void dom_cow_parse_append_shared(lxb_dom_node_t *parent, lxb_dom_node_t *node);
 /* Whether that install has happened and still stands — asked by the parse entry on every parser it makes, and
    a POSITIVE statement rather than a hole: a §13.2.6 write reaching lexbor's own table is a write no delta
    can ever see, and there is no later point at which that becomes visible. */

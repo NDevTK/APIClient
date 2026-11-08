@@ -790,7 +790,7 @@ void node_add_moving_hook(NodeMovingHook fn)
 
 /* ---- DOM §4.5 "ADOPT A NODE" ----------------------------------------------------------------------------
  *
- * ONLY STEP 2 OF IT EXISTED, inline in `node_insert_at`, and step 2 is the one step that is not about
+ * ONLY STEP 2 OF IT EXISTED, inline in the insert helper, and step 2 is the one step that is not about
  * adoption at all — it is the removal that makes a move a move. Everything the algorithm is FOR was missing:
  * a node inserted into another document kept the node document it was created in, so `ownerDocument` lied,
  * `document.createElement` on the wrong document's behalf built attributes that disagreed with their element
@@ -904,20 +904,6 @@ static void node_adopting_steps(JSContext *ctx, NodeAdoptState *s, lxb_dom_node_
                     lxb_dom_interface_document(document_template_contents_owner(ctx, doc)));
 }
 
-/* DOM §4.5 "ADOPT A NODE", given `node` and `document`. */
-void node_adopt(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *document)
-{
-    NodeAdoptState s;
-
-    DCHECK(node != NULL && document != NULL, "DOM §4.5 adopt was asked of nothing");
-    /* STEP 2. It is the capturing removal and not a raw detach because it IS a removal: the per-flow delta has
-       to see it, and so do §4.2.3's removing steps and §6.1's pre-remove steps. */
-    if (node->parent) dom_cow_remove_child(node);
-    memset(&s, 0, sizeof s);
-    node_adopt_start(ctx, &s, node, document);
-    while (node_adopt_step(ctx, &s)) {}
-}
-
 void node_adopt_start(JSContext *ctx, NodeAdoptState *s, lxb_dom_node_t *node, lxb_dom_document_t *document)
 {
     DCHECK(node != NULL && document != NULL && node->parent == NULL,
@@ -966,26 +952,6 @@ bool node_adopt_step(JSContext *ctx, NodeAdoptState *s)
 void node_adopt_visit(JSContext *ctx, NodeAdoptState *s, JSStepVisit *v)
 {
     v->buf(ctx, (void **)&s->f, sizeof(NodeAdoptFrame) * (size_t)s->cap);
-}
-
-/* §4.2.3 "insert" — A DocumentFragment IS NOT INSERTED; ITS CHILDREN ARE, in order, and the fragment is left
-   empty. That is not a detail: `createDocumentFragment` exists so a page can batch nodes and attach them in one
-   call, so every use of it went wrong — the fragment NODE landed in the tree, `frag.childNodes.length` stayed
-   what it was, and the page's markup was one level deeper than it built. Nothing threw, because a fragment is a
-   node and appending one is a legal thing to do.
-   One helper, used by every member that inserts, because "which node actually goes in" is the same question for
-   appendChild, insertBefore, replaceChild and the four ChildNode/ParentNode mixins — and a member that forgot to
-   ask it would be the one place fragments quietly stopped working again.
-   The children come OUT through the capturing chokepoint rather than a private detach: a fragment can be older
-   than the fork that is running, so another flow's baseline may hold it. */
-/* §4.2.3 insert STEP 7.1 — "Adopt node into parent's node document", which is where the ONE adopt above is
-   reached from. The realm is the PARENT'S DOCUMENT'S, because that is the document being adopted into and its
-   registry is what step 3 re-derives against; `node_insert_at` carries no JSContext of its own, deliberately,
-   and taking the running one instead would answer a second same-origin document's adoption out of whichever
-   realm happened to call. */
-static void node_insert_adopt(lxb_dom_node_t *parent, lxb_dom_node_t *node)
-{
-    node_adopt(document_realm_of(parent), node, node_document_of(parent));
 }
 
 static bool node_is_chardata(const lxb_dom_node_t *n);
@@ -1113,39 +1079,6 @@ bool node_ensure_pre_insert_valid(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_
                 return JS_ThrowDOMException(ctx, "HierarchyRequestError",
                                             "a doctype cannot be appended after the element"), false;
     return true;
-}
-
-void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref)
-{
-    if (node_is_document_fragment(node)) {
-        lxb_dom_node_t *c, *next;
-        /* §4.2.3 INSERT IS ONE OPERATION, and these are its N tree writes. Step 4 removes the fragment's
-           children with `suppressObservers` set to TRUE and queues one record for the FRAGMENT; the last step
-           queues one record for the PARENT with the whole node list. Without the scope the per-node hook
-           queued one record per child at each end — which is what "expected 1 but got 2" reports. */
-        mutation_observer_batch_begin(parent, NULL, node);
-        for (c = node->first_child; c; c = next) {
-            next = c->next;
-            dom_cow_remove_child(c);            /* STEP 4, with `suppressObservers` set */
-            node_insert_adopt(parent, c);       /* STEP 6.1, per node of `nodes` */
-            if (ref) dom_cow_insert_before(ref, c);
-            else     dom_cow_append_child(parent, c);
-        }
-        mutation_observer_batch_end();
-        return;
-    }
-    /* §4.2.3 PRE-INSERT STEP 2: a reference child that IS the node becomes the node's next sibling, decided
-       before the node leaves its place. */
-    if (ref == node) ref = node->next;
-    /* STEP 6.1. Adopt is what unlinks the node from its old parent (its own step 2) — lexbor's insert does NOT
-       unlink, it writes the new parent's links over the old ones and leaves the old parent still naming the
-       node as its child, so a MOVE (`doc.appendChild(p)` for a `p` that has a parent) built a tree with two
-       parents and a sibling chain that loops. Every walk in this engine then runs forever, which is how it
-       surfaced: §6.2's TreeWalker hung where the corpus regrafts a subtree. The removal used to be written
-       here, under a comment naming §4.5 step 2 — one step of an algorithm, standing in for the algorithm. */
-    node_insert_adopt(parent, node);
-    if (ref) dom_cow_insert_before(ref, node);
-    else     dom_cow_append_child(parent, node);
 }
 
 /* ---- DOM §4.2.3 "Mutation algorithms" ------------------------------------------------------------------------------------
@@ -1280,7 +1213,7 @@ static bool node_move(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *new_
            "other did not");
     /* THE MOVE'S ONE DOCUMENT, asserted rather than adopted. §4.5's adopt is absent from the move's numbering
        because step 1 has already made it unnecessary: one shadow-including root is one tree, and every node in
-       a tree in this engine shares its node document (node_insert_at adopts on the way in). A move that found
+       a tree in this engine shares its node document (insert step 7.1 adopts on the way in). A move that found
        two documents would be a move across a boundary step 1 was supposed to refuse. */
     DCHECK(node_document_of(node) == node_document_of(new_parent),
            "§4.2.3's move found `node` and `newParent` in two different node documents — step 1's "
@@ -2084,7 +2017,6 @@ static const char *const CD_DELETE_STEPS[]    = {
 static const char *const CD_REPLACE_STEPS[]   = {
     CD_REPLACE_ALGORITHM " replace data steps 1-2 (settling `offset`)",
     CD_REPLACE_ALGORITHM " replace data steps 3-13 (settling `count`, then the splice)", NULL };
-static const char *const CD_SPLIT_STEPS[]     = { CD_SPLIT_ALGORITHM " steps 1-9", NULL };
 
 /* THE TWO CHAINS ONE §4.10 CALL CAN RUN, IN THE ORDER THE ALGORITHM ASKS THEM. `off` is first because
    core/idl_index_arg.h requires an IdlIndexChain to be the state's FIRST field when a member needs more than
@@ -2119,7 +2051,7 @@ static void cd_index_visit(JSContext *ctx, void *st, JSStepVisit *v)
    JS_ToUint32 — on the very type it names first, and the one unknown external input crosses as itself.
    STEPS 2 AND 3 ARE STATED HERE, ONCE, FOR BOTH KINDS OF OPERAND. `node_cd_replace_data` states them too and
    that is not a second copy of this member's: it is the shared §4.10 replace-data algorithm's own, reached by
-   `js_cd_set_data` and by `node_split_text`, which have no argument to fork. Read from here they are already
+   `js_cd_set_data` and by the split machine (node_split_run), which have no argument to fork. Read from here they are already
    satisfied — the chain's exhaustion IS step 2's condition over an unknown and `offset > length` is it over a
    converted one — so the two agree by construction rather than by being kept in step. */
 static int js_cd_op(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
@@ -2278,24 +2210,30 @@ static const IdlStepDecl CD_REPLACE_STEP = {
    created on `node`'s NODE DOCUMENT (not the running realm's), and steps 7.2-7.5 move the live ranges across
    the split — a boundary point past the split point belongs to the SECOND node afterwards, which no
    composition of the public members does. Returns the new node, or NULL having thrown. */
-lxb_dom_node_t *node_split_text(JSContext *ctx, lxb_dom_node_t *node, uint32_t offset)
+bool node_split_start(JSContext *ctx, JSStepHdr *hdr, NodeSplitState *s, lxb_dom_node_t *node, uint32_t offset,
+                      int base, int after)
 {
     lxb_dom_character_data_t *cd;
-    lxb_dom_node_t *parent, *new_node;
     lxb_dom_text_t *t;
-    uint32_t length, count;
+    uint32_t length;
     size_t a, b;
 
     DCHECK(node != NULL && node->type == LXB_DOM_NODE_TYPE_TEXT,
            "§4.11's split was asked for something that is not a Text node — every caller checks the type, so "
            "reaching here means one of them stopped");
+    DCHECK(s->node == NULL, "a second DOM §4.11 split was started on one state");
     cd = lxb_dom_interface_character_data(node);
     length = cd_units(cd->data.data, cd->data.length);                  /* STEP 1 */
     if (offset > length) {                                              /* STEP 2 */
         JS_ThrowDOMException(ctx, "IndexSizeError", "the split offset is past the end of the Text node");
-        return NULL;
+        return false;
     }
-    count = length - offset;                                            /* STEP 3 */
+    memset(s, 0, sizeof *s);
+    s->in.nodes_js = JS_UNDEFINED;
+    s->node = node;
+    s->offset = offset;
+    s->after = after;
+    s->count = length - offset;                                         /* STEP 3 */
     a = cd_byte_of(cd->data.data, cd->data.length, offset);             /* STEP 4 */
     b = cd_byte_of(cd->data.data, cd->data.length, length);
     /* STEP 5 — on `node`'s NODE DOCUMENT, which is what makes a split inside an adopted subtree keep that
@@ -2303,34 +2241,82 @@ lxb_dom_node_t *node_split_text(JSContext *ctx, lxb_dom_node_t *node, uint32_t o
     t = lxb_dom_document_create_text_node(node->owner_document, cd->data.data + a, b - a);
     CHECK(t != NULL, "split a Text node: the Lexbor text allocation failed — half a split is a document that "
                      "disagrees with the program that wrote it");
-    new_node = lxb_dom_interface_node(t);
-    dom_cow_note_created(new_node);   /* this flow made it */
-    parent = node->parent;                                              /* STEP 6 */
-    if (parent) {                                                       /* STEP 7 */
-        node_insert_at(parent, new_node, node->next);                   /* STEP 7.1 */
-        range_split_text_steps(ctx, node, new_node, offset);            /* STEPS 7.2-7.5 */
+    s->new_node = lxb_dom_interface_node(t);
+    dom_cow_note_created(s->new_node);   /* this flow made it */
+    s->parent = node->parent;                                           /* STEP 6 */
+    if (s->parent) {                                                    /* STEP 7.1 */
+        node_insert_start(hdr, &s->in, s->new_node, s->parent, node->next, false, base + NODE_SPLIT_PHASE_IN_TAKE,
+                          base + NODE_SPLIT_PHASE_TAIL);
+        return true;
     }
+    hdr->stage = base + NODE_SPLIT_PHASE_TAIL;
+    return true;
+}
+
+int node_split_run(JSContext *ctx, JSStepHdr *hdr, NodeSplitState *s, int base)
+{
+    int phase = hdr->stage - base;
+    JSValue r;
+
+    DCHECK(s->node != NULL, "DOM §4.11's split was resumed before it was started");
+    if (phase >= NODE_SPLIT_PHASE_IN_TAKE && phase < NODE_SPLIT_PHASE_IN_TAKE + NODE_INSERT_PHASE_N)
+        return node_insert_run(ctx, hdr, &s->in, base + NODE_SPLIT_PHASE_IN_TAKE);
+    DCHECK(phase == NODE_SPLIT_PHASE_TAIL, "DOM §4.11's split resumed outside the block its caller declared");
+    if (s->parent) range_split_text_steps(ctx, s->node, s->new_node, s->offset);   /* STEPS 7.2-7.5 */
     /* STEP 8. Its own steps 8-11 have nothing left to move: 7.2-7.3 took every boundary point past the split
        point off this node already, which is the whole reason the standard runs them first. */
-    {
-        JSValue r = node_cd_replace_data(ctx, node, offset, count, "", 0);
-        if (JS_IsException(r)) return NULL;
-        JS_FreeValue(ctx, r);
-    }
-    return new_node;                                                    /* STEP 9 */
+    r = node_cd_replace_data(ctx, s->node, s->offset, s->count, "", 0);
+    if (JS_IsException(r)) return JS_STEP_ABRUPT;
+    JS_FreeValue(ctx, r);
+    hdr->stage = s->after;                                              /* STEP 9 is the caller's */
+    return JS_STEP_YIELD;
+}
+
+void node_split_visit(JSContext *ctx, NodeSplitState *s, JSStepVisit *v)
+{
+    node_insert_visit(ctx, &s->in, v);
+}
+
+const char *node_split_script_forbidden(int stage, int base)
+{
+    return node_insert_script_forbidden(stage, base + NODE_SPLIT_PHASE_IN_TAKE);
 }
 
 /* §4.11 `[NewObject] Text splitText(unsigned long offset)`.
    IT IS A STEP MACHINE FOR THE ONE REASON EVERY MEMBER OF THIS FAMILY IS: its offset can be unknown external
    input, and split a Text node step 2 ("If offset is greater than length, then throw an "IndexSizeError"
-   DOMException") is a comparison over it whose two completions are both feasible. `node_split_text` above is
-   the CONCEPT and takes a number, because its other caller is DOM §5.5's `insertNode` over a range offset the
-   engine itself computed — a value that was never unknown and has no fork to ask. */
+   DOMException") is a comparison over it whose two completions are both feasible. The split machine above takes
+   a number, because its other caller is DOM §5.5's `insertNode` over a range offset the engine itself computed
+   — a value that was never unknown and has no fork to ask — and its step 7.1 insert rests per node. */
+#define CD_SPLIT_STAGES(X) \
+    X(CD_SPLIT_OFFSET, CD_SPLIT_ALGORITHM " steps 1-6 (settling `offset`; the new node)") \
+    NODE_SPLIT_ALGO_STAGES(X, CD_SPLIT, CD_SPLIT_ALGORITHM) \
+    X(CD_SPLIT_RETURN, CD_SPLIT_ALGORITHM " step 9 (return new node)")
+enum { IDL_STEP_STAGE_BASE(CD_SPLIT_STAGES) CD_SPLIT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CD_SPLIT_STEPS[] = { CD_SPLIT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* The offset chain first, as core/idl_index_arg.h requires of a state holding one. */
+typedef struct {
+    CdIndexState cd;
+    NodeSplitState sp;
+} CdSplitState;
+
+static void cd_split_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    node_split_visit(ctx, &((CdSplitState *)st)->sp, v);
+}
+
+static const char *cd_split_script_forbidden(int stage, const void *st)
+{
+    (void)st;
+    return node_split_script_forbidden(stage, CD_SPLIT_IN_TAKE);
+}
+
 static int js_text_split(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
                          JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    CdIndexState *st = state;
-    lxb_dom_node_t *n = node_of(hdr->this_val), *split;
+    CdSplitState *st = state;
+    lxb_dom_node_t *n = node_of(hdr->this_val);
     uint32_t offset = 0, length;
     bool past_end = false;
     int rc;
@@ -2338,29 +2324,27 @@ static int js_text_split(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
     *presult = JS_UNDEFINED;
-    DCHECK(hdr->stage == CD_OP_OFFSET,
-           "§4.11's `splitText` resumed into a stage the algorithm does not have — it declares ONE operand that "
-           "can be unknown external input and therefore one stage, and the chain of questions that operand may "
-           "ask is a cursor on this machine's own state; the count stage beside it belongs to the §4.10 members "
-           "whose IDL gives them a second forkable operand");
+    if (hdr->stage == CD_SPLIT_RETURN) {                                                 /* STEP 9 */
+        *presult = node_wrap(ctx, st->sp.new_node);
+        return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
+    }
+    if (hdr->stage != CD_SPLIT_OFFSET) return node_split_run(ctx, hdr, &st->sp, CD_SPLIT_IN_TAKE);
     if (!n || n->type != LXB_DOM_NODE_TYPE_TEXT) {
         JS_ThrowTypeError(ctx, "splitText ran on a node that is not a Text node");
         return JS_STEP_ABRUPT;
     }
     /* THE ARGUMENT IS REQUIRED, so its absence is the DECLARATION's to refuse: §4.11 writes
        `[NewObject] Text splitText(unsigned long offset)` with no `optional`, and this member is declared with
-       nargs 1, whose argument-count check runs before the body. `argc > 0 &&` stood here instead — a
-       consumer-side default over a producer that cannot omit the value, which would have read offset 0 for a
-       call the boundary never lets through. */
+       nargs 1, whose argument-count check runs before the body. */
     DCHECK(argc >= 1, "§4.11's `splitText` reached its body with no argument — its IDL argument is required, "
                       "so the declaration's own argument-count check is what should have refused the call");
     length = cd_units(lxb_dom_interface_character_data(n)->data.data,                     /* STEP 1 */
                       lxb_dom_interface_character_data(n)->data.length);
     if (concolic_is(argv[0])) {
         /* `length + 1` POSITIONS — step 2 is `>` and not `>=`, so splitting at the very end is legal and
-           yields an empty second node. `node_split_text` states step 2 again for its own other caller; from
+           yields an empty second node. node_split_start states step 2 again for its own other caller; from
            here it is already satisfied, which is why exhausting the chain is what throws. */
-        rc = idl_index_chain_run(ctx, hdr, &st->off, argv[0], length + 1, CD_SPLIT_ALGORITHM,
+        rc = idl_index_chain_run(ctx, hdr, &st->cd.off, argv[0], length + 1, CD_SPLIT_ALGORITHM,
                                  &offset, &past_end);
         if (rc)
             return rc;   /* parked at the fork */
@@ -2371,15 +2355,13 @@ static int js_text_split(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, 
     } else {
         offset = idl_index_arg_known(ctx, argv[0], CD_SPLIT_ALGORITHM);
     }
-    split = node_split_text(ctx, n, offset);
-    if (!split)
-        return JS_STEP_ABRUPT;
-    *presult = node_wrap(ctx, split);
-    return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
+    if (!node_split_start(ctx, hdr, &st->sp, n, offset, CD_SPLIT_IN_TAKE, CD_SPLIT_RETURN)) return JS_STEP_ABRUPT;
+    return JS_STEP_YIELD;
 }
 
 static const IdlStepDecl CD_SPLIT_STEP = {
-    js_text_split, sizeof(CdIndexState), cd_index_visit, NULL, CD_SPLIT_ALGORITHM, CD_SPLIT_STEPS, 0, NULL
+    js_text_split, sizeof(CdSplitState), cd_split_visit, NULL, CD_SPLIT_ALGORITHM, CD_SPLIT_STEPS, 0, NULL,
+    .script_forbidden = cd_split_script_forbidden
 };
 
 /* §4.11 `readonly attribute DOMString wholeText` — the concatenation of the data of THIS node's contiguous

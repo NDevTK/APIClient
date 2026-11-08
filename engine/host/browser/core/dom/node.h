@@ -2,6 +2,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_NODE_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_NODE_H
 #include "core/dom/node_adopt.h"
+#include "core/dom/node_insert.h"
 #include "core/dom/node_remove.h"
 #include <lexbor/dom/dom.h>
 #include <stdbool.h>
@@ -210,10 +211,29 @@ JSValue node_cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset,
    length is in CODE UNITS and lexbor stores UTF-8, so every §5 algorithm that touches the bytes behind an
    offset goes through this one walk rather than growing a second that disagrees at a surrogate pair. */
 size_t node_cd_byte_of(const lxb_dom_node_t *n, uint32_t units);
-/* §4.11's "split a Text node" — the CONCEPT, which §5.5's `insertNode` is stated over. Returns the second half,
-   or NULL having thrown "IndexSizeError". It carries the live-range steps a substringData+insertBefore
-   composition cannot. */
-lxb_dom_node_t *node_split_text(JSContext *ctx, lxb_dom_node_t *node, uint32_t offset);
+/* DOM §4.11 "split a Text node", as a step machine: §5.5's insertNode and §4.11's splitText are stated over it.
+   A member owes it a NodeSplitState, NODE_SPLIT_ALGO_STAGES at `base`, and a stage `after`; its insert block
+   must forbid script (node_split_script_forbidden). */
+#define NODE_SPLIT_ALGO_STAGES(X, P, W) \
+    NODE_INSERT_ALGO_STAGES(X, P##_IN, W " → DOM §4.11 split a Text node step 7.1 (insert new node into parent " \
+                                       "before node's next sibling)") \
+    X(P##_TAIL, W " → DOM §4.11 split a Text node steps 7.2-8 (the live ranges; replace data)")
+enum { NODE_SPLIT_ALGO_STAGES(JS_STEP_STAGE_ENUM, NODE_SPLIT_PHASE, "") NODE_SPLIT_PHASE_N };
+typedef struct NodeSplitState {
+    lxb_dom_node_t *node, *new_node, *parent;   /* step 6's parent, or NULL */
+    uint32_t offset, count;                     /* step 3's count */
+    int after;
+    NodeInsertState in;
+} NodeSplitState;
+/* Steps 1-6 and step 7.1's insert started; the caller's next entry is at `base`, and once step 8 is done the
+   machine stands at `after` with step 9's new node in `s->new_node`. Returns false having thrown step 2's
+   "IndexSizeError", with nothing started. `s` is zeroed. */
+bool node_split_start(JSContext *ctx, JSStepHdr *hdr, NodeSplitState *s, lxb_dom_node_t *node, uint32_t offset,
+                      int base, int after);
+/* One stage; JS_STEP_YIELD at every rest, or JS_STEP_ABRUPT having thrown. */
+int node_split_run(JSContext *ctx, JSStepHdr *hdr, NodeSplitState *s, int base);
+void node_split_visit(JSContext *ctx, NodeSplitState *s, JSStepVisit *v);
+const char *node_split_script_forbidden(int stage, int base);
 /* DOM §4.13 Interface ProcessingInstruction's "CREATE A PROCESSING INSTRUCTION NODE, given a document
    `document`, a string `target`, and a string `data`" — its step 1's node creation and its step 2's "initialize
    pi with target and data", which is the algorithm §4.13 SHARES between DOM §4.5's `createProcessingInstruction`
@@ -237,25 +257,6 @@ JSValue node_pi_create(JSContext *ctx, lxb_dom_document_t *document,
    caller then hands the unknown's shape, which the step is not asked of). */
 JSValue node_pi_create_decided(JSContext *ctx, lxb_dom_document_t *document, const char *target, size_t tlen,
                                const char *data, size_t dlen, bool target_decided, bool data_decided);
-/* DOM §4.5 "ADOPT A NODE", given `node` and `document` — the whole algorithm, which is what §4.2.3's insert
-   reaches at its step 7.1 and what `Document.adoptNode()`/`importNode()` are stated over.
-   IT IS NOT A "SET THE OWNER DOCUMENT": step 3 walks `node`'s SHADOW-INCLUDING inclusive descendants in
-   shadow-including tree order and, per node, sets its node document, sets the node document of every attribute
-   in an element's attribute list, re-derives its custom element registry (custom_elements.c owns that arm),
-   enqueues an `adoptedCallback` reaction for a custom element, and runs the ADOPTING STEPS other standards
-   define — HTML's, for a `<template>`, adopting its contents into a different document again.
-   `ctx` is the realm of the DOCUMENT BEING ADOPTED INTO, because step 3's per-node state lives on wrappers and
-   a wrapper's prototypes are its document's. It may be NULL only for an adopt that step 3's condition skips
-   (`document` is already the node's node document), which is the ordinary same-document insert.
-   This form runs the walk to completion, for the synchronous callers; a step machine runs node_adopt.h's walk. */
-void node_adopt(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *document);
-
-/* §4.2.3's "insert", as this engine's ONE tree-write helper: a DocumentFragment contributes its CHILDREN, a
-   node already in a tree is removed from it first, and `ref` naming `node` itself resolves to its next sibling.
-   Exported because §5.5's content-moving members are all stated over pre-insert and append; a second copy of
-   the fragment rule is how fragments quietly stop working. `ref` NULL appends. */
-void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref);
-
 /* DOM §4.2.3 "ensure pre-insert validity", for pre-insert (node_insert.h's node_pre_insert_start), replace's step
    1, replaceChildren's step 2 and §5.5's "insert a node into a live range" step 6. `exclude` is
    childrenToExclude: the standard's « » (NULL) or « child ». Returns false having thrown. */

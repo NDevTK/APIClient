@@ -2333,13 +2333,9 @@ static void element_moving_steps(JSContext *ctx, lxb_dom_node_t *n, bool is_subt
  * read by a member of a DIFFERENT flow standing in a DIFFERENT document — the interleaving this scheduler
  * exists for is exactly what makes an ambient answer wrong, and a per-node one right.
  *
- * IT IS ALSO WHAT MAKES THE TWO PARSERS AGREE, WHICH IS THE DEFECT THIS CLOSES. §7.5.2 "Loading HTML
- * documents"' load reaches lexbor's own tree construction and routes through none of DOM §4.2.3 "Mutation
- * algorithms" at all, so it records nothing; §7.5.3's XML load builds its tree through core/dom/node.h's
- * `insert` (core/xml/xml_tree.c's DOM_PARSE_ROOT_SHARED arm) and recorded every construct it placed. One
- * question asked at two entries with two answers, and the XML entry's answer was a list no machine could
- * drain — which is why an `.xhtml` document with no script in it at all aborted where the byte-identical
- * `.html` one did not.
+ * Neither load's parse reaches DOM §4.2.3 "Mutation algorithms": §7.5.2's HTML load writes through lexbor's tree
+ * construction and §7.5.3's XML load through core/xml/xml_tree.c's DOM_PARSE_ROOT_SHARED arm, both by
+ * dom_cow_parse_append_shared, so a load records nothing for a member to drain.
  *
  * NAMED RESIDUAL. WHAT IS NOT COVERED: a load's parse runs none of §4.2.3's per-insert steps, so the work
  * those steps do for the markup's own elements is done by document_install's parsed-walk family over the

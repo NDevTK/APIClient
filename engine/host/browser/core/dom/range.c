@@ -480,11 +480,7 @@ static int range_set_bp(JSContext *ctx, RangeBounds *b, JSValueConst nodev, uint
     return 0;
 }
 
-/* §5.5 "insert a node into a live range" — declared here because `insertNode` is one of the members below and
-   `surroundContents`' step 5 is the same algorithm; both reach the one implementation further down. */
-static int range_insert_node(JSContext *ctx, RangeBounds *b, lxb_dom_node_t *node);
-
-/* §5.5's SIXTEEN PLAIN OPERATIONS, EACH PAIRED WITH THE SENTENCE ITS OWN POOL ENTRY IS REPORTED BY. The enum
+/* §5.5's FIFTEEN PLAIN OPERATIONS, EACH PAIRED WITH THE SENTENCE ITS OWN POOL ENTRY IS REPORTED BY. The enum
    below and the declaration loop in range_init are two readings of this ONE list, so a member §5.5 gains cannot
    acquire a pool entry whose forgotten release is then named after a neighbour — which is core/agent_state.h's
    whole complaint about one shared `what` for many slots. ORDER IS LOAD-BEARING and is §5.5's own IDL order:
@@ -506,8 +502,7 @@ static int range_insert_node(JSContext *ctx, RangeBounds *b, lxb_dom_node_t *nod
     X(R_COMPARE_BP,       "DOM §5.5's compareBoundaryPoints declaration")                             \
     X(R_IS_POINT_IN,      "DOM §5.5's isPointInRange declaration")                                    \
     X(R_COMPARE_POINT,    "DOM §5.5's comparePoint declaration")                                      \
-    X(R_INTERSECTS,       "DOM §5.5's intersectsNode declaration")                                    \
-    X(R_INSERT_NODE,      "DOM §5.5's insertNode declaration")
+    X(R_INTERSECTS,       "DOM §5.5's intersectsNode declaration")
 enum {
 #define X(m, w) m,
     RANGE_OPERATIONS(X)
@@ -635,13 +630,6 @@ static JSValue js_range_member(JSContext *ctx, JSValueConst this_val, int argc, 
         if (boundary_position(n, off, bounds_end(b), b->end_off) == BP_AFTER)
             return magic == R_IS_POINT_IN ? JS_FALSE : JS_NewInt32(ctx, 1);
         return magic == R_IS_POINT_IN ? JS_TRUE : JS_NewInt32(ctx, 0);
-
-    case R_INSERT_NODE:
-        /* §5.5 `[CEReactions] undefined insertNode(Node node)` — the wrapper's reactions are the IDL machine's
-           and run at this member's boundary like every other declared member's. */
-        n = node_of(nodev);
-        DCHECK(n != NULL, "insertNode reached the body with something that is not a node");
-        return range_insert_node(ctx, b, n) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 
     default:
         DCHECK(magic == R_INTERSECTS, "a Range member ran with a magic §5.5 does not declare");
@@ -967,6 +955,27 @@ static void range_collapse_point(lxb_dom_node_t *sn, lxb_dom_node_t *en, uint32_
                     "DOM §4.2.3 pre-insert step 4") \
     NODE_CLONE_ALGO_STAGES(X, RX_CLONE, "DOM §5.5 extract / clone the contents: `a clone of` a boundary node " \
                     "or a contained child")
+/* DOM §5.5 "insert a node into a live range", as a step machine insertNode and surroundContents' step 5 run:
+   step 7's split, step 9's removal and step 12's pre-insert are each the DOM machine for that algorithm. */
+#define RANGE_INSERT_ALGO_STAGES(X, P, W) \
+    NODE_SPLIT_ALGO_STAGES(X, P##_SP, W " → DOM §5.5 insert a node into a live range step 7") \
+    X(P##_SPLIT, W " → DOM §5.5 insert a node into a live range steps 8-9 (node is referenceNode; node's parent)") \
+    NODE_REMOVE_ALGO_STAGES(X, P##_RM, W " → DOM §5.5 insert a node into a live range step 9") \
+    X(P##_LOCATE, W " → DOM §5.5 insert a node into a live range steps 10-12 (newOffset; pre-insert node into " \
+                  "parent before referenceNode)") \
+    NODE_INSERT_ALGO_STAGES(X, P##_IN, W " → DOM §5.5 insert a node into a live range step 12 → DOM §4.2.3 " \
+                            "pre-insert step 4") \
+    X(P##_END, W " → DOM §5.5 insert a node into a live range step 13 (a collapsed range's end)")
+enum { RANGE_INSERT_ALGO_STAGES(JS_STEP_STAGE_ENUM, RI_PHASE, "") RI_PHASE_N };
+typedef struct RangeInsertState {
+    lxb_dom_node_t *node, *parent, *ref;   /* step 5's parent, steps 2-4's referenceNode */
+    uint32_t new_off;                      /* step 10's newOffset */
+    int after;
+    NodeSplitState sp;
+    NodeRemoveState rm;
+    NodeInsertState in;
+} RangeInsertState;
+
 /* SURROUNDCONTENTS' STEP 3 IS `extract this`, SO ITS STAGES ARE THE EXTRACTION'S — declared here, in ITS
    numbering, and NOT held in a private byte of its state. A machine rests on `hdr->stage` and the driver
    asserts that the stage it holds is a step its declaration names; a delegated algorithm keeping its own
@@ -995,8 +1004,13 @@ static void range_collapse_point(lxb_dom_node_t *sn, lxb_dom_node_t *en, uint32_
                   "pre-insert step 4") \
     NODE_CLONE_ALGO_STAGES(X, RS_X_CLONE, "DOM §5.5 surroundContents step 3 → extract: `a clone of` a " \
                   "partially contained boundary node") \
-    X(RS_WRAP,    "DOM §5.5 surroundContents steps 4-7 (empty newParent, insert it, append the fragment, and " \
-                  "select it)")
+    X(RS_EMPTY,   "DOM §5.5 surroundContents step 4 (if newParent has children, replace all with null within it)") \
+    NODE_REPLACE_ALL_ALGO_STAGES(X, RS_RA, "DOM §5.5 surroundContents step 4") \
+    X(RS_INSERT,  "DOM §5.5 surroundContents step 5 (insert newParent into this)") \
+    RANGE_INSERT_ALGO_STAGES(X, RS_RI, "DOM §5.5 surroundContents step 5") \
+    X(RS_APPEND,  "DOM §5.5 surroundContents step 6 (append fragment to newParent)") \
+    NODE_INSERT_ALGO_STAGES(X, RS_IN, "DOM §5.5 surroundContents step 6 → DOM §4.2.3 pre-insert step 4") \
+    X(RS_SELECT,  "DOM §5.5 surroundContents step 7 (select newParent within this)")
 /* TWO ENUMS, EACH BASED AT IDL_STEP_FIRST, because each is a DECLARATION's own stage block and `steps[0]` is
    the stage a member is entered at. Numbering surroundContents' block after the extraction's would leave its
    first stage naming the extraction's first step, which is a label that lies about where a parked flow is. */
@@ -1451,19 +1465,19 @@ static const IdlStepDecl RANGE_DELETE = { rd_step, sizeof(RdState), range_del_vi
 
 /* ---- insertNode ----------------------------------------------------------------------------------------- */
 
-/* §5.5 "insert a node into a live range". No page code and no walk of the page's tree — a fixed number of
-   pointer moves — so it is an ordinary declared member rather than a machine. `node` arrives brand-checked. */
-static int range_insert_node(JSContext *ctx, RangeBounds *b, lxb_dom_node_t *node)
+/* Steps 1-7: what the algorithm checks and where it inserts, then step 7's split or step 8. Returns false having
+   thrown, with nothing started; the machine resumes at `base` and stands at `after` once step 13 is done. */
+static bool range_insert_start(JSContext *ctx, JSStepHdr *hdr, RangeInsertState *s, RangeBounds *b,
+                               lxb_dom_node_t *node, int base, int after)
 {
-    lxb_dom_node_t *sn = bounds_start(b), *ref, *parent;
-    uint32_t new_off;
+    lxb_dom_node_t *sn = bounds_start(b), *ref;
 
     DCHECK(sn != NULL, "a live range's start is not a node");
     if (sn->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION ||                               /* STEP 1 */
         sn->type == LXB_DOM_NODE_TYPE_COMMENT ||
         (sn->type == LXB_DOM_NODE_TYPE_TEXT && !sn->parent) || sn == node)
         return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                    "a node cannot be inserted at this range's start"), -1;
+                                    "a node cannot be inserted at this range's start"), false;
     ref = NULL;                                                                               /* STEP 2 */
     if (sn->type == LXB_DOM_NODE_TYPE_TEXT) {                                                 /* STEP 3 */
         ref = sn;
@@ -1471,36 +1485,122 @@ static int range_insert_node(JSContext *ctx, RangeBounds *b, lxb_dom_node_t *nod
         uint32_t k = 0;
         for (ref = sn->first_child; ref && k < b->start_off; ref = ref->next) k++;
     }
-    parent = ref ? ref->parent : sn;                                                           /* STEP 5 */
-    /* STEP 6 names §4.2.3's "ensure pre-insert validity" with an empty childrenToExclude, and it is the ONE
-       entry in node.h — not a second transcription here. The copy that stood in this file had drifted from
-       the algorithm in three places (a plain ancestor test where §4.2.2 says host-including, and steps 6
-       and 8 blind to CDATASection, which §4.12 Interface CDATASection declares `: Text`), which is what two
-       copies do. */
-    if (!node_ensure_pre_insert_valid(ctx, node, parent, ref, NULL)) return -1;                /* STEP 6 */
-    if (sn->type == LXB_DOM_NODE_TYPE_TEXT) {                                                  /* STEP 7 */
-        ref = node_split_text(ctx, sn, b->start_off);
-        if (!ref) return -1;
-    }
-    if (node == ref) ref = ref->next;                                                          /* STEP 8 */
-    if (node->parent) dom_cow_remove_child(node);                                              /* STEP 9 */
-    new_off = ref ? node_index(ref) : node_length(parent);                                     /* STEP 10 */
-    new_off += node_is_document_fragment(node) ? node_length(node) : 1u;                       /* STEP 11 */
-    node_insert_at(parent, node, ref);                                                         /* STEP 12 */
-    if (node_of(b->start_node) == node_of(b->end_node) && b->start_off == b->end_off) {        /* STEP 13 */
-        JSValue w = node_wrap(ctx, parent);
-        bounds_set_end(ctx, b, w, new_off);
-        JS_FreeValue(ctx, w);
-    }
-    return 0;
+    memset(s, 0, sizeof *s);
+    s->node = node;
+    s->ref = ref;
+    s->after = after;
+    s->parent = ref ? ref->parent : sn;                                                        /* STEP 5 */
+    /* Step 6 names §4.2.3's "ensure pre-insert validity" with an empty childrenToExclude: node.h's one entry. */
+    if (!node_ensure_pre_insert_valid(ctx, node, s->parent, ref, NULL)) return false;         /* STEP 6 */
+    if (sn->type == LXB_DOM_NODE_TYPE_TEXT)                                                    /* STEP 7 */
+        return node_split_start(ctx, hdr, &s->sp, sn, b->start_off, base + RI_PHASE_SP_IN_TAKE,
+                                base + RI_PHASE_SPLIT);
+    hdr->stage = base + RI_PHASE_SPLIT;
+    return true;
 }
+
+/* One stage of the algorithm; JS_STEP_YIELD at every rest, or JS_STEP_ABRUPT having thrown. */
+static int range_insert_run(JSContext *ctx, JSStepHdr *hdr, RangeInsertState *s, RangeBounds *b, int base)
+{
+    int phase = hdr->stage - base;
+
+    if (phase >= RI_PHASE_SP_IN_TAKE && phase < RI_PHASE_SP_IN_TAKE + NODE_SPLIT_PHASE_N)
+        return node_split_run(ctx, hdr, &s->sp, base + RI_PHASE_SP_IN_TAKE);
+    if (phase >= RI_PHASE_RM_RANGES && phase < RI_PHASE_RM_RANGES + NODE_REMOVE_PHASE_N)
+        return node_remove_run(ctx, hdr, &s->rm, base + RI_PHASE_RM_RANGES);
+    if (phase >= RI_PHASE_IN_TAKE && phase < RI_PHASE_IN_TAKE + NODE_INSERT_PHASE_N)
+        return node_insert_run(ctx, hdr, &s->in, base + RI_PHASE_IN_TAKE);
+    switch (phase) {
+    case RI_PHASE_SPLIT:
+        if (s->sp.node) s->ref = s->sp.new_node;                                               /* STEP 7 */
+        if (s->node == s->ref) s->ref = s->ref->next;                                          /* STEP 8 */
+        if (s->node->parent) {                                                                 /* STEP 9 */
+            node_remove_start(hdr, &s->rm, s->node, /*suppress_observers*/ false, base + RI_PHASE_RM_RANGES,
+                              base + RI_PHASE_LOCATE);
+            return JS_STEP_YIELD;
+        }
+        hdr->stage = base + RI_PHASE_LOCATE;
+        return JS_STEP_YIELD;
+
+    case RI_PHASE_LOCATE:
+        s->new_off = s->ref ? node_index(s->ref) : node_length(s->parent);                     /* STEP 10 */
+        s->new_off += node_is_document_fragment(s->node) ? node_length(s->node) : 1u;          /* STEP 11 */
+        if (!node_pre_insert_start(ctx, hdr, &s->in, s->node, s->parent, s->ref,               /* STEP 12 */
+                                   base + RI_PHASE_IN_TAKE, base + RI_PHASE_END))
+            return JS_STEP_ABRUPT;
+        return JS_STEP_YIELD;
+
+    case RI_PHASE_END:
+        if (node_of(b->start_node) == node_of(b->end_node) && b->start_off == b->end_off) {    /* STEP 13 */
+            JSValue w = node_wrap(ctx, s->parent);
+            bounds_set_end(ctx, b, w, s->new_off);
+            JS_FreeValue(ctx, w);
+        }
+        hdr->stage = s->after;
+        return JS_STEP_YIELD;
+
+    default:
+        DFAILF("DOM §5.5 insert a node into a live range resumed at phase %d, outside its block", phase);
+        return JS_STEP_ABRUPT;
+    }
+}
+
+static void range_insert_visit(JSContext *ctx, RangeInsertState *s, JSStepVisit *v)
+{
+    node_split_visit(ctx, &s->sp, v);
+    node_insert_visit(ctx, &s->in, v);
+}
+
+static const char *range_insert_script_forbidden(int stage, int base)
+{
+    const char *why = node_split_script_forbidden(stage, base + RI_PHASE_SP_IN_TAKE);
+
+    return why ? why : node_insert_script_forbidden(stage, base + RI_PHASE_IN_TAKE);
+}
+
+/* §5.5 `[CEReactions] undefined insertNode(Node node)`: insert node into this. */
+#define RIN_STAGES(X) \
+    X(RIN_START,  "DOM §5.5 insertNode → insert a node into a live range steps 1-7") \
+    RANGE_INSERT_ALGO_STAGES(X, RIN, "DOM §5.5 insertNode") \
+    X(RIN_RETURN, "DOM §5.5 insertNode (return)")
+enum { IDL_STEP_STAGE_BASE(RIN_STAGES) RIN_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RIN_STEPS[] = { RIN_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static void rin_visit(JSContext *ctx, void *st, JSStepVisit *v) { range_insert_visit(ctx, st, v); }
+
+static const char *rin_script_forbidden(int stage, const void *st)
+{
+    (void)st;
+    return range_insert_script_forbidden(stage, RIN_SP_IN_TAKE);
+}
+
+static int rin_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                    JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    RangeBounds *b = range_receiver(hdr->this_val);
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    if (hdr->stage == RIN_RETURN) return JS_STEP_DONE;
+    if (hdr->stage == RIN_START) {
+        lxb_dom_node_t *n = argc > 0 ? node_of(argv[0]) : NULL;
+
+        DCHECK(n != NULL, "insertNode reached the body with something that is not a node");
+        if (!range_insert_start(ctx, hdr, st, b, n, RIN_SP_IN_TAKE, RIN_RETURN)) return JS_STEP_ABRUPT;
+        return JS_STEP_YIELD;
+    }
+    return range_insert_run(ctx, hdr, st, b, RIN_SP_IN_TAKE);
+}
+
+static const IdlStepDecl RANGE_INSERT = { rin_step, sizeof(RangeInsertState), rin_visit, NULL,
+                                          "DOM §5.5 Range.insertNode(node)", RIN_STEPS,
+                                          .script_forbidden = rin_script_forbidden };
 
 /* ---- surroundContents ----------------------------------------------------------------------------------- */
 
-/* IT IS A MACHINE BECAUSE ITS STEP 3 IS `extract`, which is one. The two checks before it are O(depth) walks
-   and the three steps after it are pointer moves; what makes this suspend is the extraction it PERFORMS —
-   the same body, over the stage block RS_STAGES declares in THIS member's own numbering, so every resume
-   point is a step this declaration names rather than a private byte nothing can check. */
+/* Step 3 is `extract`, step 4 replace all, step 5 insert a node into a live range and step 6 a pre-insert, each
+   that algorithm's machine in a block RS_STAGES declares in this member's own numbering. */
 static const char *const RS_STEPS[] = { RS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 /* The extraction's own state, EMBEDDED: step 3 is `extract this`, so this machine performs that algorithm
@@ -1508,9 +1608,20 @@ static const char *const RS_STEPS[] = { RS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 typedef struct RsState {
     RxState rx;
     lxb_dom_node_t *frag;
+    NodeReplaceAllState ra;   /* step 4 */
+    RangeInsertState ri;      /* step 5 */
+    NodeInsertState in;       /* step 6 */
 } RsState;
 
-static void rs_visit(JSContext *ctx, void *st, JSStepVisit *v) { rx_visit(ctx, &((RsState *)st)->rx, v); }
+static void rs_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    RsState *s = st;
+
+    rx_visit(ctx, &s->rx, v);
+    node_replace_all_visit(ctx, &s->ra, v);
+    range_insert_visit(ctx, &s->ri, v);
+    node_insert_visit(ctx, &s->in, v);
+}
 
 static int rs_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                    JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -1562,14 +1673,27 @@ static int rs_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         s->frag = node_of(sub);
         DCHECK(s->frag != NULL, "§5.5's extraction produced something that is not a fragment");
         JS_FreeValue(ctx, sub);
-        hdr->stage = RS_WRAP;
+        hdr->stage = RS_EMPTY;
         return JS_STEP_YIELD;
     }
-
-    DCHECK(hdr->stage == RS_WRAP, "§5.5's surroundContents resumed into a stage it does not have");
-    while (np->first_child) dom_cow_remove_child(np->first_child);                             /* STEP 4 */
-    if (range_insert_node(ctx, b, np) < 0) return JS_STEP_ABRUPT;                              /* STEP 5 */
-    node_insert_at(np, s->frag, NULL);                                                         /* STEP 6 */
+    if (hdr->stage >= RS_RA_RM_RANGES && hdr->stage < RS_RA_RM_RANGES + NODE_REPLACE_ALL_PHASE_N)
+        return node_replace_all_run(ctx, hdr, &s->ra, RS_RA_RM_RANGES);
+    if (hdr->stage >= RS_RI_SP_IN_TAKE && hdr->stage < RS_RI_SP_IN_TAKE + RI_PHASE_N)
+        return range_insert_run(ctx, hdr, &s->ri, b, RS_RI_SP_IN_TAKE);
+    if (hdr->stage >= RS_IN_TAKE && hdr->stage < RS_IN_TAKE + NODE_INSERT_PHASE_N)
+        return node_insert_run(ctx, hdr, &s->in, RS_IN_TAKE);
+    if (hdr->stage == RS_EMPTY) {                                                              /* STEP 4 */
+        if (np->first_child) node_replace_all_start(hdr, &s->ra, NULL, np, RS_RA_RM_RANGES, RS_INSERT);
+        else hdr->stage = RS_INSERT;
+        return JS_STEP_YIELD;
+    }
+    if (hdr->stage == RS_INSERT)                                                               /* STEP 5 */
+        return range_insert_start(ctx, hdr, &s->ri, b, np, RS_RI_SP_IN_TAKE, RS_APPEND) ? JS_STEP_YIELD
+                                                                                         : JS_STEP_ABRUPT;
+    if (hdr->stage == RS_APPEND)                                                               /* STEP 6 */
+        return node_pre_insert_start(ctx, hdr, &s->in, s->frag, np, NULL, RS_IN_TAKE, RS_SELECT) ? JS_STEP_YIELD
+                                                                                               : JS_STEP_ABRUPT;
+    DCHECK(hdr->stage == RS_SELECT, "§5.5's surroundContents resumed into a stage it does not have");
     {                                                                                          /* STEP 7 */
         JSValue pw;
         uint32_t i = node_index(np);
@@ -1585,8 +1709,13 @@ static int rs_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
 
 static const char *rs_script_forbidden(int stage, const void *st)
 {
+    const char *why;
+
     (void)st;
-    return node_insert_script_forbidden(stage, RS_X_IN_TAKE);
+    if ((why = node_insert_script_forbidden(stage, RS_X_IN_TAKE))) return why;
+    if ((why = node_replace_all_script_forbidden(stage, RS_RA_RM_RANGES))) return why;
+    if ((why = range_insert_script_forbidden(stage, RS_RI_SP_IN_TAKE))) return why;
+    return node_insert_script_forbidden(stage, RS_IN_TAKE);
 }
 
 static const IdlStepDecl RANGE_SURROUND = { rs_step, sizeof(RsState), rs_visit, NULL,
@@ -2001,7 +2130,7 @@ static const JSCFunctionListEntry js_range_consts[] = {
     JS_PROP_INT32_DEF("END_TO_START",   3, IDL_CONSTANT_PROP_FLAGS),
 };
 
-static int g_id[R_MEMBER_N], g_id_to_string = -1, g_id_delete = -1, g_id_extract = -1,
+static int g_id[R_MEMBER_N], g_id_insert = -1, g_id_to_string = -1, g_id_delete = -1, g_id_extract = -1,
            g_id_clone_contents = -1, g_id_surround = -1, g_id_client_rects = -1, g_id_bounding_rect = -1,
            g_id_contextual_fragment = -1;
 
@@ -2070,7 +2199,7 @@ void range_init(JSContext *ctx)
     g_id[R_INTERSECTS] = idl_method_id(ctx, ONE_NODE, 1, js_range_member, R_INTERSECTS);
     idl_this_iface(range_is, "Range");
     idl_iface_brand(node_class_id());
-    g_id[R_INSERT_NODE] = idl_method_id(ctx, ONE_NODE, 1, js_range_member, R_INSERT_NODE);
+    g_id_insert = idl_method_id_step(ctx, ONE_NODE, 1, NULL, 0, &RANGE_INSERT, 0);
     idl_this_iface(range_is, "Range");
     idl_iface_brand(node_class_id());
     g_id_to_string = idl_method_id_step(ctx, NULL, 0, NULL, 0, &RANGE_TO_STRING, 0);
@@ -2128,6 +2257,7 @@ void range_init(JSContext *ctx)
     agent_state_id("element", &g_id_clone_contents,
                    "DOM §5.5's cloneContents step-machine declaration");
     agent_state_id("element", &g_id_surround, "DOM §5.5's surroundContents step-machine declaration");
+    agent_state_id("element", &g_id_insert, "DOM §5.5's insertNode step-machine declaration");
     agent_state_id("element", &g_id_client_rects,
                    "CSSOM VIEW §9 Extensions to the Range Interface's getClientRects declaration");
     agent_state_id("element", &g_id_bounding_rect,
@@ -2173,7 +2303,7 @@ void range_install_proto(JSContext *ctx)
     idl_install_method(ctx, proto, "deleteContents", g_id_delete);
     idl_install_method(ctx, proto, "extractContents", g_id_extract);
     idl_install_method(ctx, proto, "cloneContents", g_id_clone_contents);
-    idl_install_method(ctx, proto, "insertNode", g_id[R_INSERT_NODE]);
+    idl_install_method(ctx, proto, "insertNode", g_id_insert);
     idl_install_method(ctx, proto, "surroundContents", g_id_surround);
     idl_install_method(ctx, proto, "toString", g_id_to_string);
     idl_install_method(ctx, proto, "createContextualFragment", g_id_contextual_fragment);

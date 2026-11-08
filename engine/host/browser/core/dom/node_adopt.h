@@ -1,5 +1,5 @@
 /* DOM §4.5 "Interface Document"'s adopt, its steps 1 and 3, as a walk a step machine takes one node per step;
- * core/dom/node.c implements it beside the synchronous node_adopt. */
+ * core/dom/node.c implements it. */
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_NODE_ADOPT_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_NODE_ADOPT_H
 

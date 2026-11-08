@@ -103,7 +103,7 @@ void xml_tree_place_created(lxb_dom_node_t *root, DomParseRootKind kind,
            exact, and why solver/dom_cow.h's §13.2.6 writer takes its claim at the node factory rather than at
            the insert that could run more than once for one node. */
         dom_cow_note_created(node);
-        node_insert_at(parent, node, NULL);
+        dom_cow_parse_append_shared(parent, node);
         return;
     }
     /* NOT A `default:` ARM — the switch is exhaustive over DomParseRootKind, so a third disposition makes this

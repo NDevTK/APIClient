@@ -2408,13 +2408,21 @@ static void cow_tc_insert_child(lxb_html_tree_t *tree, lxb_dom_node_t *to, lxb_d
            "§13.2.6 inserted into a tree its parse never declared — the insertion point climbed out to a root "
            "that is not the Document this parse was opened on, so either the parse walked into somebody else's "
            "document or a `<template>`'s content fragment lost the host that reaches it");
-    g_dom_version++;
     if (d->kind == DOM_PARSE_ROOT_PRIVATE) {
+        g_dom_version++;
         lxb_dom_node_insert_child(to, node);
         return;
     }
+    dom_cow_parse_append_shared(to, node);
+}
+
+void dom_cow_parse_append_shared(lxb_dom_node_t *parent, lxb_dom_node_t *node)
+{
+    DCHECK(parent != NULL && node != NULL && node->parent == NULL,
+           "a parser appended nothing, into nothing, or a node still in a tree");
+    g_dom_version++;
     dom_insert_capture(node);
-    lxb_dom_node_insert_child(to, node);
+    lxb_dom_node_insert_child(parent, node);
 }
 
 static void cow_tc_insert_before(lxb_html_tree_t *tree, lxb_dom_node_t *to, lxb_dom_node_t *node)
