@@ -142,6 +142,7 @@
      @RESULT, @E and @WHY out of exactly these lines and a crash's ROOT line is the last @WHY printed before
      abort(), so lines left in the frame would be a crashed renderer taking its own cause with it. */
   function absorbStdio(r, lines) {
+    r.heard = performance.now();
     for (var i = 0; i < lines.length; i++) {
       var ln = lines[i];
       DCHECK(Array.isArray(ln) && (ln[0] === 1 || ln[0] === 2) && typeof ln[1] === "string",
@@ -227,6 +228,7 @@
     /* THE CONNECTION IS CLOSED AND NOT MERELY ABANDONED, so "this peer is gone" has ONE representation: every
        later call into it rejects with the reason it was closed rather than posting into a dead port, and this
        realm's open-endpoint count stops including a pipe nothing can travel on. */
+    if (r.watch !== null) clearInterval(r.watch);
     r.conn.close("its frame was removed from the offscreen document");
     if (r.port) r.port.close();
     if (r.frame.parentNode) r.frame.parentNode.removeChild(r.frame);
@@ -356,7 +358,7 @@
        needed: it is a DECLARED REPLY FIELD of every `content.mojom.Renderer` method, so every answer carries
        the current one and the caller reads it off the reply it already awaited. */
     var r = { name: clusterKey, routingId: routingId, frame: f, port: null, lines: [],
-              conn: null, renderer: null, childProcess: null };
+              conn: null, renderer: null, childProcess: null, heard: null, probedAt: null, watch: null };
     _live.add(r);
     _provisioned++;
     /* DECLARED HERE AND FILLED BY THE PROMISE EXECUTOR ON THE NEXT LINE (which runs synchronously), which is a
@@ -465,7 +467,40 @@
        reason is gone with the relay. */
     r.renderer = r.conn.bindInterface("content.mojom.Renderer");
     r.childProcess = r.conn.bindInterface("content.mojom.ChildProcess");
+    rendererWatch(r);
     return r;
+  }
+
+  /* A renderer that stopped answering. Its process can die or hang with no event reaching this document: no
+     frame event, and a port's only events are HTML §9.4.3 "The MessageEventTarget mixin"'s message and
+     messageerror, none for a peer that is gone. So a missing reply is the only sign. A renderer with a call outstanding that has posted no record for
+     RENDERER_SILENCE_MS is asked GetMojoStats, which its event loop answers without entering the engine; one
+     that leaves the probe unanswered as long again is closed as `renderer-unresponsive`, which rejects its
+     outstanding calls, so its owner retires it through bridge.js's engineCrash with that reason. It is a
+     backstop on host time with its own signal: a loaded host can only make it retire a renderer late or
+     falsely, never rank, cap or drop a flow, and nothing in the scheduler reads it. The value is generous
+     against the engine's return to its event loop at every work quantum. */
+  var RENDERER_SILENCE_MS = 60000, RENDERER_WATCH_MS = 5000;
+  function rendererWatch(r) {
+    DCHECK(r.watch === null && r.heard !== null && r.childProcess !== null,
+           "a renderer was watched twice, before its invitation was accepted, or before its ChildProcess pipe");
+    r.watch = setInterval(function () {
+      if (r.conn.dead) return;
+      var now = performance.now();
+      if (r.probedAt !== null) {
+        if (now - r.probedAt < RENDERER_SILENCE_MS) return;
+        r.conn.close("renderer-unresponsive: no record for " + Math.round(now - r.heard) + " ms with a call " +
+                     "outstanding, and its GetMojoStats probe unanswered for " + Math.round(now - r.probedAt) +
+                     " ms");
+        return;
+      }
+      if (r.conn.outstandingCalls() === 0 || now - r.heard < RENDERER_SILENCE_MS) return;
+      r.probedAt = now;
+      r.childProcess.getMojoStats().then(function () { r.probedAt = null; }, function (e) {
+        /* The probe rejects only when the connection dies, a death its owner's outstanding calls report. */
+        DCHECK(r.conn.dead, "a renderer's GetMojoStats probe rejected on a live connection: " + String(e));
+      });
+    }, RENDERER_WATCH_MS);
   }
 
   /* ASK THE REGISTRY FOR A RENDERER, THEN MATERIALIZE THE ONE IT DECIDED ON. This holds no decision at all —
