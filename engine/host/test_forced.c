@@ -91,6 +91,7 @@
                                       document in this fixture that has a realm is `main`'s; see
                                       box_paint_selftest */
 #include "core/paint/stacking_order.h"
+#include "core/paint/painted_frame.h"   /* a published frame's object, for the parked-graph row */
 #include "core/paint/document_paint.h"   /* and the two halves JOINED: a DOCUMENT to an image, which is
                                            the assembly neither of the two above will make — see
                                            box_paint_selftest's `@PAINT document` row */
@@ -39193,6 +39194,56 @@ static bool tf_document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSu
     return drew;
 }
 
+/* @GRAPHRT over a published paint frame: the fixture's document is painted and its frame published at
+   generation 1, above the floor of 0, and the frame's object is written, rebuilt and written again. The bytes must
+   agree, and the rebuilt frame must raster the same as the original, mark for mark. Generation 1 is at or below
+   every floor a later sale writes with, so the frame left on the realm's record is baseline to every flow. */
+TF_UNIT void painted_frame_graph_selftest(JSContext *ctx, lxb_html_document_t *dom)
+{
+    LayoutJob *job = layout_job_new();
+    DocumentPaintFrame *frame;
+    JSValue obj, back[1];
+    JSFlowGraph *g1, *g2;
+    const uint8_t *b1, *b2;
+    size_t n1, n2;
+    RasterSurface s1, s2;
+    DocumentPaintCount c1, c2;
+    bool d1, d2;
+    int same;
+
+    layout_job_enter(job);
+    frame = document_paint_begin(ctx, lxb_dom_interface_document(dom));
+    while (document_paint_step(frame)) {}
+    document_paint_finish(frame);
+    layout_job_leave(job);
+    layout_job_free(job);
+    JS_SetFlowGen(1);
+    painted_frame_publish(ctx, frame);
+    JS_SetFlowGen(0);
+    obj = painted_frame_object(ctx);
+    g1 = JS_FlowGraphWrite(ctx, &obj, 1, 0);
+    JS_SetFlowGen(1);
+    CHECK(JS_FlowGraphRead(ctx, g1, back) == 0, "the painted-frame graph witness could not rebuild its graph");
+    JS_SetFlowGen(0);
+    g2 = JS_FlowGraphWrite(ctx, back, 1, 0);
+    n1 = JS_FlowGraphBytes(g1, &b1); n2 = JS_FlowGraphBytes(g2, &b2);
+    same = n1 == n2 && !memcmp(b1, b2, n1);
+    d1 = document_paint_raster(painted_frame_of(obj), &s1, &c1);
+    d2 = document_paint_raster(painted_frame_of(back[0]), &s2, &c2);
+    printf("@GRAPHRT {\"paintFrameBytes\":%zu,\"identical\":%d,\"marks\":%zu}\n", n1, same, c1.marks);
+    CHECK(same, "a rebuilt graph holding a published paint frame did not write the same bytes as its original");
+    CHECK(d1 == d2 && c1.marks == c2.marks && c1.elements == c2.elements && s1.width == s2.width &&
+              s1.height == s2.height &&
+              (s1.width * s1.height == 0 || !memcmp(s1.px, s2.px, (size_t)s1.width * s1.height * 4)),
+          "a rebuilt paint frame rasters differently from its original");
+    raster_surface_free(&s1);
+    raster_surface_free(&s2);
+    JS_FlowGraphFree(ctx, g1);
+    JS_FlowGraphFree(ctx, g2);
+    JS_FreeValue(ctx, back[0]);
+    JS_FreeValue(ctx, obj);
+}
+
 /* CORE/PAINT/BOX_PAINT.H'S ENTRY, GIVEN ITS FIRST CALLER — CSS 2.1 §E.2 "Painting order"'s walk run over a
  * document that really has a realm, a navigable and therefore a viewport, and the two numbers that separate
  * the two things a display list of zero marks can mean.
@@ -44725,6 +44776,7 @@ int main(int argc, char **argv) {
        derivations. */
     box_paint_text_selftest(ctx, dom);
     box_paint_selftest(ctx, dom);
+    painted_frame_graph_selftest(ctx, dom);
     /* AND THE SAME ENTRY OVER TWO DOCUMENTS THIS FILE WRITES — the half that reaches
        `display_list_append`. It needs a RECORD on the element's document and no navigable at all; see the
        function for why that is one `document_new` rather than the three-call realm sequence, and for which

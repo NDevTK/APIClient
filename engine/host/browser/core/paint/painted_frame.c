@@ -49,12 +49,25 @@ void painted_frame_publish(JSContext *docctx, DocumentPaintFrame *f)
     JS_FreeValue(docctx, rec);
 }
 
-const DocumentPaintFrame *painted_frame_last(JSContext *docctx)
+JSValue painted_frame_object(JSContext *docctx)
 {
     JSValue rec = pf_record(docctx), v = JS_GetProperty(docctx, rec, g_atom_frame);
-    const DocumentPaintFrame *f = NULL;
 
     JS_FreeValue(docctx, rec);
+    return v;
+}
+
+const DocumentPaintFrame *painted_frame_of(JSValueConst v)
+{
+    DCHECK(JS_GetClassID(v) == g_class, "a painted frame was asked of an object that is not one");
+    return JS_GetOpaque(v, g_class);
+}
+
+const DocumentPaintFrame *painted_frame_last(JSContext *docctx)
+{
+    JSValue v = painted_frame_object(docctx);
+    const DocumentPaintFrame *f = NULL;
+
     if (JS_IsNull(v)) return NULL;
     DCHECK(JS_GetClassID(v) == g_class,
            "a painted-frame record holds something that is not a frame — only painted_frame_publish writes it");

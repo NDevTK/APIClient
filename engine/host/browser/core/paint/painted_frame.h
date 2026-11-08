@@ -27,5 +27,9 @@ void painted_frame_publish(JSContext *docctx, DocumentPaintFrame *f);
 /* The frame step 22 last published for `docctx`'s document in the running world, borrowed until the next
    publish, or NULL when no rendering opportunity of this world has painted it. */
 const DocumentPaintFrame *painted_frame_last(JSContext *docctx);
+/* The object holding the last frame published in `docctx`'s realm (a new reference), or null. */
+JSValue painted_frame_object(JSContext *docctx);
+/* The frame a published frame object holds. */
+const DocumentPaintFrame *painted_frame_of(JSValueConst v);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_PAINT_PAINTED_FRAME_H */
