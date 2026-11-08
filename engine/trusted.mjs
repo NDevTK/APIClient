@@ -1598,29 +1598,35 @@ async function main() {
      still cause an earlier record (the work it would have spent waiting), and it is paid what is due there; a
      payment already ready is written at its own clock. */
   const flush = () => {
-    let moved = false, skipped = false;
+    let moved = false;
 
-    for (const i of instances) {
-      if (!i.live || !i.stalled) continue;
-      /* Records passed over write nothing, and a round paying nothing is a refusal, so the clock moves on to the
-         next due point until a round pays or a due record has not landed. */
-      for (;;) {
-        passDue(i);
-        const now = ZONE.replyClockNow(i.clock);
-        const next = Math.min(Infinity, ...stampedDues(i));
-        const at = i.ready.some(pays) || next <= now ? now : next;
-        if (at === Infinity || !clusterSafe(i, at)) break;
-        if (at > now) { i.delivery.skipped += at - now; i.clock.skip += at - now; skipped = true; }
-        passDue(i);
-        if (dueEntries(i).some((x) => !landedNow(i, x))) break;
-        if (!dueEntries(i).length && !dueInbox(i).length && !i.ready.some(pays)) continue;
-        payRound(i);
-        i.stalled = false;
-        moved = true;
-        break;
+    /* A pass that moves one instance's clock can make a peer safe to pay (`clusterSafe` reads every clock), so
+       passes repeat until one pays a round or moves no clock. Each skip moves a clock forward to a stamped due
+       point, and an owed answer has finitely many records, so the passes end. */
+    for (let skipped = true; skipped && !moved;) {
+      skipped = false;
+      for (const i of instances) {
+        if (!i.live || !i.stalled) continue;
+        /* Records passed over write nothing, and a round paying nothing is a refusal, so the clock moves on to
+           the next due point until a round pays or a due record has not landed. */
+        for (;;) {
+          passDue(i);
+          const now = ZONE.replyClockNow(i.clock);
+          const next = Math.min(Infinity, ...stampedDues(i));
+          const at = i.ready.some(pays) || next <= now ? now : next;
+          if (at === Infinity || !clusterSafe(i, at)) break;
+          if (at > now) { i.delivery.skipped += at - now; i.clock.skip += at - now; skipped = true; }
+          passDue(i);
+          if (dueEntries(i).some((x) => !landedNow(i, x))) break;
+          if (!dueEntries(i).length && !dueInbox(i).length && !i.ready.some(pays)) continue;
+          payRound(i);
+          i.stalled = false;
+          moved = true;
+          break;
+        }
       }
+      if (moved || skipped) clockMoved();
     }
-    if (moved || skipped) clockMoved();
     if (moved) return;
     if (busy) return;
     const live = instances.filter((i) => i.live);
