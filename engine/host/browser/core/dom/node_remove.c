@@ -7,6 +7,8 @@
  * its own index. Nothing here runs the page's code. */
 #include "core/dom/node_remove.h"
 
+#include <string.h>
+
 #include "check.h"
 #include "solver/dom_cow.h"
 #include "core/dom/document.h"
@@ -22,14 +24,18 @@
 #include "core/html/html_base_element.h"
 #include "core/timing/thread_work.h"
 
-void node_remove_start(JSStepHdr *hdr, NodeRemoveState *s, lxb_dom_node_t *node, int base, int after)
+void node_remove_start(JSStepHdr *hdr, NodeRemoveState *s, lxb_dom_node_t *node, bool suppress_observers,
+                       int base, int after)
 {
     DCHECK(node != NULL && node->parent != NULL,
            "§4.2.3 remove was started on no node or a node with no parent — step 2 asserts the parent, and the "
            "caller's own steps are what establish it");
-    DCHECK(s->node == NULL, "a second §4.2.3 remove was started while one was still walking");
+    DCHECK(s->node == NULL || (hdr->stage == after && s->cursor == NULL),
+           "a second §4.2.3 remove was started while one was still walking");
+    memset(s, 0, sizeof *s);
     s->node = node;
     s->after = after;
+    s->suppress_observers = suppress_observers;
     hdr->stage = base + NODE_REMOVE_PHASE_RANGES;
 }
 
@@ -143,7 +149,8 @@ int node_remove_run(JSContext *ctx, JSStepHdr *hdr, NodeRemoveState *s, int base
 
     case NODE_REMOVE_PHASE_RECORD:
         mutation_observer_transient_for_removal(ctx, s->node, s->parent);     /* STEP 15 */
-        mutation_observer_removal_record(ctx, s->node, s->parent, s->old_prev, s->old_next);   /* STEP 16 */
+        if (!s->suppress_observers)                                            /* STEP 16 */
+            mutation_observer_removal_record(ctx, s->node, s->parent, s->old_prev, s->old_next);
         hdr->stage = base + NODE_REMOVE_PHASE_CHANGED;
         return JS_STEP_YIELD;
 

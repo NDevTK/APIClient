@@ -24,7 +24,7 @@
 #include "core/timing/thread_work.h"
 
 void node_insert_start(JSStepHdr *hdr, NodeInsertState *s, lxb_dom_node_t *node, lxb_dom_node_t *parent,
-                       lxb_dom_node_t *child, int base, int after)
+                       lxb_dom_node_t *child, bool suppress_observers, int base, int after)
 {
     DCHECK(node != NULL && parent != NULL, "§4.2.3 insert was started with no node or no parent");
     /* STEPS 1-4: nodes is « node » and count is 1, since node is not a DocumentFragment. */
@@ -39,6 +39,7 @@ void node_insert_start(JSStepHdr *hdr, NodeInsertState *s, lxb_dom_node_t *node,
     s->parent = parent;
     s->child = child;
     s->after = after;
+    s->suppress_observers = suppress_observers;
     hdr->stage = base + NODE_INSERT_PHASE_RANGES;
 }
 
@@ -62,8 +63,8 @@ int node_insert_run(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, int base
         if (s->child) range_insert_steps(ctx, s->parent, s->child, 1);         /* STEP 5 */
         s->prev = s->child ? s->child->prev : s->parent->last_child;           /* STEP 6 */
         if (s->node->parent) {                                                 /* STEP 7.1: adopt step 2 */
-            node_remove_start(hdr, &s->rm, s->node, base + NODE_INSERT_PHASE_RM_RANGES,
-                              base + NODE_INSERT_PHASE_ADOPT);
+            node_remove_start(hdr, &s->rm, s->node, /*suppress_observers*/ false,
+                              base + NODE_INSERT_PHASE_RM_RANGES, base + NODE_INSERT_PHASE_ADOPT);
             return JS_STEP_YIELD;
         }
         hdr->stage = base + NODE_INSERT_PHASE_ADOPT;
@@ -148,7 +149,8 @@ int node_insert_run(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, int base
         /* Steps 10-12 are the member's drain, which takes this record at the step's end; the stages forbid
            script, so it collects staticNodeList now and runs step 12 once the member leaves them. */
         element_tree_steps_record_insert(s->node);
-        mutation_observer_insertion_record(ctx, s->node, s->parent, s->prev, s->child);   /* STEP 8 */
+        if (!s->suppress_observers)                                             /* STEP 8 */
+            mutation_observer_insertion_record(ctx, s->node, s->parent, s->prev, s->child);
         hdr->stage = base + NODE_INSERT_PHASE_CHANGED;
         return JS_STEP_YIELD;
 

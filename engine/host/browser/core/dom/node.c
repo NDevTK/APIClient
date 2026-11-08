@@ -49,6 +49,7 @@
 #include "solver/attr_shadow.h"
 #include "core/agent_state.h"
 #include "core/dom/mutation_observer.h"
+#include "core/dom/mutation_record.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
 #include "core/dom/slot.h"
@@ -1440,7 +1441,7 @@ static int js_node_pre_insert(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
             hdr->stage = PI_RETURN;
             return JS_STEP_YIELD;
         }
-        node_insert_start(hdr, s, node, parent, child, PI_RANGES, PI_RETURN);                   /* STEP 4 */
+        node_insert_start(hdr, s, node, parent, child, false, PI_RANGES, PI_RETURN);                   /* STEP 4 */
         return JS_STEP_YIELD;
     }
 
@@ -1513,7 +1514,7 @@ static int js_node_remove_child(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             JS_ThrowDOMException(ctx, "NotFoundError", "the node to remove is not a child of this node");
             return JS_STEP_ABRUPT;
         }
-        node_remove_start(hdr, s, child, RC_RANGES, RC_RETURN);
+        node_remove_start(hdr, s, child, false, RC_RANGES, RC_RETURN);
         return JS_STEP_YIELD;
     }
 
@@ -5340,62 +5341,182 @@ static const IdlStepDecl NODE_TEXT_STEP = {
     "DOM §4.4 Node.textContent getter (over `get text content`)", NODE_TEXT_STEPS
 };
 
-static JSValue js_node_set_text_content(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+/* §4.4 textContent's SETTER: a CharacterData node runs "replace data", an Element or DocumentFragment runs "string
+   replace all" (DOM §4.2.3), and any other node does nothing. Replace all removes each child through
+   core/dom/node_remove.h's machine and inserts the Text node through core/dom/node_insert.h's, both with
+   suppressObservers, then queues its one record; its stages forbid script, so a `<script>`'s children changed
+   steps run their post-connection steps once the record is queued. */
+#define NODE_TEXT_SET_STAGES(X) \
+    X(TCS_START,  "DOM §4.4 textContent setter (the switch on this; DOM §4.2.3 string replace all steps 1-2; " \
+                  "replace all steps 1-4)") \
+    NODE_REMOVE_ALGO_STAGES(X, TCS_RM, "DOM §4.2.3 replace all step 5 (remove parent's first child, with " \
+                                       "suppressObservers)") \
+    X(TCS_NEXT,   "DOM §4.2.3 replace all step 5 (whether parent has a child left to remove)") \
+    NODE_INSERT_ALGO_STAGES(X, TCS_IN, "DOM §4.2.3 replace all step 6 (insert node, with suppressObservers)") \
+    X(TCS_RECORD, "DOM §4.2.3 replace all step 7 (the tree mutation record)") \
+    X(TCS_DONE,   "DOM §4.4 textContent setter (replace all is done)")
+enum { IDL_STEP_STAGE_BASE(NODE_TEXT_SET_STAGES) NODE_TEXT_SET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NODE_TEXT_SET_STEPS[] = { NODE_TEXT_SET_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    NodeRemoveState rm;
+    NodeInsertState in;
+    lxb_dom_node_t *parent, *text;   /* replace all's parent and node (NULL for the empty string) */
+    JSValue removed;                 /* step 1's removedNodes as wrappers, while an observer exists; owned */
+    uint32_t nremoved;
+    uint8_t observed;                /* a mutation observer exists, so step 7 may have a record to queue */
+} NodeTextSetState;
+
+static void node_text_set_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    lxb_dom_node_t *n = node_of(this_val), *node, *next;
-    lxb_dom_text_t *text;
-    const char *str;
-    size_t len = 0;
-    bool owned_cstr = false;
+    NodeTextSetState *s = st;
 
-    (void)magic;
-    if (!n) return JS_UNDEFINED;
-    if (node_is_chardata(n))
-        return js_cd_set_data(ctx, this_val, val, 1);   /* §4.4 CharacterData: "replace data" */
-    if (!node_has_children_as_text(n))
-        return JS_UNDEFINED;                            /* §4.4 "otherwise: do nothing" */
-
-    if (n->type == LXB_DOM_NODE_TYPE_ELEMENT)
-        dom_cow_set_prop_taint(ctx, lxb_dom_interface_element(n), "textContent",
-                               concolic_is(val) ? val : JS_UNDEFINED);
-
-    if (JS_IsNull(val)) {
-        str = "";                     /* `DOMString?`: null is the empty string for "string replace all" */
-    } else if (concolic_is(val)) {
-        /* Unknown external input has no bytes: the SHAPE is what the Text node carries while the shadow above
-           carries the value. */
-        str = concolic_shape_c(val);
-        if (!str) str = "";
-        len = strlen(str);
-    } else {
-        DCHECK(JS_IsString(val), "textContent= reached the body unconverted — the IDL declaration is what "
-                                 "converts it, and running the page's toString from here is the "
-                                 "drive-to-completion the flow machinery exists to avoid");
-        str = JS_ToCStringLen(ctx, &len, val);
-        if (!str) return JS_EXCEPTION;
-        owned_cstr = true;
-    }
-
-    /* §4.4 "string replace all": every child goes — through the per-flow chokepoint, so a forked arm that sets
-       different text reads back its own — and then ONE Text node, ONLY IF the string is not empty. Appending an
-       empty Text node unconditionally gave `el.textContent = ""` a child the spec says it has none of, which a
-       page checking `firstChild` or `childNodes.length` reads as a tree it never built. */
-    for (node = n->first_child; node; node = next) {
-        next = node->next;
-        dom_cow_remove_child(node);
-    }
-    if (len) {
-        text = lxb_dom_document_create_text_node(n->owner_document, (const lxb_char_t *)str, len);
-        DCHECK(text != NULL, "textContent= produced no Text node — the page's text would silently not be there");
-        if (text) {
-            dom_cow_note_created(lxb_dom_interface_node(text));   /* this flow made it: the delta owns it */
-            dom_cow_append_child(n, lxb_dom_interface_node(text));
-        }
-    }
-    if (owned_cstr)
-        JS_FreeCString(ctx, str);
-    return JS_UNDEFINED;
+    v->val(ctx, &s->removed);
 }
+
+static const char *node_text_set_script_forbidden(int stage, const void *st)
+{
+    (void)st;
+    if (stage >= TCS_RM_RANGES && stage <= TCS_RECORD)
+        return "DOM §4.2.3 replace all runs no page code between its steps 5 and 7, and the children changed "
+               "steps' post-connection steps run only once its record is queued";
+    return NULL;
+}
+
+/* Replace all step 5's next removal, or step 6 when parent has no child left. */
+static int node_text_set_next(JSContext *ctx, JSStepHdr *hdr, NodeTextSetState *s)
+{
+    lxb_dom_node_t *c = s->parent->first_child;
+
+    if (c) {
+        if (s->observed) {
+            JSValue w = node_wrap(ctx, c);
+
+            CHECK(!JS_IsException(w), "replace all's removedNodes could not wrap a child");
+            JS_SetPropertyUint32(ctx, s->removed, s->nremoved++, w);
+        }
+        node_remove_start(hdr, &s->rm, c, /*suppress_observers*/ true, TCS_RM_RANGES, TCS_NEXT);
+        return JS_STEP_YIELD;
+    }
+    if (s->text) {
+        node_insert_start(hdr, &s->in, s->text, s->parent, NULL, /*suppress_observers*/ true, TCS_IN_RANGES,
+                          TCS_RECORD);
+        return JS_STEP_YIELD;
+    }
+    hdr->stage = TCS_RECORD;
+    return JS_STEP_YIELD;
+}
+
+static int js_node_set_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                    JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeTextSetState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    STEP_DISPATCH(NODE_TEXT_SET_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(TCS_START);
+    {
+        lxb_dom_node_t *n = node_of(hdr->this_val);
+        JSValueConst val;
+        const char *str;
+        size_t len = 0;
+        bool owned_cstr = false;
+
+        s->removed = JS_UNDEFINED;
+        if (!n) return JS_STEP_DONE;
+        DCHECK(argc == 1, "textContent= reached its body without the value its declaration converts");
+        val = argv[0];
+        if (node_is_chardata(n)) {                       /* §4.4 CharacterData: "replace data" */
+            JSValue r = js_cd_set_data(ctx, hdr->this_val, val, 1);
+
+            if (JS_IsException(r)) return JS_STEP_ABRUPT;
+            JS_FreeValue(ctx, r);
+            return JS_STEP_DONE;
+        }
+        if (!node_has_children_as_text(n)) return JS_STEP_DONE;   /* §4.4 "otherwise: do nothing" */
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT)
+            dom_cow_set_prop_taint(ctx, lxb_dom_interface_element(n), "textContent",
+                                   concolic_is(val) ? val : JS_UNDEFINED);
+        if (JS_IsNull(val)) {
+            str = "";                 /* `DOMString?`: null is the empty string for "string replace all" */
+        } else if (concolic_is(val)) {
+            /* Unknown external input has no bytes: the SHAPE is what the Text node carries while the shadow above
+               carries the value. */
+            str = concolic_shape_c(val);
+            if (!str) str = "";
+            len = strlen(str);
+        } else {
+            DCHECK(JS_IsString(val), "textContent= reached the body unconverted — the IDL declaration is what "
+                                     "converts it, and running the page's toString from here is the "
+                                     "drive-to-completion the flow machinery exists to avoid");
+            str = JS_ToCStringLen(ctx, &len, val);
+            if (!str) return JS_STEP_ABRUPT;
+            owned_cstr = true;
+        }
+        s->parent = n;
+        if (len) {                                       /* string replace all STEP 2 */
+            lxb_dom_text_t *text = lxb_dom_document_create_text_node(n->owner_document, (const lxb_char_t *)str,
+                                                                     len);
+
+            CHECK(text != NULL, "textContent= could not create its Text node");
+            s->text = lxb_dom_interface_node(text);
+            dom_cow_note_created(s->text);               /* this flow made it: the delta owns it */
+        }
+        if (owned_cstr) JS_FreeCString(ctx, str);
+        s->observed = mutation_observer_any();           /* replace all STEPS 1-4 */
+        if (s->observed) {
+            s->removed = JS_NewArray(ctx);
+            CHECK(!JS_IsException(s->removed), "replace all's removedNodes could not be allocated");
+        }
+        return node_text_set_next(ctx, hdr, s);
+    }
+
+    STEP_ARM(TCS_NEXT);
+    return node_text_set_next(ctx, hdr, s);
+
+    STEP_ARM(TCS_RECORD);
+    if (s->observed && (s->text || s->nremoved)) {      /* STEP 7 */
+        JSValue added = JS_UNDEFINED;
+
+        if (s->text) {
+            added = JS_NewArray(ctx);
+            CHECK(!JS_IsException(added), "replace all's addedNodes could not be allocated");
+            JS_SetPropertyUint32(ctx, added, 0, node_wrap(ctx, s->text));
+        }
+        mutation_observer_queue_record(ctx, MR_TYPE_CHILD_LIST, s->parent, NULL, NULL, NULL, 0, added,
+                                       s->nremoved ? s->removed : JS_UNDEFINED, NULL, NULL);
+        JS_FreeValue(ctx, added);
+    }
+    JS_FreeValue(ctx, s->removed);
+    s->removed = JS_UNDEFINED;
+    hdr->stage = TCS_DONE;
+    return JS_STEP_YIELD;
+
+    STEP_ARM(TCS_DONE);
+    return JS_STEP_DONE;
+
+    STEP_ARM(TCS_RM_RANGES); STEP_ARM(TCS_RM_ITERATORS); STEP_ARM(TCS_RM_DETACH); STEP_ARM(TCS_RM_ASSIGNED);
+    STEP_ARM(TCS_RM_SLOT_FIND); STEP_ARM(TCS_RM_SLOT_PARENT_TREE); STEP_ARM(TCS_RM_SLOT_NODE_TREE);
+    STEP_ARM(TCS_RM_ROOT); STEP_ARM(TCS_RM_DESCENDANTS); STEP_ARM(TCS_RM_RECORD); STEP_ARM(TCS_RM_CHANGED);
+    return node_remove_run(ctx, hdr, &s->rm, TCS_RM_RANGES);
+
+    STEP_ARM(TCS_IN_RANGES); STEP_ARM(TCS_IN_RM_RANGES); STEP_ARM(TCS_IN_RM_ITERATORS); STEP_ARM(TCS_IN_RM_DETACH);
+    STEP_ARM(TCS_IN_RM_ASSIGNED); STEP_ARM(TCS_IN_RM_SLOT_FIND); STEP_ARM(TCS_IN_RM_SLOT_PARENT_TREE);
+    STEP_ARM(TCS_IN_RM_SLOT_NODE_TREE); STEP_ARM(TCS_IN_RM_ROOT); STEP_ARM(TCS_IN_RM_DESCENDANTS);
+    STEP_ARM(TCS_IN_RM_RECORD); STEP_ARM(TCS_IN_RM_CHANGED); STEP_ARM(TCS_IN_ADOPT); STEP_ARM(TCS_IN_LINK);
+    STEP_ARM(TCS_IN_INDEX); STEP_ARM(TCS_IN_ASSIGNED); STEP_ARM(TCS_IN_SLOT_TREE); STEP_ARM(TCS_IN_DESCENDANTS);
+    STEP_ARM(TCS_IN_RECORD); STEP_ARM(TCS_IN_CHANGED);
+    return node_insert_run(ctx, hdr, &s->in, TCS_IN_RANGES);
+}
+
+static const IdlStepDecl NODE_TEXT_SET_STEP = {
+    js_node_set_text_content, sizeof(NodeTextSetState), node_text_set_visit, NULL,
+    "DOM §4.4 Node.textContent setter (over §4.2.3 string replace all)", NODE_TEXT_SET_STEPS,
+    .script_forbidden = node_text_set_script_forbidden
+};
 
 static const JSCFunctionListEntry js_chardata_base[] = {
     JS_CGETSET_DEF("length", js_cd_get_length, NULL),
@@ -6012,7 +6133,7 @@ void node_init(JSContext *ctx)
 
     /* `attribute DOMString? nodeValue` and `attribute DOMString? textContent` — both Node members. */
     g_id_nodevalue = idl_setter_id(ctx, IDL_DOMSTRING_NULLABLE, false, js_cd_set_data, 1);
-    g_id_textcontent = idl_setter_id(ctx, IDL_DOMSTRING_NULLABLE, false, js_node_set_text_content, 0);
+    g_id_textcontent = idl_setter_id_step(ctx, IDL_DOMSTRING_NULLABLE, false, &NODE_TEXT_SET_STEP, 0);
     g_id_textcontent_get = idl_getter_id_step(ctx, &NODE_TEXT_STEP, 0);
     /* `attribute [LegacyNullToEmptyString] DOMString data` — the extended attribute is part of the TYPE, so the
        body never sees a null and never has to remember the rule. */

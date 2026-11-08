@@ -46,11 +46,14 @@ typedef struct NodeRemoveState {
     int after;
     uint8_t parent_connected;              /* step 12's isParentConnected */
     uint8_t realm_steps;                   /* parent's document has a realm, so the removing steps HTML defines run */
+    uint8_t suppress_observers;            /* remove's suppressObservers: step 16 queues no record */
 } NodeRemoveState;
 
-/* Begin removing `node` from its parent; the caller's next entry is at `base`. Asserts node has a parent:
-   §4.2.3 remove step 2, which every caller's own steps establish. */
-void node_remove_start(JSStepHdr *hdr, NodeRemoveState *s, lxb_dom_node_t *node, int base, int after);
+/* Begin removing `node` from its parent, with remove's suppressObservers; the caller's next entry is at `base`.
+   Asserts node has a parent: §4.2.3 remove step 2, which every caller's own steps establish. `s` is zeroed or
+   holds a finished removal. */
+void node_remove_start(JSStepHdr *hdr, NodeRemoveState *s, lxb_dom_node_t *node, bool suppress_observers,
+                       int base, int after);
 /* One stage of the removal; JS_STEP_YIELD at every rest, with hdr->stage at `after` once it is done. It makes
    no request and cannot throw. */
 int node_remove_run(JSContext *ctx, JSStepHdr *hdr, NodeRemoveState *s, int base);

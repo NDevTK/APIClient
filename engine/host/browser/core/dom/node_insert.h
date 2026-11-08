@@ -46,13 +46,14 @@ typedef struct NodeInsertState {
     int after;
     uint8_t connected;                      /* node is connected after steps 7.2-7.3 (step 7.7.2) */
     uint8_t realm_steps;                    /* ...in a document with a realm, so HTML's insertion steps run */
+    uint8_t suppress_observers;             /* insert's suppressObservers: step 8 queues no record */
 } NodeInsertState;
 
-/* Begin inserting `node` into `parent` before `child` (NULL: append); the caller's next entry is at `base`.
-   Asserts pre-insert's steps 1-3 ran: node is not a DocumentFragment, child is NULL or parent's child and is not
-   node. */
+/* Begin inserting `node` into `parent` before `child` (NULL: append), with insert's suppressObservers; the
+   caller's next entry is at `base`. Asserts pre-insert's steps 1-3 ran: node is not a DocumentFragment, child is
+   NULL or parent's child and is not node. */
 void node_insert_start(JSStepHdr *hdr, NodeInsertState *s, lxb_dom_node_t *node, lxb_dom_node_t *parent,
-                       lxb_dom_node_t *child, int base, int after);
+                       lxb_dom_node_t *child, bool suppress_observers, int base, int after);
 /* One stage of the insert; JS_STEP_YIELD at every rest, with hdr->stage at `after` once step 9 is done. It makes
    no request and cannot throw. */
 int node_insert_run(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, int base);
