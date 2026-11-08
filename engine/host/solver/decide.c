@@ -317,10 +317,8 @@ static DecSeg *dec_seg_alloc(int n) {
  * dropping this flow's reference, and stays alive for siblings standing on it. The head is empty by
  * construction (a slot is appended only by the forking branch, which leaves the cursor at the end); asserted,
  * because zeroing it would discard decisions this flow made. */
+static void dec_cut_at_cursor(void);
 static void dec_leave_path(void) {
-    DecSeg *old = g_dec_base, *s, *ns;
-    int n;
-
     DCHECK(g_c < dec_total(),
            "a flow was taken off its recorded path while the cursor was already at the end of it — there is "
            "nothing above the cursor to leave behind, so this call is about a divergence that did not happen");
@@ -334,6 +332,16 @@ static void dec_leave_path(void) {
     g_replay_left++;
     g_replay_left_arms += dec_total() - g_c;
     flow_priced_truncate(g_c);   /* the slots above the cursor are no longer this flow's */
+    dec_cut_at_cursor();
+}
+
+/* End the chain at the cursor: freeze the surviving prefix as dec_leave_path's comment says, and release this
+   flow's reference on the tail. Requires the cursor inside the frozen chain with an empty head. */
+static void dec_cut_at_cursor(void) {
+    DecSeg *old = g_dec_base, *s, *ns;
+    int n;
+
+    DCHECK(g_dec_n == 0 && g_c < g_dec_below, "a chain was cut at a cursor that is not inside its frozen part");
     if (g_c == 0) {                      /* the very first branch disagreed: this flow stands on nothing */
         g_dec_base = NULL; g_dec_below = 0;
         dec_seg_unref(old);
@@ -1363,6 +1371,53 @@ int decide_value_arm(JSValueConst cond)
     return arm < 0 ? arm : (arm ^ concolic_branch_neg(cond));
 }
 
+/* An arrival takes its recorded slot whenever it lands. When the slot at the cursor is an arrival that has not
+   landed and `asked` is recorded just past a run of such arrivals, move that slot to the cursor ahead of them, so
+   they stay owed in their recorded order and the asked slot is consumed next. Returns 0, changing nothing, when a
+   question of the program's own stands between (that is a divergence). The tail is copied once into a segment of
+   this flow's own over the prefix, as dec_leave_path copies. Priced slots are noted only once consumed, so none
+   stands at or above the cursor to move. */
+static int dec_slide_arrivals(uint32_t asked) {
+    int total = dec_total(), n = total - g_c, i, j, at, res = 1;
+    uint32_t *k;
+    signed char *e;
+    const DecSeg *t;
+    DecSeg *s;
+
+    for (i = g_c; i < total; i++) {
+        uint32_t ki;
+
+        (void)dec_at(i, &ki);
+        if (ki == asked) break;
+        if (!dec_key_is_arrival(ki)) return 0;
+    }
+    if (i == total) return 0;
+    DCHECK(i > g_c && g_dec_n == 0 && g_c < g_dec_below,
+           "an arrival slide was asked with the asked slot at the cursor, or with the cursor in the head");
+    k = reclaim_malloc((size_t)n * sizeof *k);
+    e = reclaim_malloc((size_t)n);
+    CHECK(k != NULL && e != NULL, "decide: OOM copying a recorded tail to move an arrival");
+    for (j = g_c, at = 1; j < total; j++) {
+        int o = j == i ? 0 : at++;
+
+        e[o] = (signed char)dec_at(j, &k[o]);
+        for (t = g_dec_base; t; t = t->base)
+            if (j >= t->below) { res &= t->residue; break; }
+    }
+    dec_cut_at_cursor();
+    s = dec_seg_alloc(n);
+    memcpy(s->e, e, (size_t)n);
+    memcpy(s->k, k, (size_t)n * sizeof *k);
+    free(k); free(e);
+    s->below = g_c;
+    s->base = g_dec_base;   /* takes the running flow's reference on the prefix */
+    s->residue = res;       /* every slot came from the park document, or the segment claims none did */
+    s->refcount = 1;
+    g_dec_base = s;
+    g_dec_below = g_c + n;
+    return 1;
+}
+
 /* The recorded arm at the cursor, or -1 when the slot there answers a different question, in one descent of the
    chain. The cursor moves only on a match, so a caller that gets -1 stands at the divergence and dec_leave_path
    can end the vector there. */
@@ -1373,7 +1428,11 @@ static int dec_replay(uint32_t asked) {
     DCHECK(g_c < dec_total(), "the recorded arm was asked for from past the end of the vector — there is no "
                               "slot there to answer with");
     arm = dec_at(g_c, &recorded) ? 1 : 0;
-    if (recorded != asked) return -1;
+    if (recorded != asked) {
+        if (!dec_key_is_arrival(recorded) || !dec_slide_arrivals(asked)) return -1;
+        arm = dec_at(g_c, &recorded) ? 1 : 0;
+        DCHECK(recorded == asked, "an arrival slide put a slot at the cursor that does not answer the question asked");
+    }
     g_c++;
     /* Counted here, past the key comparison, because an arm consumed is exactly an arm whose recorded question the
        branch re-asked; above the comparison it would count attempts, which a divergence also is. dec_append
