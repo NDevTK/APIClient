@@ -5531,6 +5531,81 @@ static void wasm_code_text(const WasmModule *m, char *buf, size_t cap)
     }
 }
 
+/* §5.5.7-§5.5.16's records as fixture/wasm_binary.h renders them; an expr is `<offset>+<size>` of the decoded
+   bytes and a name is quoted from them. */
+static void wasm_expr_text(char *buf, size_t cap, size_t *at, const WasmExpr *e)
+{
+    wasm_text_put(buf, cap, at, "%zu+%zu", e->offset, e->size);
+}
+
+static void wasm_segment_text(const WasmModule *m, const uint8_t *bytes, char *buf, size_t cap)
+{
+    static const char *const MODE[] = { "active", "passive", "declarative" };
+    static const char *const KIND[] = { "func", "table", "memory", "global", "tag" };
+    size_t at = 0, i, k;
+
+    buf[0] = '\0';
+    wasm_text_put(buf, cap, &at, "tables[");
+    for (i = 0; i < m->n_tables; i++) {
+        wasm_text_put(buf, cap, &at, i ? ";" : "");
+        wasm_val_text(buf, cap, &at, &m->tables[i].type);
+        wasm_text_put(buf, cap, &at, " ");
+        wasm_limits_text(buf, cap, &at, &m->tables[i].limits);
+        if (m->tables[i].has_init) {
+            wasm_text_put(buf, cap, &at, " init ");
+            wasm_expr_text(buf, cap, &at, &m->tables[i].init);
+        }
+    }
+    wasm_text_put(buf, cap, &at, "] memories[");
+    for (i = 0; i < m->n_memories; i++) {
+        wasm_text_put(buf, cap, &at, i ? "," : "");
+        wasm_limits_text(buf, cap, &at, &m->memories[i]);
+    }
+    wasm_text_put(buf, cap, &at, "] tags[");
+    for (i = 0; i < m->n_tags; i++) wasm_text_put(buf, cap, &at, "%s%u", i ? "," : "", (unsigned)m->tags[i]);
+    if (m->has_start) wasm_text_put(buf, cap, &at, "] start %u exports[", (unsigned)m->start);
+    else wasm_text_put(buf, cap, &at, "] start none exports[");
+    for (i = 0; i < m->n_exports; i++) {
+        const WasmExport *e = &m->exports[i];
+
+        CHECK(e->kind <= WASM_EXTERN_TAG, "a decoded export has a kind module_decoder.h does not produce");
+        wasm_text_put(buf, cap, &at, "%s\"%.*s\" %s %u", i ? "," : "", (int)e->name_size,
+                      (const char *)bytes + e->name_offset, KIND[e->kind], (unsigned)e->index);
+    }
+    wasm_text_put(buf, cap, &at, "] elems[");
+    for (i = 0; i < m->n_elems; i++) {
+        const WasmElem *e = &m->elems[i];
+
+        wasm_text_put(buf, cap, &at, "%s%s ", i ? ";" : "", MODE[e->mode]);
+        if (e->mode == WASM_SEGMENT_ACTIVE) {
+            wasm_text_put(buf, cap, &at, "%u ", (unsigned)e->table);
+            wasm_expr_text(buf, cap, &at, &e->offset);
+            wasm_text_put(buf, cap, &at, " ");
+        }
+        wasm_val_text(buf, cap, &at, &e->type);
+        wasm_text_put(buf, cap, &at, e->exprs ? " exprs(" : " funcs(");
+        for (k = 0; k < e->n_items; k++) {
+            wasm_text_put(buf, cap, &at, k ? "," : "");
+            if (e->exprs) wasm_expr_text(buf, cap, &at, &m->elem_exprs[e->items + k]);
+            else wasm_text_put(buf, cap, &at, "%u", (unsigned)m->elem_funcs[e->items + k]);
+        }
+        wasm_text_put(buf, cap, &at, ")");
+    }
+    wasm_text_put(buf, cap, &at, "] datas[");
+    for (i = 0; i < m->n_datas; i++) {
+        const WasmData *s = &m->datas[i];
+
+        wasm_text_put(buf, cap, &at, "%s%s ", i ? ";" : "", MODE[s->mode]);
+        if (s->mode == WASM_SEGMENT_ACTIVE) {
+            wasm_text_put(buf, cap, &at, "%u ", (unsigned)s->memory);
+            wasm_expr_text(buf, cap, &at, &s->offset);
+            wasm_text_put(buf, cap, &at, " ");
+        }
+        wasm_text_put(buf, cap, &at, "bytes %zu+%zu", s->bytes_offset, s->bytes_size);
+    }
+    wasm_text_put(buf, cap, &at, "]");
+}
+
 TF_UNIT void wasm_module_decoder_selftest(void)
 {
     enum { NR = sizeof WASM_BINARY_ROWS / sizeof WASM_BINARY_ROWS[0],
@@ -5574,6 +5649,26 @@ TF_UNIT void wasm_module_decoder_selftest(void)
         wasm_type_text(wasm_module_decoder_module(&d), text, sizeof text);
         CHECKF(strcmp(text, row->text) == 0, "the WebAssembly module %s decoded its types as \"%s\"; they are "
                                               "\"%s\"", row->src, text, row->text);
+        wasm_module_decoder_free(&d);
+    }
+    for (i = 0; i < COUNTOF(WASM_SEGMENT_MALFORMED_ROWS); i++) {
+        const WasmBinaryRow *row = &WASM_SEGMENT_MALFORMED_ROWS[i];
+        WasmModuleDecoder d;
+
+        wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
+        wasm_binary_check(row->src, row->expect, &d, wasm_module_decoder_run(&d));
+        wasm_module_decoder_free(&d);
+    }
+    for (i = 0; i < COUNTOF(WASM_SEGMENT_ROWS); i++) {
+        const WasmTextRow *row = &WASM_SEGMENT_ROWS[i];
+        static char text[4096];
+        WasmModuleDecoder d;
+
+        wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
+        wasm_binary_check(row->src, NULL, &d, wasm_module_decoder_run(&d));
+        wasm_segment_text(wasm_module_decoder_module(&d), (const uint8_t *)row->bytes, text, sizeof text);
+        CHECKF(strcmp(text, row->text) == 0, "the WebAssembly module %s decoded its segments as \"%s\"; they "
+                                              "are \"%s\"", row->src, text, row->text);
         wasm_module_decoder_free(&d);
     }
     for (i = 0; i < COUNTOF(WASM_CODE_MALFORMED_ROWS); i++) {
