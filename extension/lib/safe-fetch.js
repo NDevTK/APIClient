@@ -1972,8 +1972,9 @@ function _exposedUrlList(urlList) {
    Chunks may come from another realm (`engine/trusted.mjs` runs this file in a vm context with the outer
    `fetch`), so they are never `instanceof`-tested; `%TypedArray%.prototype.set` reads internal slots and
    accumulates them whatever their realm.
-   `onRead` is told of each read the wire answered, with no bytes, so a host can place the read on its reply
-   schedule (lib/reply-schedule.js); having no bytes, it passes no gate and a body-gated request may state it. */
+   `onRead` is told the byte length of each read the wire answered, so a host can count the body onto its reply
+   schedule (lib/reply-schedule.js); a length carries no bytes, so it passes no gate and a body-gated request
+   may state it. */
 async function _readBody(resp, sink, gated, onRead) {
   /* The entry refuses a body-gated request that asked for chunks, so this cannot fire through it; it is here
      so a later route that skips that refusal aborts at the release point instead of streaming. */
@@ -2016,7 +2017,7 @@ async function _readBody(resp, sink, gated, onRead) {
     /* Released before it is accumulated, because timeliness is what a sink is for. Accumulation continues
        either way, so every gate below reads the same record whether or not a sink was stated. */
     if (sink !== undefined) sink(chunk);
-    if (onRead !== undefined) onRead();
+    if (onRead !== undefined) onRead(chunk.byteLength);
     parts.push(chunk);
     total += chunk.byteLength;
   }

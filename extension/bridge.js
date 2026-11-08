@@ -4492,7 +4492,7 @@ function pendingLineRefusal(f) {
 }
 /* The door every send is issued through without waiting: its answer is due a latency of engine work later
    (lib/reply-schedule.js), so the engine runs on while the wire answers, and the round at whose work it falls
-   due waits for it. Each body read the wire answers is a record of its own, due a latency after the one before
+   due waits for it. Each fixed byte range of the body is a record of its own, due a latency after the one before
    (replyStream*), so a body that keeps arriving holds its instance only at each record's due point, and one its
    server holds silent ends at the wire's idle end (safe-fetch.js's WIRE_IDLE_TIMEOUT_MS) as a decline.
    The shape is engine/host/wpt_runner.c's `g_inflight` table (`wpt_issue_pending` issues without waiting;
@@ -4518,8 +4518,8 @@ function engineIssue(eng, key, start, deliver, pair) {
      sees it in flight. `controller` ends the send when the engine says no flow is owed it (engineCancel).
      `due` and `ordinal` are its place in the delivery order (lib/reply-schedule.js): the round that issues it
      has read the instance's work, so its first record is due a latency after that read. */
-  /* A `fetch()` park (`pair`) is streamed: its head and each read are records the engine takes as they fall
-     due (engineDeliverStreamRecord), under the `stream` token minted here. */
+  /* A `fetch()` park (`pair`) is streamed: its head and each body record are records the engine takes as they
+     fall due (engineDeliverStreamRecord), under the `stream` token minted here. */
   const rec = replyStreamOpen({ key, value: undefined, error: null, work: null, deliver,
                                 controller: new AbortController(), cancelled: false,
                                 due: replyClockDue(eng._replyClock), ordinal: replyClockOrdinal(eng._replyClock),
@@ -4529,9 +4529,9 @@ function engineIssue(eng, key, start, deliver, pair) {
   /* A read the wire answers after the send was cancelled belongs to no record. The record's key moves once its
      head is provided, so the test reads it off the record. */
   const live = () => eng._inflight.get(rec.key) === rec;
-  const onBodyRead = () => { if (live()) replyStreamRead(rec); };
+  const onBodyRead = (length) => { if (live()) replyStreamRead(rec, length); };
   const onHead = (h) => { if (live()) rec.head = h; };
-  const onChunk = (c) => { if (live()) { rec.chunks.push(new Uint8Array(c)); replyStreamRead(rec); } };
+  const onChunk = (c) => { if (live()) { rec.chunks.push(new Uint8Array(c)); replyStreamRead(rec, c.byteLength); } };
   /* `work` never rejects; the error is carried and rethrown at delivery inside the round, so an invariant abort
      out of `eng.fetched` still reaches hostSchedule's failure arm and there is no unhandled rejection. */
   rec.work = start(rec.controller.signal, rec.stream === null ? onBodyRead : undefined,
@@ -4636,10 +4636,10 @@ function engineStreamEnd(value) {
   return { state: "end", meta: value.meta.computedType };
 }
 /* One record of a streamed send, through `Provide` (record 1: the head, carrying the `stream` token, with the
-   first read) and `ProvideBody` (every later read, and the end). The head is the chokepoint's (`onHead`):
+   first record's bytes) and `ProvideBody` (every later record, and the end). The head is the chokepoint's (`onHead`):
    status, status message, header map, URL list and filtered-response type, every field asserted here. */
 async function engineDeliverStreamRecord(eng, rec, last) {
-  const k = rec.record, piece = rec.chunks[k - 1] === undefined ? new Uint8Array(0) : rec.chunks[k - 1];
+  const k = rec.record, piece = replyStreamPiece(rec, rec.chunks);
   const end = last ? engineStreamEnd(rec.value) : null;
   if (k === 1) {
     const h = rec.head;

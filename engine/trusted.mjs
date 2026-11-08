@@ -992,11 +992,11 @@ async function main() {
     entry.rec = rec;
     ZONE.replyStreamSettle(entry);
   };
-  /* A body read the wire answered for a send (safeFetch's `onBodyRead`): it may land the record a stalled
-     instance's clock waits at. */
-  const bodyRead = (e, entry) => () => {
+  /* A body read of `length` bytes the wire answered for a send (safeFetch's `onBodyRead`): it may land the
+     record a stalled instance's clock waits at. */
+  const bodyRead = (e, entry) => (length) => {
     if (e.owed.get(entry.key) !== entry) return;
-    ZONE.replyStreamRead(entry);
+    ZONE.replyStreamRead(entry, length);
     flush();
   };
   /* A piece of a streamed send's body (safeFetch's `onChunk`): kept for the record it belongs to, and the read
@@ -1004,19 +1004,20 @@ async function main() {
   const bodyChunk = (e, entry) => (chunk) => {
     if (e.owed.get(entry.key) !== entry) return;
     entry.chunks.push(Buffer.from(chunk));
-    ZONE.replyStreamRead(entry);
+    ZONE.replyStreamRead(entry, chunk.byteLength);
     flush();
   };
   /* Whether every record of `x` due at `e`'s clock has landed: a streamed entry writes each of them in turn. */
   const landedNow = (e, x) => x.stream === null ? ZONE.replyStreamLanded(x)
                                                 : ZONE.replyStreamDueLanded(x, ZONE.replyClockNow(e.clock));
   /* A streamed send's record now owed, as the lines that write it (solver/reply_body.h). Record 1 is the head
-     with the first read: a `provide` whose reply carries the `stream` token, or the whole answer when it is also
-     the last and the body ended normally (or no head arrived). Each later record is a `body` line with that
-     read's bytes, the last stating how the body ended. */
+     with the first record's bytes: a `provide` whose reply carries the `stream` token, or the whole answer when
+     it is also the last and the body ended normally (or no head arrived). Each later record is a `body` line
+     with that record's bytes (ZONE.replyStreamPiece), the last stating how the body ended. */
   const streamLines = (x) => {
     const last = ZONE.replyStreamLast(x), k = x.record;
-    const piece = x.chunks[k - 1] === undefined ? '' : b64(x.chunks[k - 1]);
+    const bytes = ZONE.replyStreamPiece(x, x.chunks);
+    const piece = b64(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
     const endMeta = () => b64(x.end.state === 'end' ? x.end.computedType : x.end.reason);
     if (last && x.end === null)
       throw new Error(`the streamed send \`${x.key}\` settled with no end state — workFetch states one with ` +
@@ -1426,7 +1427,7 @@ async function main() {
     /* `useCorsPreflight: false`: Fetch §5.4 "Request class" sets that flag only for a ReadableStream body,
        which a GET cannot carry. */
     /* A `fetch()` (the empty destination; the engine's line states it only when every park on the pair is
-       one) is streamed: its engine resolves at the head and reads the body as each read's record is due
+       one) is streamed: its engine resolves at the head and reads the body as each of its records is due
        (`streamLines`). Every other destination's algorithm consumes the body whole. */
     const entry = send.entry;
     if (destination === '') {
