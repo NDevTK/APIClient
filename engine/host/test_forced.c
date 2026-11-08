@@ -1736,6 +1736,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/closureflag.h"
 #include "fixture/tworoot.h"
 #include "fixture/msgimgload.h"
+#include "fixture/getiterfork.h"
 #include "fixture/xwinfwd.h"
 #include "fixture/msgprefix.h"
 #include "fixture/prefixjoin.h"
@@ -2531,6 +2532,7 @@ TF_DOCS[] = {
     { "slicelen", HTML_SLICELEN },
     { "strsearch", HTML_STRSEARCH },
     { "rxsearch", HTML_RXSEARCH },
+    { "getiterfork", HTML_GETITERFORK },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -20431,6 +20433,24 @@ TF_UNIT void probes_slicelen(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `getiterfork` document (fixture/getiterfork.h): each arm of the branch inside the @@iterator
+   body, which runs as GetIteratorFromMethod's call while Array.from waits on it, reaches its own fetch. */
+TF_UNIT void probes_getiterfork(const char *js, Probe *tab, int *n) {
+    const char *ga_why = NULL, *gp_why = NULL;
+    int ga_tt = 1, gp_tt = 1;
+    fold_row(&ga_tt, &ga_why, param_value_is(js, "/api/gif", "v", "gifA"),
+             "NOT REACHED: no /api/gif record carries v=gifA, so the arm of gifIter where the fragment is '#gif' "
+             "never returned its iterator to Array.from");
+    fold_row(&gp_tt, &gp_why, param_value_is(js, "/api/gif", "v", "gifP"),
+             "NOT REACHED: no /api/gif record carries v=gifP, so the arm of gifIter where the fragment is not '#gif' "
+             "never returned its iterator to Array.from");
+    const Probe rows[] = {
+        { "gif-arm-hash", ga_tt, "gifIter", SESS_EXPLORE, ga_why },
+        { "gif-arm-plain", gp_tt, "gifIter", SESS_EXPLORE, gp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `uriclass` document (fixture/uriclass.h): an encoded unknown holds only the units Encode
    produces, so a RegExp over a unit outside them is decided, and one over a unit inside them forks. */
 TF_UNIT void probes_uriclass(const char *js, Probe *tab, int *n) {
@@ -29724,6 +29744,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_closureflag(js, probes, &np);
     probes_tworoot(js, probes, &np);
     probes_msgimgload(js, probes, &np);
+    probes_getiterfork(js, probes, &np);
     probes_xwinfwd(js, probes, &np);
     probes_msgprefix(js, probes, &np);
     probes_prefixjoin(js, probes, &np);
