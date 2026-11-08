@@ -1507,6 +1507,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/textrest.h"
 #include "fixture/childremoverest.h"
 #include "fixture/insertrecord.h"
+#include "fixture/fragrest.h"
+#include "fixture/mixinrest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2273,6 +2275,8 @@ TF_DOCS[] = {
     { "textrest", HTML_TEXTREST },
     { "childremoverest", HTML_CHILDREMOVEREST },
     { "insertrecord", HTML_INSERTRECORD },
+    { "fragrest", HTML_FRAGREST },
+    { "mixinrest", HTML_MIXINREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -17539,6 +17543,82 @@ TF_UNIT void probes_insertrecord(const char *js, Probe *tab, int *n) {
     }
 }
 
+/* The rows of the `fragrest` document (fixture/fragrest.h). fragment-append-rests: the appending arm's
+   appendChild of a fragment holding the box of 100,002 elements rests inside the call (`sliceOverrunGapWork`
+   under one quantum), and the arm then reads the box in the target whole, the fragment empty and both names
+   present. fragment-append-sibling-tree: the sibling arm reads the box in the fragment and both names absent. */
+TF_UNIT void probes_fragrest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1, kt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/fr-done", "p", "1") && param_value_is(js, "/api/fr-done", "c", "100002"),
+             "NOT REACHED: no /api/fr-done?p=1&c=100002 record, so the insert did not finish with the box whole in "
+             "the target");
+    fold_row(&tt, &why, param_value_is(js, "/api/fr-done", "f", "0"),
+             "DOM §4.2.3 insert step 4: the fragment still holds a child after its insert");
+    fold_row(&tt, &why, param_value_is(js, "/api/fr-done", "n", "1") && param_value_is(js, "/api/fr-done", "w", "1"),
+             "the appending arm did not find the inserted box's named elements: the name index missed an element "
+             "the insert put in the document tree");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: an appendChild of a fragment of "
+             "100,002 elements ran a walk of its children's subtrees inside the call instead of resting per node");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/fr-kept", "p", "1") && param_value_is(js, "/api/fr-kept", "c", "100002"),
+             "NOT REACHED: no /api/fr-kept?p=1&c=100002 record, so the sibling arm did not read the box in the "
+             "fragment with its children");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/fr-kept", "n", "1") && param_value_is(js, "/api/fr-kept", "w", "1"),
+             "the sibling arm found the box's named elements: the appending arm's name-index upkeep reached a flow "
+             "whose tree does not hold them");
+    const Probe rows[] = {
+        { "fragment-append-rests", tt, "frBox", SESS_EXPLORE, why },
+        { "fragment-append-sibling-tree", kt, "frBox", SESS_EXPLORE, kwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `mixinrest` document (fixture/mixinrest.h). mixin-<k>-rests, for append (ap), replaceWith (rw)
+   and replaceChildren (rc): the arm's call with the box of 100,002 elements and a string rests inside itself
+   (`sliceOverrunGapWork` under one quantum, a fact of the whole document), and the arm then reads the box in the
+   target whole, the span where the member leaves it, the target's child count and both names present.
+   mixin-sibling-tree: the '#keep' arm reads the box detached and both names absent. */
+TF_UNIT void probes_mixinrest(const char *js, Probe *tab, int *n) {
+    static const struct { const char *row, *url, *s, *l, *what; } R[] = {
+        { "mixin-append-rests", "/api/mx-ap", "1", "3", "an append(box, string)" },
+        { "mixin-replacewith-rests", "/api/mx-rw", "0", "2", "a replaceWith(box, string)" },
+        { "mixin-replacechildren-rests", "/api/mx-rc", "0", "2", "a replaceChildren(box, string)" },
+    };
+    const char *at = strstr(js, "\"sliceOverrunGapWork\":"), *kwhy = NULL;
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int i, kt = 1;
+
+    for (i = 0; i < (int)COUNTOF(R); i++) {
+        const char *why = NULL; int tt = 1;
+        fold_row(&tt, &why, param_value_is(js, R[i].url, "p", "1") && param_value_is(js, R[i].url, "c", "100002"),
+                 "NOT REACHED: the arm's record has no p=1&c=100002, so the member did not finish with the box "
+                 "whole in the target");
+        fold_row(&tt, &why, param_value_is(js, R[i].url, "s", R[i].s) && param_value_is(js, R[i].url, "l", R[i].l),
+                 "the member left the span or the target's child count where DOM §4.2.6 and §4.2.8 do not");
+        fold_row(&tt, &why, param_value_is(js, R[i].url, "n", "1") && param_value_is(js, R[i].url, "w", "1"),
+                 "the arm did not find the inserted box's named elements: the name index missed an element the "
+                 "insert put in the document tree");
+        fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+        fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+                 "a turn held the thread for a quantum or more between two offers: a mixin member inserting "
+                 "100,002 elements ran a walk of the subtree inside the call instead of resting per node");
+        const Probe row[] = { { R[i].row, tt, "mxBox", SESS_EXPLORE, why } };
+        probes_append(tab, n, row, 1);
+    }
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/mx-kept", "p", "1") && param_value_is(js, "/api/mx-kept", "c", "100002"),
+             "NOT REACHED: no /api/mx-kept?p=1&c=100002 record, so the sibling arm did not read the box detached "
+             "with its children");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/mx-kept", "n", "1") && param_value_is(js, "/api/mx-kept", "w", "1"),
+             "the sibling arm found the detached box's named elements: an inserting arm's name-index upkeep reached "
+             "a flow whose tree does not hold them");
+    const Probe rows[] = { { "mixin-sibling-tree", kt, "mxBox", SESS_EXPLORE, kwhy } };
+    probes_append(tab, n, rows, 1);
+}
+
 /* The row of the `keydomainwalk` document (fixture/keydomainwalk.h): 200 unknown-key reads of a Document and a
    WindowProxy over 2,000 unnamed elements charge no walk of them. */
 static long kdw_census(const char *js, const char *key);
@@ -29644,6 +29724,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_textrest(js, probes, &np);
     probes_childremoverest(js, probes, &np);
     probes_insertrecord(js, probes, &np);
+    probes_fragrest(js, probes, &np);
+    probes_mixinrest(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
