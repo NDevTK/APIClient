@@ -1422,6 +1422,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/messaging.h"
 #include "fixture/worker.h"
 #include "fixture/linkfork.h"
+#include "fixture/agentatomic.h"
 #include "fixture/orphan.h"
 #include "fixture/rejection.h"
 #include "fixture/navigator.h"
@@ -2158,6 +2159,7 @@ TF_DOCS[] = {
     { "messaging", HTML_MESSAGING },
     { "worker", HTML_WORKER },
     { "linkfork", HTML_LINKFORK },
+    { "agentatomic", HTML_AGENTATOMIC },
     { "orphan", HTML_ORPHAN },
     { "rejection", HTML_REJECTION },
     { "navigator", HTML_NAVIGATOR },
@@ -15989,6 +15991,32 @@ TF_UNIT void probes_modules(const char *js, Probe *tab, int *n) {
 /* The rows of the `linkfork` document (fixture/linkfork.h): in a flow the page forks while its worker links, an
    arm links the good chain to its full depth and takes §16.2.1.6.1.2 Link ( ) step 4 on the bad one's
    SyntaxError in its own world. */
+/* The rows of the `agentatomic` document (fixture/agentatomic.h): forks taken by a worker while its page parses a
+   page-sized fragment leave every arm with the whole parse, the parent arm and an arm whose worker matched a
+   literal alike. */
+TF_UNIT void probes_agentatomic(const char *js, Probe *tab, int *n) {
+    const char *aa_why = NULL; int aa_tt = 1, aa_hit = 0;
+    char aa_lit[8];
+
+    for (int t = 0; t < 24; t++) {
+        snprintf(aa_lit, sizeof aa_lit, "m%d", t);
+        aa_hit |= param_value_is(js, "/api/aadone", "w", aa_lit);
+    }
+    fold_row(&aa_tt, &aa_why, !!strstr(js, "\"/api/aadone\""),
+             "NOT REACHED: no arm finished both the fragment parse and the worker's comparisons");
+    fold_row(&aa_tt, &aa_why, aa_hit,
+             "NOT REACHED: no arm whose worker matched a fragment literal finished, so no arm of the worker's "
+             "forks reached the report");
+    fold_row(&aa_tt, &aa_why, param_value_is(js, "/api/aadone", "n", "100000"),
+             "HTML §8.5.4: no arm's fragment parse produced the 100000 paragraphs it was given");
+    fold_row(&aa_tt, &aa_why, !param_value_is(js, "/api/aadone", "n", "-1"),
+             "an arm reported before its fragment parse finished");
+    const Probe rows[] = {
+        { "agent-atomic-arms", aa_tt, "/api/aadone", SESS_EXPLORE, aa_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 TF_UNIT void probes_linkfork(const char *js, Probe *tab, int *n) {
     const char *lf_why = NULL; int lf_tt = 1;
     fold_row(&lf_tt, &lf_why, !!strstr(js, "\"/api/lfarm\""),
@@ -29028,6 +29056,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_messaging(js, probes, &np);
     probes_worker(js, probes, &np);
     probes_linkfork(js, probes, &np);
+    probes_agentatomic(js, probes, &np);
     probes_xdmulti(js, probes, &np);
     probes_orphan(js, probes, &np);
     probes_min(js, probes, &np);
