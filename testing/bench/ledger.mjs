@@ -294,15 +294,26 @@ function main() {
     };
     out.push([name, ...side(true), ...side(false)].join('\t'));
   }
-  for (const outc of OUTCOMES) {
-    out.push('', `## groups inside time, ${outc}: the group's rate against the rest's, Mantel-Haenszel over five ` +
-             'equal-work strata per page (only strata where both sides ran; 1 = no difference)',
-             ['group', 'strata', 'work1', `${outc}1`, '/M1', 'work0', `${outc}0`, '/M0', 'rateRatioMH'].join('\t'));
-    for (const [name, bit] of CLS) out.push([`cls:${name}`, ...groupWithinTime(pages, (r) => (r.cls & bit) !== 0, outc)].join('\t'));
-    out.push(['cls:forced|drive|candidate', ...groupWithinTime(pages, (r) => (r.cls & 35) !== 0, outc)].join('\t'));
-    for (const k of [0, 1, 2]) out.push([`priced=${k}`, ...groupWithinTime(pages, (r) => r.v.priced === k, outc)].join('\t'));
-    out.push(['priced>=3', ...groupWithinTime(pages, (r) => r.v.priced >= 3, outc)].join('\t'));
-  }
+  /* The boot flow (birth sequence 1 of each instance) is observed, rests on nothing priced, and yields the page's
+     own first requests in its first tenures, so a group containing it partly states that boot runs first; the same
+     tables are printed with it left out. */
+  const noBoot = new Map([...pages].map(([p, rows]) => [p, rows.filter((r) => r.seq !== 1)]));
+  for (const [label, src] of [['', pages], [', boot flow left out', noBoot]])
+    for (const outc of OUTCOMES) {
+      out.push('', `## groups inside time${label}, ${outc}: the group's rate against the rest's, Mantel-Haenszel over ` +
+               'five equal-work strata per page (only strata where both sides ran; 1 = no difference)',
+               ['group', 'strata', 'work1', `${outc}1`, '/M1', 'work0', `${outc}0`, '/M0', 'rateRatioMH', 'yielding1',
+                'yielding0'].join('\t'));
+      const row = (name, f) => {
+        const rs = [...src.values()].flat();
+        out.push([name, ...groupWithinTime(src, f, outc), rs.filter((r) => f(r) && r.y[outc] > 0).length,
+                  rs.filter((r) => !f(r) && r.y[outc] > 0).length].join('\t'));
+      };
+      for (const [name, bit] of CLS) row(`cls:${name}`, (r) => (r.cls & bit) !== 0);
+      row('cls:forced|drive|candidate', (r) => (r.cls & 35) !== 0);
+      for (const k of [0, 1, 2]) row(`priced=${k}`, (r) => r.v.priced === k);
+      row('priced>=3', (r) => r.v.priced >= 3);
+    }
   const want = o.bins ? o.bins.split(',') : ['at', 'x', 'served', 'famNotch', 'turn', 'priced'];
   for (const name of want) {
     need(TERMS.some((t) => t.name === name), `--bins names no term ${name}`);
