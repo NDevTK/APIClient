@@ -12,8 +12,8 @@
    imports, tags, functions, memories, tables, globals, data, elements; the start function; exports, then the
    disjointness of their names. */
 enum {
-    PH_TYPES = 0, PH_TYPES_SUPER, PH_IMPORTS, PH_TAGS, PH_FUNCS, PH_MEMORIES, PH_TABLES, PH_GLOBALS, PH_DATAS,
-    PH_ELEMS, PH_START, PH_EXPORTS, PH_NAMES, PH_FINISHED
+    PH_ALLOC = 0, PH_TYPES, PH_CANON, PH_TYPES_SUPER, PH_CLIMB, PH_IMPORTS, PH_TAGS, PH_FUNCS, PH_MEMORIES, PH_TABLES,
+    PH_GLOBALS, PH_DATAS, PH_ELEMS, PH_START, PH_EXPORTS, PH_NAMES, PH_FINISHED
 };
 
 void wasm_module_validator_init(WasmModuleValidator *v, const WasmModule *m, const uint8_t *bytes)
@@ -38,7 +38,30 @@ void wasm_module_validator_init(WasmModuleValidator *v, const WasmModule *m, con
     v->n_memories += m->n_memories;
     v->n_globals += m->n_globals;
     v->n_tags += m->n_tags;
+    v->phase = PH_ALLOC;
+}
+
+/* The tables sized by the module: a canonical id per type (at most one group per type), and a hash table over
+   those ids at most half full. Their size is the input's, so a failed allocation is the NO_ROOM refusal. */
+static WasmValidateStatus allocate(WasmModuleValidator *v)
+{
+    size_t n = v->module->n_types ? v->module->n_types : 1, cap = 8;
+
+    while (cap < 2 * n) {
+        if (cap > SIZE_MAX / 4 / sizeof(size_t)) return WASM_VALIDATE_NO_ROOM;
+        cap *= 2;
+    }
+    v->table_imports = calloc(v->n_tables - v->module->n_tables + 1, sizeof *v->table_imports);
+    v->group_canon = calloc(n, sizeof *v->group_canon);
+    v->canon_off = calloc(n, sizeof *v->canon_off);
+    v->canon_len = calloc(n, sizeof *v->canon_len);
+    v->canon_hash = calloc(n, sizeof *v->canon_hash);
+    v->canon_table = calloc(cap, sizeof *v->canon_table);
+    if (!v->table_imports || !v->group_canon || !v->canon_off || !v->canon_len || !v->canon_hash || !v->canon_table)
+        return WASM_VALIDATE_NO_ROOM;
+    v->cap_canon_table = cap;
     v->phase = PH_TYPES;
+    return WASM_VALIDATE_MORE;
 }
 
 static WasmValidateStatus unknown(WasmModuleValidator *v, const char *space, uint64_t x)
@@ -113,49 +136,282 @@ static size_t group_end(const WasmModule *m, size_t i)
     return m->types[i].rec_start + m->types[i].rec_size;
 }
 
+/* The tokens of a rec group's identity: the group, each subtype's head, and its supertypes and value types, a
+   reference into the group by its index there and one out of it by the identity of the type it names. */
+enum { T_GROUP = 1, T_TYPE, T_REC, T_CANON };
+
+static bool token(WasmModuleValidator *v, uint64_t t)
+{
+    if (v->n_tokens == v->cap_tokens) {
+        size_t cap = v->cap_tokens ? v->cap_tokens * 2 : 64;
+        uint64_t *grown;
+
+        if (cap > SIZE_MAX / sizeof *grown) return false;
+        grown = realloc(v->tokens, cap * sizeof *grown);
+        if (grown == NULL) return false;
+        v->tokens = grown;
+        v->cap_tokens = cap;
+    }
+    v->tokens[v->n_tokens++] = t;
+    v->group_hash = (v->group_hash ^ t) * 1099511628211u;
+    return true;
+}
+
+static size_t rec_start_of(const WasmModuleValidator *v, size_t x)
+{
+    return v->module->types[x].rec_start;
+}
+
+/* §3.3.10's closed defined types are equal: the same canonical group, the same index in it. */
+static bool same_type(const WasmModuleValidator *v, size_t x, size_t y)
+{
+    return v->group_canon[rec_start_of(v, x)] == v->group_canon[rec_start_of(v, y)]
+        && x - rec_start_of(v, x) == y - rec_start_of(v, y);
+}
+
+static bool token_ref(WasmModuleValidator *v, size_t x, size_t start, size_t size)
+{
+    if (x >= start && x < start + size) return token(v, T_REC) && token(v, x - start);
+    return token(v, T_CANON) && token(v, v->group_canon[rec_start_of(v, x)]) && token(v, x - rec_start_of(v, x));
+}
+
+static bool token_val(WasmModuleValidator *v, const WasmValType *t, size_t start, size_t size)
+{
+    if (!token(v, t->code) || !token(v, t->nullable) || !token(v, t->heap)) return false;
+    return t->code != WASM_TYPE_REF || t->heap != 0 || token_ref(v, t->heap_index, start, size);
+}
+
+enum { LE_NO = 0, LE_YES, LE_CLIMB };
+
+/* §3.3.3 over two abstract heap types: none below every type of the any hierarchy, i31, struct and array below
+   eq, eq below any, and nofunc, noextern and noexn below func, extern and exn. */
+static bool abstract_le(uint8_t a, uint8_t b)
+{
+    if (a == b) return true;
+    switch (a) {
+    case WASM_HEAP_NONE:
+        return b == WASM_HEAP_I31 || b == WASM_HEAP_STRUCT || b == WASM_HEAP_ARRAY || b == WASM_HEAP_EQ
+            || b == WASM_HEAP_ANY;
+    case WASM_HEAP_I31: case WASM_HEAP_STRUCT: case WASM_HEAP_ARRAY:
+        return b == WASM_HEAP_EQ || b == WASM_HEAP_ANY;
+    case WASM_HEAP_EQ: return b == WASM_HEAP_ANY;
+    case WASM_HEAP_NOFUNC: return b == WASM_HEAP_FUNC;
+    case WASM_HEAP_NOEXTERN: return b == WASM_HEAP_EXTERN;
+    case WASM_HEAP_NOEXN: return b == WASM_HEAP_EXN;
+    }
+    return false;
+}
+
+/* The abstract heap type a defined type of kind `k` expands below: struct, array or func. */
+static uint8_t kind_heap(WasmCompKind k)
+{
+    return k == WASM_COMP_STRUCT ? WASM_HEAP_STRUCT : k == WASM_COMP_ARRAY ? WASM_HEAP_ARRAY : WASM_HEAP_FUNC;
+}
+
+/* §3.3.3's heap type matching. Two type indices that are not one identity match when §3.3.10's supertype walk
+   from the first reaches the second: LE_CLIMB starts that walk (PH_CLIMB, one supertype a step). */
+static int heap_le(WasmModuleValidator *v, const WasmValType *a, const WasmValType *b)
+{
+    const WasmModule *m = v->module;
+
+    if (a->heap != 0 && b->heap != 0) return abstract_le(a->heap, b->heap) ? LE_YES : LE_NO;
+    if (a->heap == 0 && b->heap != 0)
+        return abstract_le(kind_heap(m->types[a->heap_index].kind), b->heap) ? LE_YES : LE_NO;
+    if (a->heap != 0) {
+        uint8_t k = kind_heap(m->types[b->heap_index].kind);
+
+        if (a->heap == WASM_HEAP_NONE) return k != WASM_HEAP_FUNC ? LE_YES : LE_NO;
+        return a->heap == WASM_HEAP_NOFUNC && k == WASM_HEAP_FUNC ? LE_YES : LE_NO;
+    }
+    if (same_type(v, a->heap_index, b->heap_index)) return LE_YES;
+    if (m->types[a->heap_index].n_supers == 0) return LE_NO;
+    v->climb = m->type_indices[m->types[a->heap_index].supers];
+    v->climb_target = b->heap_index;
+    return LE_CLIMB;
+}
+
+/* §3.3.5's value types and §3.3.9's storage types: a number, vector or packed type matches only itself, a
+   reference type by nullability (§3.3.4) and heap type. */
+static int val_le(WasmModuleValidator *v, const WasmValType *a, const WasmValType *b)
+{
+    if (a->code != b->code) return LE_NO;
+    if (a->code != WASM_TYPE_REF) return LE_YES;
+    if (a->nullable && !b->nullable) return LE_NO;
+    return heap_le(v, a, b);
+}
+
+/* Matching both ways, which §3.3.9 asks of a mutable field: one type, or one identity. */
+static bool val_eq(const WasmModuleValidator *v, const WasmValType *a, const WasmValType *b)
+{
+    if (a->code != b->code || a->nullable != b->nullable || a->heap != b->heap) return false;
+    return a->code != WASM_TYPE_REF || a->heap != 0 || same_type(v, a->heap_index, b->heap_index);
+}
+
+/* §3.3.9: the same mutability, then a mutable field's storage both ways and an immutable one's covariantly. */
+static int field_le(WasmModuleValidator *v, const WasmFieldType *a, const WasmFieldType *b)
+{
+    if (a->mutable_ != b->mutable_) return LE_NO;
+    if (a->mutable_) return val_eq(v, &a->storage, &b->storage) ? LE_YES : LE_NO;
+    return val_le(v, &a->storage, &b->storage);
+}
+
+/* A match's answer as a step's: a match continues at the next item, a climb is PH_CLIMB's from `back`. */
+static WasmValidateStatus match_step(WasmModuleValidator *v, int le, int back, WasmValidateStatus fail)
+{
+    if (le == LE_NO) return fail;
+    if (le == LE_CLIMB) {
+        v->climb_return = back;
+        v->climb_fail = fail;
+        v->phase = PH_CLIMB;
+        return WASM_VALIDATE_MORE;
+    }
+    v->sub++;
+    return WASM_VALIDATE_MORE;
+}
+
+/* §3.3.10's walk: one supertype a step until the walk stands on the target's identity or runs out. */
+static WasmValidateStatus climb_step(WasmModuleValidator *v)
+{
+    const WasmModule *m = v->module;
+
+    if (same_type(v, v->climb, v->climb_target)) {
+        v->phase = v->climb_return;
+        v->sub++;
+        return WASM_VALIDATE_MORE;
+    }
+    if (m->types[v->climb].n_supers == 0) return v->climb_fail;
+    v->climb = m->type_indices[m->types[v->climb].supers];
+    return WASM_VALIDATE_MORE;
+}
+
+/* §3.2.11's identity of the rec group just checked: probe the canonical groups by hash, comparing one token a step;
+   an equal group's id is taken and the new tokens dropped, otherwise the group becomes a canonical id itself. */
+static WasmValidateStatus canon_step(WasmModuleValidator *v)
+{
+    size_t len = v->n_tokens - v->group_tokens, slot = v->canon_table[v->probe], g;
+
+    if (slot != 0) {
+        g = slot - 1;
+        if (v->canon_hash[g] == v->group_hash && v->canon_len[g] == len) {
+            if (v->compare < len) {
+                if (v->tokens[v->canon_off[g] + v->compare] == v->tokens[v->group_tokens + v->compare]) {
+                    v->compare++;
+                    return WASM_VALIDATE_MORE;
+                }
+            } else {
+                v->n_tokens = v->group_tokens;
+                v->group_canon[v->item] = g;
+                v->phase = PH_TYPES_SUPER;
+                return WASM_VALIDATE_MORE;
+            }
+        }
+        v->probe = (v->probe + 1) & (v->cap_canon_table - 1);
+        v->compare = 0;
+        return WASM_VALIDATE_MORE;
+    }
+    g = v->n_canon++;
+    v->canon_off[g] = v->group_tokens;
+    v->canon_len[g] = len;
+    v->canon_hash[g] = v->group_hash;
+    v->canon_table[v->probe] = g + 1;
+    v->group_canon[v->item] = g;
+    v->phase = PH_TYPES_SUPER;
+    return WASM_VALIDATE_MORE;
+}
+
 /* One item of §3.2.11's subtype check for type v->item: its supertype count, then each supertype index, then each
-   value or storage type of its composite type (§3.2.10). */
+   value or storage type of its composite type (§3.2.10), each appended to the group's identity tokens once it
+   holds. The group's last item hands the group to PH_CANON. */
 static WasmValidateStatus check_type_item(WasmModuleValidator *v)
 {
     const WasmModule *m = v->module;
     const WasmSubType *t = &m->types[v->item];
     size_t limit = group_end(m, v->item), k = v->sub, n_items;
+    bool ok = true;
+    WasmValidateStatus st;
 
     n_items = t->n_supers + (t->kind == WASM_COMP_FUNC ? t->n_params + t->n_results : t->n_fields);
-    if (k == 0 && t->n_supers > 1) return WASM_VALIDATE_MULTIPLE_SUPERS;
+    if (k == 0) {
+        if (t->n_supers > 1) return WASM_VALIDATE_MULTIPLE_SUPERS;
+        if (v->item == t->rec_start) {
+            v->group_tokens = v->n_tokens;
+            v->group_hash = 1469598103934665603u;
+            ok = token(v, T_GROUP) && token(v, t->rec_size);
+        }
+        ok = ok && token(v, T_TYPE) && token(v, t->final) && token(v, t->n_supers) && token(v, t->kind)
+             && token(v, t->n_params) && token(v, t->n_results) && token(v, t->n_fields);
+        if (!ok) return WASM_VALIDATE_NO_ROOM;
+    }
     if (k >= n_items) {
         v->sub = 0;
         v->item++;
-        /* The group's subtypes are all checked: its supertype conditions come next, from its first type. */
         if (v->item == limit) {
             v->item = t->rec_start;
-            v->phase = PH_TYPES_SUPER;
+            v->probe = (size_t)(v->group_hash & (v->cap_canon_table - 1));
+            v->compare = 0;
+            v->phase = PH_CANON;
         }
         return WASM_VALIDATE_MORE;
     }
     v->sub++;
-    if (k < t->n_supers) return check_type_index(v, m->type_indices[t->supers + k], limit);
-    k -= t->n_supers;
-    if (t->kind == WASM_COMP_FUNC) return check_val_type(v, &m->val_types[t->params + k], limit);
-    return check_val_type(v, &m->fields[t->fields + k].storage, limit);
+    if (k < t->n_supers) {
+        size_t x = m->type_indices[t->supers + k];
+
+        st = check_type_index(v, x, limit);
+        ok = st != WASM_VALIDATE_DONE || token_ref(v, x, t->rec_start, t->rec_size);
+    } else if (t->kind == WASM_COMP_FUNC) {
+        const WasmValType *vt = &m->val_types[t->params + k - t->n_supers];
+
+        st = check_val_type(v, vt, limit);
+        ok = st != WASM_VALIDATE_DONE || token_val(v, vt, t->rec_start, t->rec_size);
+    } else {
+        const WasmFieldType *f = &m->fields[t->fields + k - t->n_supers];
+
+        st = check_val_type(v, &f->storage, limit);
+        ok = st != WASM_VALIDATE_DONE || (token(v, f->mutable_) && token_val(v, &f->storage, t->rec_start, t->rec_size));
+    }
+    return ok ? st : WASM_VALIDATE_NO_ROOM;
 }
 
-/* §3.2.11's conditions on type v->item's supertype: below its own index and not final. Its composite type's match
-   against the supertype's is the header's residual. */
+/* §3.2.11's conditions on type v->item's supertype: below its own index, not final, and §3.3.8's composite match,
+   one field or value type a step (v->sub is 0 for the head, then 1 + the item matched). */
 static WasmValidateStatus check_type_super(WasmModuleValidator *v)
 {
     const WasmModule *m = v->module;
-    const WasmSubType *t = &m->types[v->item];
-    size_t x = v->item;
+    const WasmSubType *t = &m->types[v->item], *s;
+    size_t x = v->item, k;
 
-    v->item++;
-    if (v->item == group_end(m, x)) v->phase = PH_TYPES;
-    if (t->n_supers == 0) return WASM_VALIDATE_MORE;
+    if (t->n_supers == 0 || (v->sub > 0 && v->sub - 1 >= (t->kind == WASM_COMP_FUNC
+                                                            ? t->n_params + t->n_results
+                                                            : m->types[m->type_indices[t->supers]].n_fields))) {
+        v->sub = 0;
+        v->item++;
+        if (v->item == group_end(m, x)) v->phase = PH_TYPES;
+        return WASM_VALIDATE_MORE;
+    }
     v->index = x;
     v->index2 = m->type_indices[t->supers];
-    if (v->index2 >= x) return WASM_VALIDATE_FORWARD_SUPER;
-    if (m->types[v->index2].final) return WASM_VALIDATE_FINAL_SUPER;
-    return WASM_VALIDATE_MORE;
+    s = &m->types[v->index2];
+    if (v->sub == 0) {
+        if (v->index2 >= x) return WASM_VALIDATE_FORWARD_SUPER;
+        if (s->final) return WASM_VALIDATE_FINAL_SUPER;
+        if (t->kind != s->kind) return WASM_VALIDATE_SUB_MISMATCH;
+        if (t->kind == WASM_COMP_FUNC && (t->n_params != s->n_params || t->n_results != s->n_results))
+            return WASM_VALIDATE_SUB_MISMATCH;
+        if (t->n_fields < s->n_fields) return WASM_VALIDATE_SUB_MISMATCH;
+        v->sub = 1;
+        return WASM_VALIDATE_MORE;
+    }
+    k = v->sub - 1;
+    if (t->kind != WASM_COMP_FUNC)
+        return match_step(v, field_le(v, &m->fields[t->fields + k], &m->fields[s->fields + k]), PH_TYPES_SUPER,
+                          WASM_VALIDATE_SUB_MISMATCH);
+    if (k < t->n_params)   /* parameters are contravariant */
+        return match_step(v, val_le(v, &m->val_types[s->params + k], &m->val_types[t->params + k]), PH_TYPES_SUPER,
+                          WASM_VALIDATE_SUB_MISMATCH);
+    k -= t->n_params;
+    return match_step(v, val_le(v, &m->val_types[t->results + k], &m->val_types[s->results + k]), PH_TYPES_SUPER,
+                      WASM_VALIDATE_SUB_MISMATCH);
 }
 
 /* §3.5.11: an import's external type is valid (§3.2.17). */
@@ -225,6 +481,17 @@ static WasmValidateStatus check_name(WasmModuleValidator *v)
     return WASM_VALIDATE_MORE;
 }
 
+/* Table `x`'s element type: an imported table's, then a defined one's. */
+static const WasmValType *table_type(const WasmModuleValidator *v, size_t x)
+{
+    size_t imported = v->n_tables - v->module->n_tables;
+
+    DCHECK(x < v->n_tables && v->n_table_imports == imported, "a WebAssembly table's type was asked before its "
+                                                               "imports were read, or past the tables");
+    if (x < imported) return &v->module->imports[v->table_imports[x]].type;
+    return &v->module->tables[x - imported].type;
+}
+
 /* Move to `next` when the current list of `n` items is done; otherwise answer whether v->item may be checked. */
 static bool list_done(WasmModuleValidator *v, size_t n, int next)
 {
@@ -244,6 +511,7 @@ static WasmValidateStatus step_list(WasmModuleValidator *v)
     case PH_IMPORTS:
         if (list_done(v, m->n_imports, PH_TAGS)) return WASM_VALIDATE_MORE;
         st = check_import(v, &m->imports[i]);
+        if (m->imports[i].kind == WASM_EXTERN_TABLE) v->table_imports[v->n_table_imports++] = i;
         break;
     case PH_TAGS:
         if (list_done(v, m->n_tags, PH_FUNCS)) return WASM_VALIDATE_MORE;
@@ -272,12 +540,22 @@ static WasmValidateStatus step_list(WasmModuleValidator *v)
             st = unknown(v, "memory", m->datas[i].memory);
         break;
     case PH_ELEMS:
-        /* §3.5.9: the segment's reference type is valid and an active segment's table exists. */
+        /* §3.5.9: the segment's reference type is valid, and an active segment's table exists and its element type
+           matches the segment's (v->sub is 1 once it has). */
         if (list_done(v, m->n_elems, PH_START)) return WASM_VALIDATE_MORE;
-        st = check_val_type(v, &m->elems[i].type, m->n_types);
-        if (st == WASM_VALIDATE_DONE && m->elems[i].mode == WASM_SEGMENT_ACTIVE && m->elems[i].table >= v->n_tables)
-            st = unknown(v, "table", m->elems[i].table);
-        break;
+        if (v->sub == 0) {
+            st = check_val_type(v, &m->elems[i].type, m->n_types);
+            if (st != WASM_VALIDATE_DONE) return st;
+            if (m->elems[i].mode == WASM_SEGMENT_ACTIVE) {
+                if (m->elems[i].table >= v->n_tables) return unknown(v, "table", m->elems[i].table);
+                v->index = i;
+                return match_step(v, val_le(v, &m->elems[i].type, table_type(v, m->elems[i].table)), PH_ELEMS,
+                                  WASM_VALIDATE_ELEM_MISMATCH);
+            }
+        }
+        v->sub = 0;
+        v->item++;
+        return WASM_VALIDATE_MORE;
     case PH_EXPORTS:
         if (list_done(v, m->n_exports, PH_NAMES)) return WASM_VALIDATE_MORE;
         st = check_export(v, &m->exports[i]);
@@ -314,6 +592,15 @@ WasmValidateStatus wasm_module_validator_step(WasmModuleValidator *v)
 
     DCHECK(v != NULL && v->phase != PH_FINISHED, "a WebAssembly validation was stepped after it answered");
     switch (v->phase) {
+    case PH_ALLOC:
+        st = allocate(v);
+        break;
+    case PH_CANON:
+        st = canon_step(v);
+        break;
+    case PH_CLIMB:
+        st = climb_step(v);
+        break;
     case PH_TYPES:
         if (v->item == v->module->n_types) {
             v->item = 0;
@@ -348,6 +635,16 @@ WasmValidateStatus wasm_module_validator_run(WasmModuleValidator *v)
     do st = wasm_module_validator_step(v);
     while (st == WASM_VALIDATE_MORE);
     return st;
+}
+
+/* valid.ml's string_of_reftype: `(ref null? <heap type>)`. */
+static void ref_text(const WasmValType *t, char *buf, size_t cap)
+{
+    static const char *const HEAP[] = { "exn", "array", "struct", "i31", "eq", "any", "extern", "func", "none",
+                                        "noextern", "nofunc", "noexn" };
+
+    if (t->heap != 0) snprintf(buf, cap, "(ref %s%s)", t->nullable ? "null " : "", HEAP[t->heap - WASM_HEAP_EXN]);
+    else snprintf(buf, cap, "(ref %s%u)", t->nullable ? "null " : "", (unsigned)t->heap_index);
 }
 
 void wasm_module_validator_message(const WasmModuleValidator *v, WasmValidateStatus st, char *buf, size_t cap)
@@ -386,6 +683,18 @@ void wasm_module_validator_message(const WasmModuleValidator *v, WasmValidateSta
         snprintf(buf, cap, "duplicate export name \"%.*s\"", (int)e->name_size,
                  (const char *)v->bytes + e->name_offset);
         return;
+    case WASM_VALIDATE_SUB_MISMATCH:
+        snprintf(buf, cap, "sub type %llu does not match super type %llu", (unsigned long long)v->index,
+                 (unsigned long long)v->index2);
+        return;
+    case WASM_VALIDATE_ELEM_MISMATCH: {
+        char a[64], b[64];
+
+        ref_text(&v->module->elems[v->index].type, a, sizeof a);
+        ref_text(table_type(v, v->module->elems[v->index].table), b, sizeof b);
+        snprintf(buf, cap, "type mismatch: element segment's type %s does not match table's element type %s", a, b);
+        return;
+    }
     case WASM_VALIDATE_NO_ROOM: snprintf(buf, cap, "out of memory"); return;
     }
     CHECK_FAIL("a WebAssembly validation status this file does not define");
@@ -395,6 +704,12 @@ void wasm_module_validator_free(WasmModuleValidator *v)
 {
     DCHECK(v != NULL, "a WebAssembly validation was freed with no validator");
     free(v->names);
-    v->names = NULL;
-    v->cap_names = 0;
+    free(v->group_canon);
+    free(v->tokens);
+    free(v->canon_off);
+    free(v->canon_len);
+    free(v->canon_hash);
+    free(v->canon_table);
+    free(v->table_imports);
+    memset(v, 0, sizeof *v);
 }
