@@ -3,14 +3,14 @@
  * WebAssembly/spec f3268fa9, named `<file>#<form index>` and deduplicated by bytes; `expect` is the testsuite's
  * message, matched by prefix as interpreter/script/runner.ml's assert_message does, and NULL is a module (an
  * assert_invalid module decodes too). A malformed row is kept when the decoder's own section list for it holds
- * only custom, type and import sections, the ones module_decoder.h decodes whole, and its message is not one of
- * §5.5.17's count agreements; the rest wait on the header's residual.
- * WASM_BINARY_DETAIL lists each module's sections in full: telegram's two feature probes (webAssemblyBaselineSupport,
+ * only custom, type, import and function sections, the ones module_decoder.h decodes whole, and its message is
+ * not one of §5.5.17's count agreements; the rest wait on the header's residual.
+ * WASM_BINARY_DETAIL lists each module's sections: telegram's two feature probes (webAssemblyBaselineSupport,
  * bench store), custom.wast's modules, and §5.5.17's tag and data count places; V8 (node 22) validates each and
- * agrees on every custom section's payload length. WASM_TYPE_ROWS state type sections as wasm_type_text renders
- * them: the probes, and modules built by hand over Release 3.0 §5.3 that V8 validates; WASM_IMPORT_ROWS do the
- * same for §5.5.5 through wasm_import_text. The *_MALFORMED_ROWS are hand-built too, with
- * interpreter/binary/decode.ml's message for each; V8 refuses all of them. */
+ * agrees on every custom section's payload length. WASM_TYPE_ROWS, WASM_IMPORT_ROWS and WASM_FUNCTION_ROWS state
+ * a section as test_forced.c renders it: the probes, and modules built by hand over Release 3.0 that V8
+ * validates. The *_MALFORMED_ROWS are hand-built, each with interpreter/binary/decode.ml's message; V8 refuses
+ * all of them. */
 #ifndef ENGINE_HOST_FIXTURE_WASM_BINARY_H
 #define ENGINE_HOST_FIXTURE_WASM_BINARY_H
 
@@ -56,7 +56,8 @@ typedef struct {
     WasmBinarySection sections[32];
 } WasmBinaryDetail;
 
-/* A module and one of its sections as test_forced.c renders it (wasm_type_text, wasm_import_text). */
+/* A module and one of its sections as test_forced.c renders it (wasm_type_text, wasm_import_text,
+   wasm_func_text). */
 typedef struct {
     const char *src;
     size_t len;
@@ -146,6 +147,9 @@ static const WasmBinaryRow WASM_BINARY_ROWS[] = {
     { "binary-leb128#35", 44, WB_LONG,
       "\000\141\163\155\001\000\000\000\001\005\001\140\001\177\000\002\033\001\010\163\160\145"
       "\143\164\145\163\164\011\160\162\151\156\164\137\151\063\062\000\200\200\200\200\200\000" },
+    { "binary-leb128#36", 29, WB_LONG,
+      "\000\141\163\155\001\000\000\000\001\004\001\140\000\000\003\003\001\200\200\200\200\200"
+      "\000\012\004\001\002\000\013" },
     { "binary-leb128#54", 17, WB_LARGE, "\000\141\163\155\001\000\000\000\000\203\200\200\200\020\001\061\062" },
     { "binary-leb128#55", 19, WB_LARGE,
       "\000\141\163\155\001\000\000\000\000\011\203\200\200\200\100\061\062\063\064" },
@@ -162,6 +166,9 @@ static const WasmBinaryRow WASM_BINARY_ROWS[] = {
     { "binary-leb128#60", 43, WB_LARGE,
       "\000\141\163\155\001\000\000\000\001\005\001\140\001\177\000\002\032\001\010\163\160\145"
       "\143\164\145\163\164\011\160\162\151\156\164\137\151\063\062\000\200\200\200\200\020" },
+    { "binary-leb128#61", 28, WB_LARGE,
+      "\000\141\163\155\001\000\000\000\001\004\001\140\000\000\003\006\001\200\200\200\200\020"
+      "\012\004\001\002\000\013" },
     { "binary-leb128#81", 47, NULL,
       "\000\141\163\155\001\000\000\000\001\004\001\140\000\000\003\002\001\000\012\033\001\031"
       "\000\000\374\200\000\000\374\201\200\000\000\374\206\200\200\000\000\374\207\200\200\200"
@@ -259,9 +266,13 @@ static const WasmBinaryRow WASM_BINARY_ROWS[] = {
     { "binary#102", 27, NULL,
       "\000\141\163\155\001\000\000\000\001\004\001\140\000\000\003\002\001\000\010\001\000\012"
       "\004\001\002\000\013" },
+    { "binary#104", 31, WB_ORDER,
+      "\000\141\163\155\001\000\000\000\001\004\001\140\000\000\003\002\001\000\003\002\001\000"
+      "\012\007\002\002\000\013\002\000\013" },
     { "binary#112", 14, WB_ORDER, "\000\141\163\155\001\000\000\000\002\001\000\002\001\000" },
     { "binary#113", 14, WB_ORDER, "\000\141\163\155\001\000\000\000\001\001\000\001\001\000" },
     { "binary#115", 14, WB_ORDER, "\000\141\163\155\001\000\000\000\002\001\000\001\001\000" },
+    { "binary#116", 14, WB_ORDER, "\000\141\163\155\001\000\000\000\003\001\000\002\001\000" },
     { "binary#127", 20, NULL, "\000\141\163\155\001\000\000\000\001\012\001\140\001\143\200\200\200\200\010\000" },
     { "binary#128", 20, WB_LONG, "\000\141\163\155\001\000\000\000\001\012\001\140\001\143\200\200\200\200\160\000" },
     { "custom#0", 267, NULL,
@@ -1775,6 +1786,41 @@ static const WasmBinaryRow WASM_IMPORT_MALFORMED_ROWS[] = {
     { "an import list cut after a module name", 25, WB_END,
       "\000\141\163\155\001\000\000\000\001\004\001\140\000\000\002\011\002\001\155\001\170\000"
       "\000\001\155" },
+};
+
+static const WasmTextRow WASM_FUNCTION_ROWS[] = {
+    { "telegram webAssemblyBaselineSupport (SIMD probe)", 31,
+      "\000\141\163\155\001\000\000\000\001\005\001\140\000\001\173\003\002\001\000\012\012\001"
+      "\010\000\101\000\375\017\375\142\013",
+      "funcs[0]" },
+    { "telegram webAssemblyBaselineSupport (bulk memory probe)", 48,
+      "\000\141\163\155\001\000\000\000\001\005\001\140\000\001\177\003\002\001\000\005\003\001"
+      "\000\001\012\026\001\024\000\101\000\101\000\101\000\374\012\000\000\103\000\000\000\000"
+      "\374\000\300\013",
+      "funcs[0]" },
+    { "no functions", 25,
+      "\000\141\163\155\001\000\000\000\001\011\002\140\000\000\140\001\177\001\177\003\001\000"
+      "\012\001\000",
+      "funcs[]" },
+    { "three functions over two types", 39,
+      "\000\141\163\155\001\000\000\000\001\011\002\140\000\000\140\001\177\001\177\003\004\003"
+      "\000\001\000\012\014\003\002\000\013\004\000\040\000\013\002\000\013",
+      "funcs[0,1,0]" },
+};
+
+static const WasmBinaryRow WASM_FUNCTION_MALFORMED_ROWS[] = {
+    { "a type index of six bytes", 28, WB_LONG,
+      "\000\141\163\155\001\000\000\000\001\011\002\140\000\000\140\001\177\001\177\003\007\001"
+      "\200\200\200\200\200\000" },
+    { "a type index past 32 bits", 27, WB_LARGE,
+      "\000\141\163\155\001\000\000\000\001\011\002\140\000\000\140\001\177\001\177\003\006\001"
+      "\377\377\377\377\037" },
+    { "a function list longer than the bytes", 23, WB_BOUNDS,
+      "\000\141\163\155\001\000\000\000\001\011\002\140\000\000\140\001\177\001\177\003\002\005"
+      "\000" },
+    { "a function section longer than its list", 24, WB_SIZE,
+      "\000\141\163\155\001\000\000\000\001\011\002\140\000\000\140\001\177\001\177\003\003\001"
+      "\000\000" },
 };
 
 

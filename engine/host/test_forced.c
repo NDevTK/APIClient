@@ -5478,6 +5478,17 @@ static void wasm_import_text(const WasmModule *m, const uint8_t *bytes, char *bu
     }
 }
 
+/* §5.5.6's function type indices as fixture/wasm_binary.h renders them: `funcs[<index>,...]`. */
+static void wasm_func_text(const WasmModule *m, char *buf, size_t cap)
+{
+    size_t at = 0, i;
+
+    buf[0] = '\0';
+    wasm_text_put(buf, cap, &at, "funcs[");
+    for (i = 0; i < m->n_func_types; i++) wasm_text_put(buf, cap, &at, "%s%u", i ? "," : "", (unsigned)m->func_types[i]);
+    wasm_text_put(buf, cap, &at, "]");
+}
+
 TF_UNIT void wasm_module_decoder_selftest(void)
 {
     enum { NR = sizeof WASM_BINARY_ROWS / sizeof WASM_BINARY_ROWS[0],
@@ -5521,6 +5532,26 @@ TF_UNIT void wasm_module_decoder_selftest(void)
         wasm_type_text(wasm_module_decoder_module(&d), text, sizeof text);
         CHECKF(strcmp(text, row->text) == 0, "the WebAssembly module %s decoded its types as \"%s\"; they are "
                                               "\"%s\"", row->src, text, row->text);
+        wasm_module_decoder_free(&d);
+    }
+    for (i = 0; i < COUNTOF(WASM_FUNCTION_MALFORMED_ROWS); i++) {
+        const WasmBinaryRow *row = &WASM_FUNCTION_MALFORMED_ROWS[i];
+        WasmModuleDecoder d;
+
+        wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
+        wasm_binary_check(row->src, row->expect, wasm_module_decoder_run(&d));
+        wasm_module_decoder_free(&d);
+    }
+    for (i = 0; i < COUNTOF(WASM_FUNCTION_ROWS); i++) {
+        const WasmTextRow *row = &WASM_FUNCTION_ROWS[i];
+        static char text[4096];
+        WasmModuleDecoder d;
+
+        wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
+        wasm_binary_check(row->src, NULL, wasm_module_decoder_run(&d));
+        wasm_func_text(wasm_module_decoder_module(&d), text, sizeof text);
+        CHECKF(strcmp(text, row->text) == 0, "the WebAssembly module %s decoded its functions as \"%s\"; they "
+                                              "are \"%s\"", row->src, text, row->text);
         wasm_module_decoder_free(&d);
     }
     for (i = 0; i < COUNTOF(WASM_IMPORT_MALFORMED_ROWS); i++) {
