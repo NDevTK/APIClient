@@ -189,6 +189,11 @@ bool flow_placement_inline_scan_peek(const lxb_dom_element_t *el, BlockFlowInlin
 void flow_placement_inline_context_record(const lxb_dom_element_t *el, bool establishes);
 bool flow_placement_inline_context_peek(const lxb_dom_element_t *el, bool *out);
 
+/* core/layout/box_tree.h's children style ask over `box`: the node it asks next, held when a resting drive stopped
+   it, or NULL once every child is asked. */
+void flow_placement_children_style_hold(const lxb_dom_element_t *box, lxb_dom_node_t *next);
+bool flow_placement_children_style_peek(const lxb_dom_element_t *box, lxb_dom_node_t **out);
+
 /* The census, in solver/result.c's vocabulary. Every field is a lifetime counter of this agent, so each
    may be differenced across two samples. `asks` counts §9.4.1 stack positions asked, `served` those this
    record answered, `walks` those that ran the walk; `asks == served + walks` is asserted. `placements`

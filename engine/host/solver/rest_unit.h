@@ -66,8 +66,9 @@ typedef enum {
        inside. */
     REST_UNIT_LAYOUT_BOXES,
     /* One element classified under a resting drive by a scan of a box's descendants (core/layout/block_flow.h):
-       CSS 2.2 §9.5's search of a block formatting context for its floats, or §9.4.2's establishing condition
-       over a block container's content. Each walks the whole population where it finds nothing. Past this many
+       CSS 2.2 §9.5's search of a block formatting context for its floats, §9.4.2's establishing condition
+       over a block container's content, or the style ask over a box's child sequence (core/layout/box_tree.h).
+       Each walks the whole population where it finds nothing. Past this many
        the scan holds its place and the drive rests. Cost: one element's `display`, `position` and `float`, the
        first read of which builds its cascaded style; bound (2) is asserted by the REST_UNIT_LAYOUT_DESCENDANTS
        bracket. */

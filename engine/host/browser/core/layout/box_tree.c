@@ -15,6 +15,8 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/button_label.h"
+#include "core/layout/flow_placement.h"   /* where a stopped children style ask holds its place */
+#include "core/layout/layout_job.h"       /* the resting drive and its scan allowance */
 #include "core/layout/list_marker.h"
 
 /* A zero-initialised member is a source-document node. */
@@ -79,9 +81,16 @@ bool box_tree_children_style_ask(lxb_dom_element_t *box)
     lxb_dom_node_t *n;
 
     DCHECK(box != NULL, "a box's children's styles were asked of no box");
-    for (n = flat_tree_first_child(lxb_dom_interface_node(box)); n != NULL;) {
+    /* Off a resting drive every style ask answers at once, so there is no walk to rest. */
+    if (!layout_job_rests_innermost()) return true;
+    if (!flow_placement_children_style_peek(box, &n)) n = flat_tree_first_child(lxb_dom_interface_node(box));
+    else if (n == NULL) return true;
+    while (n != NULL) {
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            if (!cssom_style_ask(lxb_dom_interface_element(n))) return false;
+            if (!layout_job_scan_take() || !cssom_style_ask(lxb_dom_interface_element(n))) {
+                flow_placement_children_style_hold(box, n);
+                return false;
+            }
             if (bt_is_spliced(n) && flat_tree_first_child(n) != NULL) {
                 n = flat_tree_first_child(n);
                 continue;
@@ -89,6 +98,7 @@ bool box_tree_children_style_ask(lxb_dom_element_t *box)
         }
         n = bt_continue_after(box, n);
     }
+    flow_placement_children_style_hold(box, NULL);
     return true;
 }
 

@@ -71,6 +71,9 @@ typedef struct {
     bool                     has_run_first, has_run_after, has_table_box, has_floats, has_float_scan;
     bool                     has_float_box, has_bfc_entry, has_bfc_frame, has_float_avoid;
     bool                     has_inline_context, has_inline_scan;
+    /* box_tree.h's children style ask over this box: the node it asks next, NULL once it has asked them all. */
+    lxb_dom_node_t          *children_style;
+    bool                     has_children_style;
     bool                     has_run_top_first, has_run_top_after;
 } FpEntry;
 
@@ -692,6 +695,31 @@ bool flow_placement_inline_context_peek(const lxb_dom_element_t *el, bool *out)
     e = fp_entry_peek(el);
     if (e == NULL || !e->has_inline_context) return false;
     *out = e->inline_context;
+    return true;
+}
+
+void flow_placement_children_style_hold(const lxb_dom_element_t *box, lxb_dom_node_t *next)
+{
+    FpEntry *e;
+
+    DCHECK(box != NULL, "a children style ask's place was held for no box");
+    e = fp_entry_for_write(box);
+    CHECK(e != NULL, "a children style ask ran under a resting drive with no placement record to hold its place; "
+                     "a resting drive's job holds one");
+    DCHECK(!e->has_children_style || e->children_style != NULL,
+           "a children style ask held a place after it had asked every child of its box in this job");
+    e->children_style = next;
+    e->has_children_style = true;
+}
+
+bool flow_placement_children_style_peek(const lxb_dom_element_t *box, lxb_dom_node_t **out)
+{
+    const FpEntry *e;
+
+    DCHECK(box != NULL && out != NULL, "a children style ask's place was asked for no box or nowhere to put it");
+    e = fp_entry_peek(box);
+    if (e == NULL || !e->has_children_style) return false;
+    *out = e->children_style;
     return true;
 }
 
