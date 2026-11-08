@@ -1543,6 +1543,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/translatepct.h"
 #include "fixture/transform2d.h"
 #include "fixture/svgtransformable.h"
+#include "fixture/svgtransformattr.h"
 #include "fixture/fillwidth.h"
 #include "fixture/jsonlead.h"
 #include "fixture/owedsale.h"
@@ -2267,6 +2268,7 @@ TF_DOCS[] = {
     { "translatepct", HTML_TRANSLATEPCT },
     { "transform2d", HTML_TRANSFORM2D },
     { "svgtransformable", HTML_SVGTRANSFORMABLE },
+    { "svgtransformattr", HTML_SVGTRANSFORMATTR },
     { "fillwidth", HTML_FILLWIDTH },
     { "jsonlead", HTML_JSONLEAD },
     { "startin", HTML_STARTIN },
@@ -21745,6 +21747,35 @@ TF_UNIT void probes_svgtransformable(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `svgtransformattr` document (fixture/svgtransformattr.h): css-transforms-1 §6's SVG
+   transform attribute as a presentation attribute, read through §3.2's resolved value of transform. */
+TF_UNIT void probes_svgtransformattr(const char *js, Probe *tab, int *n) {
+    const char *sa_why = NULL; int sa_tt = 1;
+#define SA_IS(k, v) param_value_is(js, "/api/svgtransformattr", k, v)
+    fold_row(&sa_tt, &sa_why, !!strstr(js, "\"/api/svgtransformattr\""),
+             "NOT REACHED: no /api/svgtransformattr record, so the document aborted before its fetch");
+    fold_row(&sa_tt, &sa_why, SA_IS("a", "matrix(1_0_0_1_10_20)") && SA_IS("c", "matrix(2_0_0_2_0_0)") &&
+                              SA_IS("d", "matrix(1_2_3_4_5_6)") && SA_IS("j", "matrix(1_0_0_1_10_-5)"),
+             "css-transforms-1 §6.2: an SVG transform attribute's functions, separators or numbers are not "
+             "§6.3's CSS functions in px");
+    fold_row(&sa_tt, &sa_why, SA_IS("b", "matrix(0_1_-1_0_20_0)"),
+             "css-transforms-1 §6.3: rotate(90 10 10) is not translate(10, 10) rotate(90) translate(-10, -10)");
+    fold_row(&sa_tt, &sa_why, SA_IS("e", "none") && SA_IS("f", "none"),
+             "css-transforms-1 §6.2: an attribute outside the grammar does not compute to `none`");
+    fold_row(&sa_tt, &sa_why, SA_IS("g", "matrix(1_0_0_1_5_0)"),
+             "css-transforms-1 §6.1: a style declaration does not override the transform presentation attribute");
+    fold_row(&sa_tt, &sa_why, SA_IS("h", "matrix(3_0_0_3_0_0)") && SA_IS("i", "none"),
+             "SVG 2 §6.6: a gradient's `gradientTransform` is not its transform presentation attribute, or its "
+             "`transform` is");
+    fold_row(&sa_tt, &sa_why, SA_IS("k", "matrix(0_1_-1_0_10_0)"),
+             "css-transforms-1 §3.2: translate(10px) rotate(90deg) does not resolve to one matrix()");
+#undef SA_IS
+    const Probe rows[] = {
+        { "svg-transform-attribute", sa_tt, "/api/svgtransformattr", SESS_EXPLORE, sa_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fillwidth` document (fixture/fillwidth.h): CSS 2.2 §9.4.2's line box width for a run that
    breaks, resolved over §10.1's containing block chain through a flex item's used main size. */
 TF_UNIT void probes_fillwidth(const char *js, Probe *tab, int *n) {
@@ -28054,6 +28085,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_translatepct(js, probes, &np);
     probes_transform2d(js, probes, &np);
     probes_svgtransformable(js, probes, &np);
+    probes_svgtransformattr(js, probes, &np);
     probes_fillwidth(js, probes, &np);
     probes_jsonlead(js, probes, &np);
     probes_owedsale(js, probes, &np);
