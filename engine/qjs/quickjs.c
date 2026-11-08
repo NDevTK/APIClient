@@ -3854,6 +3854,7 @@ typedef struct JSClassShortDef {
     JSAtom class_name;
     JSClassFinalizer *finalizer;
     JSClassGCMark *gc_mark;
+    const JSRecordLayout *record;   /* JSClassDef's `record`: set instead of the two hooks */
 } JSClassShortDef;
 
 static JSClassShortDef const js_std_class_def[] = {
@@ -3921,6 +3922,7 @@ static int init_class_range(JSRuntime *rt, JSClassShortDef const *tab,
         memset(cm, 0, sizeof(*cm));
         cm->finalizer = tab[i].finalizer;
         cm->gc_mark = tab[i].gc_mark;
+        cm->record = tab[i].record;
         if (JS_NewClass1(rt, class_id, cm, tab[i].class_name) < 0)
             return -1;
     }
@@ -7352,12 +7354,20 @@ static void js_record_field_check(const JSRecordField *f, const JSRecordLayout *
             rec == (f->sub != NULL) && (f->kind == JS_REC_POD_ARRAY) == (f->elem_size != 0),
             "a record layout's field at offset %u (kind %d) lacks the count, sub-layout or element size its kind "
             "needs, or carries one it does not", (unsigned)f->off, (int)f->kind);
+    DCHECKF(!f->sub || f->sub->runtime_memory == l->runtime_memory,
+            "a record layout's field at offset %u names a sub-record from another allocator — a record and "
+            "everything it owns come from one", (unsigned)f->off);
     for (int i = 0; f->sub && i < f->sub->n_fields; i++)
         js_record_field_check(&f->sub->fields[i], f->sub);
 }
 
-/* Releases what a record laid out by `l` owns, leaving the record's own storage to the caller. A host record is
-   the C allocator's and not runtime memory (quickjs.h's JSRecordLayout), so its release is spelled `(free)`. */
+/* Releases what a record laid out by `l` owns, leaving the record's own storage to the caller. Storage is
+   released to the allocator the layout names (quickjs.h's JSRecordLayout); the C allocator's release is spelled
+   `(free)`, because this file forbids the raw one for runtime memory. */
+static void js_record_free(JSRuntime *rt, const JSRecordLayout *l, void *p)
+{
+    if (l->runtime_memory) js_free_rt(rt, p); else (free)(p);
+}
 static void js_record_release(JSRuntime *rt, void *rec, const JSRecordLayout *l)
 {
     uint8_t *b = rec;
@@ -7379,7 +7389,7 @@ static void js_record_release(JSRuntime *rt, void *rec, const JSRecordLayout *l)
         case JS_REC_POD_ARRAY:
             break;
         case JS_REC_CSTR_ARRAY:
-            for (n = ptr ? f->count(rec) : 0; n > 0; n--) (free)(((char **)ptr)[n - 1]);
+            for (n = ptr ? f->count(rec) : 0; n > 0; n--) js_record_free(rt, l, ((char **)ptr)[n - 1]);
             break;
         case JS_REC_VALUE_ARRAY:
             for (n = ptr ? f->count(rec) : 0; n > 0; n--) JS_FreeValueRT(rt, ((JSValue *)ptr)[n - 1]);
@@ -7391,14 +7401,14 @@ static void js_record_release(JSRuntime *rt, void *rec, const JSRecordLayout *l)
         case JS_REC_PTR_ARRAY:
             for (n = ptr ? f->count(rec) : 0; n > 0; n--) {
                 void *e = ((void **)ptr)[n - 1];
-                if (e) { js_record_release(rt, e, f->sub); (free)(e); }
+                if (e) { js_record_release(rt, e, f->sub); js_record_free(rt, f->sub, e); }
             }
             break;
         case JS_REC_RECORD:
             if (ptr) js_record_release(rt, ptr, f->sub);
             break;
         }
-        (free)(ptr);
+        js_record_free(rt, l, ptr);
     }
 }
 
@@ -11434,7 +11444,7 @@ static void free_object(JSRuntime *rt, JSObject *p)
         (*finalizer)(rt, JS_MKPTR(JS_TAG_OBJECT, p));
     if (rt->class_array[p->class_id].record && p->u.opaque) {
         js_record_release(rt, p->u.opaque, rt->class_array[p->class_id].record);
-        (free)(p->u.opaque);
+        js_record_free(rt, rt->class_array[p->class_id].record, p->u.opaque);
     }
 
     /* fail safe */
@@ -57310,8 +57320,8 @@ static void fg_rprops(FGReader *r, JSValueConst o, int extra)
     }
 }
 
-/* A record fg_record wrote, in the C allocator's storage: into `rec` for an inline array's element, freshly
-   allocated otherwise. Each array is rebuilt at the count written, and the layout's own count is asserted against
+/* A record fg_record wrote, in the storage of the allocator its layout names: into `rec` for an inline array's
+   element, freshly allocated otherwise. Each array is rebuilt at the count written, and the layout's own count is asserted against
    it once every field is back, since a count may read a field restored after it. */
 static JSVarRef *fg_rcell(FGReader *r)
 {
@@ -57360,7 +57370,11 @@ static void fg_rclosure(FGReader *r, JSObject *p)
     CHECK(p->u.func.var_refs != NULL, "flow graph: OOM rebuilding a closure's cells");
     for (int i = 0; i < b->closure_var_count; i++) p->u.func.var_refs[i] = fg_rcell(r);
 }
-static char *fg_rcstr(FGReader *r)
+static void *fg_ralloc(FGReader *r, const JSRecordLayout *l, size_t n)
+{
+    return l->runtime_memory ? js_mallocz_rt(r->ctx->rt, n) : calloc(1, n);
+}
+static char *fg_rcstr(FGReader *r, const JSRecordLayout *l)
 {
     uint8_t t = fg_r8(r);
     uint32_t len;
@@ -57369,7 +57383,7 @@ static char *fg_rcstr(FGReader *r)
     if (t == 'N') return NULL;
     CHECK(t == 'C', "flow graph: a record's string carries a tag this reader does not know");
     len = fg_r32(r);
-    c = calloc(1, (size_t)len + 1);
+    c = fg_ralloc(r, l, (size_t)len + 1);
     CHECK(c != NULL, "flow graph: OOM rebuilding a record's string");
     memcpy(c, fg_take(r, len), len);
     c[len] = '\0';
@@ -57398,12 +57412,12 @@ static void fg_rrecord_into(FGReader *r, void *rec, size_t sz, const JSRecordLay
             written[i] = t == 'v';
             continue;
         }
-        if (f->kind == JS_REC_CSTR) { *slot = fg_rcstr(r); continue; }
+        if (f->kind == JS_REC_CSTR) { *slot = fg_rcstr(r, l); continue; }
         if (f->kind == JS_REC_INTERNED) {
-            char *c = fg_rcstr(r);
+            char *c = fg_rcstr(r, l);
             *slot = c ? (void *)js_ab_codec_intern(r->ctx->rt, (const uint8_t *)c, (uint32_t)strlen(c)) : NULL;
             CHECK(!c || *slot, "flow graph: OOM interning a record's name");
-            (free)(c);
+            if (c) js_record_free(r->ctx->rt, l, c);
             continue;
         }
         t = fg_r8(r);
@@ -57414,14 +57428,14 @@ static void fg_rrecord_into(FGReader *r, void *rec, size_t sz, const JSRecordLay
         {
             size_t es = f->kind == JS_REC_POD_ARRAY ? f->elem_size : f->kind == JS_REC_INLINE_ARRAY ? f->sub->size
                       : f->kind == JS_REC_VALUE_ARRAY ? sizeof(JSValue) : sizeof(void *);
-            uint8_t *arr = calloc(n ? n : 1, es);
+            uint8_t *arr = fg_ralloc(r, l, (size_t)(n ? n : 1) * es);
 
             CHECK(arr != NULL, "flow graph: OOM rebuilding a record's array");
             *slot = arr;
             for (uint32_t k = 0; k < n; k++) {
                 switch ((JSRecordKind)f->kind) {
                 case JS_REC_POD_ARRAY: memcpy(arr + (size_t)k * es, fg_take(r, es), es); break;
-                case JS_REC_CSTR_ARRAY: ((char **)arr)[k] = fg_rcstr(r); break;
+                case JS_REC_CSTR_ARRAY: ((char **)arr)[k] = fg_rcstr(r, l); break;
                 case JS_REC_VALUE_ARRAY: ((JSValue *)arr)[k] = fg_rvalue(r); break;
                 case JS_REC_INLINE_ARRAY: fg_rrecord_into(r, arr + (size_t)k * es, es, f->sub); break;
                 case JS_REC_PTR_ARRAY:
@@ -57450,7 +57464,7 @@ static void *fg_rrecord(FGReader *r, const JSRecordLayout *l)
     void *rec;
 
     CHECK(sz >= l->size, "flow graph: a flexible record is shorter than its fixed header");
-    rec = calloc(1, sz);
+    rec = fg_ralloc(r, l, sz);
     CHECK(rec != NULL, "flow graph: OOM rebuilding a record");
     fg_rrecord_into(r, rec, sz, l);
     DCHECK(!l->self_size || l->self_size(rec) == sz,
@@ -134320,31 +134334,14 @@ static void insert_weakref_record(JSValueConst target,
 
 /* CallSite */
 
-static void js_callsite_finalizer(JSRuntime *rt, JSValueConst val)
-{
-    JSCallSiteData *csd = JS_GetOpaque(val, JS_CLASS_CALL_SITE);
-    if (csd) {
-        JS_FreeValueRT(rt, csd->filename);
-        JS_FreeValueRT(rt, csd->func);
-        JS_FreeValueRT(rt, csd->func_name);
-        JS_FreeValueRT(rt, csd->this_val);
-        JS_FreeValueRT(rt, csd->eval_origin);
-        js_free_rt(rt, csd);
-    }
-}
-
-static void js_callsite_mark(JSRuntime *rt, JSValueConst val,
-                             JS_MarkFunc *mark_func)
-{
-    JSCallSiteData *csd = JS_GetOpaque(val, JS_CLASS_CALL_SITE);
-    if (csd) {
-        JS_MarkValue(rt, csd->filename, mark_func);
-        JS_MarkValue(rt, csd->func, mark_func);
-        JS_MarkValue(rt, csd->func_name, mark_func);
-        JS_MarkValue(rt, csd->this_val, mark_func);
-        JS_MarkValue(rt, csd->eval_origin, mark_func);
-    }
-}
+/* The record's layout: the runtime releases and marks a CallSite by it. */
+static const uint16_t CALLSITE_VALS[] = {
+    offsetof(JSCallSiteData, filename), offsetof(JSCallSiteData, func), offsetof(JSCallSiteData, func_name),
+    offsetof(JSCallSiteData, this_val), offsetof(JSCallSiteData, eval_origin),
+};
+static const JSRecordLayout CALLSITE_LAYOUT = {
+    sizeof(JSCallSiteData), CALLSITE_VALS, 5, NULL, 0, NULL, true
+};
 
 static JSValue js_new_callsite(JSContext *ctx, JSCallSiteData *csd) {
     JSValue obj = js_create_from_intrinsic(ctx, JS_CLASS_CALL_SITE);
@@ -134598,7 +134595,7 @@ static const JSCFunctionListEntry js_callsite_proto_funcs[] = {
 };
 
 static const JSClassShortDef js_callsite_class_def[] = {
-    { JS_ATOM_CallSite, js_callsite_finalizer, js_callsite_mark }, /* JS_CLASS_CALL_SITE */
+    { JS_ATOM_CallSite, NULL, NULL, &CALLSITE_LAYOUT }, /* JS_CLASS_CALL_SITE */
 };
 
 static int _JS_AddIntrinsicCallSite(JSContext *ctx)

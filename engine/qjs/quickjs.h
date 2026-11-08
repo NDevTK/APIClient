@@ -1109,8 +1109,9 @@ typedef struct JSClassExoticMethods {
 /* A host record's layout: the one statement of what a C record owns, read by everything that frees, marks,
    captures or writes it. The bytes outside the named fields are plain data. `val_off` names the owned JSValue
    slots; `fields` names the owned pointers, each by its kind. A count is a function of the record, because a
-   record states some of its lengths through other fields (a pair array is twice its count). Every pointer is
-   from the C allocator and is freed with free(). */
+   record states some of its lengths through other fields (a pair array is twice its count). The record and every
+   pointer it owns come from one allocator: the C allocator (free()), or the runtime's (js_free_rt) where
+   `runtime_memory` says so. */
 typedef struct JSRecordLayout JSRecordLayout;
 typedef enum JSRecordKind {
     JS_REC_CSTR,          /* char *: an owned NUL-terminated string, or NULL */
@@ -1137,6 +1138,7 @@ struct JSRecordLayout {
     const JSRecordField *fields;
     int n_fields;
     size_t (*self_size)(const void *rec);  /* a flexible record's size from its own header; NULL when fixed */
+    bool runtime_memory;                   /* the runtime's allocator rather than the C allocator */
 };
 
 typedef void JSClassFinalizer(JSRuntime *rt, JSValueConst val);
