@@ -340,6 +340,13 @@ void element_post_connection_record(lxb_dom_node_t *n);
 /* DOM §4.2.3 remove steps 11 and 14.1's removing steps HTML defines, for one node removed from a connected parent
    in a document with a realm; they cannot rest or run script. */
 void element_removing_steps(lxb_dom_node_t *n);
+/* DOM §4.2.3 insert step 7.7.1's insertion steps HTML defines that cannot rest, for one connected node in a
+   document with a realm (§6.6.7's autofocus step forks, and is the drain's); they run no script and must not
+   change the tree, asserted. */
+void element_insertion_steps(lxb_dom_node_t *n);
+/* Record `root`, the node an insert placed, for the drain that runs insert steps 11-12 (and §6.6.7's step), when
+   it is connected in a document with a realm. Its other insertion steps are the caller's. */
+void element_tree_steps_record_insert(lxb_dom_node_t *root);
 
 /* The element behind a wrapper, or NULL when the value is not one. */
 lxb_dom_element_t *element_of_value(JSValueConst v);

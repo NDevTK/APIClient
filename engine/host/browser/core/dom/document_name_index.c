@@ -281,11 +281,11 @@ static void dni_element(lxb_dom_document_t *doc, lxb_dom_element_t *el, int delt
 
 /* The current call's steps, charged as THREAD_WORK_DOM_WALK unless a context switch's delta restore made the
    write, which is no flow's act.
-   Named residual. Not covered: an insertion's upkeep, and a removal's other than core/dom/node_remove.h's
-   machine, runs inside the tree write's primitive, charged but not resting, so an inserted or innerHTML-cleared
-   subtree's walk holds the thread. Next: DOM insert as a step machine resting per node, and every removal routed
-   through that machine, which the observer's subtree walks then leave. Absence shows as a flow's slice overrun
-   inside a tree write with DOM-walk work charged across it. */
+   Named residual. Not covered: an insertion's upkeep other than core/dom/node_insert.h's machine, and a
+   removal's other than core/dom/node_remove.h's, runs inside the tree write's primitive, charged but not resting,
+   so a fragment-inserted or innerHTML-cleared subtree's walk holds the thread. Next: every insert and removal
+   routed through those machines, which the observer's subtree walks then leave. Absence shows as a flow's slice
+   overrun inside a tree write with DOM-walk work charged across it. */
 static void dni_charge(void)
 {
     if (g_steps && !dom_cow_restoring()) thread_work_charge(THREAD_WORK_DOM_WALK, g_steps);

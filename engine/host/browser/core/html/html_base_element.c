@@ -250,6 +250,13 @@ void html_base_element_removing_steps(lxb_dom_node_t *n)
     if (base_with_href(n)) base_element_process(n->owner_document, NULL);
 }
 
+void html_base_element_insertion_steps(lxb_dom_node_t *n)
+{
+    DCHECK(n != NULL && n->owner_document != NULL, "a base element's insertion steps ran for no node or one in no "
+                                                   "document");
+    if (base_with_href(n)) base_element_process(n->owner_document, NULL);
+}
+
 void html_base_element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el);

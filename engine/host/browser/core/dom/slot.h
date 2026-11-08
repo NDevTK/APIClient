@@ -39,6 +39,10 @@ void slot_removed_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *pa
    for a node removed from `parent`. */
 void slot_removed_assigned_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent);
 bool slot_removed_tree_steps_apply(lxb_dom_node_t *parent);
+/* The insert half in the parts a resting insert drives: steps 7.4-7.5 for a linked `node`, and whether step 7.6
+   can change anything for it. */
+void slot_inserted_assigned_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent);
+bool slot_inserted_tree_steps_apply(lxb_dom_node_t *node);
 /* §4.2.2.4's assign slottables for a tree, for one of the root's inclusive descendants in tree order (a slot is
    assigned its slottables), charged as one node of DOM-walk work: the walk's body, for a caller that rests
    between nodes. */

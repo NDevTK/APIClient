@@ -401,7 +401,7 @@ static void assign_slottables_for_a_tree(JSContext *ctx, lxb_dom_node_t *root)
        point of §4.2.3 remove step 7's second call. The guard skipped exactly that, so the removed slot kept its
        nodes and each of those nodes kept naming it as its assigned slot — which §4.4's get the parent then
        answered with, sending the event path into a detached subtree. The condition belongs at the INSERTION
-       call site, where it is a fact about that caller (see slot_insert_steps), and it is stated there. */
+       call site, where it is a fact about that caller (see slot_inserted_tree_steps_apply), and it is stated there. */
     for (n = root; n; n = node_next_in(n, root)) slot_assign_tree_node(ctx, n);
 }
 
@@ -458,10 +458,11 @@ static bool slot_assigned_empty(JSContext *ctx, lxb_dom_node_t *slot)
     return empty;
 }
 
-void slot_insert_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent)
+void slot_inserted_assigned_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent)
 {
     DCHECK(g_ready, "§4.2.3's slot steps ran before slot_init");
-    if (!node || !parent) return;
+    DCHECK(node != NULL && parent != NULL && node->parent == parent,
+           "§4.2.3 insert's slot steps ran for no node, no parent, or before steps 7.2-7.3 linked the node");
     /* "If parent is a shadow host whose shadow root's slot assignment is 'named' and node is a slottable, then
        ASSIGN A SLOT for node." The manual mode is excluded on purpose: a manually assigned slot's membership is
        decided by `assign()` and nothing else, so an insertion must not silently re-slot the node. */
@@ -475,20 +476,25 @@ void slot_insert_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *par
        the fallback of an unfilled slot has changed what is rendered. */
     if (slot_is(parent) && shadow_root_is(node_root(parent)) && slot_assigned_empty(ctx, parent))
         signal_a_slot_change(ctx, parent);
-    /* "Run ASSIGN SLOTTABLES FOR A TREE with node's root."
-       ONLY WHEN THAT ROOT IS A SHADOW ROOT, and that is a derivation about THE CALL SITES rather than about the
-       algorithm, so it is checked once per site: a slot whose root is not a shadow root computes the empty list
-       at "find slottables", and a tree being INSERTED holds no slot that already has assigned nodes — an
-       insertion is how a node gets into a tree, so nothing in it can have been assigned to anything yet.
-       Without the test this runs on every insertion, and a document with no shadow tree in it would walk itself
-       once per node.
-       THE SECOND SITE IS §4.2.3's MOVE (steps 21-23, which are this text word for word). A moved subtree CAN
-       hold a slot that already has assigned nodes, so the derivation had to be re-made for it and it holds for
-       a different reason: a slot leaving a shadow tree is cleared by the removal half's step 16 (whose own
-       guard is that the OLD parent's root is a shadow root, which is exactly that case), and a slot arriving in
-       one has its new root pass this test. So neither direction reaches this line needing what the guard skips. */
-    if (shadow_root_is(node_root(node)))
-        assign_slottables_for_a_tree(ctx, node_root(node));
+}
+
+/* "Run ASSIGN SLOTTABLES FOR A TREE with node's root" can change something only when that root is a shadow root,
+   and that is a derivation about the call sites rather than the algorithm: a slot whose root is not a shadow
+   root computes the empty list at "find slottables", and a tree being INSERTED holds no slot that already has
+   assigned nodes. Without the test a document with no shadow tree would walk itself once per insertion.
+   The second site is §4.2.3's move (steps 21-23, this text word for word): a slot leaving a shadow tree is
+   cleared by the removal half's step 16, and a slot arriving in one has its new root pass this test. */
+bool slot_inserted_tree_steps_apply(lxb_dom_node_t *node)
+{
+    return shadow_root_is(node_root(node));
+}
+
+void slot_insert_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent)
+{
+    if (!node || !parent) return;
+    slot_inserted_assigned_steps(ctx, node, parent);                    /* STEPS 7.4-7.5 */
+    if (slot_inserted_tree_steps_apply(node))
+        assign_slottables_for_a_tree(ctx, node_root(node));             /* STEP 7.6 */
 }
 
 void slot_removed_assigned_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent)

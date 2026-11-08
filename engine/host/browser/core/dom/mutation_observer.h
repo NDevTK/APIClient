@@ -54,6 +54,10 @@ void mutation_observer_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_nod
    `parent` with « », « node » and the siblings steps 5-6 bound before the detach. */
 void mutation_observer_removal_record(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent,
                                       lxb_dom_node_t *old_prev, lxb_dom_node_t *old_next);
+/* DOM §4.2.3 insert step 8 for one inserted node: queue a tree mutation record for `parent` with « node », « »,
+   `previous_sibling` (step 6's) and `child`, insert's reference child. */
+void mutation_observer_insertion_record(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent,
+                                        lxb_dom_node_t *previous_sibling, lxb_dom_node_t *child);
 
 /* §4.2.3's MOVE STEPS 25-26 — "queue a tree mutation record for oldParent with « », « node »,
    oldPreviousSibling, and oldNextSibling" and "queue a tree mutation record for newParent with « node », « »,

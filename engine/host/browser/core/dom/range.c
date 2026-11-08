@@ -4,7 +4,7 @@
  * and §5.4's StaticRange: the two carry the identical pair of boundary points (RangeBounds, in
  * abstract_range.c) and the identical five getters, and a Range additionally REGISTERS itself so that §4.2.3's
  * insert and remove can adjust it. Those adjustments are the standard's own algorithms — the "live range
- * pre-remove steps" and insert's step 4 — and they run from the DOM's one mutation chokepoint, so a tree write
+ * pre-remove steps" and insert's step 5 — and they run from the DOM's one mutation chokepoint, so a tree write
  * cannot reach the tree without them.
  *
  * THE REGISTRY IS BORROWED POINTERS WITH A FINALIZER THAT UNREGISTERS, exactly as node_iterator.c's is and for
@@ -263,11 +263,30 @@ void range_did_insert(JSContext *ctx, lxb_dom_node_t *node)
     for (i = 0; i < g_live_n; i++) {
         RangeBounds *b = abstract_range_of(g_live[i]);
         DCHECK(b != NULL, "the live-range list holds something that is not a range");
-        /* §4.2.3 insert step 4, stated against the REFERENCE child's index — which, once the node is in, is the
+        /* §4.2.3 insert step 5, stated against the REFERENCE child's index — which, once the node is in, is the
            inserted node's own. An offset EQUAL to it stays: it names the point immediately before the new node,
            which is where the boundary was. */
         if (bounds_start(b) == parent && b->start_off > index) b->start_off++;
         if (bounds_end(b) == parent && b->end_off > index)     b->end_off++;
+    }
+}
+
+void range_insert_steps(JSContext *ctx, lxb_dom_node_t *parent, lxb_dom_node_t *child, uint32_t count)
+{
+    uint32_t index;
+    int i;
+
+    (void)ctx;
+    DCHECK(parent != NULL && child != NULL && child->parent == parent,
+           "DOM §4.2.3 insert step 5 ran with no parent, no reference child, or a reference child of another node");
+    if (!g_live_n) return;
+    index = node_index(child);
+    for (i = 0; i < g_live_n; i++) {
+        RangeBounds *b = abstract_range_of(g_live[i]);
+
+        DCHECK(b != NULL, "the live-range list holds something that is not a range");
+        if (bounds_start(b) == parent && b->start_off > index) b->start_off += count;   /* STEP 5.1 */
+        if (bounds_end(b) == parent && b->end_off > index)     b->end_off += count;     /* STEP 5.2 */
     }
 }
 

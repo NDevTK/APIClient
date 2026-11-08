@@ -239,6 +239,9 @@ JSValue node_pi_create_decided(JSContext *ctx, lxb_dom_document_t *document, con
    The walk is a heap frame stack, never C recursion: a page's tree is as deep as the page says, and every
    caller of §4.2.3's insert is a plain C body that cannot suspend. See node.c. */
 void node_adopt(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *document);
+/* The same adopt for a node that has no parent: its steps 1 and 3, for a caller that ran step 2's removal
+   itself (core/dom/node_insert.h's machine). Asserts node has no parent. */
+void node_adopt_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *document);
 /* §4.2.3's "insert", as this engine's ONE tree-write helper: a DocumentFragment contributes its CHILDREN, a
    node already in a tree is removed from it first, and `ref` naming `node` itself resolves to its next sibling.
    Exported because §5.5's content-moving members are all stated over pre-insert and append; a second copy of

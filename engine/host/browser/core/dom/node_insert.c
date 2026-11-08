@@ -1,0 +1,172 @@
+/* DOM §4.2.3 "Mutation algorithms"' insert of one node, in the standard's step order, resting at every node of
+ * each walk.
+ *
+ * Steps 7.6 and 7.7 and the name index's upkeep of steps 7.2-7.3 are walks of the inserted subtree or its root,
+ * which is the page's size, so each takes one node per entry and charges it as THREAD_WORK_DOM_WALK. The link
+ * walks no index and the upkeep runs after it, one element per step (solver/dom_cow.h's primitives), so every
+ * captured entry is replayed by a context switch over the tree it was recorded against, and a flow switched in
+ * mid-insert sees its own tree and its own index. Nothing here runs the page's code: step 7.7.3 enqueues its
+ * reactions, and steps 11-12 are the member's drain, over the batch step 8's stage records. */
+#include "core/dom/node_insert.h"
+
+#include "check.h"
+#include "solver/dom_cow.h"
+#include "core/dom/document.h"
+#include "core/dom/document_name_index.h"
+#include "core/dom/element.h"
+#include "core/dom/mutation_observer.h"
+#include "core/dom/node.h"
+#include "core/dom/range.h"
+#include "core/dom/shadow_root.h"
+#include "core/dom/slot.h"
+#include "core/html/custom_elements.h"
+#include "core/html/html_base_element.h"
+#include "core/timing/thread_work.h"
+
+void node_insert_start(JSStepHdr *hdr, NodeInsertState *s, lxb_dom_node_t *node, lxb_dom_node_t *parent,
+                       lxb_dom_node_t *child, int base, int after)
+{
+    DCHECK(node != NULL && parent != NULL, "§4.2.3 insert was started with no node or no parent");
+    /* STEPS 1-4: nodes is « node » and count is 1, since node is not a DocumentFragment. */
+    DCHECK(!node_is_document_fragment(node),
+           "§4.2.3 insert was started on a DocumentFragment — its steps 1 and 4 take the fragment's children, "
+           "which this machine does not walk");
+    DCHECK(child == NULL || (child->parent == parent && child != node),
+           "§4.2.3 insert was started before a child of another parent, or before node itself — pre-insert's "
+           "steps 2-3 are what make the reference child node's next sibling");
+    DCHECK(s->node == NULL, "a second §4.2.3 insert was started while one was still walking");
+    s->node = node;
+    s->parent = parent;
+    s->child = child;
+    s->after = after;
+    hdr->stage = base + NODE_INSERT_PHASE_RANGES;
+}
+
+/* Parent's node document: a Document is its own. */
+static lxb_dom_document_t *node_insert_document(lxb_dom_node_t *parent)
+{
+    return parent->type == LXB_DOM_NODE_TYPE_DOCUMENT ? lxb_dom_interface_document(parent)
+                                                      : parent->owner_document;
+}
+
+int node_insert_run(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, int base)
+{
+    int phase = hdr->stage - base;
+    JSContext *realm;
+
+    DCHECK(s->node != NULL, "§4.2.3 insert was resumed before it was started");
+    if (phase >= NODE_INSERT_PHASE_RM_RANGES && phase < NODE_INSERT_PHASE_RM_RANGES + NODE_REMOVE_PHASE_N)
+        return node_remove_run(ctx, hdr, &s->rm, base + NODE_INSERT_PHASE_RM_RANGES);
+    switch (phase) {
+    case NODE_INSERT_PHASE_RANGES:
+        if (s->child) range_insert_steps(ctx, s->parent, s->child, 1);         /* STEP 5 */
+        s->prev = s->child ? s->child->prev : s->parent->last_child;           /* STEP 6 */
+        if (s->node->parent) {                                                 /* STEP 7.1: adopt step 2 */
+            node_remove_start(hdr, &s->rm, s->node, base + NODE_INSERT_PHASE_RM_RANGES,
+                              base + NODE_INSERT_PHASE_ADOPT);
+            return JS_STEP_YIELD;
+        }
+        hdr->stage = base + NODE_INSERT_PHASE_ADOPT;
+        return JS_STEP_YIELD;
+
+    case NODE_INSERT_PHASE_ADOPT:
+        /* Named residual. Not covered: adopt's step 3 walks node's shadow-including inclusive descendants inside
+           this one step when node comes from another document. Next: that walk one node per step over the
+           adopt frames, held in this state. Absence shows as a cross-document appendChild of a large subtree
+           whose step overruns a quantum while no DOM-walk work is charged for it. */
+        node_adopt_steps(document_realm_of(s->parent), s->node, node_insert_document(s->parent));
+        DCHECK(s->child == NULL || s->child->parent == s->parent,
+               "§4.2.3 insert's reference child left parent during step 7.1 — adopt removes node, and pre-insert "
+               "made child node's next sibling when it was node");
+        hdr->stage = base + NODE_INSERT_PHASE_LINK;
+        return JS_STEP_YIELD;
+
+    case NODE_INSERT_PHASE_LINK:
+        dom_cow_insert_link(s->parent, s->node, s->child);                     /* STEPS 7.2-7.3 */
+        s->index_doc = document_name_index_tree_document(s->node);
+        s->cursor = s->index_doc ? s->node : NULL;
+        s->connected = node_is_connected(s->node);
+        s->realm_steps = s->connected && document_realm_of(s->node) != NULL;
+        hdr->stage = base + NODE_INSERT_PHASE_INDEX;
+        return JS_STEP_YIELD;
+
+    case NODE_INSERT_PHASE_INDEX:
+        if (s->cursor) {
+            DCHECK(s->node->parent == s->parent, "§4.2.3 insert's subtree left its parent during the index upkeep");
+            if (s->cursor->type == LXB_DOM_NODE_TYPE_ELEMENT)
+                dom_cow_insert_index_element(s->index_doc, lxb_dom_interface_element(s->cursor));
+            thread_work_charge(THREAD_WORK_DOM_WALK, 1);
+            s->cursor = node_next_in(s->cursor, s->node);
+            return JS_STEP_YIELD;
+        }
+        hdr->stage = base + NODE_INSERT_PHASE_ASSIGNED;
+        return JS_STEP_YIELD;
+
+    case NODE_INSERT_PHASE_ASSIGNED:
+        slot_inserted_assigned_steps(ctx, s->node, s->parent);                  /* STEPS 7.4-7.5 */
+        if (slot_inserted_tree_steps_apply(s->node)) {
+            s->tree_root = node_root(s->node);
+            s->cursor = s->tree_root;
+            hdr->stage = base + NODE_INSERT_PHASE_SLOT_TREE;
+            return JS_STEP_YIELD;
+        }
+        s->cursor = s->node;
+        hdr->stage = base + NODE_INSERT_PHASE_DESCENDANTS;
+        return JS_STEP_YIELD;
+
+    case NODE_INSERT_PHASE_SLOT_TREE:                                           /* STEP 7.6 */
+        if (s->cursor) {
+            slot_assign_tree_node(ctx, s->cursor);
+            s->cursor = node_next_in(s->cursor, s->tree_root);
+            return JS_STEP_YIELD;
+        }
+        s->cursor = s->node;
+        hdr->stage = base + NODE_INSERT_PHASE_DESCENDANTS;
+        return JS_STEP_YIELD;
+
+    case NODE_INSERT_PHASE_DESCENDANTS:                                         /* STEP 7.7 */
+        if (s->cursor) {
+            lxb_dom_node_t *n = s->cursor;
+
+            realm = document_realm_of(n);
+            if (s->connected) {
+                html_base_element_insertion_steps(n);                           /* STEP 7.7.1 */
+                if (s->realm_steps) element_insertion_steps(n);
+                /* STEP 7.7.2 is s->connected: every node of the walk is a shadow-including inclusive descendant
+                   of node, so it shares node's answer. */
+                if (realm && n->type == LXB_DOM_NODE_TYPE_ELEMENT)
+                    custom_elements_element_connected(realm, lxb_dom_interface_element(n));   /* STEP 7.7.3 */
+            }
+            thread_work_charge(THREAD_WORK_DOM_WALK, 1);
+            s->cursor = shadow_root_next_in_shadow_including(realm ? realm : ctx, n, s->node);
+            return JS_STEP_YIELD;
+        }
+        hdr->stage = base + NODE_INSERT_PHASE_RECORD;
+        return JS_STEP_YIELD;
+
+    case NODE_INSERT_PHASE_RECORD:
+        /* Steps 10-12 are the member's drain, which takes this record at the step's end; the stages forbid
+           script, so it collects staticNodeList now and runs step 12 once the member leaves them. */
+        element_tree_steps_record_insert(s->node);
+        mutation_observer_insertion_record(ctx, s->node, s->parent, s->prev, s->child);   /* STEP 8 */
+        hdr->stage = base + NODE_INSERT_PHASE_CHANGED;
+        return JS_STEP_YIELD;
+
+    case NODE_INSERT_PHASE_CHANGED:
+        node_children_changed(ctx, s->parent);                                  /* STEP 9 */
+        hdr->stage = s->after;
+        return JS_STEP_YIELD;
+
+    default:
+        DFAILF("§4.2.3 insert was resumed at phase %d, outside the block its caller declared for it", phase);
+        return JS_STEP_ABRUPT;
+    }
+}
+
+const char *node_insert_script_forbidden(int stage, int base)
+{
+    if (stage < base || stage >= base + NODE_INSERT_PHASE_N) return NULL;
+    return "DOM §4.2.3 insert runs no page code between its steps 1 and 9: step 7.7.3 enqueues its custom element "
+           "reactions for the member's [CEReactions] epilogue, and step 12's post-connection steps run only "
+           "after every node is inserted";
+}

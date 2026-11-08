@@ -30,9 +30,12 @@ JSValue range_new_bp(JSContext *ctx, JSValueConst snode, uint32_t soff, JSValueC
 
 /* §5.5's "live range PRE-REMOVE steps", run by §4.2.3's remove BEFORE the node leaves the tree. */
 void range_pre_remove(JSContext *ctx, lxb_dom_node_t *node);
-/* §4.2.3's insert step 4, run AFTER a node has entered the tree: every live range whose start or end names the
+/* §4.2.3's insert step 5, run AFTER a node has entered the tree: every live range whose start or end names the
    new parent at an offset past the new node's index moves along by one. */
 void range_did_insert(JSContext *ctx, lxb_dom_node_t *node);
+/* DOM §4.2.3 insert step 5, run BEFORE the nodes enter the tree: every live range whose start or end names
+   `parent` at an offset past `child`'s index moves along by `count`. `child` is the reference child, non-null. */
+void range_insert_steps(JSContext *ctx, lxb_dom_node_t *parent, lxb_dom_node_t *child, uint32_t count);
 
 /* §4.10 "replace data" STEPS 8-11 — the live-range half of a CharacterData splice, run by the splice itself
    once the data has moved. `offset` and `count` are the CODE-UNIT operands the algorithm was given AFTER its

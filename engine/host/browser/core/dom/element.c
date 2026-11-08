@@ -2192,7 +2192,7 @@ static TreeStepEntry *g_ts;
 static int g_ts_n, g_ts_cap;
 
 /* §4.2.3's LIVE-RANGE steps, both directions: the pre-remove steps before a node leaves the tree, and insert's
-   step 4 after one enters it. */
+   step 5 after one enters it. */
 static void element_range_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
 {
     (void)parent;
@@ -2342,53 +2342,55 @@ static bool tree_steps_can_run(const lxb_dom_node_t *n)
     return document_realm_of(n) != NULL;
 }
 
-/* DOM §4.2.3 insert step 7.7.1, "Run the insertion steps with inclusiveDescendant", for every insertion step that
-   cannot rest, run HERE because the chokepoint is inside insert's per-node loop: Lexbor is handed one node of
-   `nodes` at a time, so a later node of the same insert is not yet in the tree. §6.6.7's autofocus step can fork
-   and is the walk's (TS_NODE_AUTOFOCUS). Each runs in the node's own document's realm, not the mutating one's.
-   None may change the tree, which would record a tree step of its own, asserted. Each node is one
-   THREAD_WORK_DOM_WALK unit. */
+void element_insertion_steps(lxb_dom_node_t *n)
+{
+    JSContext *ctx = document_realm_of(n);
+    int recorded = g_ts_n;
+
+    DCHECK(ctx != NULL, "insert's insertion steps reached a node in a document with no realm — "
+                        "tree_steps_can_run is asked of the inserted node first");
+    if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        lxb_dom_element_t *el = lxb_dom_interface_element(n);
+        JSValue w;
+
+        /* HTML §4.2.5.3 "Pragma directives"' Content security policy state, first because it grows the CSP
+           list the link fetch below is judged under; "at the time of inserting the meta element to the
+           document" is its own moment. */
+        document_meta_csp_inserted(el);
+        /* HTML §4.2.5.1's meta `referrer`: "if any meta element element is inserted into the document". */
+        document_meta_referrer_changed(el);
+        /* HTML §4.8.2 "The source element"'s insertion steps: a media parent with no src starts resource
+           selection. */
+        media_element_source_inserted(ctx, el);
+        /* HTML §4.8.3 "The img element"'s insertion steps: a relevant mutation (§4.8.4.3.2). */
+        html_image_inserted(ctx, el);
+        /* HTML §4.6.8.20's "becomes browsing-context connected" fetch, whose link options read the
+           document's base URL now, before a later node of this insert (a base) is in the tree. */
+        html_link_inserted(ctx, el);
+        /* HTML §4.2.6's update a style block, "it becomes connected": DOM §4.2.3's own worked example applies
+           the style rules here, before a script earlier in the fragment runs in the post-connection steps. */
+        html_style_element_update(el);
+        /* HTML §4.11.4's dialog insertion steps: a dialog that arrives open runs the dialog setup steps. */
+        w = node_wrap(ctx, n);
+        html_dialog_insertion_steps(ctx, w);
+        JS_FreeValue(ctx, w);
+    }
+    DCHECK(g_ts_n == recorded,
+           "an insertion step mutated the node tree — §4.2.3 says they \"must not modify the node tree that "
+           "insertedNode participates in\"");
+}
+
+/* DOM §4.2.3 insert step 7.7.1 for an insert through the chokepoint, run HERE because the chokepoint is inside
+   insert's per-node loop: Lexbor is handed one node of `nodes` at a time, so a later node of the same insert is
+   not yet in the tree. Each node is one THREAD_WORK_DOM_WALK unit. */
 static void tree_steps_insertion_steps(lxb_dom_node_t *root)
 {
     lxb_dom_node_t *n;
 
     for (n = root; n; ) {
-        JSContext *ctx = document_realm_of(n);
-        int recorded = g_ts_n;
-
-        DCHECK(ctx != NULL, "insert's insertion steps reached a node in a document with no realm — "
-                            "tree_steps_can_run asked this of the root it was handed");
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            lxb_dom_element_t *el = lxb_dom_interface_element(n);
-            JSValue w;
-
-            /* HTML §4.2.5.3 "Pragma directives"' Content security policy state, first because it grows the CSP
-               list the link fetch below is judged under; "at the time of inserting the meta element to the
-               document" is its own moment. */
-            document_meta_csp_inserted(el);
-            /* HTML §4.2.5.1's meta `referrer`: "if any meta element element is inserted into the document". */
-            document_meta_referrer_changed(el);
-            /* HTML §4.8.2 "The source element"'s insertion steps: a media parent with no src starts resource
-               selection. */
-            media_element_source_inserted(ctx, el);
-            /* HTML §4.8.3 "The img element"'s insertion steps: a relevant mutation (§4.8.4.3.2). */
-            html_image_inserted(ctx, el);
-            /* HTML §4.6.8.20's "becomes browsing-context connected" fetch, whose link options read the
-               document's base URL now, before a later node of this insert (a base) is in the tree. */
-            html_link_inserted(ctx, el);
-            /* HTML §4.2.6's update a style block, "it becomes connected": DOM §4.2.3's own worked example applies
-               the style rules here, before a script earlier in the fragment runs in the post-connection steps. */
-            html_style_element_update(el);
-            /* HTML §4.11.4's dialog insertion steps: a dialog that arrives open runs the dialog setup steps. */
-            w = node_wrap(ctx, n);
-            html_dialog_insertion_steps(ctx, w);
-            JS_FreeValue(ctx, w);
-        }
-        DCHECK(g_ts_n == recorded,
-               "an insertion step mutated the node tree — §4.2.3 says they \"must not modify the node tree that "
-               "insertedNode participates in\"");
+        element_insertion_steps(n);
         thread_work_charge(THREAD_WORK_DOM_WALK, 1);
-        n = shadow_root_next_in_shadow_including(ctx, n, root);
+        n = shadow_root_next_in_shadow_including(document_realm_of(n), n, root);
     }
 }
 
@@ -2429,6 +2431,8 @@ static void tree_steps_removing_steps(lxb_dom_node_t *root)
         element_removing_steps(n);
 }
 
+static void tree_steps_push(lxb_dom_node_t *root);
+
 static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_node_t *parent, int phase)
 {
     (void)ctx;
@@ -2443,6 +2447,17 @@ static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_n
     if (!node_is_connected(root)) return;
     if (!tree_steps_can_run(root)) return;
     tree_steps_insertion_steps(root);
+    tree_steps_push(root);
+}
+
+void element_tree_steps_record_insert(lxb_dom_node_t *root)
+{
+    DCHECK(root != NULL && root->parent != NULL, "an insert recorded no node, or a node it did not place");
+    if (node_is_connected(root) && tree_steps_can_run(root)) tree_steps_push(root);
+}
+
+static void tree_steps_push(lxb_dom_node_t *root)
+{
     if (g_ts_n == g_ts_cap) {
         int want = g_ts_cap ? g_ts_cap * 2 : 8;
         TreeStepEntry *a = lexbor_realloc(g_ts, sizeof(*a) * (size_t)want);

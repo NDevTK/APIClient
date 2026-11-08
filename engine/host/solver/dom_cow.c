@@ -69,12 +69,14 @@ typedef struct DomUndo {
        children, and without a removal capture the old subtree would survive into the new markup and leak
        across a context switch into a sibling flow that never removed it. */
     int reinserted;                                           /* kind 2: currently back in the tree (unapplied) */
-    /* kind 2: a removal whose subtree's name-index upkeep is carried by kind-9 entries recorded before it, so its
-       unlink and re-link walk no index (dom_cow_name_index_apart). */
+    /* kind 1/2: a link or removal whose subtree's name-index upkeep is carried by kind-9 entries (recorded after
+       the link, before the removal), so its unlink and re-link walk no index (dom_cow_name_index_apart). */
     int index_apart;
-    /* kind 9: an element whose id and name values left `index_doc`'s name index while linked in its tree; unapply
-       rejoins them. Recorded before the removal they belong to, so both directions run with the element linked. */
+    /* kind 9: an element whose id and name values left (`sign` -1) or joined (+1) `index_doc`'s name index while
+       linked in its tree; unapply applies the opposite sign and apply the recorded one. Ordered against its kind 1
+       or 2 entry so both directions run with the element linked. */
     lxb_dom_document_t *index_doc;
+    int sign;
     /* kind 6: an ATTRIBUTE this flow created — kind 4's twin, and a separate kind because both halves of what
        a creation entry does differ. "Is it still reachable?" is `owner != NULL` for an attribute and not
        `dom_is_attached` (an Attr's parent is always null, so kind 4's test would call an attribute sitting in
@@ -1356,10 +1358,42 @@ void dom_cow_remove_index_element(lxb_dom_document_t *doc, lxb_dom_element_t *el
     if (!document_name_index_element(doc, el, -1) || !g_dom_capture) return;
     memset(&u, 0, sizeof u);
     dom_capture_begin();
-    u.kind = 9; u.el = el; u.index_doc = doc;
+    u.kind = 9; u.el = el; u.index_doc = doc; u.sign = -1;
     u.sh_old = u.sh_cur = JS_UNDEFINED;
     dom_undo_push(u);
     dom_capture_end();
+}
+
+void dom_cow_insert_index_element(lxb_dom_document_t *doc, lxb_dom_element_t *el) {
+    DomUndo u;
+
+    if (!document_name_index_element(doc, el, +1) || !g_dom_capture) return;
+    memset(&u, 0, sizeof u);
+    dom_capture_begin();
+    u.kind = 9; u.el = el; u.index_doc = doc; u.sign = +1;
+    u.sh_old = u.sh_cur = JS_UNDEFINED;
+    dom_undo_push(u);
+    dom_capture_end();
+}
+
+void dom_cow_insert_link(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref) {
+    DOM_WRITE_OUTSIDE_LAYOUT();
+    DCHECK(parent != NULL && node != NULL && node->parent == NULL,
+           "an insert's link was asked for no parent, no node, or a node still in a tree");
+    DCHECK(ref == NULL || ref->parent == parent, "an insert's link was given a reference child of another parent");
+    g_dom_version++;
+    if (g_dom_capture) {
+        DomUndo u; memset(&u, 0, sizeof u); u.kind = 1; u.node = node; u.index_apart = 1;
+        u.sh_old = u.sh_cur = JS_UNDEFINED;
+        dom_capture_begin();
+        dom_undo_push(u);
+        dom_capture_end();
+    }
+    g_dom_index_apart++;
+    if (ref) lxb_dom_node_insert_before(ref, node);
+    else     lxb_dom_node_insert_child(parent, node);
+    g_dom_index_apart--;
+    DCHECK(node->parent == parent && node->next == ref, "an insert's link did not land where it was aimed");
 }
 
 void dom_cow_remove_detach(lxb_dom_node_t *node) {
@@ -2687,7 +2721,9 @@ static void dom_unapply_entry_body(DomUndo *u) {
     } else if (u->kind == 1 && !u->detached) {
         u->parent = lxb_dom_interface_node(u->node)->parent;              /* remember re-insert position */
         u->next = lxb_dom_interface_node(u->node)->next;
+        g_dom_index_apart += u->index_apart;
         lxb_dom_node_remove(u->node); u->detached = 1;
+        g_dom_index_apart -= u->index_apart;
     } else if (u->kind == 2 && !u->reinserted) {
         /* the baseline HAD this node and this flow removed it: parking restores the baseline. */
         g_dom_index_apart += u->index_apart;
@@ -2696,7 +2732,7 @@ static void dom_unapply_entry_body(DomUndo *u) {
         g_dom_index_apart -= u->index_apart;
         u->reinserted = 1;
     } else if (u->kind == 9) {
-        document_name_index_element(u->index_doc, u->el, +1);
+        document_name_index_element(u->index_doc, u->el, -u->sign);
     }
 }
 /* per-entry APPLY (parked -> flow): restore the flow's value/taint over the baseline. */
@@ -2728,10 +2764,12 @@ static void dom_apply_entry_body(DomUndo *u) {
         lxb_dom_node_remove(u->node); u->reinserted = 0;
         g_dom_index_apart -= u->index_apart;
     } else if (u->kind == 9) {
-        document_name_index_element(u->index_doc, u->el, -1);
+        document_name_index_element(u->index_doc, u->el, u->sign);
     } else if (u->kind == 1 && u->detached) {
+        g_dom_index_apart += u->index_apart;
         if (u->next) lxb_dom_node_insert_before(u->next, u->node);
         else if (u->parent) lxb_dom_node_insert_child(u->parent, u->node);
+        g_dom_index_apart -= u->index_apart;
         u->detached = 0;
     }
 }

@@ -55,6 +55,7 @@
 #include "core/dom/collections.h"
 #include "core/dom/range.h"
 #include "core/dom/node_remove.h"   /* §4.2.3 remove, the machine removeChild runs */
+#include "core/dom/node_insert.h"   /* §4.2.3 insert, the machine appendChild and insertBefore run */
 #include "core/dom/node_iterator.h"   /* §6.1's pre-remove steps, which §4.2.3's move runs at its step 10 */
 #include "core/xml/xml_name.h"   /* §4.13 step 1's `Name` production is XML's, referenced by the DOM */
 #include "quickjs-step.h"
@@ -395,7 +396,6 @@ static JSValue js_node_child_nodes(JSContext *ctx, JSValueConst this_val)
 }
 
 /* §4.4 appendChild — the per-flow chokepoint, returning the node the spec returns (pages chain on it). */
-static JSValue js_node_append_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
 
 /* A newly inserted <script> is PREPARED (HTML 4.12.1) by the element component, which owns that rule; the base
    asks for it through this hook so node.c does not have to know what a script is. */
@@ -922,12 +922,19 @@ static void node_adopting_steps(JSContext *ctx, NodeAdoptStack *s, lxb_dom_node_
 /* DOM §4.5 "ADOPT A NODE", given `node` and `document`. */
 void node_adopt(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *document)
 {
-    NodeAdoptStack s = { NULL, 0, 0 };
-
     DCHECK(node != NULL && document != NULL, "DOM §4.5 adopt was asked of nothing");
     /* STEP 2. It is the capturing removal and not a raw detach because it IS a removal: the per-flow delta has
        to see it, and so do §4.2.3's removing steps and §6.1's pre-remove steps. */
     if (node->parent) dom_cow_remove_child(node);
+    node_adopt_steps(ctx, node, document);
+}
+
+void node_adopt_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *document)
+{
+    NodeAdoptStack s = { NULL, 0, 0 };
+
+    DCHECK(node != NULL && document != NULL && node->parent == NULL,
+           "DOM §4.5 adopt's steps 1 and 3 were asked of nothing, or of a node step 2 has not removed");
     node_adopt_push(&s, node, document);           /* STEPS 1 and 3's condition */
     /* Step 3 mints wrappers and reads per-flow records off them, so it needs the realm — and only step 3 does,
        which is why an adopt into the document a node is already in is answerable without one. */
@@ -1376,25 +1383,99 @@ static bool node_move(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *new_
     return true;
 }
 
-/* §4.4 appendChild. `[CEReactions] Node appendChild(Node node)`: the position is a non-nullable interface type,
-   so §3.6's arity check and §3.2.15's brand are the declaration's and stand in front of this body. */
-static JSValue js_node_append_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    lxb_dom_node_t *n = node_of(this_val), *child;
+/* §4.4 appendChild(node) and insertBefore(node, child): "return the result of appending node to this" and "of
+   pre-inserting node into this before child", append being pre-insert before null. §4.2.3 pre-insert steps 1-3
+   are the first stage, step 4's insert is core/dom/node_insert.h's machine, and step 5 returns node. magic 0 is
+   appendChild (one argument), 1 insertBefore (`Node? child` second); the declarations brand both positions.
+   Named residual. Not covered: a DocumentFragment node is inserted inside the first stage by node_insert_at,
+   whose per-child chokepoint runs every child's walks within that one step. Next: the machine walking `nodes`
+   with insert step 4's suppressed removals and one record for the fragment. Absence shows as an appendChild
+   of a fragment holding a large subtree whose step overruns a quantum. */
+#define NODE_PRE_INSERT_STAGES(X) \
+    X(PI_CHECK,  "DOM §4.2.3 pre-insert steps 1-3 (ensure pre-insert validity; referenceChild)") \
+    NODE_INSERT_ALGO_STAGES(X, PI, "DOM §4.2.3 pre-insert step 4") \
+    X(PI_RETURN, "DOM §4.2.3 pre-insert step 5 (return node)")
+enum { IDL_STEP_STAGE_BASE(NODE_PRE_INSERT_STAGES) NODE_PRE_INSERT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NODE_PRE_INSERT_STEPS[] = { NODE_PRE_INSERT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    (void)magic;
-    if (!n) return JS_UNDEFINED;
-    DCHECK(argc == 1, "appendChild reached its body without its declared argument — the position is not "
-                      "optional, so §3.6 Overload resolution algorithm's step 5 throws for a zero-argument call");
-    child = node_of(argv[0]);
-    DCHECK(child != NULL, "appendChild's `Node` argument reached the body as something that is not a node — the "
-                          "declaration's IDL_INTERFACE position and its idl_iface_brand(node_class_id()) make "
-                          "that a TypeError before step 1");
-    /* §4.4's `appendChild(node)` method steps are `append`, which §4.2.3 defines as pre-insert with a null
-       child — all eleven validity steps. */
-    if (!node_pre_insert(ctx, child, n, NULL)) return JS_EXCEPTION;
-    return JS_DupValue(ctx, argv[0]);
+static void node_pre_insert_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    (void)ctx; (void)st; (void)v;   /* lexbor nodes, the documents'; the header holds this and the arguments */
 }
+
+static const char *node_pre_insert_script_forbidden(int stage, const void *st)
+{
+    (void)st;
+    return node_insert_script_forbidden(stage, PI_RANGES);
+}
+
+static int js_node_pre_insert(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeInsertState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    STEP_DISPATCH(NODE_PRE_INSERT_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(PI_CHECK);
+    {
+        lxb_dom_node_t *parent = node_of(hdr->this_val), *node, *child = NULL;
+
+        if (!parent) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        DCHECK(argc == idl_step_magic(hdr) + 1,
+               "appendChild/insertBefore reached its body without its declared arguments — neither position is "
+               "optional, so §3.6 Overload resolution algorithm's step 5 throws for a shorter call");
+        node = node_of(argv[0]);
+        DCHECK(node != NULL, "pre-insert's `Node node` reached the body as something that is not a node");
+        if (argc == 2) {
+            child = node_of(argv[1]);
+            DCHECK(child != NULL || JS_IsNull(argv[1]),
+                   "insertBefore's `Node? child` reached the body as neither a node nor the IDL null");
+        }
+        if (!node_ensure_pre_insert_valid(ctx, node, parent, child, NULL)) return JS_STEP_ABRUPT;   /* STEP 1 */
+        if (child == node) child = node->next;                                                   /* STEPS 2-3 */
+        if (node_is_document_fragment(node)) {
+            node_insert_at(parent, node, child);
+            hdr->stage = PI_RETURN;
+            return JS_STEP_YIELD;
+        }
+        node_insert_start(hdr, s, node, parent, child, PI_RANGES, PI_RETURN);                   /* STEP 4 */
+        return JS_STEP_YIELD;
+    }
+
+    STEP_ARM(PI_RANGES);
+    STEP_ARM(PI_RM_RANGES);
+    STEP_ARM(PI_RM_ITERATORS);
+    STEP_ARM(PI_RM_DETACH);
+    STEP_ARM(PI_RM_ASSIGNED);
+    STEP_ARM(PI_RM_SLOT_FIND);
+    STEP_ARM(PI_RM_SLOT_PARENT_TREE);
+    STEP_ARM(PI_RM_SLOT_NODE_TREE);
+    STEP_ARM(PI_RM_ROOT);
+    STEP_ARM(PI_RM_DESCENDANTS);
+    STEP_ARM(PI_RM_RECORD);
+    STEP_ARM(PI_RM_CHANGED);
+    STEP_ARM(PI_ADOPT);
+    STEP_ARM(PI_LINK);
+    STEP_ARM(PI_INDEX);
+    STEP_ARM(PI_ASSIGNED);
+    STEP_ARM(PI_SLOT_TREE);
+    STEP_ARM(PI_DESCENDANTS);
+    STEP_ARM(PI_RECORD);
+    STEP_ARM(PI_CHANGED);
+    return node_insert_run(ctx, hdr, s, PI_RANGES);
+
+    STEP_ARM(PI_RETURN);
+    *presult = JS_DupValue(ctx, argv[0]);                                                       /* STEP 5 */
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl NODE_PRE_INSERT_STEP = {
+    js_node_pre_insert, sizeof(NodeInsertState), node_pre_insert_visit, NULL,
+    "DOM §4.4 Node.appendChild and insertBefore (over §4.2.3 pre-insert)", NODE_PRE_INSERT_STEPS,
+    .script_forbidden = node_pre_insert_script_forbidden
+};
 
 /* §4.4 removeChild(child): "return the result of pre-removing child from this". §4.2.3 pre-remove step 1 is
    the first stage, step 2's remove is core/dom/node_remove.h's machine, and step 3 returns child. `child` is a
@@ -3948,41 +4029,23 @@ static const IdlStepDecl NODE_CLONE_STEP = {
     "DOM §4.4 Node.cloneNode (over the `clone a node` concept)", NODE_CLONE_STEPS
 };
 
-/* §4.4 insertBefore / replaceChild — the two remaining mutating tree operations, through the same per-flow
-   chokepoints appendChild and removeChild already use. §4.4 is where the members and their method steps are
-   ("The insertBefore(node, child) method steps are to return the result of pre-inserting node into this before
-   child"); §4.2.3 Mutation algorithms is where `pre-insert` and `replace` themselves are written.
-   magic 0 = insertBefore, 1 = replaceChild. */
-static JSValue js_node_insert(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* §4.4 replaceChild(node, child): "return the result of replacing child with node within this", §4.2.3's
+   replace. `Node child` is not nullable, so the declaration brands both positions before step 1. */
+static JSValue js_node_replace_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                     int magic)
 {
     lxb_dom_node_t *parent = node_of(this_val), *node, *child;
 
+    (void)magic;
     if (!parent) return JS_UNDEFINED;
-    /* §4.4's IDL is `insertBefore(Node node, Node? child)` and `replaceChild(Node node, Node child)`, so the
-       SECOND argument's nullability is the whole of what these two differ in before the algorithms start: an
-       omitted or null reference child means APPEND for one and is a TypeError for the other. THAT IS THE
-       DECLARATION'S NOW — two type arrays rather than one, because one shared array could state only one of
-       the two rules and the body then re-derived the other from the magic. Anything that is neither the IDL
-       null nor a node fails §3.2.15 Interface types' step 2 in both, in argument order. */
-    DCHECK(argc == 2, "insertBefore/replaceChild reached its body without its two declared arguments — neither "
-                      "position is optional, so §3.6 Overload resolution algorithm's step 5 arity TypeError is "
-                      "what a shorter call gets");
+    DCHECK(argc == 2, "replaceChild reached its body without its two declared arguments — neither position is "
+                      "optional, so §3.6 Overload resolution algorithm's step 5 arity TypeError is what a shorter "
+                      "call gets");
     node = node_of(argv[0]);
-    DCHECK(node != NULL, "insertBefore/replaceChild's `Node node` reached the body as something that is not a "
-                         "node — the declaration's IDL_INTERFACE position is what makes that a TypeError "
-                         "before step 1");
     child = node_of(argv[1]);
-    DCHECK(magic == 0 || child != NULL,
-           "replaceChild's `Node child` reached the body as something that is not a node — its second position "
-           "is NOT nullable in §4.4, which is what IDL_INTERFACE there states and IDL_INTERFACE_NULLABLE at "
-           "insertBefore's does not");
-    DCHECK(child != NULL || JS_IsNull(argv[1]),
-           "a reference child reached the body as neither a node nor the IDL null — §3.2.20 Nullable types is "
-           "what turns null and undefined into that null at the declaration");
-    if (magic == 0) {
-        if (!node_pre_insert(ctx, node, parent, child)) return JS_EXCEPTION;
-        return JS_DupValue(ctx, argv[0]);
-    }
+    DCHECK(node != NULL && child != NULL,
+           "replaceChild's `Node node` or `Node child` reached the body as something that is not a node — the "
+           "declaration's IDL_INTERFACE positions make that a TypeError before step 1");
     if (!node_replace(ctx, node, child, parent)) return JS_EXCEPTION;   /* §4.2.3 "replace", STEPS 1-10 */
     return JS_DupValue(ctx, argv[1]);             /* STEP 11 — replaceChild returns the node it REMOVED */
 }
@@ -4940,13 +5003,13 @@ static void node_declare_walkers(JSContext *ctx)
     idl_iface_brand(node_class_id());
     /* §4.4's four MUTATING members — the section that DECLARES them and states their method steps; §4.2.3
        Mutation algorithms is where the algorithms those steps call are written. */
-    g_w_append = idl_method_id(ctx, ONE_NODE, 1, js_node_append_child, 0);
+    g_w_append = idl_method_id_step(ctx, ONE_NODE, 1, NULL, 0, &NODE_PRE_INSERT_STEP, 0);
     idl_iface_brand(node_class_id());
     g_w_remove = idl_method_id_step(ctx, ONE_NODE, 1, NULL, 0, &NODE_REMOVE_CHILD_STEP, 0);
     idl_iface_brand(node_class_id());
-    g_w_insert = idl_method_id(ctx, NODE_THEN_NULLABLE, 2, js_node_insert, 0);
+    g_w_insert = idl_method_id_step(ctx, NODE_THEN_NULLABLE, 2, NULL, 0, &NODE_PRE_INSERT_STEP, 1);
     idl_iface_brand(node_class_id());
-    g_w_replace = idl_method_id(ctx, NODE_THEN_NODE, 2, js_node_insert, 1);
+    g_w_replace = idl_method_id(ctx, NODE_THEN_NODE, 2, js_node_replace_child, 0);
     idl_iface_brand(node_class_id());
     /* `undefined normalize()` — no arguments to convert and still three loops' worth of the page's tree. */
     g_w_normalize = idl_method_id_step(ctx, NULL, 0, NULL, 0, &NODE_NORM_STEP, 0);

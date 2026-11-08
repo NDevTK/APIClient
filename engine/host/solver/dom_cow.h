@@ -142,6 +142,11 @@ void dom_cow_remove_child(lxb_dom_node_t *node);
    linked, captured; `_detach` is step 7's unlink, captured, which then walks no index and runs no tree hook. */
 void dom_cow_remove_index_element(lxb_dom_document_t *doc, lxb_dom_element_t *el);
 void dom_cow_remove_detach(lxb_dom_node_t *node);
+/* DOM §4.2.3 insert's, for core/dom/node_insert.h's machine: `_link` is steps 7.2-7.3, captured, which walks no
+   index and runs no tree hook; `_index_element` then adds one element of the linked subtree to `doc`'s name
+   index, captured. */
+void dom_cow_insert_link(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref);
+void dom_cow_insert_index_element(lxb_dom_document_t *doc, lxb_dom_element_t *el);
 /* Whether the tree link or unlink in progress carries its subtree's name-index upkeep per element, so lexbor's
    tree observer walks none of it (core/dom/document_name_index.c). */
 bool dom_cow_name_index_apart(void);

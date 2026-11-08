@@ -50,6 +50,9 @@ void html_base_element_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_nod
 /* The first situation for one node of a subtree removed from a connected parent (DOM §4.2.3 remove steps 11 and
    14.1), for a removal that drives its descendants one per step. */
 void html_base_element_removing_steps(lxb_dom_node_t *n);
+/* The same for one node of a subtree inserted into a connected parent (DOM §4.2.3 insert step 7.7.1), for an
+   insert that drives its descendants one per step. */
+void html_base_element_insertion_steps(lxb_dom_node_t *n);
 /* §4.2.3's SECOND SITUATION (and the first, when an `href` appears on or leaves an element that is not the
    frozen one), reached through DOM §4.9's attribute change steps — registered on core/dom/element.c's
    element_attr_changed beside media_element_attr_changed. */
