@@ -140,6 +140,7 @@ typedef enum {
     X(OPACITY,             "opacity",             LXB_CSS_PROPERTY_OPACITY,        TEXT, ALL, UNTYPED)            \
     X(FILTER,              "filter",              LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(BACKDROP_FILTER,     "backdrop-filter",     LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
+    X(CLIP_PATH,           "clip-path",           LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(ANIMATION_NAME,            "animation-name",            LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
     X(ANIMATION_DURATION,        "animation-duration",        LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \
     X(ANIMATION_TIMING_FUNCTION, "animation-timing-function", LXB_CSS_PROPERTY__UNDEF, TEXT, ALL, UNTYPED) \

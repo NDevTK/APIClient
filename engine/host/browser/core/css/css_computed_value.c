@@ -2749,6 +2749,17 @@ bool css_computed_filter_is_none(lxb_dom_element_t *el, const char *name)
     return none;
 }
 
+bool css_computed_clip_path_is_none(lxb_dom_element_t *el)
+{
+    char *v = css_computed_value(el, "clip-path");
+    bool none;
+
+    DCHECK(v != NULL, "css-masking-1 §5.1's computed `clip-path` came back as no value; its row derives one");
+    none = strcasecmp(v, "none") == 0;
+    free(v);
+    return none;
+}
+
 bool css_computed_perspective(lxb_dom_element_t *el, CssPx *out)
 {
     char *spec;
@@ -2973,6 +2984,16 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
         free(spec);
         return out;
     }
+    /* css-masking-1 §5.1: `Computed value: as specified, but with <url> values made absolute`, over a value
+       core/css/css_basic_shape.h admitted.
+       NAMED RESIDUAL — WHAT IS NOT COVERED: the `<url>` clause, and css-shapes-1 §3.2 "Computed Values of Basic
+       Shapes"' exceptions (omitted values included, a circle's or ellipse's position as offsets, lengths
+       absolute, rect() and xywh() as inset()); the value stands as specified. WHAT THE NEXT DIFF BUILDS: a
+       parsed `<basic-shape>` with §3.3 "Serialization of Basic Shapes" over its computed form. HOW ITS ABSENCE
+       WOULD SHOW: getComputedStyle reading back a page's own spelling of a shape where Chrome answers the
+       canonical one. Whether the value is `none`, which is what the stacking context reads, is exact. */
+    case CSS_PROPERTY_CLIP_PATH:
+        return spec;
     /* css-transforms-2 §8: "the keyword none or an absolute length". */
     case CSS_PROPERTY_PERSPECTIVE: {
         CssPx d;

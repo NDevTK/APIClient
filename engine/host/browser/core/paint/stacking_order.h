@@ -253,12 +253,11 @@ StackingLayer stacking_layer_of(lxb_dom_element_t *el);
    then the code rather than this paragraph. */
 int stacking_order_compare(JSContext *ctx, lxb_dom_element_t *a, lxb_dom_element_t *b);
 
-/* NAMED RESIDUAL — WHAT IS NOT COVERED: css-masking-1's `clip-path`, `mask-image` and `mask-border-source`,
-   whose non-`none` values form a stacking context the way opacity does, and css-position-4 §3.1 "Top Layer
-   Styling"'s top layer, whose element's parent stacking context is the root and whose order is the top layer's.
-   WHAT THE NEXT DIFF BUILDS: the computed values of `clip-path` and `mask-image` (the latter with the `mask`
-   shorthand that sets it), read beside opacity's. HOW ITS ABSENCE WOULD SHOW: a positioned descendant of a
-   clipped or masked box is ordered against the outer context's members, so a hit test lands on a box that
-   paints beneath it. */
+/* NAMED RESIDUAL — WHAT IS NOT COVERED: css-masking-1's `mask-image` and `mask-border-source`, whose
+   non-`none` values form a stacking context the way opacity does, and css-position-4 §3.1 "Top Layer Styling"'s
+   top layer, whose element's parent stacking context is the root and whose order is the top layer's.
+   WHAT THE NEXT DIFF BUILDS: the computed value of `mask-image` with the `mask` shorthand that sets it, read
+   beside opacity's. HOW ITS ABSENCE WOULD SHOW: a positioned descendant of a masked box is ordered against
+   the outer context's members, so a hit test lands on a box that paints beneath it. */
 
 #endif

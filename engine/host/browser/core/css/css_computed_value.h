@@ -149,6 +149,9 @@ double css_computed_opacity(lxb_dom_element_t *el);
 /* Whether the computed `filter` or `backdrop-filter` (`name`) of `el` is `none` (filter-effects-1 §5). */
 bool css_computed_filter_is_none(lxb_dom_element_t *el, const char *name);
 
+/* Whether css-masking-1 §5.1 "Clipping Shape: the clip-path property"'s computed value of `el` is `none`. */
+bool css_computed_clip_path_is_none(lxb_dom_element_t *el);
+
 /* Whether css-transforms-2 §7 "The transform-style Property"'s computed value of `el` is `preserve-3d`. */
 bool css_computed_transform_style_is_preserve_3d(lxb_dom_element_t *el);
 

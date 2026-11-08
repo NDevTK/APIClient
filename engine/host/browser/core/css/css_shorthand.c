@@ -9,6 +9,7 @@
 #include "core/css/css_align.h"
 #include "core/css/css_animation_shorthand.h"
 #include "core/css/css_background_shorthand.h"
+#include "core/css/css_basic_shape.h"
 #include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_contain.h"
@@ -1451,6 +1452,8 @@ bool css_shorthand_validates_longhand(const char *longhand)
     /* filter-effects-1 §5's `filter` and filter-effects-2 §2's `backdrop-filter`; core/css/css_filter.h owns
        their grammar. */
     if (strcmp(longhand, "filter") == 0 || strcmp(longhand, "backdrop-filter") == 0) return true;
+    /* css-masking-1 §5.1's `clip-path`; core/css/css_basic_shape.h owns its grammar. */
+    if (strcmp(longhand, "clip-path") == 0) return true;
     /* SEVEN OF css-backgrounds-3 §2.10's EIGHT, for the same reason and with the same split: lexbor's registry
        carries `background-color` and none of the other seven, so §2.10's component owns their grammars and
        lexbor's parser owns the colour's. The question is FORWARDED rather than answered here, because the list
@@ -1522,6 +1525,7 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
     }
     if (strcmp(longhand, "filter") == 0 || strcmp(longhand, "backdrop-filter") == 0)
         return css_filter_specified(value);
+    if (strcmp(longhand, "clip-path") == 0) return css_clip_path_specified(value);
     /* css-lists-3 §3.6's three, AFTER §7.3's keywords, because `list-style-type: inherit` is not a
        `<counter-style>` and a `<counter-style-name>` is an ident sequence that would admit it. */
     if (list_style_owns(longhand)) return list_style_longhand_value(longhand, value);
@@ -2973,6 +2977,8 @@ bool css_shorthand_complete_for(const char *longhand)
         /* css-color-4 §3.3, filter-effects-1 §5, filter-effects-2 §2 and compositing-2 §3.4.1 and §3.4.2, each
            declared standalone. */
         "opacity", "filter", "backdrop-filter", "mix-blend-mode", "isolation",
+        /* css-masking-1 §5.1, declared standalone. */
+        "clip-path",
         /* `pointer-events` — NO shorthand in CSS sets it. css-ui-4 §6.2 "Exclusion from Hit-testing: the
            pointer-events property" declares it as a standalone property with its own `Value:` line
            (`auto | none`) and its own `Computed value:` line, and the module states no shorthand over it:

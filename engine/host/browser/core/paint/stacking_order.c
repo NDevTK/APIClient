@@ -100,11 +100,12 @@ static bool so_containment_applies(lxb_dom_element_t *el)
    must establish a new stacking context") and compositing-1 §3.4.2 "The isolation property" ("setting isolation
    to isolate will turn the element into a stacking context"). A will-change naming one forms it too
    (css-will-change-1 §2). css-color-4 keeps the rule off SVG's own rendering model: "These rules about z-order
-   do not apply to SVG elements". */
+   do not apply to SVG elements". css-masking-1 §5.1 "Clipping Shape: the clip-path property" forms one for a
+   value "other than none ... the same way that CSS opacity [CSS3COLOR] does". */
 static bool so_effect_forms(lxb_dom_element_t *el)
 {
     static const char *const EFFECTS[] = { "opacity", "filter", "backdrop-filter", "mix-blend-mode",
-                                           "isolation" };
+                                           "isolation", "clip-path" };
     const lxb_dom_node_t *n = lxb_dom_interface_node(el);
     size_t i;
 
@@ -116,7 +117,7 @@ static bool so_effect_forms(lxb_dom_element_t *el)
     return css_computed_opacity(el) < 1.0 || !css_computed_filter_is_none(el, "filter") ||
            !css_computed_filter_is_none(el, "backdrop-filter") ||
            !css_computed_keyword_is(el, "mix-blend-mode", CSS_KEYWORD_NORMAL) ||
-           css_computed_keyword_is(el, "isolation", CSS_KEYWORD_ISOLATE);
+           css_computed_keyword_is(el, "isolation", CSS_KEYWORD_ISOLATE) || !css_computed_clip_path_is_none(el);
 }
 
 /* css-will-change-1 §2 over `position`, whose `fixed` and `sticky` values form a stacking context on any box:
