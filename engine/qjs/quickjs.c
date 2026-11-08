@@ -56552,7 +56552,7 @@ void JS_FlowReachEnd(JSFlowReach *out)
 
 /* JS_FlowGraph* — see quickjs.h. Host memory throughout, spelled `(free)`/`(realloc)` for the reason the reach
    census gives: a write runs where a runtime allocation could ask for a sale. */
-enum { FG_PLAIN = 1, FG_ARRAY = 2 };
+enum { FG_PLAIN = 1, FG_ARRAY = 2, FG_ERROR = 3 };
 /* A parked graph this writer cannot write whole would resume as a different heap, so the release build stops
    too; the dev build's DCHECK above each use names what to build. */
 #define FG_NO_WRITER() CHECK_FAIL("flow graph: a parked graph holds a value or object no writer can write")
@@ -56752,7 +56752,8 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
         uint32_t i;
         if (p->flow_gen <= w->floor) { fg_u8(out, 'A'); fg_u32(out, fg_anchor(w, v)); return; }
         if (!fg_map_get(&w->objs, p, &i)) {
-            uint8_t kind = p->class_id == JS_CLASS_OBJECT ? FG_PLAIN : p->class_id == JS_CLASS_ARRAY ? FG_ARRAY : 0;
+            uint8_t kind = p->class_id == JS_CLASS_OBJECT ? FG_PLAIN : p->class_id == JS_CLASS_ARRAY ? FG_ARRAY
+                         : p->class_id == JS_CLASS_ERROR ? FG_ERROR : 0;
             if (kind == 0 && w->survey) { fg_gap(w, out, FG_GAP_CLASS, p->class_id); return; }
             if (kind == 0) {
                 DCHECKF(false, "flow graph: a private object of class %d is on a parked graph and has no writer — give "
@@ -56834,8 +56835,8 @@ static void fg_props(FGWriter *w, FGBuf *out, JSObject *p, int from)
 
 /* An object's body: its prototype, whether it is extensible, and its own data properties (fg_props). An array
    writes first whether its elements are dense ('F': stored apart, written as a count and the values) or ordinary
-   properties ('S'), then its length's attributes and value, then the properties after the length slot. A weak
-   key or target has no writer yet. */
+   properties ('S'), then its length's attributes and value, then the properties after the length slot. An Error
+   follows its properties with its uncatchable flag and its stack slot. A weak key or target has no writer yet. */
 static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
 {
     JSObject *p = w->order[id];
@@ -56866,6 +56867,11 @@ static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
         return;
     }
     fg_props(w, out, p, 0);
+    if (w->kinds[id] == FG_ERROR) {
+        /* its stack: undefined, the formatted string, or the pending [prepareStackTrace, callsites] pair */
+        fg_u8(out, p->is_uncatchable_error);
+        fg_value(w, out, p->u.object_data);
+    }
 }
 
 static JSFlowGraph *fg_write(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor, bool survey)
@@ -57055,8 +57061,10 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
     r.objs = calloc(r.n_objs ? r.n_objs : 1, sizeof *r.objs);
     CHECK(r.objs != NULL, "flow graph: OOM rebuilding a graph's object table");
     for (uint32_t i = 0; i < r.n_objs; i++) {
-        r.objs[i] = kinds[i] == FG_ARRAY ? JS_NewArray(ctx) : JS_NewObjectProtoClass(ctx, JS_NULL, JS_CLASS_OBJECT);
-        CHECK(kinds[i] == FG_ARRAY || kinds[i] == FG_PLAIN, "flow graph: an object kind this reader does not know");
+        r.objs[i] = kinds[i] == FG_ARRAY ? JS_NewArray(ctx)
+                  : JS_NewObjectProtoClass(ctx, JS_NULL, kinds[i] == FG_ERROR ? JS_CLASS_ERROR : JS_CLASS_OBJECT);
+        CHECK(kinds[i] == FG_ARRAY || kinds[i] == FG_PLAIN || kinds[i] == FG_ERROR,
+              "flow graph: an object kind this reader does not know");
         CHECK(!JS_IsException(r.objs[i]), "flow graph: OOM rebuilding an object");
     }
     n = fg_r32(&r);
@@ -57089,6 +57097,13 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
                   "flow graph: a rebuilt array refused its length");
         } else {
             fg_rprops(&r, o);
+        }
+        if (kinds[i] == FG_ERROR) {
+            JSObject *ep = JS_VALUE_GET_OBJ(o);
+
+            ep->is_uncatchable_error = fg_r8(&r) != 0;
+            JS_FreeValue(ctx, ep->u.object_data);
+            ep->u.object_data = fg_rvalue(&r);
         }
         if (!ext) CHECK(JS_PreventExtensions(ctx, o) >= 0, "flow graph: a rebuilt object refused to stop extending");
     }
