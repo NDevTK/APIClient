@@ -9,6 +9,7 @@
 #include "core/agent_state.h"
 #include "core/animation/animatable.h"
 #include "core/animation/animation.h"
+#include "core/animation/animation_event.h"
 #include "core/animation/animation_playback_event.h"
 #include "core/animation/animation_time.h"
 #include "core/animation/animation_timeline.h"
@@ -407,7 +408,7 @@ static void an_finish_notification_steps(JSContext *ctx, JSValueConst animation,
     record = animation_timeline_document_record(ctx, tl);
     end = an_effect_end(ctx, slots);
     when = animation_timeline_to_origin_relative(ctx, tl, end);
-    document_animations_append_event(ctx, record, ev, animation, when);
+    document_animations_append_event(ctx, record, ev, animation, when, animation);
     JS_FreeValue(ctx, when);
     JS_FreeValue(ctx, end);
     JS_FreeValue(ctx, record);
@@ -433,14 +434,62 @@ static JSValue js_finish_notify(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+/* The record whose §4.4 step 1 is running, or JS_UNDEFINED: while it is set, a finish notification microtask is
+   step 3's checkpoint work and is held on the record for animation_run_held_finish_notifications. It is scoped to
+   one synchronous call that holds the thread. */
+static JSValue g_step1_record = JS_UNDEFINED;
+
+void animation_hold_finish_notifications(JSValueConst record)
+{
+    DCHECK(JS_IsUndefined(record) != JS_IsUndefined(g_step1_record),
+           "§4.4 step 1's finish notification hold was opened twice or closed while not open");
+    g_step1_record = (JSValue)record;
+}
+
+void animation_run_held_finish_notifications(JSContext *ctx, JSValueConst record)
+{
+    JSValue held = JS_GetPropertyStr(ctx, record, "heldNotify"), len;
+    uint32_t i, n = 0;
+
+    DCHECK(JS_IsArray(held), "a Document's record holds no list of held finish notifications");
+    len = JS_GetPropertyStr(ctx, held, "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    JS_SetPropertyStr(ctx, record, "heldNotify", JS_NewArray(ctx));
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, held, i), args[2];
+
+        args[0] = JS_GetPropertyUint32(ctx, e, 0);
+        args[1] = JS_GetPropertyUint32(ctx, e, 1);
+        JS_FreeValue(ctx, js_finish_notify(ctx, JS_UNDEFINED, 2, args));
+        JS_FreeValue(ctx, args[0]);
+        JS_FreeValue(ctx, e);
+    }
+    JS_FreeValue(ctx, held);
+}
+
 static void an_finish_notify_queue(JSContext *ctx, JSValueConst animation, JSValueConst slots)
 {
-    JSValue fn = realm_value_get(ctx, g_notify_slot), args[2];
+    JSValue fn, args[2];
     int32_t token = sint(ctx, slots, "notifySeq") + 1;
 
-    DCHECK(JS_IsFunction(ctx, fn), "a realm has no finish notification function — animation_install_realm builds it");
     sset(ctx, slots, "notifySeq", JS_NewInt32(ctx, token));
     sset(ctx, slots, "notify", JS_NewInt32(ctx, token));
+    if (!JS_IsUndefined(g_step1_record)) {
+        JSValue held = JS_GetPropertyStr(ctx, g_step1_record, "heldNotify"), e = JS_NewArray(ctx), len;
+        uint32_t n = 0;
+
+        len = JS_GetPropertyStr(ctx, held, "length");
+        JS_ToUint32(ctx, &n, len);
+        JS_FreeValue(ctx, len);
+        JS_SetPropertyUint32(ctx, e, 0, JS_DupValue(ctx, animation));
+        JS_SetPropertyUint32(ctx, e, 1, JS_NewInt32(ctx, token));
+        JS_SetPropertyUint32(ctx, held, n, e);
+        JS_FreeValue(ctx, held);
+        return;
+    }
+    fn = realm_value_get(ctx, g_notify_slot);
+    DCHECK(JS_IsFunction(ctx, fn), "a realm has no finish notification function — animation_install_realm builds it");
     args[0] = (JSValue)animation;
     args[1] = JS_NewInt32(ctx, token);
     JS_EnqueueCallJob(ctx, fn, 2, args);
@@ -632,8 +681,14 @@ static void an_reset_pending_tasks(JSContext *ctx, JSValueConst animation, JSVal
 static void an_cancel(JSContext *ctx, JSValueConst animation, JSValueConst slots)
 {
     if (an_play_state(ctx, slots) != AN_IDLE) {
-        JSValue tl, tt = JS_NULL, ev;
+        JSValue tl, tt = JS_NULL, ev, effect = sget(ctx, slots, "effect");
+        double active = 0;
 
+        /* The active time at the moment of canceling with a fill mode of both, which CSS Animations Level 2
+           §5.1's `animationcancel` reports after the current time it derives from is gone. */
+        if (JS_IsObject(effect) && animation_active_time(ctx, animation, true, &active))
+            sset(ctx, slots, "cancelActiveTime", JS_NewFloat64(ctx, active));
+        JS_FreeValue(ctx, effect);
         an_reset_pending_tasks(ctx, animation, slots);
         an_abort(ctx, slots, "finished");
         an_new_promise(ctx, slots, "finished");
@@ -646,7 +701,7 @@ static void an_cancel(JSContext *ctx, JSValueConst animation, JSValueConst slots
             JSValue record = animation_timeline_document_record(ctx, tl);
             JSValue when = animation_time_resolved(tt) ? animation_timeline_to_origin_relative(ctx, tl, tt) : JS_NULL;
 
-            document_animations_append_event(ctx, record, ev, animation, when);
+            document_animations_append_event(ctx, record, ev, animation, when, animation);
             JS_FreeValue(ctx, when);
             JS_FreeValue(ctx, record);
         }
@@ -862,6 +917,10 @@ void animation_frame_service(JSContext *ctx, JSValueConst animation)
     JS_FreeValue(ctx, slots);
 }
 
+/* Named residual: a running animation whose end is infinite owes no frame, so CSS Animations' `animationiteration`
+   for it fires only at frames something else asks for. The next diff makes an animation with an owning element
+   whose iteration boundary lies ahead owe the frame that reaches it. Its absence shows as an infinite CSS
+   animation's iteration events stopping on a document with no other rendering work. */
 bool animation_needs_frame(JSContext *ctx, JSValueConst animation)
 {
     JSValue slots = animation_slots(ctx, animation);
@@ -948,6 +1007,105 @@ bool animation_relevant(JSContext *ctx, JSValueConst animation)
     JS_FreeValue(ctx, effect);
     JS_FreeValue(ctx, slots);
     return current || in_effect;
+}
+
+/* A resolved time value as the number CSS Animations' event table computes over. */
+static double an_number(JSContext *ctx, JSValueConst v)
+{
+    double d = 0;
+
+    if (!JS_IsNumber(v))
+        DFAIL("CSS Animations Level 2 §5.1's event table was asked over a time value that is unknown external "
+              "input — build the table's comparisons as forks in update the rendering's step 11 machine");
+    JS_ToFloat64(ctx, &d, v);
+    return d;
+}
+
+double animation_effect_number(JSContext *ctx, JSValueConst animation, const char *name)
+{
+    JSValue slots = animation_slots(ctx, animation), effect = sget(ctx, slots, "effect"), v;
+    double d;
+
+    DCHECK(JS_IsObject(effect), "an effect timing number was asked of an animation with no associated effect");
+    if (strcmp(name, "activeDuration") == 0) v = an_active_duration(ctx, effect);
+    else if (strcmp(name, "endTime") == 0) v = an_end_time(ctx, effect);
+    else v = fx(ctx, effect, name);
+    d = an_number(ctx, v);
+    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, effect);
+    JS_FreeValue(ctx, slots);
+    return d;
+}
+
+AnimationPhase animation_effect_phase(JSContext *ctx, JSValueConst animation)
+{
+    JSValue slots = animation_slots(ctx, animation), effect = sget(ctx, slots, "effect"), t;
+    FxPhase p;
+
+    DCHECK(JS_IsObject(effect), "an effect phase was asked of an animation with no associated effect");
+    t = an_current_time(ctx, slots);
+    p = an_phase(ctx, slots, effect, t);
+    JS_FreeValue(ctx, t);
+    JS_FreeValue(ctx, effect);
+    JS_FreeValue(ctx, slots);
+    return p == FX_BEFORE ? ANIMATION_PHASE_BEFORE : p == FX_ACTIVE ? ANIMATION_PHASE_ACTIVE
+         : p == FX_AFTER ? ANIMATION_PHASE_AFTER : ANIMATION_PHASE_IDLE;
+}
+
+bool animation_active_time(JSContext *ctx, JSValueConst animation, bool fill_both, double *out)
+{
+    JSValue slots = animation_slots(ctx, animation), effect = sget(ctx, slots, "effect"), t;
+    AnimationPhase p = animation_effect_phase(ctx, animation);
+    double local, delay, active;
+    bool resolved;
+
+    if (p == ANIMATION_PHASE_IDLE) {
+        JS_FreeValue(ctx, effect);
+        JS_FreeValue(ctx, slots);
+        return false;
+    }
+    t = an_current_time(ctx, slots);
+    local = an_number(ctx, t);
+    delay = animation_effect_number(ctx, animation, "delay");
+    active = animation_effect_number(ctx, animation, "activeDuration");
+    /* §4.7.2's three arms. */
+    if (p == ANIMATION_PHASE_BEFORE) {
+        resolved = fill_both || fx_fills(ctx, effect, "backwards");
+        *out = fmax(local - delay, 0);
+    } else if (p == ANIMATION_PHASE_ACTIVE) {
+        resolved = true;
+        *out = local - delay;
+    } else {
+        resolved = fill_both || fx_fills(ctx, effect, "forwards");
+        *out = fmax(fmin(local - delay, active), 0);
+    }
+    JS_FreeValue(ctx, t);
+    JS_FreeValue(ctx, effect);
+    JS_FreeValue(ctx, slots);
+    return resolved;
+}
+
+bool animation_current_iteration(JSContext *ctx, JSValueConst animation, double *out)
+{
+    AnimationPhase p = animation_effect_phase(ctx, animation);
+    double active, duration, iterations, start, overall, simple;
+
+    if (!animation_active_time(ctx, animation, false, &active)) return false;
+    duration = animation_effect_number(ctx, animation, "duration");
+    iterations = animation_effect_number(ctx, animation, "iterations");
+    start = animation_effect_number(ctx, animation, "iterationStart");
+    if (p == ANIMATION_PHASE_AFTER && isinf(iterations)) { *out = INFINITY; return true; }
+    /* §4.7.3 overall progress. */
+    overall = duration == 0 ? (p == ANIMATION_PHASE_BEFORE ? 0 : iterations) : active / duration;
+    overall += start;
+    /* §4.7.4 simple iteration progress. */
+    simple = isinf(overall) ? fmod(start, 1.0) : fmod(overall, 1.0);
+    if (simple == 0 && (p == ANIMATION_PHASE_ACTIVE || p == ANIMATION_PHASE_AFTER) &&
+        active == animation_effect_number(ctx, animation, "activeDuration") && iterations != 0)
+        simple = 1.0;
+    /* §4.7.5. */
+    *out = simple == 1.0 ? floor(overall) - 1 : floor(overall);
+    return true;
 }
 
 bool animation_replaceable(JSContext *ctx, JSValueConst animation)
@@ -1200,6 +1358,7 @@ void animation_install(JSContext *ctx, JSValueConst global)
     idl_define_global_property_reference(ctx, global, "Animation", ctor);
     animation_playback_event_install(ctx, global);
     css_animations_install(ctx, global);
+    animation_event_install(ctx, global);
 }
 
 void animation_init(JSContext *ctx)
@@ -1271,6 +1430,7 @@ void animation_init(JSContext *ctx)
     realm_declare_intrinsic(animation_install_realm);
     animation_playback_event_init(ctx);
     css_animations_init(ctx);
+    animation_event_init(ctx);
     animatable_init(ctx);
 }
 
@@ -1279,6 +1439,7 @@ void animation_free(JSRuntime *rt)
     DCHECK(g_rt != NULL, "Web Animations §6.4 was released in an agent that never declared it");
     DCHECK(g_rt == rt, "Web Animations §6.4 was released against a runtime other than the one it was declared in");
     animatable_free();
+    animation_event_free(rt);
     css_animations_free(rt);
     animation_playback_event_free(rt);
     animation_timeline_free(rt);

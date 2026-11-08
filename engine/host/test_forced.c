@@ -1511,6 +1511,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/getanims.h"
 #include "fixture/gabig.h"
 #include "fixture/garender.h"
+#include "fixture/gaevents.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2216,6 +2217,7 @@ TF_DOCS[] = {
     { "getanims", HTML_GETANIMS },
     { "gabig", HTML_GABIG },
     { "garender", HTML_GARENDER },
+    { "gaevents", HTML_GAEVENTS },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -21344,6 +21346,26 @@ TF_UNIT void probes_garender(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `gaevents` document (fixture/gaevents.h): CSS Animations Level 2 §5.1's start, iteration and
+   end events reached the owning element's document in that order with the table's elapsed times. */
+TF_UNIT void probes_gaevents(const char *js, Probe *tab, int *n) {
+    const char *ge_why = NULL; int ge_tt = 1;
+    fold_row(&ge_tt, &ge_why, !!strstr(js, "\"/api/gaevents\""),
+             "NOT REACHED: no /api/gaevents record, so no animationend reached the document");
+    fold_row(&ge_tt, &ge_why, param_value_is(js, "/api/gaevents", "seen", "start:0,iteration:0.05,end:0.1"),
+             "the CSS animation events did not arrive as animationstart, animationiteration and animationend with "
+             "elapsed times 0, 0.05 and 0.1");
+    fold_row(&ge_tt, &ge_why, param_value_is(js, "/api/gaevents", "ok", "true"),
+             "an event's target, animationName or animation was not the owning element, `geFade` and its "
+             "CSSAnimation");
+    fold_row(&ge_tt, &ge_why, param_value_is(js, "/api/gaevents", "c", "n2"),
+             "AnimationEvent's constructor did not take animationName and elapsedTime from its dictionary");
+    const Probe rows[] = {
+        { "gaevents-dispatch", ge_tt, "/api/gaevents", SESS_EXPLORE, ge_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `getanims` document (fixture/getanims.h): Web Animations' `getAnimations({ subtree: true })`
    over an animated `<svg>`, answering its CSS animations. */
 TF_UNIT void probes_getanims(const char *js, Probe *tab, int *n) {
@@ -27491,6 +27513,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_getanims(js, probes, &np);
     probes_gabig(js, probes, &np);
     probes_garender(js, probes, &np);
+    probes_gaevents(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);

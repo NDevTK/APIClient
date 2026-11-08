@@ -8,8 +8,10 @@
 #include "quickjs.h"
 #include "core/agent_state.h"
 #include "core/animation/animation.h"
+#include "core/animation/animation_event.h"
 #include "core/animation/animation_timeline.h"
 #include "core/animation/css_animations.h"
+#include "core/animation/document_animations.h"
 #include "core/css/css_animation_shorthand.h"
 #include "core/css/css_author_sheets.h"
 #include "core/css/css_computed_value.h"
@@ -135,11 +137,152 @@ static JSValue ca_effect(JSContext *ctx, JSValueConst target, const CaList *list
     JS_SetPropertyStr(ctx, fx, "delay", JS_NewFloat64(ctx, delay));
     JS_SetPropertyStr(ctx, fx, "iterations", JS_NewFloat64(ctx, iterations));
     JS_SetPropertyStr(ctx, fx, "endDelay", JS_NewFloat64(ctx, 0));
+    JS_SetPropertyStr(ctx, fx, "iterationStart", JS_NewFloat64(ctx, 0));
     JS_SetPropertyStr(ctx, fx, "direction", JS_NewString(ctx, ca_item(&lists[4], i)));
     JS_SetPropertyStr(ctx, fx, "fill", JS_NewString(ctx, ca_item(&lists[5], i)));
     /* Web Animations §4.6.7's effect target: the element the keyframes apply to, here the owning element. */
     JS_SetPropertyStr(ctx, fx, "target", JS_DupValue(ctx, target));
     return fx;
+}
+
+/* ---- Level 2 §5.1 event dispatch ------------------------------------------------------------------------- */
+
+static int ca_int_slot(JSContext *ctx, JSValueConst slots, const char *k, int dflt)
+{
+    JSValue v = JS_GetPropertyStr(ctx, slots, k);
+    int32_t n = dflt;
+
+    if (JS_IsNumber(v)) JS_ToInt32(ctx, &n, v);
+    JS_FreeValue(ctx, v);
+    return n;
+}
+
+/* Queue one AnimationEvent of `type` for `animation` at `owner`, `elapsed_ms` after the animation's start (the
+   table's elapsed time, which places the event on the timeline for §4.4 step 5's sort). */
+static void ca_queue(JSContext *ctx, JSValueConst animation, JSValueConst owner, const char *type, double elapsed_ms)
+{
+    JSValue slots = animation_slots(ctx, animation), name = JS_GetPropertyStr(ctx, slots, "cssName");
+    JSValue tl = JS_GetPropertyStr(ctx, slots, "timeline"), start = JS_GetPropertyStr(ctx, slots, "start");
+    JSValue rate = JS_GetPropertyStr(ctx, slots, "rate"), ev, record, when = JS_NULL;
+    double r = 0, s0 = 0;
+
+    DCHECK(animation_timeline_is(ctx, tl), "a CSS animation event was queued for an animation with no timeline — "
+                                           "its document for timing holds the pending animation event queue");
+    if (JS_IsNumber(start) && JS_IsNumber(rate)) {
+        JS_ToFloat64(ctx, &s0, start);
+        JS_ToFloat64(ctx, &r, rate);
+        if (r != 0) {
+            double at = s0 + (animation_effect_number(ctx, animation, "delay") + elapsed_ms) / r;
+            JSValue t = JS_NewFloat64(ctx, at);
+
+            when = animation_timeline_to_origin_relative(ctx, tl, t);
+        }
+    }
+    /* "it must be divided by 1,000 to produce a value in seconds before being assigned to the elapsedTime". */
+    ev = animation_event_new(ctx, type, animation, name, elapsed_ms / 1000.0);
+    record = animation_timeline_document_record(ctx, tl);
+    document_animations_append_event(ctx, record, ev, owner, when, animation);
+    JS_FreeValue(ctx, record);
+    JS_FreeValue(ctx, when);
+    JS_FreeValue(ctx, rate);
+    JS_FreeValue(ctx, start);
+    JS_FreeValue(ctx, tl);
+    JS_FreeValue(ctx, name);
+    JS_FreeValue(ctx, slots);
+}
+
+/* `animationcancel` for an animation about to be canceled off its owning element, when it is neither idle nor
+   after: elapsed time is "the active time of the animation at the moment it was cancelled calculated using a fill
+   mode of both". */
+static void ca_cancel_event(JSContext *ctx, JSValueConst animation)
+{
+    JSValue slots = animation_slots(ctx, animation), owner = JS_GetPropertyStr(ctx, slots, "owner");
+    int prev = ca_int_slot(ctx, slots, "cssPrevPhase", ANIMATION_PHASE_IDLE);
+    double active = 0;
+
+    if (JS_IsObject(owner) && prev != ANIMATION_PHASE_IDLE && prev != ANIMATION_PHASE_AFTER) {
+        if (!animation_active_time(ctx, animation, true, &active)) active = 0;
+        ca_queue(ctx, animation, owner, "animationcancel", active);
+    }
+    JS_SetPropertyStr(ctx, slots, "cssPrevPhase", JS_NewInt32(ctx, ANIMATION_PHASE_IDLE));
+    JS_FreeValue(ctx, owner);
+    JS_FreeValue(ctx, slots);
+}
+
+void css_animations_frame_events(JSContext *ctx, JSValueConst animation)
+{
+    JSValue slots, owner;
+    AnimationPhase now, prev;
+    double delay, active, end, istart, iend, it = 0, prev_it, iduration;
+    bool has_it;
+
+    if (!css_animations_is(ctx, animation)) return;
+    slots = animation_slots(ctx, animation);
+    owner = JS_GetPropertyStr(ctx, slots, "owner");
+    /* "If there is no owning element, no CSS animation events are dispatched". */
+    if (!JS_IsObject(owner)) { JS_FreeValue(ctx, owner); JS_FreeValue(ctx, slots); return; }
+    now = animation_effect_phase(ctx, animation);
+    prev = (AnimationPhase)ca_int_slot(ctx, slots, "cssPrevPhase", ANIMATION_PHASE_IDLE);
+    delay = animation_effect_number(ctx, animation, "delay");
+    active = animation_effect_number(ctx, animation, "activeDuration");
+    end = animation_effect_number(ctx, animation, "endTime");
+    istart = fmax(fmin(-delay, active), 0);                 /* interval start */
+    iend = fmax(fmin(end - delay, active), 0);               /* interval end */
+    has_it = animation_current_iteration(ctx, animation, &it);
+    {
+        JSValue p = JS_GetPropertyStr(ctx, slots, "cssPrevIteration");
+
+        prev_it = JS_IsNumber(p) ? 0 : NAN;
+        if (JS_IsNumber(p)) JS_ToFloat64(ctx, &prev_it, p);
+        JS_FreeValue(ctx, p);
+    }
+    if ((prev == ANIMATION_PHASE_IDLE || prev == ANIMATION_PHASE_BEFORE) && now == ANIMATION_PHASE_ACTIVE) {
+        ca_queue(ctx, animation, owner, "animationstart", istart);
+    } else if ((prev == ANIMATION_PHASE_IDLE || prev == ANIMATION_PHASE_BEFORE) && now == ANIMATION_PHASE_AFTER) {
+        ca_queue(ctx, animation, owner, "animationstart", istart);
+        ca_queue(ctx, animation, owner, "animationend", iend);
+    } else if (prev == ANIMATION_PHASE_ACTIVE && now == ANIMATION_PHASE_BEFORE) {
+        ca_queue(ctx, animation, owner, "animationend", istart);
+    } else if (prev == ANIMATION_PHASE_ACTIVE && now == ANIMATION_PHASE_ACTIVE) {
+        if (has_it && !isnan(prev_it) && it != prev_it) {
+            /* The table's †: the iteration boundary crossed, times the iteration duration. */
+            double boundary = prev_it > it ? it + 1 : it;
+
+            iduration = animation_effect_number(ctx, animation, "duration");
+            ca_queue(ctx, animation, owner, "animationiteration",
+                     (boundary - animation_effect_number(ctx, animation, "iterationStart")) * iduration);
+        }
+    } else if (prev == ANIMATION_PHASE_ACTIVE && now == ANIMATION_PHASE_AFTER) {
+        ca_queue(ctx, animation, owner, "animationend", iend);
+    } else if (prev == ANIMATION_PHASE_AFTER && now == ANIMATION_PHASE_ACTIVE) {
+        ca_queue(ctx, animation, owner, "animationstart", iend);
+    } else if (prev == ANIMATION_PHASE_AFTER && now == ANIMATION_PHASE_BEFORE) {
+        ca_queue(ctx, animation, owner, "animationstart", iend);
+        ca_queue(ctx, animation, owner, "animationend", istart);
+    } else if (prev != ANIMATION_PHASE_IDLE && prev != ANIMATION_PHASE_AFTER && now == ANIMATION_PHASE_IDLE) {
+        /* The active time Web Animations §4.5.14's cancel recorded at its moment. Named residual: an animation
+           made idle without a cancel (its timeline set to null) reports the previous frame's active time. The next
+           diff records it at §4.5.2's set the timeline too. Its absence shows as that `animationcancel`'s
+           elapsedTime lagging the moment of the change by up to one frame. */
+        JSValue at = JS_GetPropertyStr(ctx, slots, "cancelActiveTime");
+        double cancel_ms = 0;
+
+        if (!JS_IsNumber(at)) { JS_FreeValue(ctx, at); at = JS_GetPropertyStr(ctx, slots, "cssPrevActive"); }
+        if (JS_IsNumber(at)) JS_ToFloat64(ctx, &cancel_ms, at);
+        JS_FreeValue(ctx, at);
+        JS_SetPropertyStr(ctx, slots, "cancelActiveTime", JS_UNDEFINED);
+        ca_queue(ctx, animation, owner, "animationcancel", cancel_ms);
+    }
+    JS_SetPropertyStr(ctx, slots, "cssPrevPhase", JS_NewInt32(ctx, (int32_t)now));
+    JS_SetPropertyStr(ctx, slots, "cssPrevIteration", has_it ? JS_NewFloat64(ctx, it) : JS_NULL);
+    {
+        double a = 0;
+
+        JS_SetPropertyStr(ctx, slots, "cssPrevActive",
+                          animation_active_time(ctx, animation, true, &a) ? JS_NewFloat64(ctx, a) : JS_NULL);
+    }
+    JS_FreeValue(ctx, owner);
+    JS_FreeValue(ctx, slots);
 }
 
 /* ---- the element's list --------------------------------------------------------------------------------- */
@@ -276,6 +419,7 @@ void css_animations_update(lxb_dom_element_t *el)
         JSValue a = JS_GetPropertyUint32(ctx, existing, k), slots;
 
         if (JS_IsUndefined(a)) continue;
+        ca_cancel_event(ctx, a);
         animation_cancel(ctx, a);
         slots = animation_slots(ctx, a);
         JS_SetPropertyStr(ctx, slots, "formerOwner", JS_GetPropertyStr(ctx, slots, "owner"));
@@ -371,6 +515,18 @@ static JSValue ca_order_owner(JSContext *ctx, JSValueConst animation, bool *canc
     if (!JS_IsObject(o)) { JS_FreeValue(ctx, o); return JS_NULL; }
     *canceled = true;
     return o;
+}
+
+bool css_animations_is(JSContext *ctx, JSValueConst v)
+{
+    JSValue name;
+    bool is;
+
+    if (!animation_is(ctx, v)) return false;
+    name = ca_slot(ctx, v, "cssName");
+    is = JS_IsString(name);
+    JS_FreeValue(ctx, name);
+    return is;
 }
 
 bool css_animations_owned(JSContext *ctx, JSValueConst animation)

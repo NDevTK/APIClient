@@ -47,6 +47,11 @@ void animation_cancel(JSContext *ctx, JSValueConst animation);
 /* §4.5.17's play state, as AnimationPlayState's string. */
 const char *animation_play_state(JSContext *ctx, JSValueConst animation);
 
+/* §4.4 steps 1 and 3's finish notifications: between hold(record) and hold(JS_UNDEFINED), the microtask
+   §4.5.12 step 5 queues is held on `record` instead, and run_held runs those as step 3's checkpoint does. */
+void animation_hold_finish_notifications(JSValueConst record);
+void animation_run_held_finish_notifications(JSContext *ctx, JSValueConst record);
+
 /* §4.4 step 1 for one animation associated with a timeline just updated: run its pending task if it is now ready,
    then update its finished state. */
 void animation_frame_service(JSContext *ctx, JSValueConst animation);
@@ -57,6 +62,19 @@ bool animation_needs_frame(JSContext *ctx, JSValueConst animation);
 bool animation_replaceable(JSContext *ctx, JSValueConst animation);
 /* §4.6.7: is this animation relevant (associated effect current or in effect, replace state not removed)? */
 bool animation_relevant(JSContext *ctx, JSValueConst animation);
+/* §4.6.6's phase of the associated effect, idle where its local time is unresolved (which CSS Animations Level 2
+   §5.1 calls the idle phase). Asserts the animation has an associated effect. */
+typedef enum { ANIMATION_PHASE_IDLE = 0, ANIMATION_PHASE_BEFORE, ANIMATION_PHASE_ACTIVE, ANIMATION_PHASE_AFTER }
+    AnimationPhase;
+AnimationPhase animation_effect_phase(JSContext *ctx, JSValueConst animation);
+/* §4.7.2's active time, in milliseconds, with the effect's own fill mode or with `both`; false where unresolved. */
+bool animation_active_time(JSContext *ctx, JSValueConst animation, bool fill_both, double *out);
+/* §4.7.5's current iteration index; false where unresolved. */
+bool animation_current_iteration(JSContext *ctx, JSValueConst animation, double *out);
+/* A number of the associated effect's timing: "delay", "duration", "iterations", "iterationStart", or
+   "activeDuration" (§4.6.5.2) and "endTime" (§4.6.5.3). */
+double animation_effect_number(JSContext *ctx, JSValueConst animation, const char *name);
+
 /* §5.4.2's composite order of the animations of two effects: negative when `a` sorts first, zero when equal. */
 int animation_composite_order(JSContext *ctx, JSValueConst a, JSValueConst b);
 

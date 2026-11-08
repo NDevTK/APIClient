@@ -22,9 +22,11 @@ JSValue document_animations_record(JSContext *ctx);
 JSValue document_animations_now(JSContext *ctx, JSValueConst record);
 /* Associate a document timeline with the record's Document (§4.3 "A timeline can be associated with a document"). */
 void document_animations_add_timeline(JSContext *ctx, JSValueConst record, JSValueConst timeline);
-/* Append `ev` (consumed) to the record's pending animation event queue with its target and scheduled event time. */
+/* Append `ev` (consumed) to the record's pending animation event queue with its target, its scheduled event time
+   and the animation it is about, whose composite order §4.4 step 5 sorts by (the target, for a CSS animation
+   event, is the owning element). */
 void document_animations_append_event(JSContext *ctx, JSValueConst record, JSValue ev, JSValueConst target,
-                                      JSValueConst scheduled);
+                                      JSValueConst scheduled, JSValueConst animation);
 
 /* Web Animations §4.5's global animation list, appended to: the position (from 1) the appended animation holds. The
    list's order is all §5.4.2 reads of it, so a per-realm count in creation order is the list. */

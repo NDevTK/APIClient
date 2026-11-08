@@ -8,6 +8,7 @@
 #include "core/animation/animation.h"
 #include "core/animation/animation_time.h"
 #include "core/animation/animation_timeline.h"
+#include "core/animation/css_animations.h"
 #include "core/animation/document_animations.h"
 #include "core/realm.h"
 #include "solver/flow.h"
@@ -15,8 +16,8 @@
 static JSClassID g_slot = JS_INVALID_CLASS_ID;
 static int g_ready;
 
-/* An entry of the pending animation event queue: [event, target, scheduled event time]. */
-enum { DA_EVENT = 0, DA_TARGET = 1, DA_SCHEDULED = 2 };
+/* An entry of the pending animation event queue: [event, target, scheduled event time, animation]. */
+enum { DA_EVENT = 0, DA_TARGET = 1, DA_SCHEDULED = 2, DA_ANIMATION = 3 };
 
 static uint32_t da_len(JSContext *ctx, JSValueConst arr)
 {
@@ -63,7 +64,7 @@ void document_animations_add_timeline(JSContext *ctx, JSValueConst record, JSVal
 }
 
 void document_animations_append_event(JSContext *ctx, JSValueConst record, JSValue ev, JSValueConst target,
-                                      JSValueConst scheduled)
+                                      JSValueConst scheduled, JSValueConst animation)
 {
     JSValue q = da_list(ctx, record, "events"), e = JS_NewArray(ctx);
 
@@ -72,6 +73,9 @@ void document_animations_append_event(JSContext *ctx, JSValueConst record, JSVal
     JS_SetPropertyUint32(ctx, e, DA_EVENT, ev);
     JS_SetPropertyUint32(ctx, e, DA_TARGET, JS_DupValue(ctx, target));
     JS_SetPropertyUint32(ctx, e, DA_SCHEDULED, JS_DupValue(ctx, scheduled));
+    DCHECK(animation_is(ctx, animation), "a pending animation event was queued about something that is not an "
+                                         "animation — every producer names the animation it is about");
+    JS_SetPropertyUint32(ctx, e, DA_ANIMATION, JS_DupValue(ctx, animation));
     JS_SetPropertyUint32(ctx, q, da_len(ctx, q), e);
     JS_FreeValue(ctx, q);
 }
@@ -183,11 +187,10 @@ static bool da_before(JSContext *ctx, JSValueConst x, JSValueConst y)
     }
     JS_FreeValue(ctx, tx);
     JS_FreeValue(ctx, ty);
-    ax = JS_GetPropertyUint32(ctx, x, DA_TARGET);
-    ay = JS_GetPropertyUint32(ctx, y, DA_TARGET);
+    ax = JS_GetPropertyUint32(ctx, x, DA_ANIMATION);
+    ay = JS_GetPropertyUint32(ctx, y, DA_ANIMATION);
     DCHECK(animation_is(ctx, ax) && animation_is(ctx, ay),
-           "a pending animation event's target is not an animation — every producer in core/animation/ appends "
-           "an AnimationPlaybackEvent targeted at the animation it is about");
+           "a pending animation event's entry names no animation — document_animations_append_event asserts one");
     before = animation_composite_order(ctx, ax, ay) < 0;
     JS_FreeValue(ctx, ax);
     JS_FreeValue(ctx, ay);
@@ -208,12 +211,17 @@ uint32_t document_animations_update(JSContext *docctx, JSValueConst now)
     JS_SetPropertyStr(docctx, record, "now", JS_DupValue(docctx, now));
     as = da_animations(docctx, record);
     n = da_len(docctx, as);
+    animation_hold_finish_notifications(record);
     for (i = 0; i < n; i++) {
         JSValue a = JS_GetPropertyUint32(docctx, as, i);
 
         animation_frame_service(docctx, a);
+        /* "Queueing animation events for any such animations": CSS Animations Level 2 §5.1's, compared across
+           this new animation frame now that no pending task is left. */
+        css_animations_frame_events(docctx, a);
         JS_FreeValue(docctx, a);
     }
+    animation_hold_finish_notifications(JS_UNDEFINED);
     /* Step 2: remove replaced animations. §5.5.2's test asks for each target property of an effect, and no
        effect here models its target properties. */
     for (i = 0; i < n; i++) {
@@ -225,13 +233,15 @@ uint32_t document_animations_update(JSContext *docctx, JSValueConst now)
         JS_FreeValue(docctx, a);
     }
     JS_FreeValue(docctx, as);
-    /* Step 3: perform a microtask checkpoint. Step 1 is the only producer of microtasks here, so the checkpoint
-       has work exactly when step 1 queued one, and this machine cannot run a checkpoint between its steps. */
+    /* Step 3: perform a microtask checkpoint. Step 1's finish notification microtasks were held on the record,
+       and run here, so their events join the queue step 4 copies. Anything else step 1 queued is a promise
+       reaction of the page's, and this machine cannot run the page's code between its steps. */
+    animation_run_held_finish_notifications(docctx, record);
     if (f) flow_job_kinds(f, &task1, &micro1);
     if (micro1 > micro0)
-        DFAIL("Web Animations §4.4 step 3 must perform a microtask checkpoint here, and step 1 queued a microtask "
-              "(a settled promise's reaction or the finish notification steps) — build a checkpoint the "
-              "rendering machine can rest on between steps 1 and 4");
+        DFAIL("Web Animations §4.4 step 3 must perform a microtask checkpoint here, and step 1 settled a promise "
+              "the page attached a reaction to — build a checkpoint the rendering machine can rest on between "
+              "steps 1 and 4");
     /* Steps 4-5: copy, clear and stable-sort the pending animation event queue. An insertion sort is stable. */
     q = da_list(docctx, record, "events");
     n = da_len(docctx, q);
@@ -290,6 +300,7 @@ static void da_install_record(JSContext *ctx)
     JS_SetPropertyStr(ctx, r, "dispatching", JS_NewArray(ctx));
     JS_SetPropertyStr(ctx, r, "listed", JS_NewUint32(ctx, 0));
     JS_SetPropertyStr(ctx, r, "styledGen", JS_NULL);
+    JS_SetPropertyStr(ctx, r, "heldNotify", JS_NewArray(ctx));
     realm_value_set(ctx, g_slot, r);
 }
 

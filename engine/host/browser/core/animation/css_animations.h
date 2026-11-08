@@ -32,6 +32,13 @@ void css_animations_update(lxb_dom_element_t *el);
 /* `el`'s CSS animations, in `animation-name` order, as an array. OWNED. */
 JSValue css_animations_of(JSContext *ctx, lxb_dom_element_t *el);
 
+/* Does `v` implement CSSAnimation? */
+bool css_animations_is(JSContext *ctx, JSValueConst v);
+/* CSS Animations Level 2 §5.1's event dispatch for one animation as a new animation frame is established: the
+   phase and current iteration compared with the previous frame's, and the events the table names queued on the
+   timeline's Document with the owning element as target. Nothing for an animation with no owning element. */
+void css_animations_frame_events(JSContext *ctx, JSValueConst animation);
+
 /* CSS Animations Level 2 §2.2: is `animation` ordered as a CSS animation with an owning element (or, canceled
    and not since played, by the owning element it was canceled off)? */
 bool css_animations_owned(JSContext *ctx, JSValueConst animation);
