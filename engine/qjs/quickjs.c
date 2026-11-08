@@ -34920,7 +34920,11 @@ typedef struct JSTAIdx {
     JSValue src;          /* ToObject(source) (owned) */
     JSValue el;           /* the element held across its coercion (owned) */
     int64_t src_len, i;
-    JSValue pred;         /* set's step 14 range test over an unknown length, held across its fork (owned) */
+    JSValue pred;         /* set's step 5 or range test over an unknown, held across its fork (owned) */
+    /* set's targetOffset where offset is unknown: ToIntegerOrInfinity(offset), derived (owned), else
+       JS_UNINITIALIZED; `idx` is its example on this arm exactly where `off_have` holds. */
+    JSValue offset_v;
+    bool off_have;
 } JSTAIdx;
 
 /* String.prototype trim / trimStart / trimEnd / at / codePointAt: ONE machine. Their whole shared prologue is
@@ -129433,12 +129437,16 @@ static JSValue js_ta_slice_fini(JSContext *ctx, void *st, bool take_result)
     X(TAIDX_READ, "23.2.3.1 steps 5-6 (out of range returns undefined, else Get(O, ToString(k))) - and " \
                   "step 4's negative-relative half, which resolves here")
 #define TAIDX_TAIL_SET(X) \
-    X(TAIDX_SRC,   "23.2.3.26 steps 5-6 (source is ToObject(source); a typed-array source is set whole)") \
-    X(TAIDX_TA_RANGE, "23.2.3.26.2 step 14 over an unknown length or byteOffset (the range test forks)") \
-    X(TAIDX_LEN,   "23.2.3.26.1 step 3 (srcLength is LengthOfArrayLike(src))") \
-    X(TAIDX_NEXT,  "23.2.3.26.1 step 6 (the next index k of the source)") \
-    X(TAIDX_VALUE, "23.2.3.26.1 step 6.c via 10.4.5.16 step 1 (value is ToBigInt or ToNumber)") \
-    X(TAIDX_GET,   "23.2.3.26.1 step 6.b (value is Get(src, Pk))")
+    X(TAIDX_OFF_SIGN, "23.2.3.26 step 5 over an unknown targetOffset (targetOffset < 0 forks; that arm throws)") \
+    X(TAIDX_SRC,   "23.2.3.26 step 6 and 23.2.3.26.1 step 3 (source is ToObject(source); a typed-array source " \
+                   "is set whole)") \
+    X(TAIDX_TA_RANGE, "23.2.3.26.2 steps 13-14 over an unknown length, byteOffset or targetOffset (the range " \
+                      "test forks)") \
+    X(TAIDX_LEN,   "23.2.3.26.1 step 4 (sourceLength is LengthOfArrayLike(source))") \
+    X(TAIDX_RANGE, "23.2.3.26.1 steps 5-6 over an unknown targetOffset (the range test forks)") \
+    X(TAIDX_NEXT,  "23.2.3.26.1 step 8 (the next index k of the source)") \
+    X(TAIDX_VALUE, "23.2.3.26.1 step 8.4 via 10.4.5.18 steps 1-2 (number is ToBigInt or ToNumber)") \
+    X(TAIDX_GET,   "23.2.3.26.1 step 8.2 (value is Get(source, propertyKey))")
 enum { TAIDX_STAGES(JS_STEP_STAGE_ENUM, 0, 0, TAIDX_TAIL_AT) };
 enum { TAIDX_SET_TAIL_BASE = TAIDX_INDEX, TAIDX_TAIL_SET(JS_STEP_STAGE_ENUM) };
 static const char *const js_ta_at_steps[] = {
@@ -129460,8 +129468,8 @@ static bool typed_array_is_bigint(JSClassID class_id)
 }
 
 /* Whether %TypedArray%.prototype.set's source is a typed array that SetTypedArrayFromTypedArray must read through
-   an unknown: a length or a [[ByteOffset]] of either view, or a source holding unknown elements copied across
-   element types (a same-type copy carries its spans with the bytes). */
+   an unknown: targetOffset, a length or a [[ByteOffset]] of either view, or a source holding unknown elements copied
+   across element types (a same-type copy carries its spans with the bytes). */
 static bool js_ta_set_from_ta_unknown_asks(JSContext *ctx, JSTAIdx *s)
 {
     JSObject *p = get_typed_array(ctx, s->hdr.this_val), *sp;
@@ -129469,7 +129477,8 @@ static bool js_ta_set_from_ta_unknown_asks(JSContext *ctx, JSTAIdx *s)
     if (!p || JS_VALUE_GET_TAG(s->src) != JS_TAG_OBJECT || !is_typed_array(JS_VALUE_GET_OBJ(s->src)->class_id))
         return false;
     sp = JS_VALUE_GET_OBJ(s->src);
-    return !JS_IsUninitialized(p->u.typed_array->length_unknown) ||
+    return !JS_IsUninitialized(s->offset_v) ||
+           !JS_IsUninitialized(p->u.typed_array->length_unknown) ||
            !JS_IsUninitialized(p->u.typed_array->offset_unknown) ||
            !JS_IsUninitialized(sp->u.typed_array->length_unknown) ||
            !JS_IsUninitialized(sp->u.typed_array->offset_unknown) ||
@@ -129510,13 +129519,114 @@ static int js_ta_store_element(JSContext *ctx, JSObject *p, int64_t k, JSValue v
     return 0;
 }
 
+/* 23.2.3.26 step 4 over an unknown offset: targetOffset is an unknown derived from it, whose example, where the
+   offset's is a primitive, is ToIntegerOrInfinity over that; `idx` takes it where it is a safe integer. */
+static void js_ta_set_offset_unknown(JSContext *ctx, JSTAIdx *s)
+{
+    JSValueConst off = step_arg(&s->hdr, 1);
+    JSValue ex = JS_UNDEFINED;
+    double d = 0;
+
+    s->idx = 0;
+    s->off_have = false;
+    if (js_concolic_held(off)) {
+        JSValue e = js_concolic_operand(ctx, off);
+        int tag = JS_VALUE_GET_NORM_TAG(e);
+
+        if ((JS_IsNumber(e) || tag == JS_TAG_STRING || tag == JS_TAG_BOOL || tag == JS_TAG_NULL ||
+             tag == JS_TAG_UNDEFINED) && JS_ToFloat64(ctx, &d, e) == 0) {
+            d = isnan(d) ? 0 : trunc(d) + 0.0;
+            ex = js_float64(d);
+            if (fabs(d) <= MAX_SAFE_INTEGER) {
+                s->idx = (int64_t)d;
+                s->off_have = true;
+            }
+        }
+        JS_FreeValue(ctx, e);
+    }
+    s->offset_v = g_concolic.derived(ctx, "23.2.3.26 step 4 (targetOffset is ToIntegerOrInfinity(offset))", &off, 1,
+                                     ex);
+    DCHECK(!JS_IsUninitialized(s->offset_v), "an unknown offset derived no unknown targetOffset");
+    g_concolic.type_fix(ctx, s->offset_v, JS_LANG_TYPE_NUMBER);
+}
+
+/* sourceLength + targetOffset, the left side of 23.2.3.26.1 step 6's and 23.2.3.26.2 step 14's range test (`step`
+   names which): a Number where both are stated, else an unknown derived from them, whose example is the sum of
+   their examples where both have one. `slen` is borrowed. Owned. */
+static JSValue js_ta_set_extent(JSContext *ctx, JSTAIdx *s, JSValueConst slen, const char *step)
+{
+    bool off_stated = JS_IsUninitialized(s->offset_v);
+    JSValue ops[2], ex, r;
+    double d = 0;
+    bool have;
+
+    ex = !js_value_is_concolic(slen) ? js_dup(slen)
+       : js_concolic_held(slen) ? js_concolic_operand(ctx, slen) : JS_UNDEFINED;
+    have = JS_IsNumber(ex) && JS_ToFloat64(ctx, &d, ex) == 0 && (off_stated || s->off_have);
+    JS_FreeValue(ctx, ex);
+    if (!js_value_is_concolic(slen) && off_stated)
+        return js_float64(d + (double)s->idx);
+    ops[0] = slen;
+    ops[1] = off_stated ? JS_NewInt64(ctx, s->idx) : s->offset_v;
+    r = g_concolic.derived(ctx, step, ops, 2, have ? js_float64(d + (double)s->idx) : JS_UNDEFINED);
+    DCHECK(!JS_IsUninitialized(r), "an unknown sourceLength or targetOffset derived no unknown extent");
+    return r;
+}
+
+/* The store set's loops make at element targetOffset + k of `p` where targetOffset is the unknown s->offset_v: an
+   ANY span over the buffer keyed by that index (js_ab_span_set_any), carrying `v` (borrowed) where it is unknown.
+   `step` names the loop's index step. The example world's store at the example index is the caller's. */
+static void js_ta_set_span_at(JSContext *ctx, JSTAIdx *s, JSObject *p, int64_t k, JSValueConst v, const char *step)
+{
+    JSValue ops[2], at;
+
+    if (typed_array_is_oob(p)) return;          /* 10.4.5.18 step 3: no index of the view is valid */
+    ops[0] = s->offset_v;
+    ops[1] = js_int64(k);
+    at = g_concolic.derived(ctx, step, ops, 2, s->off_have ? js_int64(s->idx + k) : JS_UNDEFINED);
+    DCHECK(!JS_IsUninitialized(at), "an unknown targetOffset derived no unknown target index");
+    js_ab_span_set_any(ctx, p->u.typed_array->buffer, at, js_value_is_concolic(v) ? v : JS_UNINITIALIZED);
+    JS_FreeValue(ctx, at);
+}
+
+/* 23.2.3.26.1 step 8.4, TypedArraySetElement(target, targetOffset + k, `v`) for k = s->i, `v` a primitive (taken).
+   Over an unknown targetOffset the example world stores at the example index where this arm keeps one, and an arm
+   that keeps none still runs 10.4.5.18 steps 1-2's conversion, whose throw is the page's. 0 or -1. */
+static int js_ta_set_arraylike_store(JSContext *ctx, JSTAIdx *s, JSValue v)
+{
+    JSObject *p;
+
+    if (JS_IsUninitialized(s->offset_v))
+        return JS_SetPropertyUint32(ctx, s->hdr.this_val, s->idx + s->i, v) < 0 ? -1 : 0;
+    p = get_typed_array(ctx, s->hdr.this_val);
+    if (!p) { JS_FreeValue(ctx, v); return -1; }
+    if (s->off_have) {
+        if (JS_SetPropertyUint32(ctx, s->hdr.this_val, s->idx + s->i, js_dup(v)) < 0) {
+            JS_FreeValue(ctx, v);
+            return -1;
+        }
+    } else if (!js_value_is_concolic(v)) {
+        JSValue n = typed_array_is_bigint(p->class_id) ? JS_ToBigIntFree(ctx, js_dup(v))
+                                                       : JS_ToNumberFree(ctx, js_dup(v));
+
+        if (JS_IsException(n)) { JS_FreeValue(ctx, v); return -1; }
+        JS_FreeValue(ctx, n);
+    }
+    js_ta_set_span_at(ctx, s, p, s->i, v, "23.2.3.26.1 step 8.3 (targetIndex is targetOffset + k)");
+    JS_FreeValue(ctx, v);
+    return 0;
+}
+
 /* 23.2.3.26.2 SetTypedArrayFromTypedArray where js_ta_set_from_ta_unknown_asks holds. Step 14's RangeError is a
-   predicate over the lengths, so it forks; on its in-range arm the source's example window is read first (step
-   17's clone) as 10.4.5.17 answers each element, then stored as 10.4.5.18 does, and an unknown source length
-   makes its elements past the example one write at an unknown offset of the target, derived from them.
-   0, a request code, or -1. */
+   predicate over the lengths and targetOffset, so it forks; on its in-range arm the source's example window is read
+   first (step 17's clone) as 10.4.5.17 answers each element, then stored as 10.4.5.18 does, and an unknown source
+   length makes its elements past the example one write at an unknown offset of the target, derived from them. Over
+   an unknown targetOffset each element is also a write at an unknown index (js_ta_set_span_at), and the example
+   world's stores run only where this arm keeps the example's whole window. 0, a request code, or -1. */
 static int js_ta_set_from_ta_unknown(JSContext *ctx, JSTAIdx *s, JSValue cb_result)
 {
+    static const char ta_index_step[] = "23.2.3.26.2 step 19 (targetByteIndex is targetOffset x targetElementSize + "
+                                        "targetByteOffset), in elements";
     JSObject *p = get_typed_array(ctx, s->hdr.this_val), *sp = JS_VALUE_GET_OBJ(s->src);
     JSTypedArray *ta, *sta;
     JSValue *vals, v, at;
@@ -129525,7 +129635,7 @@ static int js_ta_set_from_ta_unknown(JSContext *ctx, JSTAIdx *s, JSValue cb_resu
 
     JS_FreeValue(ctx, cb_result);
     if (!p) return -1;
-    if (s->idx < 0) {                                   /* 23.2.3.26 step 5 */
+    if (JS_IsUninitialized(s->offset_v) && s->idx < 0) {   /* 23.2.3.26 step 5; TAIDX_OFF_SIGN forks an unknown */
         JS_ThrowRangeError(ctx, "invalid array length");
         return -1;
     }
@@ -129536,22 +129646,10 @@ static int js_ta_set_from_ta_unknown(JSContext *ctx, JSTAIdx *s, JSValue cb_resu
     ta = p->u.typed_array;
     sta = sp->u.typed_array;
     if (JS_IsUninitialized(s->pred)) {
-        JSValue sv[2], ops[2], slen, ex;
-        double d = 0;
+        JSValue sv[2], slen;
 
         slen = JS_IsUninitialized(sta->length_unknown) ? js_int64(sp->u.array.count) : js_dup(sta->length_unknown);
-        if (js_value_is_concolic(slen)) {
-            ex = js_concolic_held(slen) ? js_concolic_operand(ctx, slen) : JS_UNDEFINED;
-            ops[0] = slen;
-            ops[1] = JS_NewInt64(ctx, s->idx);
-            sv[0] = g_concolic.derived(ctx, "23.2.3.26.2 step 14 (sourceLength + targetOffset)", ops, 2,
-                                       JS_IsNumber(ex) && JS_ToFloat64(ctx, &d, ex) == 0
-                                       ? js_float64(d + (double)s->idx) : JS_UNDEFINED);
-            JS_FreeValue(ctx, ex);
-            DCHECK(!JS_IsUninitialized(sv[0]), "an unknown source length derived no unknown extent");
-        } else {
-            sv[0] = js_float64((double)sp->u.array.count + (double)s->idx);
-        }
+        sv[0] = js_ta_set_extent(ctx, s, slen, "23.2.3.26.2 step 14 (sourceLength + targetOffset)");
         JS_FreeValue(ctx, slen);
         sv[1] = JS_IsUninitialized(ta->length_unknown) ? js_int64(p->u.array.count) : js_dup(ta->length_unknown);
         if (!js_value_is_concolic(sv[0]) && !js_value_is_concolic(sv[1])) {
@@ -129574,7 +129672,10 @@ static int js_ta_set_from_ta_unknown(JSContext *ctx, JSTAIdx *s, JSValue cb_resu
         return -1;
     }
     n = sp->u.array.count;
-    if (n > (int64_t)p->u.array.count - s->idx) {
+    if (!JS_IsUninitialized(s->offset_v)) {
+        s->off_have = s->off_have && n <= (int64_t)p->u.array.count - s->idx;
+        n = min_int64(n, p->u.array.count);
+    } else if (n > (int64_t)p->u.array.count - s->idx) {
         if (!JS_IsUninitialized(ta->length_unknown)) {
             DFAIL("23.2.3.26.2 steps 21-22 past an unknown-length target's example bytes: build a store past the "
                   "example window that a read past it answers");
@@ -129589,7 +129690,11 @@ static int js_ta_set_from_ta_unknown(JSContext *ctx, JSTAIdx *s, JSValue cb_resu
         DCHECK(got, "a source element below its stored count has no value");
     }
     for (k = 0; k < n; k++) {
-        if (js_ta_store_element(ctx, p, s->idx + k, vals[k]) < 0) {
+        if (!JS_IsUninitialized(s->offset_v))
+            js_ta_set_span_at(ctx, s, p, k, vals[k], ta_index_step);
+        if (!JS_IsUninitialized(s->offset_v) && !s->off_have) {
+            JS_FreeValue(ctx, vals[k]);
+        } else if (js_ta_store_element(ctx, p, s->idx + k, vals[k]) < 0) {
             for (k++; k < n; k++) JS_FreeValue(ctx, vals[k]);
             js_free(ctx, vals);
             return -1;
@@ -129599,9 +129704,13 @@ static int js_ta_set_from_ta_unknown(JSContext *ctx, JSTAIdx *s, JSValue cb_resu
     if (!JS_IsUninitialized(sta->length_unknown) && n == sp->u.array.count) {
         v = js_ta_get_past_example(ctx, sp, (uint32_t)n);
         if (js_value_is_concolic(v) && !typed_array_is_immutable(p)) {
-            at = js_ta_byte_index(ctx, ta, (s->idx + n) << typed_array_size_log2(p->class_id));
-            js_ab_span_set_any(ctx, ta->buffer, at, v);
-            JS_FreeValue(ctx, at);
+            if (!JS_IsUninitialized(s->offset_v)) {
+                js_ta_set_span_at(ctx, s, p, n, v, ta_index_step);
+            } else {
+                at = js_ta_byte_index(ctx, ta, (s->idx + n) << typed_array_size_log2(p->class_id));
+                js_ab_span_set_any(ctx, ta->buffer, at, v);
+                JS_FreeValue(ctx, at);
+            }
         }
         JS_FreeValue(ctx, v);
     }
@@ -129620,6 +129729,8 @@ static int js_ta_idx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         s->result = JS_UNDEFINED;
         s->src = JS_UNDEFINED; s->el = JS_UNDEFINED;
         s->pred = JS_UNINITIALIZED;
+        s->offset_v = JS_UNINITIALIZED;
+        s->off_have = false;
         p = get_typed_array(ctx, s->hdr.this_val);
         if (!p) return -1;
         if (s->hdr.arg == TAIDX_AT) {
@@ -129630,6 +129741,13 @@ static int js_ta_idx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
             return -1;
         }
         s->hdr.stage = TAIDX_INDEX;
+    }
+    if (s->hdr.stage == TAIDX_INDEX && s->hdr.arg == TAIDX_SET && js_value_is_concolic(step_arg(&s->hdr, 1))) {
+        /* Named residual. Not covered: an offset object whose valueOf answers an unknown runs on its example.
+           Next diff: take the coerced primitive here and derive from it as from a direct unknown. How its absence
+           shows: a set at an offset a page wraps in an object writes only at the example index. */
+        js_ta_set_offset_unknown(ctx, s);
+        s->hdr.stage = TAIDX_OFF_SIGN;
     }
     if (s->hdr.stage == TAIDX_INDEX) {
         JSValueConst v = (s->hdr.arg == TAIDX_AT) ? step_arg(&s->hdr, 0) : step_arg(&s->hdr, 1);
@@ -129645,6 +129763,31 @@ static int js_ta_idx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
        because the values that reach them happen to be numbers. Each mode owns the result it was resumed with. */
     if (s->hdr.arg == TAIDX_SET) {
         int64_t dst_len;
+        if (s->hdr.stage == TAIDX_OFF_SIGN) {
+            int arm;
+
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            if (JS_IsUninitialized(s->pred)) {
+                JSValue sv[2];
+
+                sv[0] = js_int32(0);
+                sv[1] = js_dup(s->offset_v);
+                DCHECK(g_concolic.rel != NULL, "an offset is unknown with no JSConcolicHooks.rel installed");
+                CHECK(g_concolic.rel(ctx, sv + 2, OP_lte), "the relation hook declined set's targetOffset sign test");
+                s->pred = sv[0];
+            }
+            r = step_tobool_run(ctx, &s->hdr, s->pred, "23.2.3.26 step 5 (targetOffset is at least 0)", &arm);
+            if (r) return r;
+            JS_FreeValue(ctx, s->pred);
+            s->pred = JS_UNINITIALIZED;
+            if (!arm) {
+                JS_ThrowRangeError(ctx, "invalid array length");
+                return -1;
+            }
+            s->off_have = s->off_have && s->idx >= 0;
+            s->hdr.stage = TAIDX_SRC;
+        }
         if (s->hdr.stage == TAIDX_SRC) {
             int h;
             s->src = JS_ToObject(ctx, step_arg(&s->hdr, 0));
@@ -129671,10 +129814,37 @@ static int js_ta_idx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
             if (r2) return r2 < 0 ? -1 : r2;
             /* reading the length can change |dst|; per spec the range check is against its OLD length */
             dst_len = s->len;
-            if (s->idx > dst_len - s->src_len) {
+            if (JS_IsUninitialized(s->offset_v) && s->idx > dst_len - s->src_len) {
                 JS_ThrowRangeError(ctx, "invalid array length");
                 return -1;
             }
+            s->hdr.stage = JS_IsUninitialized(s->offset_v) ? (uint16_t)TAIDX_NEXT : (uint16_t)TAIDX_RANGE;
+        }
+        if (s->hdr.stage == TAIDX_RANGE) {   /* steps 5-6 over the unknown targetOffset; step 5's +inf fails 6 */
+            JSObject *tp = get_typed_array(ctx, s->hdr.this_val);
+            int arm;
+
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            if (!tp) return -1;
+            if (JS_IsUninitialized(s->pred)) {
+                JSValue sv[2];
+
+                sv[0] = js_ta_set_extent(ctx, s, js_int64(s->src_len),
+                                         "23.2.3.26.1 step 6 (sourceLength + targetOffset)");
+                sv[1] = JS_IsUninitialized(tp->u.typed_array->length_unknown) ? js_int64(s->len)
+                      : js_dup(tp->u.typed_array->length_unknown);
+                DCHECK(g_concolic.rel != NULL, "an offset is unknown with no JSConcolicHooks.rel installed");
+                CHECK(g_concolic.rel(ctx, sv + 2, OP_lte), "the relation hook declined set's range test");
+                s->pred = sv[0];
+            }
+            r = step_tobool_run(ctx, &s->hdr, s->pred, "23.2.3.26.1 step 6 range test", &arm);
+            if (r) return r;
+            if (!arm) {
+                JS_ThrowRangeError(ctx, "invalid array length");
+                return -1;
+            }
+            s->off_have = s->off_have && s->idx <= s->len - s->src_len;
             s->hdr.stage = TAIDX_NEXT;
         }
         for (;;) {
@@ -129692,8 +129862,9 @@ static int js_ta_idx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
                 s->hdr.stage = TAIDX_NEXT;
                 JS_FreeValue(ctx, s->el);     /* the OBJECT the primitive came from; cb_coerce only borrowed it */
                 s->el = JS_UNDEFINED;
-                if (JS_SetPropertyUint32(ctx, s->hdr.this_val, s->idx + s->i, cb_result) < 0) return -1;
+                r = js_ta_set_arraylike_store(ctx, s, cb_result);
                 cb_result = JS_UNDEFINED;
+                if (r < 0) return -1;
                 s->i++;
             }
             JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
@@ -129724,7 +129895,7 @@ static int js_ta_idx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
             {
                 JSValue el = s->el;
                 s->el = JS_UNDEFINED;
-                if (JS_SetPropertyUint32(ctx, s->hdr.this_val, s->idx + s->i, el) < 0)
+                if (js_ta_set_arraylike_store(ctx, s, el) < 0)
                     return -1;
             }
             s->i++;
@@ -129774,6 +129945,7 @@ static void js_ta_idx_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->src);
     v->val(ctx, &s->el);
     v->val(ctx, &s->pred);
+    v->val(ctx, &s->offset_v);
 }
 
 static JSValue js_ta_idx_fini(JSContext *ctx, void *st, bool take_result)
