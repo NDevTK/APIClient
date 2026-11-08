@@ -37,6 +37,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/dom/document_name_index.h"   /* §7.2.2.3's element names, answered with no walk */
 #include "check.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
@@ -918,6 +919,32 @@ static JSValue win_named_value_of(JSContext *ctx, const char *name, lxb_dom_node
     return v;
 }
 
+/* Whether String key `prop` is no supported property name of HTML §7.2.2.3, decided without a walk: no child
+   navigable has it as its target name, the document's name index holds no element id or name of it, and no
+   connected region of unknown markup could parse an element that does (each region forks in the step). */
+static bool win_named_absent(JSContext *ctx, JSAtom prop)
+{
+    lxb_dom_node_t *root = document_root_node(ctx);
+    size_t n;
+    const char *name = JS_AtomToCStringLen(ctx, &n, prop);
+    JSValue nav;
+    bool absent;
+
+    CHECK(name != NULL, "window: OOM reading a property name");
+    nav = win_named_navigable(ctx, name);
+    absent = JS_IsUndefined(nav) && (root == NULL || !document_name_index_holds(root, name, n));
+    JS_FreeValue(ctx, nav);
+    JS_FreeCString(ctx, name);
+    for (int r = 0; absent && r < unknown_markup_count(ctx); r++) {
+        lxb_dom_node_t *rn;
+        JSValue m = unknown_markup_at(ctx, r, &rn);
+
+        JS_FreeValue(ctx, m);
+        if (node_is_connected(rn)) absent = false;
+    }
+    return absent;
+}
+
 /* HTML §7.2.2.3's [[GetOwnProperty]] from C. The lookup rests per element as win_named_step, which every keyed
    request reaches (get_own_property_step), [[Set]]'s OrdinarySet included, so a C activation asking for a String
    key is a caller to route onto the keyed entry. A Symbol names no named property. */
@@ -928,7 +955,7 @@ static int win_named_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValue
 
     (void)desc; (void)obj;
     JS_FreeValue(ctx, pv);
-    if (sym) return 0;
+    if (sym || win_named_absent(ctx, prop)) return 0;
     DFAIL("a C activation asked WindowProperties' named [[GetOwnProperty]]: §7.2.2.3's lookup rests per element "
           "as win_named_step, so route this caller's read or write through the keyed entry "
           "(get_own_property_step), never a C walk");
@@ -1238,8 +1265,8 @@ static JSValue win_named_key_domain_step(JSContext *ctx, JSValueConst obj)
     return idl_step_function(ctx, "WindowProperties supported names in a key domain", g_id_named_domain_step);
 }
 
-/* JSClassExoticMethods.get_own_property_step: the step function for a String key, JS_UNDEFINED for a Symbol,
-   which names no named property. Owned. */
+/* JSClassExoticMethods.get_own_property_step: the step function for a String key that may be a supported name,
+   JS_UNDEFINED for a Symbol, which names no named property, or a key win_named_absent rules out. Owned. */
 static JSValue win_named_get_own_step(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
     JSValue pv;
@@ -1249,7 +1276,7 @@ static JSValue win_named_get_own_step(JSContext *ctx, JSValueConst obj, JSAtom p
     pv = JS_AtomToValue(ctx, prop);
     name = JS_IsString(pv);
     JS_FreeValue(ctx, pv);
-    if (!name) return JS_UNDEFINED;
+    if (!name || win_named_absent(ctx, prop)) return JS_UNDEFINED;
     DCHECK(g_id_named_step >= 0, "named access asked for its step before window_init declared it");
     return idl_step_function(ctx, "WindowProperties named access", g_id_named_step);
 }
