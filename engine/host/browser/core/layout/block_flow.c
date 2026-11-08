@@ -1104,10 +1104,38 @@ bool block_flow_establishes_inline_context(lxb_dom_element_t *el)
     LayoutJobDrive d;
     bool establishes = false;
 
+#if APICLIENT_DEV
+    if (layout_job_rests_innermost()) {
+        char nbuf[160];
+
+        DCHECKF(!block_flow_display_is_block_container(css_computed_display(el)) ||
+                    flow_placement_inline_context_peek(el, &establishes),
+                "%s: its inline formatting context condition was read under a resting drive with no answered ask "
+                "before it, so this read would scan its content inside one activation; the body whose read "
+                "reaches here asks `block_flow_establishes_inline_context_ask` first, as "
+                "`intrinsic_inline_sizes_ask` does for `intrinsic_inline_sizes`", box_subject(el, nbuf, sizeof nbuf));
+    }
+#endif
     layout_job_drive_begin(&d);
     while (!block_flow_establishes_inline_context_ask(el, &establishes)) (void)block_flow_drive_deferred(&d);
     layout_job_drive_end(&d);
     return establishes;
+}
+
+bool block_flow_establishes_inline_context_served(lxb_dom_element_t *el, const char *asker)
+{
+    bool establishes;
+    char nbuf[160];
+
+    DCHECK(el != NULL && asker != NULL, "a served inline formatting context condition was read with no element or "
+                                        "no asker named");
+    if (!block_flow_display_is_block_container(css_computed_display(el))) return false;
+    if (flow_placement_inline_context_peek(el, &establishes)) return establishes;
+    DFAILF("%s: its inline formatting context condition was read as served and no ask answered it in this job; "
+           "%s asks `block_flow_establishes_inline_context_ask` under the activation's resting drive before this "
+           "read", box_subject(el, nbuf, sizeof nbuf), asker);
+    (void)nbuf;
+    return block_flow_establishes_inline_context(el);
 }
 
 /* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes" -------------------------------------------------------------

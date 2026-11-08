@@ -1173,7 +1173,7 @@ static bool bp_line_boxes(BpState *st, lxb_dom_element_t *el)
     size_t n, i;
     bool ok = true;
 
-    if (block_flow_establishes_inline_context(el)) {
+    if (block_flow_establishes_inline_context_served(el, "core/paint/document_paint.c's document_paint_ready")) {
         BlockFlowRun whole;
 
         /* §9.4.2's context with an ELEMENT to name it is the WHOLE of this container's content — the run with

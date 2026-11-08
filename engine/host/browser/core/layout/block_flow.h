@@ -381,6 +381,9 @@ bool block_flow_run_generates_box(lxb_dom_element_t *el, BlockFlowRun run);
    unwritten when a resting drive stopped it. The read drives the ask to its answer under a drive of its own. */
 bool block_flow_establishes_inline_context_ask(lxb_dom_element_t *el, bool *out);
 bool block_flow_establishes_inline_context(lxb_dom_element_t *el);
+/* The answer an earlier ask in this job holds, for a reader whose `asker` (named in the crash) asks first under
+   a resting drive; a reader that reaches it with nothing held crashes, and the release arm drives the ask. */
+bool block_flow_establishes_inline_context_served(lxb_dom_element_t *el, const char *asker);
 
 /* A stopped §9.4.2 scan's place: the member it classifies next and the box whose sequence holds it, which is
    the container or an inline box inside it, and whether an inline-level child of the container was met. */
