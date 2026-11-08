@@ -1609,6 +1609,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/transform3d.h"
 #include "fixture/indivtransform.h"
 #include "fixture/perspective.h"
+#include "fixture/perspectivew.h"
 #include "fixture/preserve3d.h"
 #include "fixture/fillwidth.h"
 #include "fixture/jsonlead.h"
@@ -2360,6 +2361,7 @@ TF_DOCS[] = {
     { "transform3d", HTML_TRANSFORM3D },
     { "indivtransform", HTML_INDIVTRANSFORM },
     { "perspective", HTML_PERSPECTIVE },
+    { "perspectivew", HTML_PERSPECTIVEW },
     { "preserve3d", HTML_PRESERVE3D },
     { "fillwidth", HTML_FILLWIDTH },
     { "jsonlead", HTML_JSONLEAD },
@@ -22847,6 +22849,26 @@ TF_UNIT void probes_perspective(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `perspectivew` document (fixture/perspectivew.h): css-transforms-2 §4.2's corners at w <= 0
+   in a client rectangle, against Chrome 153.0.8010.12. */
+TF_UNIT void probes_perspectivew(const char *js, Probe *tab, int *n) {
+    const char *pw_why = NULL; int pw_tt = 1;
+#define PW_IS(k, v) param_value_is(js, "/api/perspectivew", k, v)
+    fold_row(&pw_tt, &pw_why, !!strstr(js, "\"/api/perspectivew\""),
+             "NOT REACHED: no /api/perspectivew record, so the document aborted before its fetch");
+    fold_row(&pw_tt, &pw_why, PW_IS("n", "0_0_100_100"),
+             "css-transforms-2 §4.2: a box at w = -1 does not map its corners through the division by w");
+    fold_row(&pw_tt, &pw_why, PW_IS("z", "0_0_100_100"),
+             "css-transforms-2 §4.2: a box at w = 0 does not map its corners undivided");
+    fold_row(&pw_tt, &pw_why, PW_IS("m", "-100_-100_200_400"),
+             "css-transforms-2 §4.2: a box whose w changes sign across it does not enclose its four divided corners");
+#undef PW_IS
+    const Probe rows[] = {
+        { "perspective-w", pw_tt, "/api/perspectivew", SESS_EXPLORE, pw_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `preserve3d` document (fixture/preserve3d.h): css-transforms-2 §7's transform-style and §4.1.4's
    accumulated 3D transformation matrix. */
 TF_UNIT void probes_preserve3d(const char *js, Probe *tab, int *n) {
@@ -29229,6 +29251,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_transform3d(js, probes, &np);
     probes_indivtransform(js, probes, &np);
     probes_perspective(js, probes, &np);
+    probes_perspectivew(js, probes, &np);
     probes_preserve3d(js, probes, &np);
     probes_fillwidth(js, probes, &np);
     probes_jsonlead(js, probes, &np);
