@@ -54,6 +54,8 @@ typedef struct NodeInsertState {
     uint8_t realm_steps;                    /* ...in a document with a realm, so HTML's insertion steps run */
     uint8_t suppress_observers;             /* insert's suppressObservers: step 8 queues no record */
     uint8_t observed;                       /* a mutation observer exists, so the records have wrappers to name */
+    uint8_t keep_nodes;                     /* nodes_js outlives the insert, for the caller's record */
+    uint8_t done;                           /* step 9 is done */
 } NodeInsertState;
 
 /* Begin inserting `node` into `parent` before `child` (NULL: append), with insert's suppressObservers; the
@@ -64,6 +66,12 @@ void node_insert_start(JSStepHdr *hdr, NodeInsertState *s, lxb_dom_node_t *node,
 /* One stage of the insert; JS_STEP_YIELD at every rest, with hdr->stage at `after` once step 9 is done. It makes
    no request and cannot throw. */
 int node_insert_run(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, int base);
+/* Keep a fragment's nodes as wrappers past the insert, for a caller whose own record names them (replace step
+   10, replace all step 7); called right after node_insert_start. */
+void node_insert_keep_nodes(NodeInsertState *s);
+/* The kept nodes of a finished insert of a DocumentFragment while an observer exists, owned by the caller, or
+   JS_UNDEFINED. */
+JSValue node_insert_take_nodes(NodeInsertState *s);
 /* What the state owns, for the member's visit. */
 void node_insert_visit(JSContext *ctx, NodeInsertState *s, JSStepVisit *v);
 /* Why the page's code must not run at `stage`, or NULL: every stage of the block at `base`. */

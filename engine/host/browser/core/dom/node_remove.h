@@ -47,6 +47,7 @@ typedef struct NodeRemoveState {
     uint8_t parent_connected;              /* step 12's isParentConnected */
     uint8_t realm_steps;                   /* parent's document has a realm, so the removing steps HTML defines run */
     uint8_t suppress_observers;            /* remove's suppressObservers: step 16 queues no record */
+    uint8_t done;                          /* step 17 is done */
 } NodeRemoveState;
 
 /* Begin removing `node` from its parent, with remove's suppressObservers; the caller's next entry is at `base`.

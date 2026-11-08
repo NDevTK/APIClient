@@ -30,8 +30,7 @@ void node_remove_start(JSStepHdr *hdr, NodeRemoveState *s, lxb_dom_node_t *node,
     DCHECK(node != NULL && node->parent != NULL,
            "§4.2.3 remove was started on no node or a node with no parent — step 2 asserts the parent, and the "
            "caller's own steps are what establish it");
-    DCHECK(s->node == NULL || (hdr->stage == after && s->cursor == NULL),
-           "a second §4.2.3 remove was started while one was still walking");
+    DCHECK(s->node == NULL || s->done, "a second §4.2.3 remove was started while one was still walking");
     memset(s, 0, sizeof *s);
     s->node = node;
     s->after = after;
@@ -156,6 +155,7 @@ int node_remove_run(JSContext *ctx, JSStepHdr *hdr, NodeRemoveState *s, int base
 
     case NODE_REMOVE_PHASE_CHANGED:
         node_children_changed(ctx, s->parent);                                 /* STEP 17 */
+        s->done = 1;
         hdr->stage = s->after;
         return JS_STEP_YIELD;
 

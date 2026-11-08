@@ -57,6 +57,8 @@
 #include "core/dom/range.h"
 #include "core/dom/node_remove.h"   /* §4.2.3 remove, the machine removeChild runs */
 #include "core/dom/node_insert.h"   /* §4.2.3 insert, the machine appendChild and insertBefore run */
+#include "core/dom/node_replace.h"  /* §4.2.3 replace and replace all, which replaceChild and the mixins run */
+#include "core/timing/thread_work.h"
 #include "core/dom/node_iterator.h"   /* §6.1's pre-remove steps, which §4.2.3's move runs at its step 10 */
 #include "core/xml/xml_name.h"   /* §4.13 step 1's `Name` production is XML's, referenced by the DOM */
 #include "quickjs-step.h"
@@ -1126,42 +1128,6 @@ bool node_pre_insert(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *paren
     return true;
 }
 
-/* §4.2.3 "replace" — NOT a pre-insert followed by a remove, which is what `replaceChild` and `replaceWith` each
-   wrote out and which is wrong in three ways the standard's own ordering fixes. (a) Its validity runs with
-   childrenToExclude « child », so `document.replaceChild(newHtml, document.documentElement)` is legal where a
-   pre-insert is not — a pre-insert would see the element child that is about to leave and throw. (b) Its
-   reference child is child's NEXT sibling and the removal comes FIRST, so `p.replaceChild(n, n)` is a no-op
-   returning n; inserting before n and then removing n took the node OUT of the tree. (c) The removal carries
-   `suppressObservers` and the operation queues ONE tree mutation record naming both lists, where
-   insert-then-remove queues two. Returns false HAVING THROWN. */
-static bool node_replace(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *child, lxb_dom_node_t *parent)
-{
-    lxb_dom_node_t *ref;
-
-    DCHECK(child != NULL, "§4.2.3's replace was asked to replace nothing — `child` is the node the algorithm "
-                          "removes and returns, and it is non-nullable in both members stated over this");
-    if (!node_ensure_pre_insert_valid(ctx, node, parent, child, child)) return false;   /* STEP 1, « child » */
-    ref = child->next;                                                          /* STEP 2 */
-    if (ref == node) ref = node->next;                                          /* STEP 3 */
-    /* STEPS 4-9. `previousSibling` and `referenceChild` are read off the tree by the scope at the moment the
-       insertion happens, which — because the removal precedes it — is exactly the pair the standard binds at
-       its steps 2 and 4. */
-    /* STEP 6 IS BEFORE STEP 7, IT IS OUTSIDE THE SCOPE, AND BOTH OF THOSE ARE OBSERVABLE. Adopt removes `node`
-       from the parent it already had, which is a removal of ITS OWN — the standard queues it as a separate
-       record with the siblings `node` had at that moment, so it must run before `child` leaves and must not be
-       folded into the operation's record. `p.replaceChild(p.lastChild, p.firstChild)` is where the sibling
-       matters and `p.replaceChild(n, n)` is where the separation does: adopt takes `n` out, which makes step
-       7's condition FALSE — the standard's own note — so that call is two records, one removing and one
-       adding, and not one record naming `n` twice. */
-    node_insert_adopt(parent, node);                                            /* STEP 6 */
-    /* STEP 7's removal is the only one this operation suppresses, and only when there is one to suppress. */
-    mutation_observer_batch_begin(parent, child->parent ? child : NULL, NULL);
-    if (child->parent) dom_cow_remove_child(child);                             /* STEP 7 */
-    node_insert_at(parent, node, ref);                                          /* STEP 9 */
-    mutation_observer_batch_end();                                              /* STEP 10 */
-    return true;
-}
-
 void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref)
 {
     if (node_is_document_fragment(node)) {
@@ -1573,33 +1539,6 @@ static bool mixin_names_node(int argc, JSValueConst *argv, const lxb_dom_node_t 
     return false;
 }
 
-/* §4.2.6 "to convert nodes into a node" — the FIVE steps, which produce ONE node: each string becomes a Text
-   node, a single node is returned as itself, and anything else is appended into a fresh DocumentFragment. Every
-   ChildNode/ParentNode member is stated over the RESULT of this, which is why they each take
-   `(Node or DOMString)...` and each perform exactly one pre-insert. Returns NULL having thrown. */
-static lxb_dom_node_t *node_convert_into_a_node(JSContext *ctx, lxb_dom_node_t *owner,
-                                                int argc, JSValueConst *argv)
-{
-    lxb_dom_document_fragment_t *frag;
-    lxb_dom_node_t *fnode;
-    int i;
-
-    if (argc == 1) return node_from_arg(ctx, owner, argv[0]);          /* STEPS 1-2 */
-    frag = lxb_dom_document_fragment_interface_create(owner->owner_document);   /* STEP 3 */
-    CHECK(frag != NULL, "§4.2.6's convert-nodes-into-a-node could not create the fragment its result is");
-    fnode = lxb_dom_interface_node(frag);
-    /* THIS FLOW MADE IT — the same record createDocumentFragment pushes at its own creation site. The fragment
-       is emptied by the insertion that consumes it and never becomes reachable from the tree, so without the
-       entry it is left in the document's Lexbor arena owned by nothing and invisible to the GC walk. */
-    dom_cow_note_created(fnode);
-    for (i = 0; i < argc; i++) {                                       /* STEP 4 */
-        lxb_dom_node_t *x = node_from_arg(ctx, owner, argv[i]);
-        if (!x) return NULL;
-        node_insert_at(fnode, x, NULL);       /* "append node to fragment" — §4.2.3's append, not a raw link */
-    }
-    return fnode;                                                      /* STEP 5 */
-}
-
 /* DOM §4.2.8 Mixin ChildNode's `remove()` steps, VERBATIM: "If this's parent is null, then return. Remove
    this." Lifted out of the mixin body below so that HTML §4.10.7 "The select element"'s zero-argument
    overload entry — which that section defines as its "namesake method on the ChildNode interface implemented
@@ -1657,74 +1596,171 @@ static const IdlStepDecl NODE_CHILD_REMOVE_STEP = {
     "DOM §4.2.8 ChildNode.remove (over §4.2.3 remove)", NODE_CHILD_REMOVE_STEPS
 };
 
-static JSValue js_node_mixin(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* DOM §4.2.6 Mixin ParentNode's append, prepend and replaceChildren and §4.2.8 Mixin ChildNode's before, after
+   and replaceWith, as one declared step member: the viable sibling (one sibling per step), §4.2.6 "convert nodes
+   into a node" (each "append node to fragment" through the insert machine), then the member's pre-insert,
+   replace or replace all. magic 1 = before, 2 = after, 3 = replaceWith, 4 = append, 5 = prepend,
+   6 = replaceChildren. */
+#define NODE_MIXIN_STAGES(X) \
+    X(MX_START,   "DOM §4.2.6 and §4.2.8 (parent; this's parent is null: return)") \
+    X(MX_VIABLE,  "DOM §4.2.8 before step 3, after and replaceWith step 3 (the viable sibling, one per step)") \
+    X(MX_CONVERT, "DOM §4.2.6 convert nodes into a node (strings to Text nodes; each node appended to the " \
+                  "fragment)") \
+    X(MX_INSERT,  "DOM §4.2.6 and §4.2.8 (the reference child; pre-insert, replace or replace all)") \
+    NODE_INSERT_ALGO_STAGES(X, MX_IN, "DOM §4.2.6 and §4.2.8 → DOM §4.2.3 pre-insert step 4") \
+    NODE_REPLACE_ALGO_STAGES(X, MX_RP, "DOM §4.2.8 replaceWith step 5") \
+    NODE_REPLACE_ALL_ALGO_STAGES(X, MX_RA, "DOM §4.2.6 replaceChildren step 3") \
+    X(MX_DONE,    "DOM §4.2.6 and §4.2.8 (done)")
+enum { IDL_STEP_STAGE_BASE(NODE_MIXIN_STAGES) NODE_MIXIN_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NODE_MIXIN_STEPS[] = { NODE_MIXIN_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    lxb_dom_node_t *parent, *viable;   /* this's parent; the viable sibling */
+    lxb_dom_node_t *node;              /* convert nodes into a node's result */
+    int i;                             /* the next of nodes to convert */
+    NodeInsertState in;
+    NodeReplaceState rp;
+    NodeReplaceAllState ra;
+} NodeMixinState;
+
+static void node_mixin_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    lxb_dom_node_t *n = node_of(this_val), *parent, *ref, *added;
+    NodeMixinState *s = st;
 
-    if (!n) return JS_UNDEFINED;
-    parent = n->parent;
-    /* §4.2.7: a node with no parent has nothing to be removed from or inserted beside — and that is a no-op,
-       not an error, which is what lets a page call `el.remove()` twice. */
-    if (magic <= 3 && !parent) return JS_UNDEFINED;
-
-    DCHECK(magic != 0, "ChildNode's remove() reached the variadic mixin body — it is its own step member");
-
-    /* §4.2.8 STEP 2 — the VIABLE sibling, computed BEFORE the conversion because the conversion MOVES the
-       nodes it is given and a reference child that moves is a reference to nothing. It is the nearest sibling
-       in the member's direction that is not one of `nodes`, which is what makes `el.after(a, el.nextSibling)`
-       land the pair where the standard says rather than around a sibling that is about to leave. */
-    if (magic == 1) {
-        for (ref = n->prev; ref && mixin_names_node(argc, argv, ref); ref = ref->prev) {}
-    } else if (magic == 2 || magic == 3) {
-        for (ref = n->next; ref && mixin_names_node(argc, argv, ref); ref = ref->next) {}
-    } else {
-        ref = NULL;
-    }
-
-    /* §4.2.6 "convert nodes into a node" — ONE node, which is a DocumentFragment when there is more than one.
-       This loop used to pre-insert each argument SEPARATELY, which is a different algorithm in three visible
-       ways: `document.append(a, b)` must throw for the pair rather than insert `a` and then reject `b`;
-       `el.before(a, b)` is ONE tree mutation record, not two; and a validity check made per argument cannot see
-       the fragment the standard checks. */
-    added = node_convert_into_a_node(ctx, n, argc, argv);
-    if (!added) return JS_EXCEPTION;
-    /* §4.2.8 before STEP 5, and it is AFTER the conversion on purpose: the conversion moves nodes out of this
-       parent, so both `parent's first child` and `viablePreviousSibling's next sibling` are read from the tree
-       the insertion will actually happen in. `after` and `replaceWith` have no such step — they pre-insert
-       before the viable NEXT sibling as it stands. */
-    if (magic == 1) ref = ref ? ref->next : parent->first_child;
-
-    /* §4.2.6 and §4.2.8 STATE EVERY ONE OF THESE OVER "PRE-INSERT" or over "replace", and this loop wrote the
-       tree links directly — so the seven convenience members were the seven places §4.2.3's validity was not
-       checked at all. `document.append(text)` and `document.prepend(el)` built the trees appendChild refuses. */
-    switch (magic) {
-    case 1: case 2: if (!node_pre_insert(ctx, added, parent, ref)) return JS_EXCEPTION; break;
-    /* §4.2.8 replaceWith STEP 4: `this`'s parent is checked AGAIN, because the conversion above may have moved
-       `this` into the fragment; only when it is still there is this the REPLACE algorithm. */
-    case 3: if (n->parent == parent) { if (!node_replace(ctx, added, n, parent)) return JS_EXCEPTION; }
-            else if (!node_pre_insert(ctx, added, parent, ref)) return JS_EXCEPTION;
-            break;
-    case 4: if (!node_pre_insert(ctx, added, n, NULL)) return JS_EXCEPTION; break;
-    case 5: if (!node_pre_insert(ctx, added, n, n->first_child)) return JS_EXCEPTION; break;
-    case 6:
-        /* §4.2.6 replaceChildren STEPS 2-3: the validity is ensured BEFORE anything is removed, which is the
-           whole point of it being a separate step — this used to empty the parent first, so a call that must
-           throw destroyed the children on its way to not throwing at all.
-           WHAT IS NOT BUILT HERE is §4.2.3's "replace all" record: the standard removes every child with
-           suppressObservers set and queues ONE tree mutation record naming both lists, and these removals still
-           queue one record each. That needs a suppress-ALL scope, which mutation_observer.h's scope does not
-           have — it suppresses the ONE child `replace` names. */
-        if (!node_ensure_pre_insert_valid(ctx, added, n, NULL, NULL)) return JS_EXCEPTION;
-        {
-            lxb_dom_node_t *c = n->first_child, *next;
-            for (; c; c = next) { next = c->next; dom_cow_remove_child(c); }
-        }
-        node_insert_at(n, added, NULL);
-        break;
-    default: DFAIL("a ChildNode/ParentNode member ran with an unknown magic"); break;
-    }
-    return JS_UNDEFINED;
+    node_insert_visit(ctx, &s->in, v);
+    node_replace_visit(ctx, &s->rp, v);
+    node_replace_all_visit(ctx, &s->ra, v);
 }
+
+static const char *node_mixin_script_forbidden(int stage, const void *st)
+{
+    const char *why;
+
+    (void)st;
+    if ((why = node_insert_script_forbidden(stage, MX_IN_TAKE))) return why;
+    if ((why = node_replace_script_forbidden(stage, MX_RP_RM_RANGES))) return why;
+    return node_replace_all_script_forbidden(stage, MX_RA_RM_RANGES);
+}
+
+/* §4.2.3 pre-insert steps 1-3, then step 4's insert through the machine. Returns false having thrown. */
+static bool node_mixin_pre_insert(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *in, lxb_dom_node_t *node,
+                                  lxb_dom_node_t *parent, lxb_dom_node_t *child, int after)
+{
+    if (!node_ensure_pre_insert_valid(ctx, node, parent, child, NULL)) return false;   /* STEP 1 */
+    if (child == node) child = node->next;                                              /* STEPS 2-3 */
+    node_insert_start(hdr, in, node, parent, child, false, MX_IN_TAKE, after);          /* STEP 4 */
+    return true;
+}
+
+static int js_node_mixin(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeMixinState *s = st;
+    lxb_dom_node_t *n = node_of(hdr->this_val);
+    int magic = idl_step_magic(hdr);
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    STEP_DISPATCH(NODE_MIXIN_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(MX_START);
+    if (!n) return JS_STEP_DONE;
+    DCHECK(magic >= 1 && magic <= 6, "a ChildNode/ParentNode member ran with an unknown magic");
+    if (magic <= 3) {
+        s->parent = n->parent;                                                  /* STEP 1 */
+        if (!s->parent) return JS_STEP_DONE;                                    /* STEP 2 */
+        s->viable = magic == 1 ? n->prev : n->next;
+        hdr->stage = MX_VIABLE;
+        return JS_STEP_YIELD;
+    }
+    hdr->stage = MX_CONVERT;
+    return JS_STEP_YIELD;
+
+    STEP_ARM(MX_VIABLE);
+    /* STEP 3: this's first preceding (before) or following sibling that is not in nodes. */
+    if (s->viable && mixin_names_node(argc, argv, s->viable)) {
+        thread_work_charge(THREAD_WORK_DOM_WALK, 1);
+        s->viable = magic == 1 ? s->viable->prev : s->viable->next;
+        return JS_STEP_YIELD;
+    }
+    hdr->stage = MX_CONVERT;
+    return JS_STEP_YIELD;
+
+    STEP_ARM(MX_CONVERT);
+    if (argc == 1) {                                                            /* STEPS 1-2 */
+        s->node = node_from_arg(ctx, n, argv[0]);
+        if (!s->node) return JS_STEP_ABRUPT;
+        hdr->stage = MX_INSERT;
+        return JS_STEP_YIELD;
+    }
+    if (!s->node) {                                                             /* STEP 3 */
+        lxb_dom_document_fragment_t *frag = lxb_dom_document_fragment_interface_create(n->owner_document);
+
+        CHECK(frag != NULL, "§4.2.6's convert nodes into a node could not create its fragment");
+        s->node = lxb_dom_interface_node(frag);
+        dom_cow_note_created(s->node);                       /* this flow made it: the delta owns it */
+    }
+    if (s->i < argc) {                                                          /* STEP 4 */
+        lxb_dom_node_t *x = node_from_arg(ctx, n, argv[s->i++]);
+
+        if (!x) return JS_STEP_ABRUPT;
+        if (!node_mixin_pre_insert(ctx, hdr, &s->in, x, s->node, NULL, MX_CONVERT)) return JS_STEP_ABRUPT;
+        return JS_STEP_YIELD;
+    }
+    hdr->stage = MX_INSERT;                                                     /* STEP 5 */
+    return JS_STEP_YIELD;
+
+    STEP_ARM(MX_INSERT);
+    switch (magic) {
+    case 1:                                                                     /* before STEPS 5-6 */
+        if (!node_mixin_pre_insert(ctx, hdr, &s->in, s->node, s->parent,
+                                   s->viable ? s->viable->next : s->parent->first_child, MX_DONE))
+            return JS_STEP_ABRUPT;
+        return JS_STEP_YIELD;
+    case 2:                                                                     /* after STEP 5 */
+        if (!node_mixin_pre_insert(ctx, hdr, &s->in, s->node, s->parent, s->viable, MX_DONE))
+            return JS_STEP_ABRUPT;
+        return JS_STEP_YIELD;
+    case 3:
+        if (n->parent == s->parent) {                                           /* replaceWith STEP 5 */
+            if (!node_ensure_pre_insert_valid(ctx, s->node, s->parent, n, n)) return JS_STEP_ABRUPT;
+            node_replace_start(hdr, &s->rp, s->node, n, s->parent, MX_RP_RM_RANGES, MX_DONE);
+            return JS_STEP_YIELD;
+        }
+        if (!node_mixin_pre_insert(ctx, hdr, &s->in, s->node, s->parent, s->viable, MX_DONE))   /* STEP 6 */
+            return JS_STEP_ABRUPT;
+        return JS_STEP_YIELD;
+    case 4:                                                                     /* append STEP 2 */
+        if (!node_mixin_pre_insert(ctx, hdr, &s->in, s->node, n, NULL, MX_DONE)) return JS_STEP_ABRUPT;
+        return JS_STEP_YIELD;
+    case 5:                                                                     /* prepend STEP 2 */
+        if (!node_mixin_pre_insert(ctx, hdr, &s->in, s->node, n, n->first_child, MX_DONE)) return JS_STEP_ABRUPT;
+        return JS_STEP_YIELD;
+    default:                                                                    /* replaceChildren STEPS 2-3 */
+        if (!node_ensure_pre_insert_valid(ctx, s->node, n, NULL, NULL)) return JS_STEP_ABRUPT;
+        node_replace_all_start(hdr, &s->ra, s->node, n, MX_RA_RM_RANGES, MX_DONE);
+        return JS_STEP_YIELD;
+    }
+
+    NODE_INSERT_ALGO_STAGES(JS_STEP_STAGE_ARM, MX_IN, "")
+    return node_insert_run(ctx, hdr, &s->in, MX_IN_TAKE);
+
+    NODE_REPLACE_ALGO_STAGES(JS_STEP_STAGE_ARM, MX_RP, "")
+    return node_replace_run(ctx, hdr, &s->rp, MX_RP_RM_RANGES);
+
+    NODE_REPLACE_ALL_ALGO_STAGES(JS_STEP_STAGE_ARM, MX_RA, "")
+    return node_replace_all_run(ctx, hdr, &s->ra, MX_RA_RM_RANGES);
+
+    STEP_ARM(MX_DONE);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl NODE_MIXIN_STEP = {
+    js_node_mixin, sizeof(NodeMixinState), node_mixin_visit, NULL,
+    "DOM §4.2.6 ParentNode and §4.2.8 ChildNode (over §4.2.3 pre-insert, replace and replace all)",
+    NODE_MIXIN_STEPS, .script_forbidden = node_mixin_script_forbidden
+};
 
 /* §4.2.6 `[CEReactions] undefined moveBefore(Node node, Node? child)` — THREE STEPS on top of §4.2.3's move.
  *
@@ -4046,24 +4082,63 @@ static const IdlStepDecl NODE_CLONE_STEP = {
 
 /* §4.4 replaceChild(node, child): "return the result of replacing child with node within this", §4.2.3's
    replace. `Node child` is not nullable, so the declaration brands both positions before step 1. */
-static JSValue js_node_replace_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                     int magic)
-{
-    lxb_dom_node_t *parent = node_of(this_val), *node, *child;
+/* §4.4 replaceChild(node, child): "return the result of replacing child with node within this". §4.2.3 replace
+   step 1 is the first stage, steps 2-10 are core/dom/node_replace.h's machine, and step 11 returns child. */
+#define NODE_REPLACE_CHILD_STAGES(X) \
+    X(RPC_CHECK,  "DOM §4.2.3 replace step 1 (ensure pre-insert validity, childrenToExclude « child »)") \
+    NODE_REPLACE_ALGO_STAGES(X, RPC, "DOM §4.4 replaceChild") \
+    X(RPC_RETURN, "DOM §4.2.3 replace step 11 (return child)")
+enum { IDL_STEP_STAGE_BASE(NODE_REPLACE_CHILD_STAGES) NODE_REPLACE_CHILD_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NODE_REPLACE_CHILD_STEPS[] = { NODE_REPLACE_CHILD_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    (void)magic;
-    if (!parent) return JS_UNDEFINED;
-    DCHECK(argc == 2, "replaceChild reached its body without its two declared arguments — neither position is "
-                      "optional, so §3.6 Overload resolution algorithm's step 5 arity TypeError is what a shorter "
-                      "call gets");
-    node = node_of(argv[0]);
-    child = node_of(argv[1]);
-    DCHECK(node != NULL && child != NULL,
-           "replaceChild's `Node node` or `Node child` reached the body as something that is not a node — the "
-           "declaration's IDL_INTERFACE positions make that a TypeError before step 1");
-    if (!node_replace(ctx, node, child, parent)) return JS_EXCEPTION;   /* §4.2.3 "replace", STEPS 1-10 */
-    return JS_DupValue(ctx, argv[1]);             /* STEP 11 — replaceChild returns the node it REMOVED */
+static void node_replace_child_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    node_replace_visit(ctx, st, v);
 }
+
+static const char *node_replace_child_script_forbidden(int stage, const void *st)
+{
+    (void)st;
+    return node_replace_script_forbidden(stage, RPC_RM_RANGES);
+}
+
+static int js_node_replace_child(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeReplaceState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    STEP_DISPATCH(NODE_REPLACE_CHILD_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(RPC_CHECK);
+    {
+        lxb_dom_node_t *parent = node_of(hdr->this_val), *node, *child;
+
+        if (!parent) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        DCHECK(argc == 2, "replaceChild reached its body without its two declared arguments");
+        node = node_of(argv[0]);
+        child = node_of(argv[1]);
+        DCHECK(node != NULL && child != NULL,
+               "replaceChild's `Node node` or `Node child` reached the body as something that is not a node");
+        if (!node_ensure_pre_insert_valid(ctx, node, parent, child, child)) return JS_STEP_ABRUPT;   /* STEP 1 */
+        node_replace_start(hdr, s, node, child, parent, RPC_RM_RANGES, RPC_RETURN);
+        return JS_STEP_YIELD;
+    }
+
+    NODE_REPLACE_ALGO_STAGES(JS_STEP_STAGE_ARM, RPC, "")
+    return node_replace_run(ctx, hdr, s, RPC_RM_RANGES);
+
+    STEP_ARM(RPC_RETURN);
+    *presult = JS_DupValue(ctx, argv[1]);                                      /* STEP 11 */
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl NODE_REPLACE_CHILD_STEP = {
+    js_node_replace_child, sizeof(NodeReplaceState), node_replace_child_visit, NULL,
+    "DOM §4.4 Node.replaceChild (over §4.2.3 replace)", NODE_REPLACE_CHILD_STEPS,
+    .script_forbidden = node_replace_child_script_forbidden
+};
 
 /* DOM §4.4 "Interface Node"'s lookupPrefix / lookupNamespaceURI / isDefaultNamespace — THE THREE MEMBERS, AND
    THE ALGORITHM IS NOT HERE. §4.4 defines two walks ("locate a namespace", "locate a namespace prefix") and
@@ -5024,7 +5099,7 @@ static void node_declare_walkers(JSContext *ctx)
     idl_iface_brand(node_class_id());
     g_w_insert = idl_method_id_step(ctx, NODE_THEN_NULLABLE, 2, NULL, 0, &NODE_PRE_INSERT_STEP, 1);
     idl_iface_brand(node_class_id());
-    g_w_replace = idl_method_id(ctx, NODE_THEN_NODE, 2, js_node_replace_child, 0);
+    g_w_replace = idl_method_id_step(ctx, NODE_THEN_NODE, 2, NULL, 0, &NODE_REPLACE_CHILD_STEP, 0);
     idl_iface_brand(node_class_id());
     /* `undefined normalize()` — no arguments to convert and still three loops' worth of the page's tree. */
     g_w_normalize = idl_method_id_step(ctx, NULL, 0, NULL, 0, &NODE_NORM_STEP, 0);
@@ -5072,10 +5147,15 @@ static void mixin_declare(JSContext *ctx, const NodeMixinMember *tab, unsigned n
             /* TWO DECLARATIONS BECAUSE THE IDL WRITES TWO SIGNATURES — see NodeMixinMember. A member that
                declares no arguments converts none, so `remove`'s body is reached with the page's value
                untouched and unread, which is what §4.2.8's `remove()` means. */
-            g_mixin_id[tab[k].magic] = tab[k].takes_nodes
-                ? idl_method_id_ext(ctx, MIXIN_NODES, 1, /*variadic*/ true, node_class_id(),
-                                    js_node_mixin, tab[k].magic)
-                : idl_method_id_step(ctx, NULL, 0, NULL, 0, &NODE_CHILD_REMOVE_STEP, tab[k].magic);
+            if (tab[k].takes_nodes) {
+                g_mixin_id[tab[k].magic] = idl_method_id_step(ctx, MIXIN_NODES, 1, NULL, 0, &NODE_MIXIN_STEP,
+                                                              tab[k].magic);
+                idl_variadic();
+                idl_iface_brand(node_class_id());
+            } else {
+                g_mixin_id[tab[k].magic] = idl_method_id_step(ctx, NULL, 0, NULL, 0, &NODE_CHILD_REMOVE_STEP,
+                                                              tab[k].magic);
+            }
             /* THE SLOT THE LINE ABOVE JUST SET, DECLARED BESIDE IT — and INSIDE this guard rather than beside
                it, which is the one placement that cannot abort. core/agent_state.c refuses a second
                declaration of ONE address by name ("one static was declared as agent state twice"), and this
@@ -5356,76 +5436,31 @@ static const IdlStepDecl NODE_TEXT_STEP = {
 };
 
 /* §4.4 textContent's SETTER: a CharacterData node runs "replace data", an Element or DocumentFragment runs "string
-   replace all" (DOM §4.2.3), and any other node does nothing. Replace all removes each child through
-   core/dom/node_remove.h's machine and inserts the Text node through core/dom/node_insert.h's, both with
-   suppressObservers, then queues its one record; its stages forbid script, so a `<script>`'s children changed
+   replace all" (DOM §4.2.3), and any other node does nothing. String replace all creates the Text node and runs
+   core/dom/node_replace.h's replace all machine, whose stages forbid script, so a `<script>`'s children changed
    steps run their post-connection steps once the record is queued. */
 #define NODE_TEXT_SET_STAGES(X) \
-    X(TCS_START,  "DOM §4.4 textContent setter (the switch on this; DOM §4.2.3 string replace all steps 1-2; " \
-                  "replace all steps 1-4)") \
-    NODE_REMOVE_ALGO_STAGES(X, TCS_RM, "DOM §4.2.3 replace all step 5 (remove parent's first child, with " \
-                                       "suppressObservers)") \
-    X(TCS_NEXT,   "DOM §4.2.3 replace all step 5 (whether parent has a child left to remove)") \
-    NODE_INSERT_ALGO_STAGES(X, TCS_IN, "DOM §4.2.3 replace all step 6 (insert node, with suppressObservers)") \
-    X(TCS_RECORD, "DOM §4.2.3 replace all step 7 (the tree mutation record)") \
+    X(TCS_START,  "DOM §4.4 textContent setter (the switch on this; DOM §4.2.3 string replace all steps 1-2)") \
+    NODE_REPLACE_ALL_ALGO_STAGES(X, TCS_RA, "DOM §4.2.3 string replace all step 3") \
     X(TCS_DONE,   "DOM §4.4 textContent setter (replace all is done)")
 enum { IDL_STEP_STAGE_BASE(NODE_TEXT_SET_STAGES) NODE_TEXT_SET_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const NODE_TEXT_SET_STEPS[] = { NODE_TEXT_SET_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-typedef struct {
-    NodeRemoveState rm;
-    NodeInsertState in;
-    lxb_dom_node_t *parent, *text;   /* replace all's parent and node (NULL for the empty string) */
-    JSValue removed;                 /* step 1's removedNodes as wrappers, while an observer exists; owned */
-    uint32_t nremoved;
-    uint8_t observed;                /* a mutation observer exists, so step 7 may have a record to queue */
-} NodeTextSetState;
-
 static void node_text_set_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    NodeTextSetState *s = st;
-
-    v->val(ctx, &s->removed);
-    node_insert_visit(ctx, &s->in, v);
+    node_replace_all_visit(ctx, st, v);
 }
 
 static const char *node_text_set_script_forbidden(int stage, const void *st)
 {
     (void)st;
-    if (stage >= TCS_RM_RANGES && stage <= TCS_RECORD)
-        return "DOM §4.2.3 replace all runs no page code between its steps 5 and 7, and the children changed "
-               "steps' post-connection steps run only once its record is queued";
-    return NULL;
-}
-
-/* Replace all step 5's next removal, or step 6 when parent has no child left. */
-static int node_text_set_next(JSContext *ctx, JSStepHdr *hdr, NodeTextSetState *s)
-{
-    lxb_dom_node_t *c = s->parent->first_child;
-
-    if (c) {
-        if (s->observed) {
-            JSValue w = node_wrap(ctx, c);
-
-            CHECK(!JS_IsException(w), "replace all's removedNodes could not wrap a child");
-            JS_SetPropertyUint32(ctx, s->removed, s->nremoved++, w);
-        }
-        node_remove_start(hdr, &s->rm, c, /*suppress_observers*/ true, TCS_RM_RANGES, TCS_NEXT);
-        return JS_STEP_YIELD;
-    }
-    if (s->text) {
-        node_insert_start(hdr, &s->in, s->text, s->parent, NULL, /*suppress_observers*/ true, TCS_IN_TAKE,
-                          TCS_RECORD);
-        return JS_STEP_YIELD;
-    }
-    hdr->stage = TCS_RECORD;
-    return JS_STEP_YIELD;
+    return node_replace_all_script_forbidden(stage, TCS_RA_RM_RANGES);
 }
 
 static int js_node_set_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                     JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    NodeTextSetState *s = st;
+    NodeReplaceAllState *s = st;
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
@@ -5439,8 +5474,8 @@ static int js_node_set_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, in
         const char *str;
         size_t len = 0;
         bool owned_cstr = false;
+        lxb_dom_node_t *text = NULL;
 
-        s->removed = JS_UNDEFINED;
         if (!n) return JS_STEP_DONE;
         DCHECK(argc == 1, "textContent= reached its body without the value its declaration converts");
         val = argv[0];
@@ -5471,59 +5506,28 @@ static int js_node_set_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, in
             if (!str) return JS_STEP_ABRUPT;
             owned_cstr = true;
         }
-        s->parent = n;
-        if (len) {                                       /* string replace all STEP 2 */
-            lxb_dom_text_t *text = lxb_dom_document_create_text_node(n->owner_document, (const lxb_char_t *)str,
-                                                                     len);
+        if (len) {                                       /* string replace all STEPS 1-2 */
+            lxb_dom_text_t *t = lxb_dom_document_create_text_node(n->owner_document, (const lxb_char_t *)str,
+                                                                  len);
 
-            CHECK(text != NULL, "textContent= could not create its Text node");
-            s->text = lxb_dom_interface_node(text);
-            dom_cow_note_created(s->text);               /* this flow made it: the delta owns it */
+            CHECK(t != NULL, "textContent= could not create its Text node");
+            text = lxb_dom_interface_node(t);
+            dom_cow_note_created(text);                  /* this flow made it: the delta owns it */
         }
         if (owned_cstr) JS_FreeCString(ctx, str);
-        s->observed = mutation_observer_any();           /* replace all STEPS 1-4 */
-        if (s->observed) {
-            s->removed = JS_NewArray(ctx);
-            CHECK(!JS_IsException(s->removed), "replace all's removedNodes could not be allocated");
-        }
-        return node_text_set_next(ctx, hdr, s);
+        node_replace_all_start(hdr, s, text, n, TCS_RA_RM_RANGES, TCS_DONE);   /* STEP 3 */
+        return JS_STEP_YIELD;
     }
 
-    STEP_ARM(TCS_NEXT);
-    return node_text_set_next(ctx, hdr, s);
-
-    STEP_ARM(TCS_RECORD);
-    if (s->observed && (s->text || s->nremoved)) {      /* STEP 7 */
-        JSValue added = JS_UNDEFINED;
-
-        if (s->text) {
-            added = JS_NewArray(ctx);
-            CHECK(!JS_IsException(added), "replace all's addedNodes could not be allocated");
-            JS_SetPropertyUint32(ctx, added, 0, node_wrap(ctx, s->text));
-        }
-        mutation_observer_queue_record(ctx, MR_TYPE_CHILD_LIST, s->parent, NULL, NULL, NULL, 0, added,
-                                       s->nremoved ? s->removed : JS_UNDEFINED, NULL, NULL);
-        JS_FreeValue(ctx, added);
-    }
-    JS_FreeValue(ctx, s->removed);
-    s->removed = JS_UNDEFINED;
-    hdr->stage = TCS_DONE;
-    return JS_STEP_YIELD;
+    NODE_REPLACE_ALL_ALGO_STAGES(JS_STEP_STAGE_ARM, TCS_RA, "")
+    return node_replace_all_run(ctx, hdr, s, TCS_RA_RM_RANGES);
 
     STEP_ARM(TCS_DONE);
     return JS_STEP_DONE;
-
-    STEP_ARM(TCS_RM_RANGES); STEP_ARM(TCS_RM_ITERATORS); STEP_ARM(TCS_RM_DETACH); STEP_ARM(TCS_RM_ASSIGNED);
-    STEP_ARM(TCS_RM_SLOT_FIND); STEP_ARM(TCS_RM_SLOT_PARENT_TREE); STEP_ARM(TCS_RM_SLOT_NODE_TREE);
-    STEP_ARM(TCS_RM_ROOT); STEP_ARM(TCS_RM_DESCENDANTS); STEP_ARM(TCS_RM_RECORD); STEP_ARM(TCS_RM_CHANGED);
-    return node_remove_run(ctx, hdr, &s->rm, TCS_RM_RANGES);
-
-    NODE_INSERT_ALGO_STAGES(JS_STEP_STAGE_ARM, TCS_IN, "")
-    return node_insert_run(ctx, hdr, &s->in, TCS_IN_TAKE);
 }
 
 static const IdlStepDecl NODE_TEXT_SET_STEP = {
-    js_node_set_text_content, sizeof(NodeTextSetState), node_text_set_visit, NULL,
+    js_node_set_text_content, sizeof(NodeReplaceAllState), node_text_set_visit, NULL,
     "DOM §4.4 Node.textContent setter (over §4.2.3 string replace all)", NODE_TEXT_SET_STEPS,
     .script_forbidden = node_text_set_script_forbidden
 };

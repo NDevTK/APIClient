@@ -35,8 +35,8 @@ void node_insert_start(JSStepHdr *hdr, NodeInsertState *s, lxb_dom_node_t *node,
     DCHECK(child == NULL || (child->parent == parent && child != node),
            "§4.2.3 insert was started before a child of another parent, or before node itself — pre-insert's "
            "steps 2-3 are what make the reference child node's next sibling");
-    DCHECK(s->parent == NULL || (hdr->stage == after && s->nodes == NULL),
-           "a second §4.2.3 insert was started while one was still walking");
+    DCHECK(s->parent == NULL || (s->done && s->nodes == NULL && !JS_IsObject(s->nodes_js)),
+           "a second §4.2.3 insert was started while one was still walking, or before its kept nodes were taken");
     memset(s, 0, sizeof *s);
     s->nodes_js = JS_UNDEFINED;
     s->parent = parent;
@@ -52,6 +52,21 @@ void node_insert_start(JSStepHdr *hdr, NodeInsertState *s, lxb_dom_node_t *node,
     s->node = node;
     s->count = 1;                                                              /* STEP 2 */
     hdr->stage = base + NODE_INSERT_PHASE_RANGES;
+}
+
+void node_insert_keep_nodes(NodeInsertState *s)
+{
+    DCHECK(s->parent != NULL && !s->done, "an insert's nodes were kept for one that is not running");
+    s->keep_nodes = 1;
+}
+
+JSValue node_insert_take_nodes(NodeInsertState *s)
+{
+    JSValue v = s->nodes_js;
+
+    DCHECK(s->done && s->keep_nodes, "an insert's nodes were taken before it finished, or were not kept");
+    s->nodes_js = JS_UNDEFINED;
+    return v;
 }
 
 void node_insert_visit(JSContext *ctx, NodeInsertState *s, JSStepVisit *v)
@@ -88,8 +103,11 @@ static int node_insert_finish(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s
     js_free(ctx, s->nodes);
     s->nodes = NULL;
     s->cap = 0;
-    JS_FreeValue(ctx, s->nodes_js);
-    s->nodes_js = JS_UNDEFINED;
+    if (!s->keep_nodes) {
+        JS_FreeValue(ctx, s->nodes_js);
+        s->nodes_js = JS_UNDEFINED;
+    }
+    s->done = 1;
     hdr->stage = s->after;
     return JS_STEP_YIELD;
 }
