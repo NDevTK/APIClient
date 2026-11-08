@@ -11,6 +11,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/dom/flat_tree.h"
 #include "core/css/css_computed_style.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
@@ -274,7 +275,7 @@ static bool ev_in_replaced_content(const lxb_dom_node_t *n)
     const lxb_dom_node_t *a;
     bool svg_chain = n->ns == LXB_NS_SVG;
 
-    for (a = n->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
+    for (a = flat_tree_parent(n); a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = flat_tree_parent(a)) {
         lxb_dom_element_t *el = lxb_dom_interface_element((lxb_dom_node_t *)a);
         size_t len = 0;
         const lxb_char_t *name = lxb_dom_element_local_name(el, &len);
@@ -301,7 +302,7 @@ bool element_view_subtree_has_boxes(const lxb_dom_node_t *n)
        decided where every other UA rule is (css_style_declaration.c's UA layer), and this asks css-display-3
        §2.5's ONE keyword that reaches a whole subtree: "the element and its descendants generate no boxes or
        text sequences". */
-    for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
+    for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = flat_tree_parent(a)) {
         CssDisplay d = css_computed_display(lxb_dom_interface_element((lxb_dom_node_t *)a));
         bool none;
 
@@ -322,7 +323,7 @@ bool element_view_box_tests_ask(const lxb_dom_node_t *n)
     DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
            "a CSSOM VIEW §6 member's box tests were asked of no element — each member states element_is");
     if (!ev_in_presented_document(n)) return true;
-    for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent)
+    for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = flat_tree_parent(a))
         if (!cssom_style_ask(lxb_dom_interface_element((lxb_dom_node_t *)a))) return false;
     return true;
 }
@@ -1401,7 +1402,7 @@ static void ev_client_rect_px(const EvTarget *t, lxb_dom_element_t *el, const Cs
    namespace UNDER another element that is. */
 static bool ev_has_svg_layout_box(const lxb_dom_node_t *n)
 {
-    const lxb_dom_node_t *p = n->parent;
+    const lxb_dom_node_t *p = flat_tree_parent(n);
 
     return n->ns == LXB_NS_SVG && p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT && p->ns == LXB_NS_SVG;
 }
@@ -1673,11 +1674,11 @@ bool element_view_client_rects_ask(lxb_dom_element_t *el, LayoutJobDrive *d)
    a `display: contents` parent generates none itself and still lays out its text. */
 static lxb_dom_node_t *ev_text_parent(const lxb_dom_node_t *text)
 {
-    DCHECK(text != NULL && text->type == LXB_DOM_NODE_TYPE_TEXT && text->parent != NULL &&
-               text->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+    DCHECK(text != NULL && text->type == LXB_DOM_NODE_TYPE_TEXT && flat_tree_parent(text) != NULL &&
+               flat_tree_parent(text)->type == LXB_DOM_NODE_TYPE_ELEMENT,
            "CSSOM View §9's text rectangles were asked of a node that is not a Text node with an element parent; "
            "a Range in a document selects only those (its caller asks `range_in_document` first)");
-    return text->parent;
+    return flat_tree_parent(text);
 }
 
 bool element_view_text_rects_ask(const lxb_dom_node_t *text, uint32_t start, uint32_t end, LayoutJobDrive *d)

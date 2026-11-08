@@ -581,15 +581,13 @@ bool block_flow_text_child_generates_box(const lxb_dom_node_t *n)
            "§9.2.2.1's white-space question was asked about something that is not a TEXT node — the rule is "
            "about a run of character data and the property it reads is that run's containing element's "
            "inherited `white-space`");
-    DCHECK(n != NULL && n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
-           "§9.2.2.1's white-space question was asked about a TEXT node with no ELEMENT parent. The property "
-           "it reads is INHERITED, and css-display-3 §2.5 \"Box Generation: the none and contents "
-           "keywords\"'s Note keeps inheritance on the document tree — "
-           "\"any semantics based on the document tree, such as selector-matching, event handling, and "
-           "property inheritance, are not affected\" — so the element this run inherits from is its own DOM "
-           "parent and there is no other answer to fall back to. A text node whose parent is a document or a "
-           "fragment is not a child any walk over a block container's content reaches");
-    return bf_chars_generate_box(lxb_dom_interface_element(n->parent), cd->data.data, cd->data.length);
+    DCHECK(n != NULL && flat_tree_parent(n) != NULL && flat_tree_parent(n)->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "§9.2.2.1's white-space question was asked about a TEXT node with no ELEMENT flat-tree parent. The "
+           "property it reads is INHERITED, which css-shadow-1 §4.1 states over the flat tree (\"elements "
+           "assigned to a slot inherit from that slot\") and css-display-3 §2.5's Note keeps off the box tree, "
+           "so the element this run inherits from is its flat-tree parent. A text node in no flat tree is not "
+           "a child any walk over a block container's content reaches");
+    return bf_chars_generate_box(lxb_dom_interface_element(flat_tree_parent(n)), cd->data.data, cd->data.length);
 }
 
 /* CSS 2.2 §9.2.1 "Block-level elements and block boxes" over css-display-3 §2's pair: a block-level box whose

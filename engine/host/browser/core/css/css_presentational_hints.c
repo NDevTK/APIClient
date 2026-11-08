@@ -449,6 +449,8 @@ static const char *const DIM_ATTR_TAGS[] = { "embed", "iframe", "object", "video
    component composes with this arm and the choice is local. */
 static lxb_dom_element_t *img_dimension_attribute_source(lxb_dom_element_t *el)
 {
+    /* The DOM parent: HTML states the source over "an img element whose parent node is a picture element", a
+       DOM relation and not a CSS tree. */
     lxb_dom_node_t *n = lxb_dom_interface_node(el), *p = n->parent, *c;
     const lxb_char_t *tag;
     size_t taglen = 0;

@@ -2997,6 +2997,8 @@ static const char *cssd_ua_heading_margin_block(lxb_dom_element_t *el, const lxb
    and an `svg` whose parent is an SVG element other than `foreignObject`. */
 static const char *cssd_ua_svg_transform_origin(lxb_dom_element_t *el, const lxb_char_t *tag, size_t taglen)
 {
+    /* The DOM parent: this is a selector match, and css-shadow-1 §4.1 says "Selectors operates on the DOM tree
+       as the host language presents it". */
     lxb_dom_node_t *n = lxb_dom_interface_node(el), *p = n->parent;
     size_t plen = 0;
     const lxb_char_t *ptag;

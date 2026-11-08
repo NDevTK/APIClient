@@ -69,6 +69,8 @@ static bool css_tr_in_svg_text(lxb_dom_element_t *el)
     static const char *const TEXT_CONTENT[] = { "text", "textPath", "tspan" };
     lxb_dom_node_t *p;
 
+    /* The DOM parent equals the flat-tree one here: an SVG element is neither a slot nor a shadow host (DOM's
+       attachShadow takes only the valid shadow host names, all HTML). */
     for (p = lxb_dom_interface_node(el)->parent;
          p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT && p->ns == LXB_NS_SVG; p = p->parent)
         if (css_tr_local_name_in(lxb_dom_interface_element(p), TEXT_CONTENT, COUNTOF(TEXT_CONTENT))) return true;
