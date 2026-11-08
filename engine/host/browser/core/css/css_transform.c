@@ -153,5 +153,8 @@ bool css_transform_is_transformed(lxb_dom_element_t *el)
 
 bool css_transform_creates_context(lxb_dom_element_t *el)
 {
-    return css_transform_is_css_box_transformable(el) && css_transform_is_transformed(el);
+    CssPx d;
+
+    return css_transform_is_css_box_transformable(el) &&
+           (css_transform_is_transformed(el) || css_computed_perspective(el, &d));
 }

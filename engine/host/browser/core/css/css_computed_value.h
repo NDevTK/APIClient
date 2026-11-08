@@ -143,6 +143,14 @@ bool css_computed_transform_box_is_content(lxb_dom_element_t *el);
    box corner, percentages left unresolved, and a Z offset. */
 CssTransformOrigin css_computed_transform_origin(lxb_dom_element_t *el);
 
+/* css-transforms-2 §8 "The perspective Property"'s computed value of `el`, an absolute length; false for
+   `none`. */
+bool css_computed_perspective(lxb_dom_element_t *el, CssPx *out);
+
+/* css-transforms-2 §9 "The perspective-origin Property"'s computed value of `el`: two offsets from the
+   reference box corner, percentages left unresolved, and a Z of 0. */
+CssTransformOrigin css_computed_perspective_origin(lxb_dom_element_t *el);
+
 /* css-transforms-2 §5's computed `translate`, `rotate` or `scale` (`name`) of `el` as the one function §5 makes
    it equivalent to; false for `none`. */
 bool css_computed_individual_transform(lxb_dom_element_t *el, const char *name, CssTransformFunction *out);

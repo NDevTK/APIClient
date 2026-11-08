@@ -161,6 +161,8 @@ static bool css_property_applies_physical(lxb_dom_element_t *el, const char *nam
     /* css-transforms-1 §4 "The transform-origin Property": "Applies to: transformable elements", either of §2
        Terminology's categories (core/css/css_transform.h). */
     if (strcmp(name, "transform-origin") == 0) return css_transform_is_transformable(el);
+    /* css-transforms-2 §9 "The perspective-origin Property": "Applies to: transformable elements". */
+    if (strcmp(name, "perspective-origin") == 0) return css_transform_is_transformable(el);
     is_size = css_pa_in(CSS_SIZE_PROPERTIES, CSS_PA_N(CSS_SIZE_PROPERTIES), name);
     is_margin = css_pa_in(CSS_MARGIN_PROPERTIES, CSS_PA_N(CSS_MARGIN_PROPERTIES), name);
     is_padding = css_pa_in(CSS_PADDING_PROPERTIES, CSS_PA_N(CSS_PADDING_PROPERTIES), name);

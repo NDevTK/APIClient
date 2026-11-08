@@ -33,6 +33,7 @@
 #include "core/css/css_syntax_match.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_individual_transform.h"
+#include "core/css/css_perspective.h"
 #include "core/css/css_transform_function.h"
 #include "core/css/css_transform_matrix.h"
 #include "core/css/css_transform_origin.h"
@@ -2661,6 +2662,53 @@ static CssTransformOrigin css_cv_transform_origin(lxb_dom_element_t *el, char *s
     return o;
 }
 
+/* css-transforms-2 §8's computed `perspective` and §9's computed `perspective-origin` over
+   core/css/css_perspective.h's grammars; a value outside either computes to its `Initial:` value. CONSUMES
+   `spec`. */
+static bool css_cv_perspective(lxb_dom_element_t *el, char *spec, CssPx *out)
+{
+    CssCvFontCtx slot;
+    CssFontMetrics font = css_cv_font_metrics(&slot, el, "perspective");
+    bool ok = css_perspective_parse(css_cv_realm(el), &font, spec, out);
+
+    free(spec);
+    return ok;
+}
+
+static CssTransformOrigin css_cv_perspective_origin(lxb_dom_element_t *el, char *spec)
+{
+    CssCvFontCtx slot;
+    CssFontMetrics font = css_cv_font_metrics(&slot, el, "perspective-origin");
+    CssTransformOrigin o;
+
+    if (!css_perspective_origin_parse(css_cv_realm(el), &font, spec, &o)) o = css_transform_origin_initial();
+    free(spec);
+    return o;
+}
+
+bool css_computed_perspective(lxb_dom_element_t *el, CssPx *out)
+{
+    char *spec;
+
+    DCHECK(out != NULL, "css-transforms-2 §8's computed `perspective` was asked for with nowhere to put it");
+    css_cv_modelled(el, "perspective");
+    spec = css_cv_specified(el, "perspective");
+    DCHECK(spec != NULL, "CSS Cascade §7.1 produced no specified `perspective`; core/css/css_style_declaration.c "
+                         "carries its `Initial: none` row");
+    return css_cv_perspective(el, spec, out);
+}
+
+CssTransformOrigin css_computed_perspective_origin(lxb_dom_element_t *el)
+{
+    char *spec;
+
+    css_cv_modelled(el, "perspective-origin");
+    spec = css_cv_specified(el, "perspective-origin");
+    DCHECK(spec != NULL, "CSS Cascade §7.1 produced no specified `perspective-origin`; "
+                         "core/css/css_style_declaration.c carries its `Initial: 50% 50%` row");
+    return css_cv_perspective_origin(el, spec);
+}
+
 /* css-transforms-2 §5's computed `translate`, `rotate` or `scale` over core/css/css_individual_transform.h's
    grammar; false for `none`, which a value outside the grammar also computes to. CONSUMES `spec`. */
 static bool css_cv_individual_transform(lxb_dom_element_t *el, const char *name, char *spec,
@@ -2838,6 +2886,19 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
     /* css-transforms-1 §4: `Computed value: see background-position`, the one entry above's. */
     case CSS_PROPERTY_TRANSFORM_ORIGIN: {
         CssTransformOrigin o = css_cv_transform_origin(el, spec);
+
+        return css_transform_origin_serialize(&o);
+    }
+    /* css-transforms-2 §8: "the keyword none or an absolute length". */
+    case CSS_PROPERTY_PERSPECTIVE: {
+        CssPx d;
+
+        if (!css_cv_perspective(el, spec, &d)) return css_cv_strdup("none");
+        return css_length_serialize_px(d.px);
+    }
+    /* css-transforms-2 §9: `Computed value: see background-position`, as transform-origin's. */
+    case CSS_PROPERTY_PERSPECTIVE_ORIGIN: {
+        CssTransformOrigin o = css_cv_perspective_origin(el, spec);
 
         return css_transform_origin_serialize(&o);
     }
@@ -3026,6 +3087,9 @@ CssResolvedKind css_resolved_kind(const char *name)
         /* css-transforms §4: "The transform-origin property is a resolved value special case property like
            height." */
         "transform-origin",
+        /* css-transforms-2 §9: "The perspective-origin property is a resolved value special case property like
+           height." */
+        "perspective-origin",
     };
     static const char *const USED_IF_POSITIONED[] = {
         "bottom", "left", "inset-block-end", "inset-block-start", "inset-inline-end", "inset-inline-start",
@@ -3547,11 +3611,12 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
     return css_resolved_computed(ctx, el, name);
 }
 
-/* css-transforms-1 §4's used transform-origin as CSSOM §6.7.2 writes it: the two offsets in pixels, then the Z
-   offset unless it is a zero no environment fact reaches. False, after the crash, for an offset an environment
+/* css-transforms-1 §4's used transform-origin, or css-transforms-2 §9's used perspective-origin (`name`), as
+   CSSOM §6.7.2 writes it: the two offsets in pixels, then the Z offset unless it is a zero no environment fact
+   reaches. False, after the crash, for an offset an environment
    fact reaches: the string is then a function of several lengths' facts, which core/frame/viewport.h's one
    seam cannot mint, as `border-spacing`'s arm below states. */
-static bool css_resolved_transform_origin(JSContext *ctx, lxb_dom_element_t *el, JSValue *out)
+static bool css_resolved_origin(JSContext *ctx, lxb_dom_element_t *el, const char *name, JSValue *out)
 {
     CssPx o[3];
     char *t[3], *text;
@@ -3559,13 +3624,14 @@ static bool css_resolved_transform_origin(JSContext *ctx, lxb_dom_element_t *el,
     bool z, env;
     int i;
 
-    css_transform_origin_used(el, o);
+    if (strcmp(name, "transform-origin") == 0) css_transform_origin_used(el, o);
+    else css_perspective_origin_used(el, o);
     z = o[2].env != CSS_ENV_NONE || o[2].px != 0.0;
     env = o[0].env != CSS_ENV_NONE || o[1].env != CSS_ENV_NONE || o[2].env != CSS_ENV_NONE;
     if (env) {
-        DFAIL("a used `transform-origin` whose offsets derive from an environment fact reached the page, and its "
-              "string is a function of up to three lengths' facts. BUILD the joint mint at core/frame/viewport.h "
-              "that `border-spacing`'s arm names, and this arm becomes one call to it");
+        DFAIL("a used `transform-origin` or `perspective-origin` whose offsets derive from an environment fact "
+              "reached the page, and its string is a function of up to three lengths' facts. BUILD the joint mint "
+              "at core/frame/viewport.h that `border-spacing`'s arm names, and this arm becomes one call to it");
         return false;
     }
     for (i = 0; i < 3; i++) {
@@ -3573,7 +3639,7 @@ static bool css_resolved_transform_origin(JSContext *ctx, lxb_dom_element_t *el,
         n += strlen(t[i]);
     }
     text = lexbor_malloc(n);
-    CHECK(text != NULL, "cssom: OOM serializing a used `transform-origin`");
+    CHECK(text != NULL, "cssom: OOM serializing a used origin");
     snprintf(text, n, "%s %s%s%s", t[0], t[1], z ? " " : "", z ? t[2] : "");
     for (i = 0; i < 3; i++) free(t[i]);
     *out = JS_NewString(ctx, text);
@@ -3613,8 +3679,8 @@ static JSValue css_resolved_longhand_held(JSContext *ctx, lxb_dom_element_t *el,
            core/layout/used_value.h computes it — §10.1's containing block and §10.3.3's equation included —
            crashing by section for the arms that need an intrinsic size. */
         if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) break;
-        if (strcmp(name, "transform-origin") == 0) {
-            if (css_resolved_transform_origin(ctx, el, &out)) return out;
+        if (strcmp(name, "transform-origin") == 0 || strcmp(name, "perspective-origin") == 0) {
+            if (css_resolved_origin(ctx, el, name, &out)) return out;
             break;
         }
         return css_resolved_px(ctx, used_value_px(el, name));
@@ -3768,6 +3834,7 @@ static bool css_resolved_longhand_ask(lxb_dom_element_t *el, const char *name)
     case CSS_RESOLVED_USED_IF_RENDERED:
         if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) return true;
         if (strcmp(name, "transform-origin") == 0) return css_transform_origin_used_ask(el);
+        if (strcmp(name, "perspective-origin") == 0) return css_perspective_origin_used_ask(el);
         return used_value_px_ask(el, name, &px);
     case CSS_RESOLVED_USED_IF_POSITIONED:
         if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) return true;

@@ -228,6 +228,16 @@ static CssTransformMatrix3d css_tm4_rotation(double x, double y, double z, doubl
     return out;
 }
 
+/* css-transforms-2 §16's perspective(d), the identity with m34 = −1/d. §8 "The perspective Property": "values
+   less than 1px must be treated as 1px for rendering purposes", and §12.2 says the same of the function. */
+static CssTransformMatrix3d css_tm4_perspective(CssPx d)
+{
+    CssTransformMatrix3d out = css_tm4_identity();
+
+    out.m[3][2] = css_px_div(css_px(-1.0), css_px_max(d, css_px(1.0)));
+    return out;
+}
+
 /* css-transforms-1 §12 "Mathematical Description of Transform Functions"' matrix for one 2D
    `<transform-function>`, and css-transforms-2 §16 "Mathematical Description of Transform Functions"' for one
    3D one. `ref` is the reference box (width, height), or NULL on the pass that reads only the linear part. */
@@ -323,12 +333,7 @@ static CssTransformMatrix3d css_tm_of_function(const CssTransformFunction *fn, c
        resulting matrix is the identity matrix)", and css-transforms-2 §12.2: "If the depth value is less than
        1px, it must be treated as 1px". */
     case CSS_TF_PERSPECTIVE:
-        if (!fn->perspective_none) {
-            CssPx d = css_tm_length_px(&fn->length[0], NULL);
-
-            if (d.px < 1.0) d = css_px(1.0);
-            out.m[3][2] = css_px_div(css_px(-1.0), d);
-        }
+        if (!fn->perspective_none) out = css_tm4_perspective(css_tm_length_px(&fn->length[0], NULL));
         break;
     }
     return out;
@@ -404,24 +409,21 @@ static bool css_tm_svg_reference_box(lxb_dom_element_t *el, const CssTransformOr
 {
     if (css_transform_category(el) != CSS_TRANSFORMABLE_SVG) return false;
     if (o->x.kind != CSS_LENGTH_ABSOLUTE || o->y.kind != CSS_LENGTH_ABSOLUTE)
-        DFAIL("css-transforms-1 §4: a percentage transform-origin on an SVG element refers to §5's reference "
-              "box, which for SVG elements without associated CSS layout box is SVG 2's: \"the used value for "
+        DFAIL("css-transforms-1 §4: a percentage transform-origin or perspective-origin on an SVG element refers "
+              "to §5's reference box, which for SVG elements without associated CSS layout box is SVG 2's: \"the used value for "
               "content-box is fill-box and for border-box is stroke-box\", and view-box is the nearest SVG "
               "viewport. BUILD SVG 2 §8.10 \"Bounding boxes\"' object and stroke bounding boxes and the "
               "viewport's viewBox size as that reference box");
     return true;
 }
 
-void css_transform_origin_used(lxb_dom_element_t *el, CssPx out[3])
+/* An origin's offsets against `el`'s reference box: css-transforms-1 §4's and css-transforms-2 §9's
+   percentages each "relative to the width of the reference box", and the same for the height. */
+static void css_tm_origin_used(lxb_dom_element_t *el, CssTransformOrigin o, CssPx out[3])
 {
-    CssTransformOrigin o;
     CssPx ref[2] = { css_px(0.0), css_px(0.0) };
     bool svg;
 
-    DCHECK(el != NULL && out != NULL && css_transform_is_transformable(el),
-           "css-transforms-1 §4's used transform-origin was asked of no element, with nowhere to put it, or of "
-           "an element its `Applies to: transformable elements` line excludes");
-    o = css_computed_transform_origin(el);
     svg = css_tm_svg_reference_box(el, &o);
     if (!svg && o.x.kind != CSS_LENGTH_ABSOLUTE) ref[0] = css_tm_reference_size(el, false);
     if (!svg && o.y.kind != CSS_LENGTH_ABSOLUTE) ref[1] = css_tm_reference_size(el, true);
@@ -430,16 +432,42 @@ void css_transform_origin_used(lxb_dom_element_t *el, CssPx out[3])
     out[2] = o.z;
 }
 
-bool css_transform_origin_used_ask(lxb_dom_element_t *el)
+static bool css_tm_origin_used_ask(lxb_dom_element_t *el, CssTransformOrigin o)
 {
-    CssTransformOrigin o;
-
-    DCHECK(el != NULL && css_transform_is_transformable(el),
-           "css-transforms-1 §4's used transform-origin was asked of no element or of one it does not apply to");
-    o = css_computed_transform_origin(el);
     if (css_tm_svg_reference_box(el, &o)) return true;
     return (o.x.kind == CSS_LENGTH_ABSOLUTE || css_tm_reference_size_ask(el, false)) &&
            (o.y.kind == CSS_LENGTH_ABSOLUTE || css_tm_reference_size_ask(el, true));
+}
+
+void css_transform_origin_used(lxb_dom_element_t *el, CssPx out[3])
+{
+    DCHECK(el != NULL && out != NULL && css_transform_is_transformable(el),
+           "css-transforms-1 §4's used transform-origin was asked of no element, with nowhere to put it, or of "
+           "an element its `Applies to: transformable elements` line excludes");
+    css_tm_origin_used(el, css_computed_transform_origin(el), out);
+}
+
+bool css_transform_origin_used_ask(lxb_dom_element_t *el)
+{
+    DCHECK(el != NULL && css_transform_is_transformable(el),
+           "css-transforms-1 §4's used transform-origin was asked of no element or of one it does not apply to");
+    return css_tm_origin_used_ask(el, css_computed_transform_origin(el));
+}
+
+void css_perspective_origin_used(lxb_dom_element_t *el, CssPx out[3])
+{
+    DCHECK(el != NULL && out != NULL && css_transform_is_transformable(el),
+           "css-transforms-2 §9's used perspective-origin was asked of no element, with nowhere to put it, or "
+           "of an element its `Applies to: transformable elements` line excludes");
+    css_tm_origin_used(el, css_computed_perspective_origin(el), out);
+}
+
+bool css_perspective_origin_used_ask(lxb_dom_element_t *el)
+{
+    DCHECK(el != NULL && css_transform_is_transformable(el),
+           "css-transforms-2 §9's used perspective-origin was asked of no element or of one it does not apply "
+           "to");
+    return css_tm_origin_used_ask(el, css_computed_perspective_origin(el));
 }
 
 /* What `el`'s matrix reads of layout, decided from its computed values alone. `anchored` is false when the
@@ -466,19 +494,61 @@ static bool css_tm_declared(lxb_dom_element_t *el, const char *name, const char 
     return declared;
 }
 
-/* css-transforms-2's properties on the parent that change a child's matrix and that this engine does not
-   compute: §8's perspective pre-multiplies its perspective matrix (§4.1.4), and §7's preserve-3d keeps a 3D
-   rendering context where the flattening below assumes there is none. */
+/* css-transforms-2's §7 preserve-3d on the parent keeps a 3D rendering context where the flattening below
+   assumes there is none. */
 static void css_tm_unbuilt_properties(lxb_dom_element_t *el)
 {
     lxb_dom_element_t *parent = css_parent_element(el);
 
-    if (parent != NULL && (css_tm_declared(parent, "perspective", "none") ||
-                           css_tm_declared(parent, "transform-style", "flat")))
+    if (parent != NULL && css_tm_declared(parent, "transform-style", "flat"))
         DFAIL("css-transforms-2 §4.1.4 \"Accumulated 3D Transformation Matrix Computation\": the parent declares "
-              "`perspective` or `transform-style`, which this engine computes no value for. BUILD §8's "
-              "perspective matrix over §9's perspective-origin and pre-multiply it into the child's matrix, and "
-              "§7's preserve-3d accumulation");
+              "`transform-style`, which this engine computes no value for. BUILD §7's preserve-3d accumulation");
+}
+
+/* `el`'s parent when §8's perspective applies to it with a value other than `none`, written to `d`; NULL
+   otherwise. §8's `Applies to:` line is transformable elements. */
+static lxb_dom_element_t *css_tm_perspective_parent(lxb_dom_element_t *el, CssPx *d)
+{
+    lxb_dom_element_t *parent = css_parent_element(el);
+
+    if (parent == NULL || !css_transform_is_transformable(parent) || !css_computed_perspective(parent, d))
+        return NULL;
+    return parent;
+}
+
+/* css-transforms-2 §4.1.1 "Perspective"'s perspective matrix of `parent`: "Translate by the computed X and Y
+   values of perspective-origin", "Multiply by the matrix that would be obtained from the perspective()
+   transform function, where the length is provided by the value of the perspective property", "Translate by
+   the negated computed X and Y values of perspective-origin". §9 measures the origin from the parent's
+   reference box corner, anchored at its layout position as the element's own origin is. */
+static CssTransformMatrix3d css_tm_perspective_matrix(lxb_dom_element_t *parent, CssPx d)
+{
+    CssTransformMatrix3d m, t;
+    CssPx o[3], ax, ay;
+    FlowPoint corner = flow_border_box_origin(parent);
+
+    css_perspective_origin_used(parent, o);
+    ax = css_px_add(corner.x, o[0]);
+    ay = css_px_add(corner.y, o[1]);
+    if (css_computed_transform_box_is_content(parent)) {
+        ax = css_px_add(ax, used_value_leading_edge_px(parent, false));
+        ay = css_px_add(ay, used_value_leading_edge_px(parent, true));
+    }
+    t = css_tm4_translation(ax, ay, css_px(0.0));
+    m = css_tm4_perspective(d);
+    m = css_tm4_multiply(&t, &m);
+    t = css_tm4_translation(css_px_scale(ax, -1.0), css_px_scale(ay, -1.0), css_px(0.0));
+    return css_tm4_multiply(&m, &t);
+}
+
+static bool css_tm_perspective_matrix_ask(lxb_dom_element_t *parent)
+{
+    FlowPoint corner;
+    CssPx unused;
+
+    if (!css_perspective_origin_used_ask(parent) || !flow_border_box_origin_ask(parent, &corner)) return false;
+    return !css_computed_transform_box_is_content(parent) ||
+           (used_value_px_ask(parent, "padding-left", &unused) && used_value_px_ask(parent, "padding-top", &unused));
 }
 
 static void css_tm_plan(lxb_dom_element_t *el, CssTmPlan *p)
@@ -518,11 +588,14 @@ CssTransformMatrix css_transform_matrix_of_element(lxb_dom_element_t *el)
 {
     CssTransformMatrix3d m, t;
     CssTmPlan p;
-    CssPx ref[2] = { css_px(0.0), css_px(0.0) }, ax, ay;
+    CssPx ref[2] = { css_px(0.0), css_px(0.0) }, ax, ay, d;
     FlowPoint corner;
+    lxb_dom_element_t *parent;
 
     DCHECK(el != NULL, "css-transforms-1 §2's transformation matrix was asked for with no element");
     css_tm_plan(el, &p);
+    /* An untransformed child needs no parent perspective either: it maps z = 0 to z = 0, where the perspective
+       matrix's w is 1, so the flattened product is the identity. */
     if (!p.applies) return css_transform_matrix_identity();
     if (p.read_x) ref[0] = css_tm_reference_size(el, false);
     if (p.read_y) ref[1] = css_tm_reference_size(el, true);
@@ -544,6 +617,13 @@ CssTransformMatrix css_transform_matrix_of_element(lxb_dom_element_t *el)
         m = css_tm4_multiply(&t, &m);
         t = css_tm4_translation(css_px_scale(ax, -1.0), css_px_scale(ay, -1.0), css_px_scale(p.origin.z, -1.0));
         m = css_tm4_multiply(&m, &t);
+    }
+    /* css-transforms-2 §4.1.4: "If parent element has a value for perspective which is not none, pre-multiply
+       the parent element's perspective matrix into the transform." */
+    parent = css_tm_perspective_parent(el, &d);
+    if (parent != NULL) {
+        t = css_tm_perspective_matrix(parent, d);
+        m = css_tm4_multiply(&t, &m);
     }
     return css_tm4_flatten(&m);
 }
@@ -646,12 +726,15 @@ static bool css_tm_element_ask(lxb_dom_element_t *el)
 {
     CssTmPlan p;
     FlowPoint corner;
-    CssPx unused;
+    CssPx unused, d;
     bool done;
+    lxb_dom_element_t *parent;
 
     css_tm_plan(el, &p);
     if (!p.applies) return true;
     css_transform_list_free(&p.list);
+    parent = css_tm_perspective_parent(el, &d);
+    if (parent != NULL && !css_tm_perspective_matrix_ask(parent)) return false;
     done = (!p.read_x || css_tm_reference_size_ask(el, false)) && (!p.read_y || css_tm_reference_size_ask(el, true));
     if (done && p.anchored) {
         done = flow_border_box_origin_ask(el, &corner);
