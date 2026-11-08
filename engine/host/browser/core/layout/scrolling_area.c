@@ -277,7 +277,10 @@ static bool sa_fold_span(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvai
 
 static bool sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool ending_at_hi, CssPx *best)
 {
-    if (!block_flow_establishes_inline_context(b)) return true;
+    bool ifc;
+
+    if (!block_flow_establishes_inline_context_ask(b, &ifc)) return false;
+    if (!ifc) return true;
     {
         BlockFlowRun whole;
         CssPx origin;
@@ -482,8 +485,9 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                 descend = false;
             } else {
                 if (w->stage == SA_STAGE_CONTEXT) {
-                    bool context = block_flow_establishes_inline_context(d);
+                    bool context;
 
+                    if (!block_flow_establishes_inline_context_ask(d, &context)) return false;
                     if (context && !sa_inline_context_extreme(d, w->vertical, w->ending_at_hi, &w->best))
                         return false;
                     if (flex_item_display_is_flex_container(css_computed_display(d)) &&

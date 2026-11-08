@@ -53,6 +53,10 @@ typedef struct {
     lxb_dom_element_t      **floats;
     size_t                   floats_n, floats_cap;
     lxb_dom_node_t          *float_scan;
+    /* CSS 2.2 §9.4.2's establishing condition over this block container's content, closed by
+       `has_inline_context`, and the scan's place while it is stopped. */
+    bool                     inline_context;
+    BlockFlowInlineScan      inline_scan;
     /* §9.5.1's margin box of this float, in its context root's content-box frame. */
     FlowFloatBox             float_box;
     /* Where this box's block formatting context puts it, and its top content edge there (flow_placement.h). */
@@ -66,6 +70,7 @@ typedef struct {
     bool                     has_anon;
     bool                     has_run_first, has_run_after, has_table_box, has_floats, has_float_scan;
     bool                     has_float_box, has_bfc_entry, has_bfc_frame, has_float_avoid;
+    bool                     has_inline_context, has_inline_scan;
     bool                     has_run_top_first, has_run_top_after;
 } FpEntry;
 
@@ -633,6 +638,57 @@ bool flow_placement_float_scan_peek(const lxb_dom_element_t *root, lxb_dom_node_
     e = fp_entry_peek(root);
     if (e == NULL || !e->has_float_scan) return false;
     *out = e->float_scan;
+    return true;
+}
+
+void flow_placement_inline_scan_hold(const lxb_dom_element_t *el, const BlockFlowInlineScan *at)
+{
+    FpEntry *e;
+
+    DCHECK(el != NULL && at != NULL, "a §9.4.2 scan's place was held for no container or no place");
+    e = fp_entry_for_write(el);
+    CHECK(e != NULL, "a §9.4.2 scan stopped with no placement record to hold its place; it stops only under a "
+                     "resting drive, whose job holds one");
+    DCHECK(!e->has_inline_context, "a §9.4.2 scan held its place after its container's answer was recorded");
+    e->inline_scan = *at;
+    e->has_inline_scan = true;
+}
+
+bool flow_placement_inline_scan_peek(const lxb_dom_element_t *el, BlockFlowInlineScan *out)
+{
+    const FpEntry *e;
+
+    DCHECK(el != NULL && out != NULL, "a §9.4.2 scan's place was asked for no container or nowhere to put it");
+    e = fp_entry_peek(el);
+    if (e == NULL || !e->has_inline_scan) return false;
+    *out = e->inline_scan;
+    return true;
+}
+
+void flow_placement_inline_context_record(const lxb_dom_element_t *el, bool establishes)
+{
+    FpEntry *e;
+
+    DCHECK(el != NULL, "§9.4.2's establishing condition was recorded for no container");
+    e = fp_entry_for_write(el);
+    CHECK(e != NULL, "§9.4.2's establishing condition was answered with no placement record held; every "
+                     "computed-value read it made needs the job that holds one");
+    DCHECKF(!e->has_inline_context || e->inline_context == establishes,
+            "one container's §9.4.2 establishing condition was answered both ways in one job (%d then %d)",
+            (int)e->inline_context, (int)establishes);
+    e->inline_context = establishes;
+    e->has_inline_context = true;
+    e->has_inline_scan = false;
+}
+
+bool flow_placement_inline_context_peek(const lxb_dom_element_t *el, bool *out)
+{
+    const FpEntry *e;
+
+    DCHECK(el != NULL && out != NULL, "§9.4.2's establishing condition was asked for no container or nowhere");
+    e = fp_entry_peek(el);
+    if (e == NULL || !e->has_inline_context) return false;
+    *out = e->inline_context;
     return true;
 }
 

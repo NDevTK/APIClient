@@ -72,7 +72,7 @@ struct LayoutJob {
     unsigned  nest;      /* computing LAYOUT_Q_BF_BOX entries above `base` */
     unsigned  drives;    /* drives open on this job */
     size_t    quota;     /* boxes a resting drive may still lay out in this activation */
-    size_t    scan;      /* elements a resting drive's float search may still examine in this activation */
+    size_t    scan;      /* elements a resting drive's scans may still examine in this activation */
     size_t    line_items;   /* items a resting drive's line box fills may still take in this activation */
     size_t    line_metrics; /* box metrics its line box walks may still derive in this activation */
     size_t    rules;     /* style rules its author matches may still test in this activation */
@@ -600,7 +600,7 @@ void layout_job_drive_begin_resting(LayoutJobDrive *d)
     job->nest = 0;
     job->drives++;
     job->quota = rest_unit_items(REST_UNIT_LAYOUT_BOXES);
-    job->scan = rest_unit_items(REST_UNIT_LAYOUT_FLOAT_SCAN);
+    job->scan = rest_unit_items(REST_UNIT_LAYOUT_ELEMENT_SCAN);
     job->line_items = rest_unit_items(REST_UNIT_LAYOUT_LINE_ITEMS);
     job->line_metrics = rest_unit_items(REST_UNIT_LAYOUT_LINE_METRICS);
     job->rules = rest_unit_items(REST_UNIT_CASCADE_RULES);

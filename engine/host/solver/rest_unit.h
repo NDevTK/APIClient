@@ -65,12 +65,13 @@ typedef enum {
        between its asks; bound (2) is asserted by the REST_UNIT_LAYOUT_DESCENDANTS bracket the drive runs
        inside. */
     REST_UNIT_LAYOUT_BOXES,
-    /* One element examined under a resting drive by CSS 2.2 §9.5's search of a block formatting context for
-       its first float (core/layout/block_flow.h), which is a walk of the whole context where it finds none.
-       Past this many the search holds its place and the drive rests. Cost: one element's `display`,
-       `position` and `float`, the first read of which builds its cascaded style; bound (2) is asserted by the
-       REST_UNIT_LAYOUT_DESCENDANTS bracket. */
-    REST_UNIT_LAYOUT_FLOAT_SCAN,
+    /* One element classified under a resting drive by a scan of a box's descendants (core/layout/block_flow.h):
+       CSS 2.2 §9.5's search of a block formatting context for its floats, or §9.4.2's establishing condition
+       over a block container's content. Each walks the whole population where it finds nothing. Past this many
+       the scan holds its place and the drive rests. Cost: one element's `display`, `position` and `float`, the
+       first read of which builds its cascaded style; bound (2) is asserted by the REST_UNIT_LAYOUT_DESCENDANTS
+       bracket. */
+    REST_UNIT_LAYOUT_ELEMENT_SCAN,
     /* One item of an inline formatting context's collection (core/layout/text_run.h: a character, a box edge,
        a forced break or an atomic inline) taken by a step of its fill under a resting drive
        (core/layout/line_box.h): css-sizing-3 §2.1's walk, CSS 2.2 §9.4.2's distribution or §10.8's line box

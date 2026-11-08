@@ -92,6 +92,34 @@ bool box_tree_children_style_ask(lxb_dom_element_t *box)
     return true;
 }
 
+/* cssom_style_ask of each element `bt_resolve` reads from `n`, in its order: false at the first that parked. */
+static bool bt_resolve_ask(lxb_dom_element_t *box, lxb_dom_node_t *n)
+{
+    while (n != NULL) {
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && !cssom_style_ask(lxb_dom_interface_element(n))) return false;
+        if (!bt_is_spliced(n)) return true;
+        n = flat_tree_first_child(n) != NULL ? flat_tree_first_child(n) : bt_continue_after(box, n);
+    }
+    return true;
+}
+
+bool box_tree_first_child_ask(lxb_dom_element_t *box)
+{
+    DCHECK(box != NULL, "a box's first member was asked of no box");
+    if (!cssom_style_ask(box)) return false;
+    if (button_label_generated(box)) return true;
+    return bt_resolve_ask(box, flat_tree_first_child(lxb_dom_interface_node(box)));
+}
+
+bool box_tree_next_sibling_ask(lxb_dom_element_t *box, BoxTreeChild child)
+{
+    DCHECK(box != NULL && child.node != NULL, "a box's next member was asked with no box, or from no node");
+    if (box_tree_child_is_label(child)) return true;
+    if (box_tree_child_is_marker(child))
+        return button_label_generated(box) || bt_resolve_ask(box, flat_tree_first_child(child.node));
+    return bt_resolve_ask(box, bt_continue_after(box, child.node));
+}
+
 /* `bt_continue_after` read backward: the position before a spliced element's first child is the position
    before the element. */
 static lxb_dom_node_t *bt_continue_before(lxb_dom_element_t *box, lxb_dom_node_t *n)

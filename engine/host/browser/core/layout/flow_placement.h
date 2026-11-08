@@ -182,6 +182,13 @@ bool flow_placement_float_avoid_peek(const lxb_dom_element_t *el, FlowFloatAvoid
 void flow_placement_float_scan_hold(const lxb_dom_element_t *root, lxb_dom_node_t *next);
 bool flow_placement_float_scan_peek(const lxb_dom_element_t *root, lxb_dom_node_t **out);
 
+/* CSS 2.2 §9.4.2's establishing condition over block container `el`'s content (core/layout/block_flow.h's
+   ask): the scan's place, held when a resting drive stopped it, and the answer, whose record ends the hold. */
+void flow_placement_inline_scan_hold(const lxb_dom_element_t *el, const BlockFlowInlineScan *at);
+bool flow_placement_inline_scan_peek(const lxb_dom_element_t *el, BlockFlowInlineScan *out);
+void flow_placement_inline_context_record(const lxb_dom_element_t *el, bool establishes);
+bool flow_placement_inline_context_peek(const lxb_dom_element_t *el, bool *out);
+
 /* The census, in solver/result.c's vocabulary. Every field is a lifetime counter of this agent, so each
    may be differenced across two samples. `asks` counts §9.4.1 stack positions asked, `served` those this
    record answered, `walks` those that ran the walk; `asks == served + walks` is asserted. `placements`

@@ -367,24 +367,28 @@ bool block_flow_child_breaks_inline_box(lxb_dom_element_t *parent, BoxTreeChild 
 bool block_flow_run_generates_box(lxb_dom_element_t *el, BlockFlowRun run);
 
 
-/* CSS 2.2 §9.4.2's OWN CONDITION over `el`'s WHOLE CONTENT: "an inline formatting context is established by
-   a block container box that contains no block-level boxes."
-   IT IS THE QUESTION "IS THIS ELEMENT WHERE core/layout/line_box.h's RUN IS THE WHOLE CHILD LIST", which is the
-   one shape of §9.4.2's context that has an ELEMENT to name it. §9.2.1.1's anonymous block box is the other,
-   and it is deliberately NOT reachable through this entry: a MIXED container answers FALSE here even though
-   its inline-level children do sit in inline formatting contexts, because those contexts belong to boxes the
-   element tree does not contain and a caller that wants them wants a RUN and not an element.
-   IT IS EXPORTED BECAUSE §9.2.1's ALTERNATIVE IS ASKED FROM OUTSIDE THIS WALK AS WELL AS INSIDE IT. CSSOM VIEW
-   §2's scrolling area needs the boxes on this context's line boxes PLACED, and reaching them means knowing
-   which element establishes the context they are on — the same classification this file's own walk makes to
-   choose between §9.4.1 and §9.4.2, and a second copy of it would be one document with two box trees, free to
-   disagree about whether a run of white space is content (§9.2.2.1, the predicate above).
-   A CONTAINER WHOSE INLINE BOX HOLDS AN IN-FLOW BLOCK-LEVEL BOX ANSWERS FALSE, and §9.2.1.1's second
-   paragraph is why: that block-level box "becomes a sibling of those anonymous boxes", so it is one of THIS
-   container's boxes and §9.4.2's "contains no block-level boxes" is not satisfied — whatever the child LIST
-   looks like. The question is therefore asked over the container's CONTENT and not over its children, which
-   is the one thing a caller re-deriving this predicate from `display` and a child walk would get wrong. */
+/* CSS 2.2 §9.4.2's condition over `el`'s whole content: "an inline formatting context is established by a block
+   container box that contains no block-level boxes". It names the one shape of §9.4.2's context that has an
+   element; a mixed container answers false, since its runs are §9.2.1.1's anonymous block boxes. It is exported
+   so CSSOM VIEW §2's scrolling area, the intrinsic sizes and paint use this file's classification rather than
+   a second copy that could disagree about §9.2.2.1's white space.
+   The content, not the child list: §9.2.1.1's second paragraph makes an in-flow block-level box inside an
+   inline box "a sibling of those anonymous boxes", so such a container answers false.
+   The ask classifies one member per step (the container's sequence and, through each inline box, its
+   descendants), asking each member's style first and taking one element of a resting drive's scan allowance
+   (core/layout/layout_job.h's layout_job_scan_take); the answer and a stopped scan's place are held per
+   container in the job's placement record (core/layout/flow_placement.h). False ("not yet") with `*out`
+   unwritten when a resting drive stopped it. The read drives the ask to its answer under a drive of its own. */
+bool block_flow_establishes_inline_context_ask(lxb_dom_element_t *el, bool *out);
 bool block_flow_establishes_inline_context(lxb_dom_element_t *el);
+
+/* A stopped §9.4.2 scan's place: the member it classifies next and the box whose sequence holds it, which is
+   the container or an inline box inside it, and whether an inline-level child of the container was met. */
+typedef struct {
+    lxb_dom_element_t *parent;
+    BoxTreeChild       at;
+    bool               inline_level;
+} BlockFlowInlineScan;
 
 /* CSS 2.2 §10.8.1 "Leading and half-leading"'s `inline-block` BASELINE, as the DISTANCE §9.4.1's OWN STACK
    REACHES IT AT. The section states the whole rule in one sentence with an exception in it: "The baseline of

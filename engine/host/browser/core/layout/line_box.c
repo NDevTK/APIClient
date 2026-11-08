@@ -674,8 +674,8 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
               "block-level boxes inside it\" puts a block-level box OUTSIDE the anonymous box as its SIBLING "
               "whether it is a child of the container or was reached through an inline box the section breaks "
               "around it — so no run this walk is ever handed may contain one, at any depth, and the run's "
-              "exclusive end is where it stops. Whichever of `bf_content_is_inline` and `block_flow_next_block_box` "
-              "stopped agreeing with the other is the fix");
+              "exclusive end is where it stops. Whichever of `block_flow_establishes_inline_context_ask` and "
+              "`block_flow_next_block_box` stopped agreeing with the other is the fix");
     /* §10.8's step 2 for this box, asked at the walk because it is about the box (whether its `A'` and `D'`
        are measured from its neighbours' baseline) and the walk reaches each box once, while the per-line pass
        reaches it once per item. It is asked of a `br` too: the break is an inline-level box on the line it
@@ -2537,8 +2537,8 @@ static bool lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbC
    two shapes holds this box. §9.4.2's
    condition is asked over the container's whole child list, the one shape with an element to name it
    (core/layout/block_flow.h); a mixed container's runs are §9.2.1.1's anonymous block boxes, and the one
-   holding this box supplies the run and origin `lb_anon_run` looks up. False ("not yet") when that lookup's
-   §9.4.1 walk deferred a contribution; `*out` is then unwritten. */
+   holding this box supplies the run and origin `lb_anon_run` looks up. False ("not yet") when §9.4.2's scan
+   or that lookup's §9.4.1 walk stopped; `*out` is then unwritten. */
 static bool lb_establishing_context(lxb_dom_node_t *subject, LbContext *out)
 {
     lxb_dom_node_t *a, *child = subject;
@@ -2580,12 +2580,15 @@ static bool lb_establishing_context(lxb_dom_node_t *subject, LbContext *out)
                   lb_el_name(el, ebuf, sizeof ebuf), lb_el_display(el),
                   lb_el_name(anc, abuf, sizeof abuf), lb_el_display(anc));
         if (container) {
+            bool ifc;
+
             ctx.style = anc;
             /* §9.4.2's condition over the whole child list picks the shape, asked once through the component that
                owns it, so this branch and `lb_anon_run`'s enumeration are one classification. A container that
                establishes the context itself is the run with no bound on either side, spelled as the one-entry
                collection so the fill below has one loop over both shapes. */
-            if (block_flow_establishes_inline_context(anc)) {
+            if (!block_flow_establishes_inline_context_ask(anc, &ifc)) return false;
+            if (ifc) {
                 ctx.box = lexbor_malloc(sizeof *ctx.box);
                 CHECK(ctx.box != NULL,
                       "out of memory naming CSS 2.2 §9.4.2's inline formatting context. It is ONE entry for a "

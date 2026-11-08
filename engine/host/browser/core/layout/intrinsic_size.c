@@ -450,7 +450,8 @@ static IsChildNext is_child(TextRunMeasure *m, IsFloats *fl, lxb_dom_element_t *
            "CSS 2.2 §9.2.1.1 \"Anonymous block boxes\" puts a block-level box on the CONTAINER's stack, as a "
            "sibling of the anonymous boxes, whether it is a direct child or is reached through an inline box "
            "it breaks — so no run this walk is ever handed may contain one, and whichever of "
-           "`bf_content_is_inline` and `block_flow_next_block_box` stopped agreeing with the other is the fix");
+           "`block_flow_establishes_inline_context_ask` and `block_flow_next_block_box` stopped agreeing with "
+           "the other is the fix");
     /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes"' atomic inline-level box that is not replaced, one
        item of this run ("as a single opaque box"; css-text-3 §5.5 "Line Breaking Details": "a soft wrap
        opportunity before and after each replaced element or other atomic inline").
@@ -1400,6 +1401,7 @@ bool intrinsic_inline_sizes_ask(lxb_dom_element_t *el)
 {
     CssDisplay d;
     IntrinsicInlineSizes empty;
+    bool ifc;
 
     DCHECK(el != NULL, "css-sizing-3 §5.1's intrinsic inline sizes were asked for with no element");
     /* The read's dispatch, in its order. A replaced element is sized by natural dimensions and measures no
@@ -1415,7 +1417,8 @@ bool intrinsic_inline_sizes_ask(lxb_dom_element_t *el)
         return grid_container_inline_sizes_ask(el, &min_content, &max_content);
     }
     if (!block_flow_display_is_block_container(d)) return true;
-    if (block_flow_establishes_inline_context(el)) {
+    if (!block_flow_establishes_inline_context_ask(el, &ifc)) return false;
+    if (ifc) {
         BlockFlowRun whole;
 
         whole.after = NULL;

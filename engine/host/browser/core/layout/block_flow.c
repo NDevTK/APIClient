@@ -11,6 +11,7 @@
 #include "core/dom/flat_tree.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
+#include "core/css/css_style_declaration.h"   /* the style ask §9.4.2's scan makes before each read */
 #include "core/timing/thread_work.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
@@ -634,7 +635,7 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
               "the element tree by its contents\" as a child sequence — so what is owed here is ROUTING this "
               "walk to it and NOT a second copy of the rule. "
               "THIS FILE'S OWN WALKS ARE ROUTED, WHICH IS WHY REACHING THIS LINE NOW MEANS A CALLER OUTSIDE "
-              "THEM: `bf_content_next`, `bf_content_is_inline`, `bf_inline_box_breaks`, the run's start and step "
+              "THEM: `bf_content_next`, `block_flow_establishes_inline_context_ask`, `bf_inline_box_breaks`, the run's start and step "
               "and `block_flow_run_generates_box` all take that sequence, so nothing this file enumerates can "
               "hand this classification a `contents` element any more. A caller that still composes a child "
               "list with `->first_child` and `->next`, or a box parent with `->parent`, is what gets here — "
@@ -675,7 +676,7 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
     if (block) return BLOCK_FLOW_CHILD_BLOCK;
     /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes": this child is inline-level, so it is not on
        §9.4.1's stack at all — §9.4.2's line boxes hold it, and which of the two formatting contexts this block
-       container establishes is decided over the WHOLE child list rather than here (bf_content_is_inline). */
+       container establishes is decided over the WHOLE child list rather than here (block_flow_establishes_inline_context_ask). */
     if (inline_level) return BLOCK_FLOW_CHILD_INLINE;
     /* CSS 2.1 §17.4 Tables in the visual formatting model ANSWERS THIS CLASSIFICATION, and it used to abort
        here. The box §9.4.1's stack places for a `display: table` element is not the table box at all: "the
@@ -999,65 +1000,112 @@ static bool bf_box(lxb_dom_element_t *el, BfBaseline pass, BfBox *out);
    formatting context "is established by a block container box THAT CONTAINS NO BLOCK-LEVEL BOXES". One
    block-level box settles the container's context — §9.2.1.1 "Anonymous block boxes": "then we FORCE IT TO
    HAVE ONLY BLOCK-LEVEL BOXES INSIDE IT" — so the scan stops at the first one: a long list of block-level
-   children is answered at its first member, and only a container that holds none reads its whole list.
-   Answers whether the container's children hold an inline-level box and no block-level box. */
-static bool bf_content_is_inline(lxb_dom_element_t *el)
-{
-    BoxTreeChild c;
-    bool inl = false;
+   children is answered at its first member, and only a container that holds none reads its whole content.
+   The scan is a pre-order walk of css-display-3 §2.5's spliced sequences, which `block_flow_next_block_box`
+   also walks (core/layout/intrinsic_size.c asserts the two agree). It descends into each inline box, because
+   §9.2.1.1's second paragraph puts an in-flow block-level box inside one on THIS container's box list ("the
+   block-level box becomes a sibling of those anonymous boxes"), and into nothing else: an atomic inline keeps
+   its block-level children. A float, an outside marker and a member with no box decide nothing (§9.5: "since a
+   float is not in the flow"). */
 
-    /* css-display-3 §2.5's SPLICED SEQUENCE, because this walk and `block_flow_next_block_box` are REQUIRED to
-       agree — core/layout/intrinsic_size.c asserts that agreement by name — and a `contents` child would put
-       its children on one walk's list and not the other's. */
-    for (c = box_tree_first_child(el); box_tree_child_exists(c); c = box_tree_next_sibling(el, c)) {
-        switch (block_flow_child_kind(el, c)) {
-        case BLOCK_FLOW_CHILD_NO_BOX: break;
-        /* css-lists-3 §3.5's outside marker box "is placed outside the principal block box", so it is neither
-           a block-level nor an inline-level box of this content and leaves both bits as the source-document
-           children set them. An inside marker would be inline content; classifying one aborts. */
-        case BLOCK_FLOW_CHILD_OUTSIDE_MARKER: break;
-        /* §9.4.2's condition is "a block container box that CONTAINS NO BLOCK-LEVEL BOXES" and §9.2.1.1's
-           forcing is triggered by one — and a float is neither, because it is not in this container's flow at
-           all: §9.5's "since a float is not in the flow, non-positioned block boxes created before and after
-           the float box flow vertically as if the float did not exist". §9.2.1.1's own splitting paragraph
-           reads the same way from the other end, treating block-level siblings "that are consecutive or
-           separated only by collapsible whitespace and/or out-of-flow elements" as one break. So a float
-           decides NOTHING here, and this classification ANSWERS for a container that has one; what a float
-           does to the answer is a fact about the WIDTH of line boxes and about §9.5.2's clearance, which is
-           each walk's own question at its own line. */
-        case BLOCK_FLOW_CHILD_FLOAT:  break;
-        case BLOCK_FLOW_CHILD_BLOCK:  return false;
-        case BLOCK_FLOW_CHILD_INLINE:
-            inl = true;
-            /* §9.2.1.1's SECOND PARAGRAPH IS PART OF THIS QUESTION AND NOT OF A LATER ONE. A broken inline box
-               puts its in-flow block-level descendant on THIS container's box list, as a SIBLING of the
-               anonymous boxes around the two halves — so the container "contains a block-level box" in exactly
-               the sense §9.4.2's establishing condition means, and answering INLINE here would hand §9.4.2's
-               line boxes a box no line box can hold. */
-            if (block_flow_child_breaks_inline_box(el, c)) return false;
-            break;
-        }
+/* Moves the scan past `*at`, a member of `*parent`'s sequence, entering it when `enter`; false with both
+   unchanged when a style the step reads parked. */
+static bool bf_inline_scan_advance(lxb_dom_element_t *el, lxb_dom_element_t **parent, BoxTreeChild *at,
+                                   bool enter)
+{
+    lxb_dom_element_t *p = *parent;
+    BoxTreeChild c = *at;
+
+    if (enter) {
+        p = lxb_dom_interface_element(c.node);
+        if (!box_tree_first_child_ask(p)) return false;
+        c = box_tree_first_child(p);
+    } else {
+        if (!box_tree_next_sibling_ask(p, c)) return false;
+        c = box_tree_next_sibling(p, c);
     }
-    return inl;
+    while (!box_tree_child_exists(c) && p != el) {
+        BoxTreeChild up = box_tree_child_of_node(lxb_dom_interface_node(p));
+        lxb_dom_element_t *pp = box_tree_parent(up);
+
+        DCHECK(pp != NULL, "a §9.4.2 scan climbed out of an inline box with no box parent — it enters only "
+                           "inline boxes below the container, each a member of its box parent's sequence");
+        if (!box_tree_next_sibling_ask(pp, up)) return false;
+        c = box_tree_next_sibling(pp, up);
+        p = pp;
+    }
+    *parent = p;
+    *at = c;
+    return true;
 }
 
-/* §9.4.2's OWN CONDITION, WHOLE — see the header for why it is exported rather than re-derived. Both conjuncts
-   are the section's own sentence: the box must be a BLOCK CONTAINER, and it must CONTAIN NO BLOCK-LEVEL BOXES.
-   The `display` half is asked FIRST and is not redundant with the classification below: `bf_content_is_inline` reads
-   a CHILD LIST and a `display: inline` element with only text children has one that looks exactly like a block
-   container's, so a caller that skipped it would be told that an inline box establishes the formatting context
-   its own ancestor establishes — and would then place that context's line boxes against the inline box's
-   content edge, which is not a rectangle §9.4.2 gives line boxes at all. */
+bool block_flow_establishes_inline_context_ask(lxb_dom_element_t *el, bool *out)
+{
+    BlockFlowInlineScan s;
+
+    DCHECK(el != NULL && out != NULL, "CSS 2.2 §9.4.2's establishing condition was asked with no element or "
+                                      "nowhere to answer");
+    DCHECK(flow_placement_is_held(), "CSS 2.2 §9.4.2's establishing condition was asked with no layout job "
+                                     "holding a placement record; every computed value it reads needs one");
+    if (!cssom_style_ask(el)) return false;
+    /* The `display` half is asked first: a `display: inline` element with only text children has a child list
+       like a block container's, and §9.4.2 gives line boxes no rectangle against an inline box's content. */
+    if (!block_flow_display_is_block_container(css_computed_display(el))) {
+        *out = false;
+        return true;
+    }
+    if (flow_placement_inline_context_peek(el, out)) return true;
+    if (!flow_placement_inline_scan_peek(el, &s)) {
+        if (!box_tree_first_child_ask(el)) return false;
+        s.parent = el;
+        s.at = box_tree_first_child(el);
+        s.inline_level = false;
+    }
+    while (box_tree_child_exists(s.at)) {
+        bool enter = false;
+
+        if (!box_tree_child_is_generated(s.at) && s.at.node->type == LXB_DOM_NODE_TYPE_ELEMENT &&
+            (!layout_job_scan_take() || !cssom_style_ask(lxb_dom_interface_element(s.at.node)))) {
+            flow_placement_inline_scan_hold(el, &s);
+            return false;
+        }
+        switch (block_flow_child_kind(s.parent, s.at)) {
+        case BLOCK_FLOW_CHILD_NO_BOX:
+        case BLOCK_FLOW_CHILD_OUTSIDE_MARKER:
+        case BLOCK_FLOW_CHILD_FLOAT:
+            break;
+        case BLOCK_FLOW_CHILD_BLOCK:
+            flow_placement_inline_context_record(el, false);
+            *out = false;
+            return true;
+        case BLOCK_FLOW_CHILD_INLINE:
+            if (s.parent == el) s.inline_level = true;
+            /* A label is a text sequence and a text node has no children: only an inline box is entered. */
+            enter = !box_tree_child_is_generated(s.at) && s.at.node->type == LXB_DOM_NODE_TYPE_ELEMENT &&
+                    bf_generates_inline_box(lxb_dom_interface_element(s.at.node));
+            break;
+        }
+        if (!bf_inline_scan_advance(el, &s.parent, &s.at, enter)) {
+            flow_placement_inline_scan_hold(el, &s);
+            return false;
+        }
+    }
+    DCHECK(s.parent == el, "a §9.4.2 scan ended inside an inline box — its advance climbs out of every box it "
+                           "entered before it reports the container's sequence ended");
+    flow_placement_inline_context_record(el, s.inline_level);
+    *out = s.inline_level;
+    return true;
+}
+
 bool block_flow_establishes_inline_context(lxb_dom_element_t *el)
 {
-    CssDisplay d;
-    bool container;
+    LayoutJobDrive d;
+    bool establishes = false;
 
-    DCHECK(el != NULL, "CSS 2.2 §9.4.2's establishing condition was asked with no element");
-    d = css_computed_display(el);
-    container = block_flow_display_is_block_container(d);
-    if (!container) return false;
-    return bf_content_is_inline(el);
+    layout_job_drive_begin(&d);
+    while (!block_flow_establishes_inline_context_ask(el, &establishes)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
+    return establishes;
 }
 
 /* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes" -------------------------------------------------------------
@@ -2035,12 +2083,14 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
     w.esc_run = bf_run_empty();
     /* A walk staged before it classified stands at its start, so it runs as a fresh one. */
     resumed = bf_walk_resume(body, el, &w, &out) && w.classified;
-    /* §9.4.2's classification reads every child's `display`: asked first under the caller's resting drive, so a
-       long child list's cascade parks between activations instead of running inside this body. */
-    if (!resumed && !wrapper && !box_tree_children_style_ask(el)) return bf_walk_stage(body, el, &w, &out);
+    /* The stack reads every child's `display`: asked first under the caller's resting drive, so a long child
+       list's cascade parks between activations instead of running inside this body. A resumed walk took its
+       branch on its first run. */
+    if (!resumed && !wrapper) {
+        if (!block_flow_establishes_inline_context_ask(el, &w.ifc) || !box_tree_children_style_ask(el))
+            return bf_walk_stage(body, el, &w, &out);
+    }
     if (wrapper) wn = bf_wrapper_boxes(el, &wl);
-    /* A resumed walk took its branch on its first run. */
-    if (!resumed) w.ifc = !wrapper && bf_content_is_inline(el);
     w.classified = true;
     /* Where this walk stands in its block formatting context. Its top content edge is known at once when a
        border, padding or an inline formatting context keeps its children's margins from its own, after the first
@@ -3461,7 +3511,12 @@ bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **ou
        container, and one establishing §9.4.2's context, are answered here; a container holding block-level
        boxes is answered by its stack, which wraps each run of inline-level content it meets. */
     if (!block_flow_display_is_block_container(css_computed_display(el))) return true;
-    if (bf_content_is_inline(el)) return true;
+    {
+        bool ifc;
+
+        if (!block_flow_establishes_inline_context_ask(el, &ifc)) return false;
+        if (ifc) return true;
+    }
     /* The census counts an ask at the attempt that answers it, as the origin's does. The stack runs whatever
        this container's `height` says: a container with a declared height is exactly the one whose text can
        overflow it. */

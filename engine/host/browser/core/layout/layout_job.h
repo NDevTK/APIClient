@@ -223,7 +223,7 @@ void layout_job_drive_end(LayoutJobDrive *d);
 /* A drive whose driver rests (a step machine's, on its entered job). `begin_resting` asserts it is the job's
    outermost drive and takes every suspended entry the last activation left as its own; `spent` answers whether
    this activation has laid out its rest_unit_items(REST_UNIT_LAYOUT_BOXES) boxes, examined its
-   rest_unit_items(REST_UNIT_LAYOUT_FLOAT_SCAN) elements, taken its rest_unit_items(REST_UNIT_LAYOUT_LINE_ITEMS)
+   rest_unit_items(REST_UNIT_LAYOUT_ELEMENT_SCAN) elements, taken its rest_unit_items(REST_UNIT_LAYOUT_LINE_ITEMS)
    line box items, derived its rest_unit_items(REST_UNIT_LAYOUT_LINE_METRICS) box metrics, tested its
    rest_unit_items(REST_UNIT_CASCADE_RULES) style rules or emitted its rest_unit_items(REST_UNIT_CASCADE_EMITS)
    rules; `end` on a resting drive
@@ -285,9 +285,10 @@ bool layout_job_bf_resume(size_t at, const lxb_dom_element_t *el, LayoutBfCursor
    stages and suspends; otherwise it takes one item when a resting drive is innermost. */
 bool layout_job_bf_step(size_t at);
 
-/* CSS 2.2 §9.5's float search (core/layout/block_flow.h) is about to examine one element. It answers false
-   when a resting drive is innermost and has spent its items, and the search then holds its place and answers
-   "not yet"; otherwise it takes one element when a resting drive is innermost. */
+/* A scan of core/layout/block_flow.h (CSS 2.2 §9.5's float search, §9.4.2's establishing condition) is about to
+   examine one element. It answers false when a resting drive is innermost and has spent its items, and the scan
+   then holds its place and answers "not yet"; otherwise it takes one element when a resting drive is
+   innermost. */
 bool layout_job_scan_take(void);
 
 /* A resting build of an author match (core/css/css_style_declaration.h's cssom_style_ask) is about to test one

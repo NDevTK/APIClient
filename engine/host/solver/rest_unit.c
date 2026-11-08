@@ -31,10 +31,10 @@
    (REST_UNIT_LAYOUT_LINE_ITEMS). */
 #define REST_UNIT_LAYOUT_BOXES_N   4u
 
-/* Elements a resting drive's float search examines per rest point, 32. The floor is the rest's own cost,
-   which a search pays as one held place; the ceiling is bound (2): an element whose cascaded style is built
+/* Elements a resting drive's scans examine per rest point, 32. The floor is the rest's own cost, which a
+   scan pays as one held place; the ceiling is bound (2): an element whose cascaded style is built
    by its first read costs a few hundred microseconds. */
-#define REST_UNIT_LAYOUT_FLOAT_SCAN_N   32u
+#define REST_UNIT_LAYOUT_ELEMENT_SCAN_N   32u
 
 /* Items a resting drive's line box fill takes per rest point, 256. The floor is the rest's own cost: the body
    holding the fill is replayed, which one item does not amortize. The ceiling is bound (2): with box metrics
@@ -111,7 +111,7 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_XML_CONSTRUCTS:   n = REST_UNIT_XML_CONSTRUCTS_N;   break;
     case REST_UNIT_SUBTREE_REMOVALS: n = REST_UNIT_SUBTREE_REMOVALS_N; break;
     case REST_UNIT_LAYOUT_BOXES:     n = REST_UNIT_LAYOUT_BOXES_N;     break;
-    case REST_UNIT_LAYOUT_FLOAT_SCAN: n = REST_UNIT_LAYOUT_FLOAT_SCAN_N; break;
+    case REST_UNIT_LAYOUT_ELEMENT_SCAN: n = REST_UNIT_LAYOUT_ELEMENT_SCAN_N; break;
     case REST_UNIT_LAYOUT_DESCENDANTS: n = REST_UNIT_LAYOUT_DESCENDANTS_N; break;
     case REST_UNIT_LAYOUT_LINE_ITEMS: n = REST_UNIT_LAYOUT_LINE_ITEMS_N; break;
     case REST_UNIT_LAYOUT_LINE_METRICS: n = REST_UNIT_LAYOUT_LINE_METRICS_N; break;

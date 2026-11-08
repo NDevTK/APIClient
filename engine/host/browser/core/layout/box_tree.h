@@ -102,4 +102,9 @@ lxb_dom_element_t *box_tree_parent(BoxTreeChild n);
    itself. */
 bool box_tree_children_style_ask(lxb_dom_element_t *box);
 
+/* The same ask for one step: every style `box_tree_first_child(box)` or `box_tree_next_sibling(box, child)`
+   reads, `box`'s own first. False ("not yet") at the first that parked. */
+bool box_tree_first_child_ask(lxb_dom_element_t *box);
+bool box_tree_next_sibling_ask(lxb_dom_element_t *box, BoxTreeChild child);
+
 #endif
