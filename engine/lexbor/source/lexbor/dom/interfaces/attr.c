@@ -244,6 +244,10 @@ lxb_dom_attr_set_value(lxb_dom_attr_t *attr,
         }
     }
 
+    if (attr->owner != NULL && lxb_dom_tree_observer() != NULL) {
+        lxb_dom_tree_observer()->attr_removing(attr->owner, attr);
+    }
+
     old_value = *attr->value;
     new_value = attr->value;
 
@@ -260,6 +264,10 @@ lxb_dom_attr_set_value(lxb_dom_attr_t *attr,
 
     new_value->data[value_len] = 0x00;
     new_value->length = value_len;
+
+    if (attr->owner != NULL && lxb_dom_tree_observer() != NULL) {
+        lxb_dom_tree_observer()->attr_added(attr->owner, attr);
+    }
 
     if (!(lxb_dom_document_opt(doc) & LXB_DOM_DOCUMENT_OPT_WO_EVENTS)
         && doc->attr_mutation->change != NULL && attr->owner != NULL)
@@ -290,8 +298,16 @@ lxb_dom_attr_set_value_wo_copy(lxb_dom_attr_t *attr,
         }
     }
 
+    if (attr->owner != NULL && lxb_dom_tree_observer() != NULL) {
+        lxb_dom_tree_observer()->attr_removing(attr->owner, attr);
+    }
+
     attr->value->data = value;
     attr->value->length = value_len;
+
+    if (attr->owner != NULL && lxb_dom_tree_observer() != NULL) {
+        lxb_dom_tree_observer()->attr_added(attr->owner, attr);
+    }
 
     return LXB_STATUS_OK;
 }
@@ -357,6 +373,10 @@ lxb_dom_attr_remove(lxb_dom_attr_t *attr)
     }
 
     doc = lxb_dom_interface_node(attr)->owner_document;
+
+    if (lxb_dom_tree_observer() != NULL) {
+        lxb_dom_tree_observer()->attr_removing(element, attr);
+    }
 
     old_value = NULL;
     old_value_len = 0;

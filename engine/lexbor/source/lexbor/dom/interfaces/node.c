@@ -370,6 +370,28 @@ lxb_dom_node_name(lxb_dom_node_t *node, size_t *len)
     return NULL;
 }
 
+static const lxb_dom_tree_observer_t *lxb_dom_tree_observer_current;
+
+void
+lxb_dom_tree_observer_set(const lxb_dom_tree_observer_t *observer)
+{
+    lxb_dom_tree_observer_current = observer;
+}
+
+const lxb_dom_tree_observer_t *
+lxb_dom_tree_observer(void)
+{
+    return lxb_dom_tree_observer_current;
+}
+
+static void
+lxb_dom_node_observe_inserted(lxb_dom_node_t *node)
+{
+    if (lxb_dom_tree_observer_current != NULL) {
+        lxb_dom_tree_observer_current->inserted(node);
+    }
+}
+
 void
 lxb_dom_node_insert_child_wo_events(lxb_dom_node_t *to, lxb_dom_node_t *node)
 {
@@ -385,6 +407,8 @@ lxb_dom_node_insert_child_wo_events(lxb_dom_node_t *to, lxb_dom_node_t *node)
     node->prev = to->last_child;
 
     to->last_child = node;
+
+    lxb_dom_node_observe_inserted(node);
 }
 
 void
@@ -419,6 +443,8 @@ lxb_dom_node_insert_before_wo_events(lxb_dom_node_t *to, lxb_dom_node_t *node)
     node->prev = to->prev;
 
     to->prev = node;
+
+    lxb_dom_node_observe_inserted(node);
 }
 
 void
@@ -452,6 +478,8 @@ lxb_dom_node_insert_after_wo_events(lxb_dom_node_t *to, lxb_dom_node_t *node)
     node->next = to->next;
     node->prev = to;
     to->next = node;
+
+    lxb_dom_node_observe_inserted(node);
 }
 
 void
@@ -858,6 +886,10 @@ lxb_dom_node_remove_spec(lxb_dom_node_t *node, bool suppress_observers)
 void
 lxb_dom_node_remove_wo_events(lxb_dom_node_t *node)
 {
+    if (lxb_dom_tree_observer_current != NULL) {
+        lxb_dom_tree_observer_current->removing(node);
+    }
+
     if (node->parent != NULL) {
         if (node->parent->first_child == node) {
             node->parent->first_child = node->next;

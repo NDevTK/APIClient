@@ -391,6 +391,10 @@ done:
 
     attr->owner = element;
 
+    if (lxb_dom_tree_observer() != NULL) {
+        lxb_dom_tree_observer()->attr_added(element, attr);
+    }
+
     if (!(lxb_dom_document_opt(doc) & LXB_DOM_DOCUMENT_OPT_WO_EVENTS)
         && doc->attr_mutation->append != NULL)
     {

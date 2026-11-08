@@ -8,6 +8,7 @@
    directly, and nothing else pulls their declarations in. */
 #include <lexbor/html/attribute_steps.h>
 
+#include "core/dom/document_name_index.h"
 #include "check.h"
 #include "core/dom/attr_list.h"   /* the attribute generation an append advances */
 #include "core/dom/node_heap.h"
@@ -374,6 +375,7 @@ lxb_html_parser_t *html_parse_new_parser(void)
        engine passes, so there is no parse left to forget. Idempotent by construction — one process-wide table
        whose address does not change — and asserted from the other side on every parse open. */
     dom_cow_install_tree_construction();
+    document_name_index_install();   /* the tree a parse builds is observed from its first node */
     DCHECK(dom_cow_owns_tree_construction(),
            "installing this engine's §13.2.6 DOM writer did not take — the table is one process-wide pointer "
            "and this is the line that sets it, so a mismatch here means a second component is competing for "

@@ -8,6 +8,7 @@
 #include <lexbor/dom/interfaces/element.h>
 #include <lexbor/dom/interfaces/shadow_root.h>   /* DOM §4.8's node type is the one lexbor's own dispatch drops */
 
+#include "core/dom/document_name_index.h"
 #include "check.h"
 #include "core/dom/attr_list.h"     /* dom_attr_destroy — the ONE point an Attr's death converges on */
 #include "core/dom/document_type.h"  /* document_type_destroy — §4.6's ids are not in the arena lexbor frees them into */
@@ -341,8 +342,11 @@ int dom_document_owns_node_interfaces(lxb_dom_document_t *doc)
    seventeen callers is the wrong place for one caller's measurement. */
 lxb_html_document_t *dom_document_create(void)
 {
-    lxb_html_document_t *dom = lxb_html_document_create();
+    lxb_html_document_t *dom;
     lxb_dom_document_t *doc;
+
+    document_name_index_install();   /* before the first node of any document is linked */
+    dom = lxb_html_document_create();
 
     if (dom == NULL)
         return NULL;

@@ -197,6 +197,10 @@ failed:
 lxb_status_t
 lxb_dom_document_clean(lxb_dom_document_t *document)
 {
+    if (lxb_dom_tree_observer() != NULL) {
+        lxb_dom_tree_observer()->document_destroying(document);
+    }
+
     if (lxb_dom_interface_node(document)->owner_document == document) {
         lexbor_mraw_clean(document->mraw);
         lexbor_mraw_clean(document->text);
@@ -217,6 +221,10 @@ lxb_dom_document_destroy(lxb_dom_document_t *document)
 {
     if (document == NULL) {
         return NULL;
+    }
+
+    if (lxb_dom_tree_observer() != NULL) {
+        lxb_dom_tree_observer()->document_destroying(document);
     }
 
     if (lxb_dom_interface_node(document)->owner_document != document) {

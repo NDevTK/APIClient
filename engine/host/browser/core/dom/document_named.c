@@ -3,11 +3,12 @@
  * partial interface Document`, so a named property shadows an interface member (`<img name=getElementById>`).
  * Answers come from the running flow's tree in tree order, attributes read at the walk; a [[Get]], [[HasProperty]]
  * or [[GetOwnProperty]] walks as a step machine (dn_step) over the shared resting walk (core/dom/named_walk.h).
- * Named residual: not covered — an index; every `document.x` walks the tree. Next diff builds Blink's named-item
- * map at Lexbor's own tree insertion and removal primitives, which the parser, §8.4.3's document.write feed and
- * the DOM API all call (dom_cow's chokepoints miss the first two), updated as Element::insertedInto/removedFrom
- * update Blink's; the parse runs inside a flow, so the map is per flow's document and rides the flow's delta,
- * never C state sibling flows share. Absence shows as host work per `document.x` growing with the tree. */
+ * A name no element's id or name carries is answered by the document's name index (core/dom/document_name_index.h)
+ * with no walk: it is not a supported property name, which is Web IDL §3.9.7's visibility step 1, and every
+ * `document.<member>` read is one.
+ * Named residual: not covered — a name the index holds still walks to decide the element type and order. Next
+ * diff builds the index's per-name element list in tree order, as Blink's named-item map keeps it. Absence shows
+ * as host work per `document.x` of a carried name growing with the tree. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -19,6 +20,7 @@
 #include "core/dom/collections.h"
 #include "core/dom/document.h"
 #include "core/dom/document_named.h"
+#include "core/dom/document_name_index.h"
 #include "core/dom/named_walk.h"
 #include "core/dom/node.h"
 #include "core/html/html_iframe.h"
@@ -250,15 +252,18 @@ static JSValue dn_key_domain_step(JSContext *ctx, JSValueConst obj)
     return idl_step_function(ctx, "Document supported names in a key domain", g_id_dn_domain_step);
 }
 
-/* JSClassExoticMethods.get_own_property_step: the walk for a String key, JS_UNDEFINED for a Symbol. Owned. */
+/* JSClassExoticMethods.get_own_property_step: the walk for a String key the name index holds, JS_UNDEFINED for
+   any other key. Owned. */
 static JSValue dn_get_own_step(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
-    JSValue pv = JS_AtomToValue(ctx, prop);
-    bool str = JS_IsString(pv);
+    const char *name;
+    size_t n;
+    bool held;
 
-    (void)obj;
-    JS_FreeValue(ctx, pv);
-    if (!str) return JS_UNDEFINED;
+    if (!dn_string_name(ctx, prop, &name, &n)) return JS_UNDEFINED;
+    held = document_name_index_holds(dn_document(obj), name, n);
+    JS_FreeCString(ctx, name);
+    if (!held) return JS_UNDEFINED;   /* not a supported property name: the prototype answers */
     DCHECK(g_id_dn_step >= 0, "Document named access asked for its step before document_named_init declared it");
     return idl_step_function(ctx, "Document named access", g_id_dn_step);
 }
@@ -290,8 +295,9 @@ static int dn_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst o
     const char *name;
     size_t n;
 
-    (void)desc; (void)obj;
+    (void)desc;
     if (!dn_string_name(ctx, prop, &name, &n)) return 0;
+    if (!document_name_index_holds(dn_document(obj), name, n)) { JS_FreeCString(ctx, name); return 0; }
     JS_FreeCString(ctx, name);
     DFAIL("a C activation asked a Document's named [[GetOwnProperty]]: the lookup rests per element as dn_step, so "
           "route this caller's read through the keyed entry (get_own_property_step), never a C walk");

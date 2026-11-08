@@ -133,6 +133,29 @@ lxb_dom_node_clone(lxb_dom_node_t *node, bool deep);
 LXB_API const lxb_char_t *
 lxb_dom_node_name(lxb_dom_node_t *node, size_t *len);
 
+/*
+ * The tree observer: what the embedder maintains as a function of the tree, told at the primitives every tree
+ * write passes through (the four link primitives below, an element's attribute list and an attribute's value),
+ * so a structure derived from the tree stays its function across any write, the parser's included. `inserted`
+ * runs after `node` is linked, `removing` before it is unlinked; `attr_added` after an attribute is on its
+ * element or holds its new value, `attr_removing` before it leaves or loses its old one; `document_destroying`
+ * before a document's arenas go. NULL until the embedder sets one.
+ */
+typedef struct {
+    void (*inserted)(lxb_dom_node_t *node);
+    void (*removing)(lxb_dom_node_t *node);
+    void (*attr_added)(lxb_dom_element_t *element, lxb_dom_attr_t *attr);
+    void (*attr_removing)(lxb_dom_element_t *element, lxb_dom_attr_t *attr);
+    void (*document_destroying)(lxb_dom_document_t *document);
+}
+lxb_dom_tree_observer_t;
+
+LXB_API void
+lxb_dom_tree_observer_set(const lxb_dom_tree_observer_t *observer);
+
+LXB_API const lxb_dom_tree_observer_t *
+lxb_dom_tree_observer(void);
+
 LXB_API void
 lxb_dom_node_insert_child_wo_events(lxb_dom_node_t *to, lxb_dom_node_t *node);
 

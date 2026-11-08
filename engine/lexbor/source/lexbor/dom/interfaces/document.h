@@ -83,6 +83,7 @@ struct lxb_dom_document {
     lexbor_hash_t                             *ns;
     void                                      *parser;
     void                                      *user;
+    void                                      *name_index;   /* the tree observer's, freed at its destroy */
 
     lxb_dom_document_css_t                    *css;
 

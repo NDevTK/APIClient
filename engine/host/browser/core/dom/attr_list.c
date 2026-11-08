@@ -127,6 +127,7 @@ void dom_attr_attach(lxb_dom_element_t *el, lxb_dom_attr_t *a, lxb_dom_attr_t *b
     if (a->next) a->next->prev = a; else el->last_attr = a;
     a->owner = el;                                    /* step 2: the attribute's element */
     dom_attr_generation_advance();
+    if (lxb_dom_tree_observer()) lxb_dom_tree_observer()->attr_added(el, a);
     /* §4.9 "HANDLE ATTRIBUTE CHANGES" FOR AN APPEND — the same edge `lxb_dom_element_attr_append` fires, fired
        here because this component IS that append for the paths lexbor's own entry cannot serve (an insert
        BEFORE a given attribute). The value is passed as the pair the callback is defined over rather than as
@@ -158,6 +159,7 @@ void dom_attr_detach(lxb_dom_attr_t *a)
     DCHECK(a != NULL, "an attribute detach was asked for no attribute");
     el = a->owner;
     if (!el) return;   /* §9.4.7 over an attribute already detached — its element is already null */
+    if (lxb_dom_tree_observer()) lxb_dom_tree_observer()->attr_removing(el, a);
     if (el->attr_id == a) el->attr_id = NULL;
     else if (el->attr_class == a) el->attr_class = NULL;
     if (a->prev) a->prev->next = a->next; else el->first_attr = a->next;
@@ -191,6 +193,7 @@ void dom_attr_replace(lxb_dom_attr_t *old_a, lxb_dom_attr_t *new_a)
            "an attribute was replaced by one with a different (namespace, local name) — \"set an attribute\" "
            "step 3 finds the old one BY that identity, so the two match by construction");
     el = old_a->owner;
+    if (lxb_dom_tree_observer()) lxb_dom_tree_observer()->attr_removing(el, old_a);
     if (el->attr_id == old_a) el->attr_id = new_a;
     else if (el->attr_class == old_a) el->attr_class = new_a;
     new_a->prev = old_a->prev;
@@ -201,6 +204,7 @@ void dom_attr_replace(lxb_dom_attr_t *old_a, lxb_dom_attr_t *new_a)
     old_a->prev = old_a->next = NULL;
     old_a->owner = NULL;                              /* step 5 */
     dom_attr_generation_advance();
+    if (lxb_dom_tree_observer()) lxb_dom_tree_observer()->attr_added(el, new_a);
 }
 
 /* THE ONE PLACE AN Attr's STRUCT IS HANDED BACK, which is why both of an attribute's side-map entries go back
