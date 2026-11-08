@@ -1548,6 +1548,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/svgtransformattr.h"
 #include "fixture/transform3d.h"
 #include "fixture/indivtransform.h"
+#include "fixture/perspective.h"
 #include "fixture/fillwidth.h"
 #include "fixture/jsonlead.h"
 #include "fixture/owedsale.h"
@@ -2276,6 +2277,7 @@ TF_DOCS[] = {
     { "svgtransformattr", HTML_SVGTRANSFORMATTR },
     { "transform3d", HTML_TRANSFORM3D },
     { "indivtransform", HTML_INDIVTRANSFORM },
+    { "perspective", HTML_PERSPECTIVE },
     { "fillwidth", HTML_FILLWIDTH },
     { "jsonlead", HTML_JSONLEAD },
     { "startin", HTML_STARTIN },
@@ -22179,6 +22181,32 @@ TF_UNIT void probes_indivtransform(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `perspective` document (fixture/perspective.h): css-transforms-2 §8's perspective and §9's
+   perspective-origin, through §4.1.1's perspective matrix. */
+TF_UNIT void probes_perspective(const char *js, Probe *tab, int *n) {
+    const char *pe_why = NULL; int pe_tt = 1;
+#define PE_IS(k, v) param_value_is(js, "/api/perspective", k, v)
+    fold_row(&pe_tt, &pe_why, !!strstr(js, "\"/api/perspective\""),
+             "NOT REACHED: no /api/perspective record, so the document aborted before its fetch");
+    fold_row(&pe_tt, &pe_why, PE_IS("c", "0") && PE_IS("cw", "200") && PE_IS("ct", "0"),
+             "css-transforms-2 §4.1.1: the parent's perspective matrix does not scale a translateZ child by "
+             "d/(d - Z) about the perspective origin");
+    fold_row(&pe_tt, &pe_why, PE_IS("d", "150") && PE_IS("dw", "200") && PE_IS("dt", "-150"),
+             "css-transforms-2 §9: a four-value perspective-origin is not offset from the reference box's right "
+             "and bottom edges");
+    fold_row(&pe_tt, &pe_why, PE_IS("k", "5") && PE_IS("kt", "305"),
+             "css-transforms-2 §8: a box with `perspective` is not the containing block of its positioned child");
+    fold_row(&pe_tt, &pe_why, PE_IS("pp", "100px") && PE_IS("wp", "0px") && PE_IS("cp", "none") &&
+                              PE_IS("po", "100px_100px") && PE_IS("qo", "150px_150px"),
+             "css-transforms-2 §8 and §9: a computed perspective or a resolved perspective-origin does not read "
+             "back");
+#undef PE_IS
+    const Probe rows[] = {
+        { "perspective", pe_tt, "/api/perspective", SESS_EXPLORE, pe_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fillwidth` document (fixture/fillwidth.h): CSS 2.2 §9.4.2's line box width for a run that
    breaks, resolved over §10.1's containing block chain through a flex item's used main size. */
 TF_UNIT void probes_fillwidth(const char *js, Probe *tab, int *n) {
@@ -28492,6 +28520,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_svgtransformattr(js, probes, &np);
     probes_transform3d(js, probes, &np);
     probes_indivtransform(js, probes, &np);
+    probes_perspective(js, probes, &np);
     probes_fillwidth(js, probes, &np);
     probes_jsonlead(js, probes, &np);
     probes_owedsale(js, probes, &np);
