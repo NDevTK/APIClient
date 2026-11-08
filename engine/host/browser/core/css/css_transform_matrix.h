@@ -31,23 +31,18 @@
  * transform-origin Property" gives that origin an `Initial:` value of `50% 50%`, so the bracket is NON-ZERO
  * FOR EVERY ELEMENT WITH A BOX and a consumer built to §3.2 would rotate every box about its top-left corner.
  *
- * THE SHAPE IS §12's OWN 3x2 AND NOT A 4x4. §12 "Mathematical Description of Transform Functions" states the
- * equivalence: "A 2D 3x2 matrix with six parameters a, b, c, d, e and f is equivalent to the matrix:". Every
- * css-transforms-1 §7.1 "2D Transform Functions" function is one, and so is every css-transforms-2 3D function
- * whose matrix is a 2D matrix in Terminology's sense (translate3d(x, y, 0), rotateZ(), scale3d(x, y, 1)); a
- * 3D function whose matrix is not crashes in core/css/css_transform_matrix.c naming the 4x4 to build.
+ * AN ELEMENT'S MATRIX IS css-transforms-2 §6 "Current Transformation Matrix"'s 4x4, and the chain composes the
+ * 3x3 PROJECTIVE MATRIX §7's flattening leaves of it. With `transform-style: flat`, the initial value, each
+ * element's content is drawn into its parent's plane, so a point enters every element's matrix with z = 0 and
+ * leaves it with its z discarded: the third row and column of the 4x4 never reach the parent, and what does is
+ * the 3x3 of rows x, y, w over columns x, y, 1. The 2D matrices of css-transforms-1 are its affine case
+ * (p = q = 0, s = 1).
  *
- * THE LINEAR PART IS A `double` AND THE TRANSLATION IS A `CssPx`, WHICH IS A STATEMENT ABOUT WHERE AN
- * ENVIRONMENT FACT CAN ENTER A TRANSFORM. §7.1 gives the scales and matrix() a `<number>` argument and the
- * rotation and skews an `[ <angle> | <zero> ]`, and every one of those is a literal the author wrote — no
- * viewport, no device pixel ratio, no font size can reach them — so `a`, `b`, `c` and `d` are pure ratios with
- * an empty domain and core/css/css_length.h's `css_px_scale` is the operation that says so ("`k` is a pure
- * ratio … so it changes no fact"). THE TRANSLATIONS ARE THE OPPOSITE: §7.1 gives them a
- * `<length-percentage>`, so a `translate(10vw)` is a function of the initial containing block and
- * `translate(2rem)` of the reader's own default font size, and `transform: translateX(10vw)` moves a client
- * rectangle exactly as `width: 10vw` sizes one. Carrying those as bare doubles would drop the domain at the
- * matrix and delete the arm the other viewport takes — which is why this component never serializes a list
- * and re-parses it, and why core/css/css_computed_value.h answers the PARSED list.
+ * EVERY ENTRY IS A `CssPx`, WHICH IS A STATEMENT ABOUT WHERE AN ENVIRONMENT FACT CAN ENTER A TRANSFORM. The
+ * translations are `<length-percentage>`s, so `translate(10vw)` is a function of the initial containing block,
+ * and the anchor of a rotation is the element's layout position. A perspective row multiplies those lengths into
+ * the linear part and the divisor, so no entry is a pure ratio in general; core/css/css_length.h's product
+ * carries both operands' facts, and a product with an exact zero is the zero every world agrees on.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_TRANSFORM_MATRIX_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_TRANSFORM_MATRIX_H
@@ -56,13 +51,19 @@
 
 #include "core/css/css_length.h"
 
-/* §12's six parameters, in §12's own order. `a` and `d` scale, `b` and `c` shear, and `e` and `f` translate —
-   "One translation unit on a matrix is equivalent to 1 pixel in the local coordinate system of the element",
-   which is why the pair is a LENGTH in this engine's own vocabulary and the other four are not. */
+/* The flattened 3x3: §12's six parameters in §12's own order (a = m11, b = m12, c = m21, d = m22, e = m41,
+   f = m42) and the projective row p = m14, q = m24, s = m44, so a point maps to ((a x + c y + e) / w,
+   (b x + d y + f) / w) with w = p x + q y + s. */
 typedef struct {
-    double a, b, c, d;
-    CssPx  e, f;
+    CssPx a, b, c, d, e, f;
+    CssPx p, q, s;
 } CssTransformMatrix;
+
+/* A 4x4 in §16's notation, `m[r][c]` the entry in row r and column c of the matrix as §16 prints it, so m41 (the
+   X translation) is m[0][3] and m14 is m[3][0]. */
+typedef struct {
+    CssPx m[4][4];
+} CssTransformMatrix3d;
 
 /* §2's step 1 — "Start with the identity matrix." It is also the whole answer for an element no transform
    applies to, and that is a DERIVATION rather than a stand-in: mapping a point through the identity is the
@@ -117,7 +118,15 @@ bool css_transform_origin_used_ask(lxb_dom_element_t *el);
    the identity matrix", "Post-multiply all <transform-function>s in <transform-list> to transform" — the
    product alone, with no transform-origin and no position, percentages resolved against §5's reference box.
    False for a computed `none`, which resolves to itself. */
-bool css_transform_matrix_resolved(lxb_dom_element_t *el, CssTransformMatrix *out);
+bool css_transform_matrix_resolved(lxb_dom_element_t *el, CssTransformMatrix3d *out);
+
+/* css-transforms-2 §2.1's serialization of a resolved 4x4: matrix() when it "is a 2D matrix", matrix3d() in
+   column-major order otherwise, each number as CSSOM §6.7.2 writes a <number>. Every entry is concrete
+   (asserted). OWNED. */
+char *css_transform_matrix3d_serialize(const CssTransformMatrix3d *m);
+
+/* Whether any entry of `m` derives from an environment fact. */
+bool css_transform_matrix3d_derived(const CssTransformMatrix3d *m);
 
 /* The layout the entry above reads, asked under a resting drive: false ("not yet") when it was deferred. */
 bool css_transform_matrix_resolved_ask(lxb_dom_element_t *el);

@@ -3653,31 +3653,20 @@ static JSValue css_resolved_longhand_held(JSContext *ctx, lxb_dom_element_t *el,
         /* css-transforms-1 §3.2 "Resolved value of transform": "When the computed value is a <transform-list>,
            the resolved value is one <matrix()> function computed by the following algorithm: … Serialize
            transform to a <matrix()> function. For other computed values, the resolved value is the computed
-           value." core/css/css_transform_matrix.h computes the product; the six numbers are written as
-           CSSOM §6.7.2 writes a <number>, with a negative zero written as zero. */
-        CssTransformMatrix m;
-        double v[6];
-        char *t[6], *text;
-        size_t n = sizeof "matrix(, , , , , )";
-        int i;
+           value." core/css/css_transform_matrix.h computes the product and css-transforms-2 §2.1's matrix() or
+           matrix3d() serialization. */
+        CssTransformMatrix3d m;
+        char *text;
 
         if (!css_transform_matrix_resolved(el, &m)) break;
-        if (m.e.env != CSS_ENV_NONE || m.f.env != CSS_ENV_NONE) {
-            DFAIL("css-transforms-1 §3.2: a resolved `transform` whose translation derives from an environment "
-                  "fact reached the page, and its matrix() string is a function of two lengths' facts. BUILD the "
-                  "joint mint at core/frame/viewport.h that `border-spacing`'s arm below names, and this arm "
-                  "becomes one call to it");
+        if (css_transform_matrix3d_derived(&m)) {
+            DFAIL("css-transforms-1 §3.2: a resolved `transform` whose matrix derives from an environment fact "
+                  "reached the page, and its string is a function of several lengths' facts. BUILD the joint "
+                  "mint at core/frame/viewport.h that `border-spacing`'s arm below names, and this arm becomes "
+                  "one call to it");
             break;
         }
-        v[0] = m.a; v[1] = m.b; v[2] = m.c; v[3] = m.d; v[4] = m.e.px; v[5] = m.f.px;
-        for (i = 0; i < 6; i++) {
-            t[i] = css_length_serialize_number(v[i] + 0.0, "");
-            n += strlen(t[i]);
-        }
-        text = lexbor_malloc(n);
-        CHECK(text != NULL, "cssom: OOM serializing a resolved `transform`");
-        snprintf(text, n, "matrix(%s, %s, %s, %s, %s, %s)", t[0], t[1], t[2], t[3], t[4], t[5]);
-        for (i = 0; i < 6; i++) free(t[i]);
+        text = css_transform_matrix3d_serialize(&m);
         out = JS_NewString(ctx, text);
         free(text);
         return out;

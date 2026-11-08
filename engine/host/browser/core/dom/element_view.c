@@ -1300,6 +1300,12 @@ static JSValue ev_client_px(JSContext *ctx, CssPx v)
     return viewport_env_derived(v, JS_NewFloat64(ctx, v.px));
 }
 
+/* A matrix entry that is the concrete number `k` in every world. */
+static bool ev_px_is(CssPx v, double k)
+{
+    return v.env == CSS_ENV_NONE && v.px == k;
+}
+
 /* §6's getClientRects() step 3's FIRST CONSTRAINT, PERFORMED — "Apply the transforms that apply to the element
    and its ancestors." css-transforms-1 §2 "The Transform Rendering Model" is the algorithm that constraint
    names without naming, and that section says so in its own words: "Transforms are also taken into account when
@@ -1324,13 +1330,15 @@ static void ev_map_through_transforms(lxb_dom_element_t *el, CssPx *x, CssPx *y,
     CssPx cx[4], cy[4], min_x, min_y, max_x, max_y;
     unsigned i;
 
-    /* An axis-aligned matrix that flips neither axis (the identity, a translation, a positive scale) maps the
-       origin to the enclosing rectangle's corner and scales each extent, which is that rectangle exactly
+    /* An affine axis-aligned matrix that flips neither axis (the identity, a translation, a positive scale)
+       maps the origin to the enclosing rectangle's corner and scales each extent, which is that rectangle exactly
        without `(y + h) - y`, a difference IEEE arithmetic need not return as `h`. */
-    if (ctm.b == 0.0 && ctm.c == 0.0 && ctm.a >= 0.0 && ctm.d >= 0.0 && w->px >= 0.0 && h->px >= 0.0) {
+    if (ev_px_is(ctm.b, 0.0) && ev_px_is(ctm.c, 0.0) && ev_px_is(ctm.p, 0.0) && ev_px_is(ctm.q, 0.0) &&
+        ev_px_is(ctm.s, 1.0) && ctm.a.env == CSS_ENV_NONE && ctm.d.env == CSS_ENV_NONE && ctm.a.px >= 0.0 &&
+        ctm.d.px >= 0.0 && w->px >= 0.0 && h->px >= 0.0) {
         css_transform_matrix_map(ctm, *x, *y, x, y);
-        *w = css_px_scale(*w, ctm.a);
-        *h = css_px_scale(*h, ctm.d);
+        *w = css_px_scale(*w, ctm.a.px);
+        *h = css_px_scale(*h, ctm.d.px);
         return;
     }
     css_transform_matrix_map(ctm, *x, *y, &cx[0], &cy[0]);
