@@ -1549,6 +1549,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/transform3d.h"
 #include "fixture/indivtransform.h"
 #include "fixture/perspective.h"
+#include "fixture/preserve3d.h"
 #include "fixture/fillwidth.h"
 #include "fixture/jsonlead.h"
 #include "fixture/owedsale.h"
@@ -2278,6 +2279,7 @@ TF_DOCS[] = {
     { "transform3d", HTML_TRANSFORM3D },
     { "indivtransform", HTML_INDIVTRANSFORM },
     { "perspective", HTML_PERSPECTIVE },
+    { "preserve3d", HTML_PRESERVE3D },
     { "fillwidth", HTML_FILLWIDTH },
     { "jsonlead", HTML_JSONLEAD },
     { "startin", HTML_STARTIN },
@@ -22207,6 +22209,28 @@ TF_UNIT void probes_perspective(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `preserve3d` document (fixture/preserve3d.h): css-transforms-2 §7's transform-style and §4.1.4's
+   accumulated 3D transformation matrix. */
+TF_UNIT void probes_preserve3d(const char *js, Probe *tab, int *n) {
+    const char *p3_why = NULL; int p3_tt = 1;
+#define P3_IS(k, v) param_value_is(js, "/api/preserve3d", k, v)
+    fold_row(&p3_tt, &p3_why, !!strstr(js, "\"/api/preserve3d\""),
+             "NOT REACHED: no /api/preserve3d record, so the document aborted before its fetch");
+    fold_row(&p3_tt, &p3_why, P3_IS("a", "100") && P3_IS("aw", "100"),
+             "css-transforms-2 §4.1.4: a child of a preserve-3d parent is flattened instead of accumulating the "
+             "parent's 4x4");
+    fold_row(&p3_tt, &p3_why, P3_IS("b", "325") && P3_IS("bw", "50") && P3_IS("c", "525") && P3_IS("cw", "50"),
+             "css-transforms-2 §7: a child of a flat parent, or of a preserve-3d parent whose used value §7.1's "
+             "grouping makes flat, is not flattened into the parent's plane");
+    fold_row(&p3_tt, &p3_why, P3_IS("as", "preserve-3d") && P3_IS("bs", "flat") && P3_IS("cs", "preserve-3d"),
+             "css-transforms-2 §7: a computed transform-style does not read back as its keyword");
+#undef P3_IS
+    const Probe rows[] = {
+        { "preserve-3d", p3_tt, "/api/preserve3d", SESS_EXPLORE, p3_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fillwidth` document (fixture/fillwidth.h): CSS 2.2 §9.4.2's line box width for a run that
    breaks, resolved over §10.1's containing block chain through a flex item's used main size. */
 TF_UNIT void probes_fillwidth(const char *js, Probe *tab, int *n) {
@@ -28521,6 +28545,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_transform3d(js, probes, &np);
     probes_indivtransform(js, probes, &np);
     probes_perspective(js, probes, &np);
+    probes_preserve3d(js, probes, &np);
     probes_fillwidth(js, probes, &np);
     probes_jsonlead(js, probes, &np);
     probes_owedsale(js, probes, &np);
