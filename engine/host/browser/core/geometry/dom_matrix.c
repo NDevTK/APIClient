@@ -1086,8 +1086,8 @@ static JSValue js_dm_tojson(JSContext *ctx, JSValueConst this_val, int argc, JSV
 typedef JSValue (*DmBody)(JSContext *, JSValueConst, int, JSValueConst *, int);
 
 /* Each method's declaration: its name, how many optional `unrestricted double` arguments it declares, the body
-   and its magic, whether its one argument is a DOMMatrixInit, whether it is DOMMatrix's own (`*Self`,
-   setMatrixValue) and whether it is `[Exposed=Window]`. */
+   and its magic, whether its one argument is a DOMMatrixInit (transformPoint's is a DOMPointInit), whether it
+   is DOMMatrix's own (`*Self`, setMatrixValue) and whether it is `[Exposed=Window]`. */
 static const struct {
     const char *name;
     int nargs;
@@ -1108,7 +1108,7 @@ static const struct {
     { "flipX",                0, js_dm_immutable, DM_FLIP_X,             false, false, false },
     { "flipY",                0, js_dm_immutable, DM_FLIP_Y,             false, false, false },
     { "inverse",              0, js_dm_immutable, DM_INVERT,             false, false, false },
-    { "transformPoint",       1, js_dm_transform_point, 0,               true,  false, false },
+    { "transformPoint",       1, js_dm_transform_point, 0,               false, false, false },
     { "toFloat32Array",       0, js_dm_to_array,  0,                     false, false, false },
     { "toFloat64Array",       0, js_dm_to_array,  1,                     false, false, false },
     { "toString",             0, js_dm_to_string, 0,                     false, false, true },
@@ -1159,7 +1159,11 @@ void dom_matrix_init(JSContext *ctx)
         idl_typed_array(0, JS_TYPED_ARRAY_FLOAT64, false, false);
     }
     for (i = 0; i < COUNTOF(DM_METHODS); i++) {
-        if (DM_METHODS[i].dict)
+        /* transformPoint(optional DOMPointInit point = {}) is the one method whose dictionary is §2's. */
+        if (DM_METHODS[i].body == js_dm_transform_point)
+            g_id_method[i] = idl_method_id_dict(ctx, ONE_DICT, 1, DOM_POINT_INIT_DECL.members, DOM_POINT_INIT_DECL.n,
+                                                js_dm_transform_point, 0);
+        else if (DM_METHODS[i].dict)
             g_id_method[i] = idl_method_id_dict(ctx, ONE_DICT, 1, DOM_MATRIX_INIT_DECL.members,
                                                 DOM_MATRIX_INIT_DECL.n, DM_METHODS[i].body, DM_METHODS[i].magic);
         else if (DM_METHODS[i].body == js_dm_set_matrix_value)
@@ -1167,7 +1171,8 @@ void dom_matrix_init(JSContext *ctx)
         else
             g_id_method[i] = idl_method_id(ctx, DM_METHODS[i].nargs ? DOUBLES : NULL, DM_METHODS[i].nargs,
                                            DM_METHODS[i].body, DM_METHODS[i].magic);
-        if (DM_METHODS[i].dict || (DM_METHODS[i].nargs > 0 && DM_METHODS[i].body != js_dm_set_matrix_value))
+        if (DM_METHODS[i].dict || DM_METHODS[i].body == js_dm_transform_point ||
+            (DM_METHODS[i].nargs > 0 && DM_METHODS[i].body != js_dm_set_matrix_value))
             idl_optional_from(0);
     }
     for (i = 0; i < 22; i++) g_id_set[i] = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false, js_dm_set, (int)i);
