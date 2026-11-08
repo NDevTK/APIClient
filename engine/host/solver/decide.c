@@ -65,7 +65,7 @@ static JSValue g_cur_fn = JS_UNDEFINED;   /* borrowed from the running Flow (ali
 static int g_running = 0;
 
 /* The fork census's rows, three populations in three tables (see fork_key_count and decide.h). A mechanism row
- * is prose written at a call site in this tree (each reaches decide_fork_same_path with its caller's name), so a
+ * is prose written at a call site in this tree (each reaches fork_key_count with its caller's name), so a
  * document cannot enlarge the set; it is counted exactly in a table that grows. A constraint key is the page's
  * and unbounded, so it gets a fixed table with Space-Saving admission (Metwally, Agrawal & El Abbadi, "Efficient
  * Computation of Frequent and Top-k Elements in Data Streams", ICDT 2005): an eviction hands the departing row's
@@ -190,11 +190,12 @@ static uint32_t dec_key_hash(const char *key) {
     return h ? h : 1u;   /* 0 is in no namespace, so a key that lands on it is nudged off */
 }
 
-/* A completion's slot key: its mechanism name's hash in DEC_KEY_ARRIVAL's namespace. */
-static uint32_t dec_arrival_hash(const char *why) {
+/* An arrival's slot key: its mechanism name's hash, then the `n` bytes naming what arrived, in DEC_KEY_ARRIVAL's
+   namespace. */
+static uint32_t dec_arrival_hash(const char *why, const void *what, size_t n) {
     DCHECK(why != NULL && *why == '(', "a completion's slot key was asked of something that is not a mechanism's "
                                        "name — the census files those as synthetic rows, whose names open on `(`");
-    return (dec_fnv(2166136261u, why, strlen(why)) & ~DEC_KEY_SITE) | DEC_KEY_ARRIVAL;
+    return (dec_fnv(dec_fnv(2166136261u, why, strlen(why)), what, n) & ~DEC_KEY_SITE) | DEC_KEY_ARRIVAL;
 }
 
 static int dec_key_is_site(uint32_t asked) { return (asked & DEC_KEY_SITE) != 0; }
@@ -885,11 +886,11 @@ void decide_fork_observation_stats(long *total, long *observed, long *unobserved
 
     DCHECK(total && observed && unobserved && mechanism, "the fork observation census was asked to fill nothing");
     for (i = 0; i < g_fork_mech_n; i++) mech += g_fork_mech[i].n;
-    /* The partition: every fork is filed at dec_fork_here (counted above by its observation) or at
-       decide_fork_same_path (a mechanism row), and at no third site. */
+    /* The partition: every fork is filed at dec_fork_here (counted above by its observation) or at a mechanism
+       row (decide_fork_same_path, dec_arrival_fork), and at no third site. */
     DCHECK(g_fork_observed + g_fork_unobserved + mech == g_fork_total,
            "the fork census's three populations do not sum to its total — a fork was counted into the total "
-           "at a site that is neither dec_fork_here nor decide_fork_same_path, so the observation split "
+           "at a site that is neither dec_fork_here nor a mechanism row, so the observation split "
            "states a denominator it does not cover");
     *total = g_fork_total;
     *observed = g_fork_observed;
@@ -1174,7 +1175,7 @@ void decide_history_name(uint64_t *identity, int *ordinal) {
 
 /* See decide.h. */
 int decide_completion_recorded_later(const char *why) {
-    uint32_t asked = dec_arrival_hash(why), k;
+    uint32_t asked = dec_arrival_hash(why, NULL, 0), k;
     int i;
 
     DCHECK(g_running, "a completion's recorded slot was asked while no flow's decision state was loaded");
@@ -1239,20 +1240,16 @@ void *decide_fork_same_path(const char *why) {
     return b;
 }
 
-/* See decide.h. The slot is keyed by `why`, the mechanism's own name, so a replay that reaches a different
-   mechanism here diverges (dec_replay's key comparison) rather than consuming an arm recorded for another. */
-int decide_completion(const char *why, void **sib_blob) {
+/* The two-armed arrival slot `asked`, counted under the census row `why`: the recorded arm on a replay that holds
+   it, or 0 with `*sib_blob` the sibling's state on arm 1. A replay that reaches another question here diverges
+   (dec_replay's key comparison) rather than consuming an arm recorded for another. */
+static int dec_arrival_fork(const char *why, uint32_t asked, void **sib_blob) {
     DecideBlob *b;
-    uint32_t asked;
     int arm;
 
-    DCHECK(why != NULL && *why == '(',
-           "a completion fork was keyed by something other than a mechanism's name — the census files it as a "
-           "synthetic row, whose names open on `(`");
-    DCHECK(g_running, "a completion fork was asked while no flow's decision state was loaded");
-    DCHECK(sib_blob != NULL, "a completion fork was asked with nowhere to hand the sibling's decision state");
+    DCHECK(g_running, "an arrival fork was asked while no flow's decision state was loaded");
+    DCHECK(sib_blob != NULL, "an arrival fork was asked with nowhere to hand the sibling's decision state");
     *sib_blob = NULL;
-    asked = dec_arrival_hash(why);
     if (g_c < dec_total()) {
         arm = dec_replay(asked);
         if (arm >= 0) return arm;
@@ -1268,6 +1265,51 @@ int decide_completion(const char *why, void **sib_blob) {
     dec_append(0, asked); g_c++;
     *sib_blob = b;
     return 0;
+}
+
+/* See decide.h. Keyed by `why`, the mechanism's own name. */
+int decide_completion(const char *why, void **sib_blob) {
+    return dec_arrival_fork(why, dec_arrival_hash(why, NULL, 0), sib_blob);
+}
+
+/* See decide.h. */
+int decide_fork_arrival(const char *why, uint64_t what, void **sib_blob) {
+    return dec_arrival_fork(why, dec_arrival_hash(why, &what, sizeof what), sib_blob);
+}
+
+/* See decide.h. The scan is dec_slide_arrivals': the run of unlanded arrivals at the cursor. */
+int decide_arrival_recorded(const char *why, uint64_t what) {
+    uint32_t asked = dec_arrival_hash(why, &what, sizeof what), k;
+    int i, e;
+
+    DCHECK(g_running, "an arrival's recorded arm was asked while no flow's decision state was loaded");
+    for (i = g_c; i < dec_total(); i++) {
+        e = dec_at(i, &k);
+        if (k == asked) return e ? 1 : 0;
+        if (!dec_key_is_arrival(k)) return -1;
+    }
+    return -1;
+}
+
+/* See decide.h. */
+void decide_leave_path(void) {
+    DCHECK(g_running && g_c < dec_total(), "a flow was taken off its recorded path with no recorded slot at its cursor");
+    dec_leave_path();
+}
+
+/* See decide.h. */
+void decide_arrival_taken(const char *why, uint64_t what) {
+    uint32_t asked = dec_arrival_hash(why, &what, sizeof what);
+
+    DCHECK(g_running, "an arrival's sibling arm was taken while no flow's decision state was loaded");
+    if (g_c < dec_total()) {
+        int arm = dec_replay(asked);
+
+        DCHECK(arm != 0, "a flow took an arrival's sibling arm where its record holds the forking parent's arm");
+        if (arm == 1) return;
+        dec_leave_path();
+    }
+    dec_append(1, asked); g_c++;
 }
 
 /* See decide.h. The freeze and reference are the fork's; the census entry is not, because no frontier member is

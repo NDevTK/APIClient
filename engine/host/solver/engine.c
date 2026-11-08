@@ -6792,6 +6792,15 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
    called (or a listener's next event, engine_orphan_redrive), hand a body back to the drives a park recorded for
    it, or build the call of a drive that has one.
    0 is "nothing to take", which lets the caller finish. */
+/* The census rows and slot keys of the two drive seeds (decide_fork_arrival), each keyed with the body's locator. */
+#define ORPHAN_SEED_WHY    "(a function the page never called was driven — no predicate was asked)"
+#define ORPHAN_REDRIVE_WHY "(a listener the page never fired was driven again — no predicate was asked)"
+
+/* Whether chain member `k` is the listener's next event: the body, in the same load, the member before it named. */
+static int orphan_member_is_next_event(const Flow *f, int k) {
+    return k > 0 && f->orphan_chain[k] == f->orphan_chain[k - 1] && f->orphan_chain_doc[k] == f->orphan_chain_doc[k - 1];
+}
+
 #define ORPHAN_STEP_SEEDED   1
 #define ORPHAN_STEP_ROUTED   2
 #define ORPHAN_STEP_RESUMED  3
@@ -6827,9 +6836,7 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
      * (engine_orphan_redrive), because a take hands a body over once per timeline. No birth or take hands it over
      * again, so its function is the one this flow called last, handed over here, where the flow has run out of
      * work as the recording drive had when it re-drove it. */
-    if (f->orphan_want && JS_IsUndefined(f->orphan_claim_fn) && f->orphan_claim_at > 0 &&
-        f->orphan_chain[f->orphan_claim_at] == f->orphan_chain[f->orphan_claim_at - 1] &&
-        f->orphan_chain_doc[f->orphan_claim_at] == f->orphan_chain_doc[f->orphan_claim_at - 1]) {
+    if (f->orphan_want && JS_IsUndefined(f->orphan_claim_fn) && orphan_member_is_next_event(f, f->orphan_claim_at)) {
         DCHECK(JS_IsFunction(ctx, f->fn) && f->orphan_hash == f->orphan_chain[f->orphan_claim_at - 1],
                "a drive waiting for its listener's next event holds no function, or the one it holds is not the "
                "body its last member called — the claim branch below writes `fn` and the hash together");
@@ -6852,6 +6859,9 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
                "a resumed orphan drive built its call frame while another flow was switched in — the receiver and "
                "arguments would carry that flow's generation");
         hash = f->orphan_chain[f->orphan_claim_at];
+        /* The seed that minted this member recorded this flow on arm 1. */
+        decide_arrival_taken(orphan_member_is_next_event(f, f->orphan_claim_at) ? ORPHAN_REDRIVE_WHY : ORPHAN_SEED_WHY,
+                             hash);
         DCHECK(f->orphan_acts[f->orphan_claim_at] == NULL,
                "a resumed drive's member already states an act before its call was built — the rebuild records "
                "none, and the act is read from the body handed over");
@@ -6881,7 +6891,7 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
 
 /* The frontier's orphan surface, served by whichever member has run out of its own work (see the note above
  * engine_orphan_resume). Its gate is the minting half: the line below adds a member to the frontier
- * (engine_sibling_assemble over decide_fork_same_path), and a non-forking session must gain none from inside itself,
+ * (engine_sibling_assemble over decide_fork_arrival), and a non-forking session must gain none from inside itself,
  * which the fork seam asserts for every other door. */
 /* A LISTENER RUNS ONCE PER EVENT, so a drive whose body is a listener (its member states an act) is followed by
    another drive of the same body in the world it left: the next event, with arguments of its own
@@ -6893,7 +6903,9 @@ static int engine_orphan_redrive(JSContext *ctx, Flow *f) {
     uint64_t hash = f->orphan_hash;
     JSValue *base;
     Flow *sib;
+    void *dblob;
     char *act;
+    int recorded;
 
     if (!f->orphan || f->orphan_want || f->redrive_seeded || called == 0 || !f->orphan_acts[called - 1])
         return 0;
@@ -6901,15 +6913,25 @@ static int engine_orphan_redrive(JSContext *ctx, Flow *f) {
            "a drive with a called listener member holds no function, or names another body — `fn` and the hash "
            "are written with the member's call");
     f->redrive_seeded = 1;
+    /* A replay meeting the re-drive its record took: the next event's drive is its own record. This flow is not
+       waiting, so an arm 1 there is the record of the drive itself, which this flow stands on without being it (a
+       candidate on a drive's whole path): it leaves the path, and the drive, another flow, is not minted again. */
+    recorded = decide_arrival_recorded(ORPHAN_REDRIVE_WHY, hash);
+    if (recorded == 1) decide_leave_path();
+    if (recorded == 0) {
+        (void)decide_fork_arrival(ORPHAN_REDRIVE_WHY, hash, &dblob);
+        DCHECK(dblob == NULL, "a recorded re-drive minted a sibling on its replay");
+    }
+    if (recorded >= 0) return 0;
     /* The next event's act is asked in the world the last call left, which may have removed the listener or
        changed its target. */
     if (!(act = listener_act_of(ctx, f->fn))) return 0;
     g_orphans_driven++;
     base = engine_orphan_call(ctx, f->fn, f->orphan_argc, hash, called, act);
-    sib = engine_sibling_assemble(ctx, f, base,
-                                  decide_fork_same_path("(a listener the page never fired was driven again — no "
-                                                        "predicate was asked)"),
-                                  concolic_pins_suspend(), flow_path_marks(f));
+    recorded = decide_fork_arrival(ORPHAN_REDRIVE_WHY, hash, &dblob);
+    DCHECK(recorded == 0 && dblob != NULL,
+           "a re-drive its record does not hold replayed an arm — decide_arrival_recorded reads the same run");
+    sib = engine_sibling_assemble(ctx, f, base, dblob, concolic_pins_suspend(), flow_path_marks(f));
     DCHECK(sib->orphan && sib->orphan_chain_n == called,
            "a re-drive's assembly did not carry the drives its flow has called — the next event follows them");
     JS_FreeValue(ctx, sib->fn);
@@ -6931,6 +6953,8 @@ static int engine_orphan_redrive(JSContext *ctx, Flow *f) {
 
 static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     OrphanTake t = { JS_UNDEFINED, 0, 0 };
+    void *dblob;
+    int recorded;
     char *act;
     uint32_t gen = JS_OrphanGen(JS_GetRuntime(ctx));
     uint64_t hash;
@@ -7026,6 +7050,24 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
      * un-entered when the claim opened, which may not exist. Next diff builds: this branch deleted, with that
      * ordering asserted at the seeding. Absence shows as: `hand-a-parked-drive-its-function` in a resumed run's
      * step-unit histogram, nonzero if this door fires, zero on every run of every host if it is dead. */
+    /* A replay meeting the seed its record took here. On arm 0 this flow seeded the drive, which is its own record
+       and is handed the body by the route; on arm 1 this flow is that drive, waiting for exactly this body, and
+       takes its slot when it builds the call (engine_orphan_resume). An arm 1 on a flow not waiting for this body
+       (a candidate standing on a drive's whole path, solve.c's `route_on_drive`) is the record of a drive this flow
+       is not: it leaves its path here, and the drive, the detecting flow's own timeline, is not minted again. */
+    recorded = decide_arrival_recorded(ORPHAN_SEED_WHY, hash);
+    if (recorded == 1 && !(f->orphan_want && JS_IsUndefined(f->orphan_claim_fn) &&
+                           f->orphan_chain[f->orphan_claim_at] == hash))
+        decide_leave_path();
+    if (recorded >= 0) {
+        if (recorded == 0) {
+            (void)decide_fork_arrival(ORPHAN_SEED_WHY, hash, &dblob);
+            DCHECK(dblob == NULL, "a recorded seed minted a sibling on its replay");
+        }
+        if (!g_orphan_claims_closed) (void)engine_orphan_route(ctx, t.fn, t.argc, hash);
+        JS_FreeValue(ctx, t.fn);
+        return ORPHAN_STEP_ROUTED;
+    }
     if (!g_orphan_claims_closed && engine_orphan_route(ctx, t.fn, t.argc, hash)) {
         /* No fresh drive beside them: the claimants drive the body from the recorded paths that reached it, and
            a second timeline calling the same function would stand on nothing. */
@@ -7041,10 +7083,10 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     DCHECK(g_sess_forking,
            "a driven orphan was about to join the frontier of a non-forking session — the walk's gate returns before "
            "the take, so a second entry into the drive bypassed it");
-    sib = engine_sibling_assemble(ctx, f, base,
-                                  decide_fork_same_path("(a function the page never called was driven — no "
-                                                        "predicate was asked)"),
-                                  concolic_pins_suspend(), flow_path_marks(f));
+    recorded = decide_fork_arrival(ORPHAN_SEED_WHY, hash, &dblob);
+    DCHECK(recorded == 0 && dblob != NULL,
+           "a seed its record does not hold replayed an arm — decide_arrival_recorded reads the same run");
+    sib = engine_sibling_assemble(ctx, f, base, dblob, concolic_pins_suspend(), flow_path_marks(f));
     sib->orphan = 1;
     /* The function it drives, flow.h's `fn`, so a walk of the frontier can say which functions are being driven.
        The assembly dup'd the parent's, which is given back here. */

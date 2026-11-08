@@ -459,15 +459,10 @@ void decide_refine_stats(long *asked, long *refined);
  * definition, they are N-1 ordinary boolean arms, and a completion this engine numbers itself is asked through
  * decide_completion; a peer's answers are a set only the peer knows, with no index a slot could hold.
  *
- * `why` NAMES WHAT ARRIVED, AND IT IS A PARAMETER BECAUSE THE ANSWER FORK IS NOT THE ONLY CALLER. The census
- * row this mints is the frontier's PROVENANCE (decide_fork_at), and it stood as one fixed string — "a peer's
- * answer arrived" — while three unrelated things were counted under it: the answer fork, the ORPHAN DRIVE of a
- * function the page never called, and the delivery-time fork over two sender arms. Two of those three had
- * nothing to do with an answer, so the row said something false about most of what it counted, and the reader
- * it is written for is one asking WHICH mechanism is growing the frontier. It is still not a PREDICATE key and
- * must not be spelled like one — there is no question here for a replay to re-ask — so it is prose naming the
- * mechanism, and every caller passes a string that says what it is rather than what it forked over. Borrowed:
- * the row copies it. */
+ * `why` names the mechanism (the answer fork, its standby, the delivery-time fork, the source cut): the census row
+ * is the frontier's provenance (decide_fork_at), and it is prose rather than a predicate key, since there is no
+ * question here for a replay to re-ask. Borrowed: the row copies it. A fork over a value this flow can name and
+ * whose sibling parks (an orphan seed) is recorded instead, through decide_fork_arrival. */
 void *decide_fork_same_path(const char *why);
 
 /* A fork over a completion this engine numbers itself: a two-armed choice whose arms are fixed by the caller's
@@ -478,6 +473,20 @@ void *decide_fork_same_path(const char *why);
  * assemble that arm with. A completion with three arms is asked as two of these, in a fixed order. The sibling
  * and this flow then park on different recipes, which decide_fork_same_path cannot give them. */
 int decide_completion(const char *why, void **sib_blob);
+/* A fork over a value that arrived and that this flow can name (`what`, e.g. an orphan body's locator), recorded as
+   decide_completion records a completion: one arrival slot keyed by `why` and `what`, this flow on arm 0 and the
+   sibling standing past it on arm 1. A replay that recorded it returns the recorded arm with `*sib_blob` NULL and
+   mints nothing, so a resumed parent does not re-mint the sibling its record already holds. */
+int decide_fork_arrival(const char *why, uint64_t what, void **sib_blob);
+/* The arm the running flow's recorded path holds for that arrival among the unlanded arrivals at its cursor, or -1
+   when it holds none there. A read: the slot is consumed by decide_fork_arrival or decide_arrival_taken. */
+int decide_arrival_recorded(const char *why, uint64_t what);
+/* The running flow is that fork's sibling here (a drive building the call its seed minted it for): consumes the
+   recorded arm 1, or past its record writes arm 1 as its own slot. */
+void decide_arrival_taken(const char *why, uint64_t what);
+/* The running flow cannot follow its recorded path from the cursor on (its record holds an arrival arm this flow
+   cannot take): it leaves the path there, counted as any divergence is. Requires a recorded slot at the cursor. */
+void decide_leave_path(void);
 
 /* THE SAME FREEZE WITH NO FRONTIER MEMBER BEHIND IT — for a caller that wants the running flow's PATH and is
  * not minting a flow to stand on it.
