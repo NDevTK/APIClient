@@ -113,4 +113,13 @@ void css_transform_origin_used(lxb_dom_element_t *el, CssPx out[3]);
 /* The layout the entry above reads, asked under a resting drive: false ("not yet") when it was deferred. */
 bool css_transform_origin_used_ask(lxb_dom_element_t *el);
 
+/* css-transforms-1 §3.2 "Resolved value of transform"'s matrix: "Let transform be a 4x4 matrix initialized to
+   the identity matrix", "Post-multiply all <transform-function>s in <transform-list> to transform" — the
+   product alone, with no transform-origin and no position, percentages resolved against §5's reference box.
+   False for a computed `none`, which resolves to itself. */
+bool css_transform_matrix_resolved(lxb_dom_element_t *el, CssTransformMatrix *out);
+
+/* The layout the entry above reads, asked under a resting drive: false ("not yet") when it was deferred. */
+bool css_transform_matrix_resolved_ask(lxb_dom_element_t *el);
+
 #endif

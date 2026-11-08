@@ -3520,7 +3520,8 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
 static bool css_resolved_transform_origin(JSContext *ctx, lxb_dom_element_t *el, JSValue *out)
 {
     CssPx o[3];
-    char *t[3], text[3 * 64];
+    char *t[3], *text;
+    size_t n = sizeof "  ";
     bool z, env;
     int i;
 
@@ -3533,10 +3534,16 @@ static bool css_resolved_transform_origin(JSContext *ctx, lxb_dom_element_t *el,
               "that `border-spacing`'s arm names, and this arm becomes one call to it");
         return false;
     }
-    for (i = 0; i < 3; i++) t[i] = css_length_serialize_px(o[i].px);
-    snprintf(text, sizeof text, "%s %s%s%s", t[0], t[1], z ? " " : "", z ? t[2] : "");
+    for (i = 0; i < 3; i++) {
+        t[i] = css_length_serialize_px(o[i].px);
+        n += strlen(t[i]);
+    }
+    text = lexbor_malloc(n);
+    CHECK(text != NULL, "cssom: OOM serializing a used `transform-origin`");
+    snprintf(text, n, "%s %s%s%s", t[0], t[1], z ? " " : "", z ? t[2] : "");
     for (i = 0; i < 3; i++) free(t[i]);
     *out = JS_NewString(ctx, text);
+    free(text);
     return true;
 }
 
@@ -3644,30 +3651,36 @@ static JSValue css_resolved_longhand_held(JSContext *ctx, lxb_dom_element_t *el,
     }
     case CSS_RESOLVED_TRANSFORM: {
         /* css-transforms-1 §3.2 "Resolved value of transform": "When the computed value is a <transform-list>,
-           the resolved value is one <matrix()> function … For other computed values, the resolved value is the
-           computed value."
-           THE COMPUTED VALUE IS ASKED FOR AS ONE, not re-derived from the cascade here: §3's own line has an
-           absolutization in it, so a resolved value built out of the SPECIFIED value would report a `10em`
-           translation as `10em` on a page whose font size makes it 160px. The entry above ANSWERS a list now —
-           it parses §7 "The Transform Functions"' grammar and absolutizes what it finds — so what reaches the
-           escape below is `none`, and what reaches the crash is a real computed `<transform-list>` rather than
-           a value nothing could read. That is the whole of what changed here: the argument this comment used
-           to make, that the grammar was missing and only `none` could arrive, is retired. */
-        char *v = css_computed_value(el, name);
+           the resolved value is one <matrix()> function computed by the following algorithm: … Serialize
+           transform to a <matrix()> function. For other computed values, the resolved value is the computed
+           value." core/css/css_transform_matrix.h computes the product; the six numbers are written as
+           CSSOM §6.7.2 writes a <number>, with a negative zero written as zero. */
+        CssTransformMatrix m;
+        double v[6];
+        char *t[6], *text;
+        size_t n = sizeof "matrix(, , , , , )";
+        int i;
 
-        if (css_cv_is(v, "none")) { out = JS_NewString(ctx, v); free(v); return out; }
-        free(v);
-        DFAIL("css-transforms-1 §3.2 \"Resolved value of transform\" makes `transform` a resolved value special "
-              "case: a <transform-list> resolves to ONE <matrix()> function, built by initializing a 4x4 matrix "
-              "to the identity, POST-MULTIPLYING every <transform-function> in the list into it, and "
-              "serializing the result. The computed value now exists (the entry above), so what is left is "
-              "exactly those three steps plus §12 \"Mathematical Description of Transform Functions\"'s matrix "
-              "for each function. BUILD the reduction beside core/css/css_transform.c, whose consumers need "
-              "the same matrix rather than its serialization — CSSOM VIEW §6's client rectangles and "
-              "INTERSECTION OBSERVER §3.2.9 \"Calculate a target's Effective Transformation Matrix\" — so the "
-              "MATRIX is the component "
-              "and this member's string is one reader of it");
-        break;
+        if (!css_transform_matrix_resolved(el, &m)) break;
+        if (m.e.env != CSS_ENV_NONE || m.f.env != CSS_ENV_NONE) {
+            DFAIL("css-transforms-1 §3.2: a resolved `transform` whose translation derives from an environment "
+                  "fact reached the page, and its matrix() string is a function of two lengths' facts. BUILD the "
+                  "joint mint at core/frame/viewport.h that `border-spacing`'s arm below names, and this arm "
+                  "becomes one call to it");
+            break;
+        }
+        v[0] = m.a; v[1] = m.b; v[2] = m.c; v[3] = m.d; v[4] = m.e.px; v[5] = m.f.px;
+        for (i = 0; i < 6; i++) {
+            t[i] = css_length_serialize_number(v[i] + 0.0, "");
+            n += strlen(t[i]);
+        }
+        text = lexbor_malloc(n);
+        CHECK(text != NULL, "cssom: OOM serializing a resolved `transform`");
+        snprintf(text, n, "matrix(%s, %s, %s, %s, %s, %s)", t[0], t[1], t[2], t[3], t[4], t[5]);
+        for (i = 0; i < 6; i++) free(t[i]);
+        out = JS_NewString(ctx, text);
+        free(text);
+        return out;
     }
     case CSS_RESOLVED_BORDER_SPACING: {
         /* §9 makes this property's resolved value its COMPUTED value, and CSS 2.1 §17.6.1 "The separated
@@ -3740,10 +3753,11 @@ static bool css_resolved_longhand_ask(lxb_dom_element_t *el, const char *name)
             css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED))
             return flow_border_box_origin_ask(el, &o);
         return true;
+    case CSS_RESOLVED_TRANSFORM:
+        return css_transform_matrix_resolved_ask(el);
     case CSS_RESOLVED_COMPUTED:
     case CSS_RESOLVED_USED:
     case CSS_RESOLVED_LINE_HEIGHT:
-    case CSS_RESOLVED_TRANSFORM:
     case CSS_RESOLVED_BORDER_SPACING:
         return true;
     }

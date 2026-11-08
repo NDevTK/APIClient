@@ -9,6 +9,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/css/css_presentational_hints.h"
+#include "core/css/css_transform_attribute.h"
 #include "core/css/css_length.h"     /* CSSOM §6.7.2's number, for an SVG presentation attribute's user units */
 #include "core/css/css_shorthand.h"   /* a hint declares the property HTML writes, which may be a shorthand */
 #include "core/css/css_style_declaration.h"   /* a property's grammar and initial value */
@@ -625,8 +626,8 @@ static char *svg_presentation_value(const char *name, const char *value)
    presentation attributes on designated elements": ‘foreignObject’, ‘image’, ‘rect’, ‘svg’, ‘symbol’ and
    ‘use’. A presentation attribute is one that will "contribute to the author level of the cascade ... and have
    specificity 0", which is this origin.
-   Named residual: SVG 2 §6.6's other rows (`x`, `y`, `cx`, `cy`, `r`, `rx`, `ry`, `d`, `fill`, `transform`
-   and the rest of its property table) are not mapped. The next diff maps them through svg_presentation_value
+   Named residual: SVG 2 §6.6's other rows (`x`, `y`, `cx`, `cy`, `r`, `rx`, `ry`, `d`, `fill` and the rest
+   of its property table but `transform`, mapped below) are not mapped. The next diff maps them through svg_presentation_value
    once a consumer reads the property (SVG painting). Their absence shows as getComputedStyle of an SVG
    element answering a property's initial value where a browser answers the attribute's. */
 static void hint_svg_size(lxb_dom_element_t *el, const char *tag, size_t taglen, CssHintSink sink, void *ud)
@@ -658,6 +659,32 @@ static void hint_svg_size(lxb_dom_element_t *el, const char *tag, size_t taglen,
     }
 }
 
+/* SVG 2 §6.6 "Presentation attributes"' `transform` row: "the transform property gets represented by different
+   presentation attributes depending on the SVG element it applies to": `transform` on "Any element in the SVG
+   namespace with the exception of the ‘pattern’, ‘linearGradient’ and ‘radialGradient’ elements",
+   `patternTransform` on `pattern` and `gradientTransform` on the two gradients. css-transforms-1 §6.2 is the
+   grammar and §6.3 the mapping; a value outside the grammar is SVG 2 §4.2 "Attribute syntax"'s "assumed to
+   have been specified as the given initial value", `none`. */
+static void hint_svg_transform(lxb_dom_element_t *el, const char *tag, size_t taglen, CssHintSink sink, void *ud)
+{
+    const char *attr = "transform";
+    lxb_dom_attr_t *a;
+    const lxb_char_t *v;
+    size_t vlen = 0;
+    char *value;
+
+    if (taglen == 7 && memcmp(tag, "pattern", 7) == 0) attr = "patternTransform";
+    else if ((taglen == 14 && memcmp(tag, "linearGradient", 14) == 0) ||
+             (taglen == 14 && memcmp(tag, "radialGradient", 14) == 0))
+        attr = "gradientTransform";
+    a = lxb_dom_element_attr_by_name(el, (const lxb_char_t *)attr, strlen(attr));
+    if (a == NULL) return;
+    v = lxb_dom_attr_value(a, &vlen);
+    value = css_transform_attribute_to_css((const char *)v, v != NULL ? vlen : 0);
+    sink(ud, "transform", value != NULL ? value : "none");
+    free(value);
+}
+
 void css_presentational_hints_collect(lxb_dom_element_t *el, CssHintSink sink, void *ud)
 {
     lxb_dom_node_t *node = lxb_dom_interface_node(el);
@@ -677,6 +704,7 @@ void css_presentational_hints_collect(lxb_dom_element_t *el, CssHintSink sink, v
         tag = lxb_dom_element_local_name(el, &taglen);
         DCHECK(tag != NULL, "an SVG element has no local name");
         hint_svg_size(el, (const char *)tag, taglen, sink, ud);
+        hint_svg_transform(el, (const char *)tag, taglen, sink, ud);
         return;
     }
     if (node->ns != LXB_NS_HTML) return;

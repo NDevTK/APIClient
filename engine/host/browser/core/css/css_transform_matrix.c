@@ -441,6 +441,57 @@ CssTransformMatrix css_transform_matrix_of_element(lxb_dom_element_t *el)
     return m;
 }
 
+/* §3.2's percentages read the reference box of an element whose layout is the CSS box model's; SVG 2's, and
+   an element with no box, have none this component can measure. */
+static void css_tm_resolved_box_check(lxb_dom_element_t *el)
+{
+    switch (css_transform_category(el)) {
+    case CSS_TRANSFORMABLE_CSS_BOX:
+        return;
+    case CSS_TRANSFORMABLE_SVG:
+        DFAIL("css-transforms-1 §3.2: a percentage translation on an SVG element refers to §5's reference box, "
+              "which for SVG elements without associated CSS layout box is SVG 2's. BUILD SVG 2 §8.10 "
+              "\"Bounding boxes\"' object and stroke bounding boxes and the viewport's viewBox size as that box");
+        return;
+    case CSS_TRANSFORMABLE_NONE:
+        DFAIL("css-transforms-1 §3.2: a percentage translation on an element that is not transformable (a "
+              "non-replaced inline box, a column, or no box at all) has no §5 reference box to resolve against. "
+              "BUILD the reference box user agents measure for such an element and resolve against it");
+        return;
+    }
+}
+
+bool css_transform_matrix_resolved(lxb_dom_element_t *el, CssTransformMatrix *out)
+{
+    CssTransformList list;
+    CssPx ref[2] = { css_px(0.0), css_px(0.0) };
+    bool x, y, ok;
+
+    DCHECK(el != NULL && out != NULL, "css-transforms-1 §3.2's matrix was asked of no element or into nowhere");
+    if (!css_computed_transform_list(el, &list)) return false;
+    css_tm_list_reads(&list, &x, &y);
+    if (x || y) css_tm_resolved_box_check(el);
+    if (x && css_transform_is_css_box_transformable(el)) ref[0] = css_tm_reference_size(el, false);
+    if (y && css_transform_is_css_box_transformable(el)) ref[1] = css_tm_reference_size(el, true);
+    ok = css_tm_of_list(&list, ref, out);
+    css_transform_list_free(&list);
+    if (!ok) *out = css_transform_matrix_identity();
+    return true;
+}
+
+bool css_transform_matrix_resolved_ask(lxb_dom_element_t *el)
+{
+    CssTransformList list;
+    bool x, y;
+
+    DCHECK(el != NULL, "css-transforms-1 §3.2's matrix was asked of no element");
+    if (!css_computed_transform_list(el, &list)) return true;
+    css_tm_list_reads(&list, &x, &y);
+    css_transform_list_free(&list);
+    if (!css_transform_is_css_box_transformable(el)) return true;
+    return (!x || css_tm_reference_size_ask(el, false)) && (!y || css_tm_reference_size_ask(el, true));
+}
+
 /* The layout `el`'s matrix reads, asked: false ("not yet") when a question was deferred. */
 static bool css_tm_element_ask(lxb_dom_element_t *el)
 {
