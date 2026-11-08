@@ -1610,6 +1610,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/indivtransform.h"
 #include "fixture/perspective.h"
 #include "fixture/perspectivew.h"
+#include "fixture/dommatrix.h"
 #include "fixture/preserve3d.h"
 #include "fixture/fillwidth.h"
 #include "fixture/jsonlead.h"
@@ -2362,6 +2363,7 @@ TF_DOCS[] = {
     { "indivtransform", HTML_INDIVTRANSFORM },
     { "perspective", HTML_PERSPECTIVE },
     { "perspectivew", HTML_PERSPECTIVEW },
+    { "dommatrix", HTML_DOMMATRIX },
     { "preserve3d", HTML_PRESERVE3D },
     { "fillwidth", HTML_FILLWIDTH },
     { "jsonlead", HTML_JSONLEAD },
@@ -22869,6 +22871,115 @@ TF_UNIT void probes_perspectivew(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `dommatrix` document (fixture/dommatrix.h): Geometry Interfaces §2, §5 and §6, against
+   Chrome 153.0.8010.12. */
+TF_UNIT void probes_dommatrix(const char *js, Probe *tab, int *n) {
+    const char *dm_why = NULL; int dm_tt = 1;
+#define DM_IS(k, v) param_value_is(js, "/api/dommatrix", k, v)
+    fold_row(&dm_tt, &dm_why, !!strstr(js, "\"/api/dommatrix\""),
+             "NOT REACHED: no /api/dommatrix record, so the document aborted before its fetch");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("ty", "function_function_function_function_function_true"),
+             "Geometry Interfaces §2, §5 and §6 do not install the five interfaces, or WebKitCSSMatrix is not "
+             "DOMMatrix's legacy window alias");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("st", "2_10_10_true"),
+             "Geometry Interfaces §6.2 does not parse a transform list into a 2D matrix");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("s2", "matrix_2__0__0__2__10__10_"),
+             "Geometry Interfaces §6.5's stringifier does not write matrix()");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("s3", "matrix3d_2__0__0__0__0__2__0__0__0__0__2__0__0__0__0__1_"),
+             "Geometry Interfaces §6.6's scale3dSelf does not make a 3D matrix written as matrix3d()");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("ch", "matrix_2__0__0__2__-20__-20_"),
+             "Geometry Interfaces §6.6's self methods do not chain post-multiplied");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("iv", "matrix_0.5__0__0__0.5__-5__-5_"),
+             "Geometry Interfaces §6.5's inverse does not invert");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("ni", "NaN_false"),
+             "Geometry Interfaces §6.6's invertSelf does not set NaN and is 2D false for a singular matrix");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("tp", "20_18_0_1"),
+             "Geometry Interfaces §2.1 does not transform a point by a matrix");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("mt", "20_18_true"),
+             "Geometry Interfaces §2's matrixTransform does not return a new DOMPoint");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("id", "true_true_true_false"),
+             "Geometry Interfaces §6.4's isIdentity or is 2D does not read");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("ex", "SyntaxError_SyntaxError_SyntaxError_TypeError_TypeError_TypeError_InvalidStateError"),
+             "Geometry Interfaces §6.1-§6.3 and §6.5 do not throw their SyntaxError, TypeError and "
+             "InvalidStateError");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("fm", "false_7_false"),
+             "Geometry Interfaces §6.1's validate and fixup does not fill or decide is2D");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("mu", "matrix_2__0__0__2__10__0_"),
+             "Geometry Interfaces §6.5's multiply does not post-multiply");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("pm", "matrix_2__0__0__2__20__0_"),
+             "Geometry Interfaces §6.6's preMultiplySelf does not pre-multiply");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("ro", "0_1_-1_0"),
+             "Geometry Interfaces §6.6's rotateSelf with one argument does not rotate about Z");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("r3", "0_1_-1_false"),
+             "Geometry Interfaces §6.6's rotateSelf about X does not make a 3D matrix");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("ra", "0_1_true"),
+             "Geometry Interfaces §6.6's rotateAxisAngleSelf about Z does not stay 2D");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("rv", "0_1"),
+             "Geometry Interfaces §6.6's rotateFromVectorSelf does not rotate to the vector");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("sk", "1_1_-1_-1"),
+             "Geometry Interfaces §6.5's skewX, skewY, flipX and flipY do not read");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("sc", "matrix_2__0__0__3__0__0__matrix_2__0__0__2__-10__-10__3"),
+             "Geometry Interfaces §6.6's scaleSelf does not default scaleY or scale about its origin");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("qd", "2_0_10_10"),
+             "Geometry Interfaces §5's fromRect and getBounds do not read");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("qb", "10_8_200_172_true_180"),
+             "Geometry Interfaces §5's getBounds over four points, or [SameObject] p1, does not read");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("qq", "1_2_1"),
+             "Geometry Interfaces §5's fromQuad does not default absent points");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("js", "__x__1__y__2__z__0__w__1__196"),
+             "Geometry Interfaces §2's and §6's [Default] toJSON do not serialize");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("wk", "10_20_true"),
+             "Geometry Interfaces §6.2 does not parse a resolved transform (swiper's WebKitCSSMatrix read)");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("fa", "6_16_3"),
+             "Geometry Interfaces §6.3's fromFloat32Array or §6.5's toFloat64Array and toFloat32Array do not read");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("rt", "matrix_1__2__3__4__5__6_"),
+             "Geometry Interfaces §6.3 does not stringify a matrix argument into the string arm");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("se", "false_3_true"),
+             "Geometry Interfaces §6.4's setters do not write the element or clear is 2D");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("sv", "matrix_1__0__0__1__1__2_"),
+             "Geometry Interfaces §6.6's setMatrixValue does not parse");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("ro2", "undefined_true_true"),
+             "Geometry Interfaces DOMMatrixReadOnly has a self method, or the inheritance is not the IDL's");
+    fold_row(&dm_tt, &dm_why,
+             DM_IS("pt", "3_1_3_2_function"),
+             "Geometry Interfaces §2's DOMPoint setters, defaults or fromPoint do not read");
+#undef DM_IS
+    const Probe rows[] = {
+        { "geometry-interfaces", dm_tt, "/api/dommatrix", SESS_EXPLORE, dm_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `preserve3d` document (fixture/preserve3d.h): css-transforms-2 §7's transform-style and §4.1.4's
    accumulated 3D transformation matrix. */
 TF_UNIT void probes_preserve3d(const char *js, Probe *tab, int *n) {
@@ -29252,6 +29363,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_indivtransform(js, probes, &np);
     probes_perspective(js, probes, &np);
     probes_perspectivew(js, probes, &np);
+    probes_dommatrix(js, probes, &np);
     probes_preserve3d(js, probes, &np);
     probes_fillwidth(js, probes, &np);
     probes_jsonlead(js, probes, &np);
