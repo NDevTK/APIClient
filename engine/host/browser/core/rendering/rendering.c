@@ -292,7 +292,8 @@ static void ur_paint_destroy(JSContext *ctx, void *p)
     UrPaint *u = p;
 
     (void)ctx;
-    document_paint_frame_free(u->frame);
+    /* NULL while the root's style ask rests: document_paint_begin has not run yet. */
+    if (u->frame != NULL) document_paint_frame_free(u->frame);
     layout_job_free(u->job);
     free(u);
 }
