@@ -2,9 +2,11 @@
    `overflow:auto` box below 20,000 one-pixel block boxes (test_forced.c's COLLREST_10000, twice, each `<i>` made
    a block). Both scrolling boxes' area walks and step 2.2's border box read are CSS 2.1 §9.4.1's walk over those
    boxes, which a resting drive must hold. Chrome scrolls the box to 160 and the window to 19,330, then fires
-   §13.2's `scroll` and `scrollend` at the box (neither bubbles) and at the document (both bubble). Two more
-   boxes, which hold no other engine state (no listener), are scrolled by `scrollTop`, one of them frozen first:
-   each shows the page no own key, symbol or clone, and the frozen one still scrolls.
+   §13.2's `scroll` and `scrollend` at the box (neither bubbles) and then at the document (both bubble), all
+   before the frame's animation callbacks; a fourth box scrolled from the first box's `scroll` listener gets
+   its two events in the next frame. Two more boxes, which hold no other engine state (no listener), are
+   scrolled by `scrollTop`, one of them frozen first: each shows the page no own key, symbol or clone, and the
+   frozen one still scrolls.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_SCROLLREST_H
@@ -22,16 +24,21 @@ static const char HTML_SCROLLREST[] =
     "<div style=\"height:100px\"></div></div>"
     "<div id=srBox3 style=\"position:absolute;top:0;overflow:auto;width:20px;height:20px\">"
     "<div style=\"height:100px\"></div></div>"
+    "<div id=srBox4 style=\"position:absolute;top:0;overflow:auto;width:20px;height:20px\">"
+    "<div style=\"height:100px\"></div></div>"
     "<script>"
-    "var srBox = document.getElementById('srBox'), srB = '', srD = '';"
+    "var srBox = document.getElementById('srBox'), srBox4 = document.getElementById('srBox4'), srQ = '';"
     "function srF(e) { return (e.bubbles ? 1 : 0) + '' + (e.cancelable ? 1 : 0); }"
-    "srBox.addEventListener('scroll', function (e) { srB += 's' + srF(e); });"
-    "srBox.addEventListener('scrollend', function (e) { srB += 'e' + srF(e); });"
-    "document.addEventListener('scroll', function (e) { srD += e.target === document ? 's' + srF(e) : 'x'; });"
-    "window.addEventListener('scroll', function () { srD += 'w'; });"
-    "document.addEventListener('scrollend', function (e) {"
-    "  if (e.target !== document) { srD += 'x'; return; }"
-    "  fetch('/api/srscrolled?b=' + srB + '&d=' + srD + 'e' + srF(e));"
+    "function srL(n, t) {"
+    "  t.addEventListener('scroll', function (e) { srQ += (e.target === t ? n + 's' + srF(e) : n + 'x') + '.'; });"
+    "  t.addEventListener('scrollend', function (e) { srQ += (e.target === t ? n + 'e' + srF(e) : n + 'x') + '.'; });"
+    "}"
+    "srL('b', srBox); srL('d', document); srL('4', srBox4);"
+    "window.addEventListener('scroll', function () { srQ += 'w.'; });"
+    "srBox.addEventListener('scroll', function () { srBox4.scrollTop = 5; });"
+    "requestAnimationFrame(function () { srQ += 'f.'; });"
+    "srBox4.addEventListener('scrollend', function () {"
+    "  fetch('/api/srscrolled?o=' + srQ + '&t4=' + srBox4.scrollTop);"
     "});"
     "document.getElementById('srT').scrollIntoView();"
     "fetch('/api/scrollintorest?t=' + srBox.scrollTop + '&y=' + window.scrollY);"

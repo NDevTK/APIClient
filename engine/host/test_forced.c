@@ -24170,7 +24170,7 @@ TF_UNIT void probes_blocklead(const char *js, Probe *tab, int *n) {
 /* The rows of the `scrollrest` document (fixture/scrollrest.h): CSSOM View §6.1's scroll a target into view for
    a target in a scroll container below 20,000 block boxes. scroll-into-view-rests: every turn offers a suspend
    point within one quantum of work, read from `sliceOverrunGapWork`, and the box and the window land where
-   Chrome puts them. scroll-events-element: §13.2's events at the box and the document, as Chrome fires them.
+   Chrome puts them. scroll-events-element: §13.2's events across the boxes and frames, in Chrome's order.
    scroll-position-unobservable: a scrolled element, frozen or not, shows the page nothing of its position. */
 TF_UNIT void probes_scrollrest(const char *js, Probe *tab, int *n) {
     const char *why = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
@@ -24192,13 +24192,14 @@ TF_UNIT void probes_scrollrest(const char *js, Probe *tab, int *n) {
              "a turn held the thread for a quantum or more between two offers: scroll a target into view read a "
              "scrolling box's layout or the target's border box on a drive that does not rest");
     fold_row(&ev_tt, &ev_why, !!strstr(js, "\"/api/srscrolled\""),
-             "NOT REACHED: no /api/srscrolled record, so the document's `scrollend` never fired");
-    fold_row(&ev_tt, &ev_why, param_value_is(js, "/api/srscrolled", "b", "s00e00"),
-             "CSSOM View §13.2: the scrolled box did not get one `scroll` then one `scrollend`, neither bubbling "
-             "nor cancelable (the scroll steps' step 2, last branch)");
-    fold_row(&ev_tt, &ev_why, param_value_is(js, "/api/srscrolled", "d", "s10we10"),
-             "CSSOM View §13.2: the document did not get a bubbling `scroll` (seen by window) then a bubbling "
-             "`scrollend`, or the box's events reached it");
+             "NOT REACHED: no /api/srscrolled record, so the listener-scrolled box's `scrollend` never fired");
+    fold_row(&ev_tt, &ev_why, param_value_is(js, "/api/srscrolled", "o", "bs00.be00.ds10.w.de10.f.4s00.4e00."),
+             "CSSOM View §13.2, as Chrome 153.0.8010.12 fires it: the box's `scroll` then `scrollend` (neither "
+             "bubbling nor cancelable), then the document's bubbling `scroll` (seen by window) and `scrollend`, "
+             "all before the frame's animation callback; then, a frame later, the two events of the box the "
+             "first `scroll` listener scrolled");
+    fold_row(&ev_tt, &ev_why, param_value_is(js, "/api/srscrolled", "t4", "5"),
+             "CSSOM View §6: a scrollTop set from a `scroll` listener did not scroll its box to 5");
     fold_row(&lk_tt, &lk_why, !!strstr(js, "\"/api/srleak\""),
              "NOT REACHED: no /api/srleak record, so the document aborted before its reads");
     fold_row(&lk_tt, &lk_why, param_value_is(js, "/api/srleak", "k", "0.0.0.0.0.DataCloneError.DataCloneError"),
