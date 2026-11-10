@@ -56699,7 +56699,8 @@ void JS_FlowReachEnd(JSFlowReach *out)
 
 /* JS_FlowGraph* — see quickjs.h. Host memory throughout, spelled `(free)`/`(realloc)` for the reason the reach
    census gives: a write runs where a runtime allocation could ask for a sale. */
-enum { FG_PLAIN = 1, FG_ARRAY = 2, FG_ERROR = 3, FG_RECORD = 4, FG_CLOSURE = 5, FG_BRAND = 6 };
+enum { FG_PLAIN = 1, FG_ARRAY = 2, FG_ERROR = 3, FG_RECORD = 4, FG_CLOSURE = 5, FG_BRAND = 6, FG_PROMISE = 7,
+       FG_RESOLVER = 8 };
 /* Whether `id` is a class whose objects are a brand over ordinary properties: registered by the host, with no
    finalizer, mark, record, call or exotic methods. Host classes only, because a predefined class keeps state in
    the object's union whether or not it declares a hook, and a host class's only state outside its properties is
@@ -56809,8 +56810,8 @@ typedef struct {
     JSContext *ctx;
     uint32_t floor;
     JSFlowGraph *g;
-    FGMap objs, anch, cells, cell_anch;
-    uint32_t n_priv_cells;
+    FGMap objs, anch, cells, cell_anch, shared;
+    uint32_t n_priv_cells, n_shared;
     FGStrMap strs;
     uint8_t **held;     /* host copies of flattened ropes the string table names, freed with the writer */
     uint32_t n_held;
@@ -56820,6 +56821,9 @@ typedef struct {
     uint32_t n_strs;
     uint8_t *kinds;
 } FGWriter;
+/* The promise family's bodies, defined beside its records. */
+static void fg_promise(FGWriter *w, FGBuf *out, JSObject *p);
+static void fg_resolver(FGWriter *w, FGBuf *out, JSObject *p);
 
 /* A survey's record of a case with no writer, and the placeholder that marks the graph unreadable. */
 static void fg_gap(FGWriter *w, FGBuf *out, int what, int id)
@@ -56921,6 +56925,9 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
             uint8_t kind = p->class_id == JS_CLASS_OBJECT ? FG_PLAIN : p->class_id == JS_CLASS_ARRAY ? FG_ARRAY
                          : p->class_id == JS_CLASS_ERROR ? FG_ERROR
                          : js_class_has_bytecode(p->class_id) ? FG_CLOSURE
+                         : p->class_id == JS_CLASS_PROMISE ? FG_PROMISE
+                         : p->class_id == JS_CLASS_PROMISE_RESOLVE_FUNCTION ||
+                           p->class_id == JS_CLASS_PROMISE_REJECT_FUNCTION ? FG_RESOLVER
                          : w->ctx->rt->class_array[p->class_id].record ? FG_RECORD
                          : fg_class_is_brand(w->ctx->rt, p->class_id) && p->u.opaque == NULL ? FG_BRAND : 0;
             if (kind == 0 && w->survey) { fg_gap(w, out, FG_GAP_CLASS, p->class_id); return; }
@@ -57150,8 +57157,8 @@ static void fg_closure(FGWriter *w, FGBuf *out, JSObject *p)
    properties ('S'), then its length's attributes and value, then the properties after the length slot. An Error
    follows its properties with its uncatchable flag and its stack slot, and an object of a class with a record
    layout writes its record ahead of them, so a rebuilt one holds it before its exotic methods are asked. A
-   branded host object (fg_class_is_brand) is its class and its properties. A weak key or target has no writer
-   yet. */
+   branded host object (fg_class_is_brand) is its class and its properties, and a Promise or a promise resolving
+   function writes its record first (fg_promise, fg_resolver). A weak key or target has no writer yet. */
 static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
 {
     JSObject *p = w->order[id];
@@ -57182,6 +57189,8 @@ static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
         return;
     }
     if (w->kinds[id] == FG_CLOSURE) fg_closure(w, out, p);
+    if (w->kinds[id] == FG_PROMISE) fg_promise(w, out, p);
+    if (w->kinds[id] == FG_RESOLVER) fg_resolver(w, out, p);
     if (w->kinds[id] == FG_RECORD) {
         DCHECK(p->u.opaque != NULL, "flow graph: an object of a class with a record layout holds no record");
         fg_record(w, out, p->u.opaque, w->ctx->rt->class_array[p->class_id].record);
@@ -57216,6 +57225,7 @@ static JSFlowGraph *fg_write(JSContext *ctx, const JSValueConst *roots, int n, u
     (free)(rbuf.b); (free)(bbuf.b); (free)(w.order); (free)(w.kinds);
     for (uint32_t i = 0; i < w.n_held; i++) (free)(w.held[i]);
     (free)(w.held); (free)(w.objs.s); (free)(w.strs.s); (free)(w.anch.s); (free)(w.cells.s); (free)(w.cell_anch.s);
+    (free)(w.shared.s);
     return g;
 }
 
@@ -57265,8 +57275,11 @@ typedef struct {
     const uint8_t *p, *end;
     JSValue *objs, *strs;
     JSVarRef **cells;   /* the private cells rebuilt so far, in written order; each closure holds its own ref */
-    uint32_t n_objs, n_strs, cap_strs, n_cells, cap_cells;
+    void **shared;      /* the resolving pairs' already-resolved records rebuilt so far, in written order */
+    uint32_t n_objs, n_strs, cap_strs, n_cells, cap_cells, n_shared, cap_shared;
 } FGReader;
+static void fg_rpromise(FGReader *r, JSObject *p);
+static void fg_rresolver(FGReader *r, JSObject *p);
 
 static const uint8_t *fg_take(FGReader *r, size_t n)
 {
@@ -57564,13 +57577,17 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
     for (uint32_t i = 0; i < r.n_objs; i++) {
         JSClassID cid = kinds[i] == FG_ERROR ? JS_CLASS_ERROR : JS_CLASS_OBJECT;
 
-        CHECK(kinds[i] >= FG_PLAIN && kinds[i] <= FG_BRAND, "flow graph: an object kind this reader does not know");
+        CHECK(kinds[i] >= FG_PLAIN && kinds[i] <= FG_RESOLVER, "flow graph: an object kind this reader does not know");
         if (kinds[i] >= FG_RECORD) {
             cid = fg_r32(&r);
             CHECK(cid < ctx->rt->class_count &&
                       (kinds[i] == FG_RECORD ? ctx->rt->class_array[cid].record != NULL
-                       : kinds[i] == FG_CLOSURE ? js_class_has_bytecode(cid) : fg_class_is_brand(ctx->rt, cid)),
-                  "flow graph: a record, closure or branded object names a class of another kind in this runtime");
+                       : kinds[i] == FG_CLOSURE ? js_class_has_bytecode(cid)
+                       : kinds[i] == FG_PROMISE ? cid == JS_CLASS_PROMISE
+                       : kinds[i] == FG_RESOLVER ? cid == JS_CLASS_PROMISE_RESOLVE_FUNCTION ||
+                                                   cid == JS_CLASS_PROMISE_REJECT_FUNCTION
+                       : fg_class_is_brand(ctx->rt, cid)),
+                  "flow graph: an object names a class its kind does not allow in this runtime");
         }
         r.objs[i] = kinds[i] == FG_ARRAY ? JS_NewArray(ctx) : JS_NewObjectProtoClass(ctx, JS_NULL, cid);
         if (kinds[i] == FG_CLOSURE && !JS_IsException(r.objs[i])) {
@@ -57589,6 +57606,8 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
         JSValue o = r.objs[i], proto = fg_rvalue(&r);
         uint8_t ext = fg_r8(&r);
         if (kinds[i] == FG_CLOSURE) fg_rclosure(&r, JS_VALUE_GET_OBJ(o));
+        if (kinds[i] == FG_PROMISE) fg_rpromise(&r, JS_VALUE_GET_OBJ(o));
+        if (kinds[i] == FG_RESOLVER) fg_rresolver(&r, JS_VALUE_GET_OBJ(o));
         if (kinds[i] == FG_RECORD) {   /* before anything asks the class's exotic methods, which read the record */
             JSObject *rp = JS_VALUE_GET_OBJ(o);
             rp->u.opaque = fg_rrecord(&r, ctx->rt->class_array[rp->class_id].record);
@@ -57630,7 +57649,7 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
     CHECK(r.p == r.end, "flow graph: a serialized graph has bytes past its last record");
     for (uint32_t i = 0; i < r.n_objs; i++) JS_FreeValue(ctx, r.objs[i]);
     for (uint32_t i = 0; i < r.n_strs; i++) JS_FreeValue(ctx, r.strs[i]);
-    (free)(r.objs); (free)(r.strs); (free)(r.cells);
+    (free)(r.objs); (free)(r.strs); (free)(r.cells); (free)(r.shared);
     return 0;
 }
 
@@ -119129,6 +119148,101 @@ typedef struct JSPromiseReactionData {
     JSValue resolving_funcs[2];
     JSValue handler;
 } JSPromiseReactionData;
+
+/* JS_FlowGraph's bodies for the promise family (see fg_body). A Promise writes whether it holds its record, then
+   its state, its handled flag, its result, and each reaction list as a count and the reactions' three values in
+   list order. A resolving function writes its promise slot and its already-resolved record, which its pair
+   shares: 'R' and the flag the first time the record is met, 'r' and its index after. */
+static void fg_promise(FGWriter *w, FGBuf *out, JSObject *p)
+{
+    JSPromiseData *s = p->u.promise_data;
+    struct list_head *el;
+
+    if (!s) { fg_u8(out, 'N'); return; }
+    fg_u8(out, 'P');
+    fg_u8(out, (uint8_t)s->promise_state);
+    fg_u8(out, s->is_handled);
+    fg_value(w, out, s->promise_result);
+    for (int i = 0; i < 2; i++) {
+        uint32_t n = 0;
+
+        list_for_each(el, &s->promise_reactions[i]) n++;
+        fg_u32(out, n);
+        list_for_each(el, &s->promise_reactions[i]) {
+            JSPromiseReactionData *rd = list_entry(el, JSPromiseReactionData, link);
+            fg_value(w, out, rd->resolving_funcs[0]);
+            fg_value(w, out, rd->resolving_funcs[1]);
+            fg_value(w, out, rd->handler);
+        }
+    }
+}
+static void fg_resolver(FGWriter *w, FGBuf *out, JSObject *p)
+{
+    JSPromiseFunctionData *s = p->u.promise_function_data;
+    uint32_t i;
+
+    DCHECK(s != NULL, "flow graph: a promise resolving function holds no record");
+    fg_value(w, out, s->promise);
+    if (fg_map_get(&w->shared, s->presolved, &i)) { fg_u8(out, 'r'); fg_u32(out, i); return; }
+    fg_map_put(&w->shared, s->presolved, w->n_shared++);
+    fg_u8(out, 'R');
+    fg_u8(out, s->presolved->already_resolved);
+}
+static void fg_rpromise(FGReader *r, JSObject *p)
+{
+    JSPromiseData *s;
+    uint8_t t = fg_r8(r);
+
+    if (t == 'N') return;
+    CHECK(t == 'P', "flow graph: a promise's record carries a tag this reader does not know");
+    s = js_mallocz(r->ctx, sizeof *s);
+    CHECK(s != NULL, "flow graph: OOM rebuilding a promise");
+    init_list_head(&s->promise_reactions[0]);
+    init_list_head(&s->promise_reactions[1]);
+    s->promise_state = (JSPromiseStateEnum)fg_r8(r);
+    s->is_handled = fg_r8(r) != 0;
+    s->promise_result = fg_rvalue(r);
+    for (int i = 0; i < 2; i++) {
+        for (uint32_t n = fg_r32(r); n > 0; n--) {
+            JSPromiseReactionData *rd = js_mallocz(r->ctx, sizeof *rd);
+            CHECK(rd != NULL, "flow graph: OOM rebuilding a promise reaction");
+            rd->resolving_funcs[0] = fg_rvalue(r);
+            rd->resolving_funcs[1] = fg_rvalue(r);
+            rd->handler = fg_rvalue(r);
+            list_add_tail(&rd->link, &s->promise_reactions[i]);
+        }
+    }
+    p->u.promise_data = s;
+}
+static void fg_rresolver(FGReader *r, JSObject *p)
+{
+    JSPromiseFunctionData *s = js_mallocz(r->ctx, sizeof *s);
+    JSPromiseFunctionDataResolved *sr;
+    uint8_t t;
+
+    CHECK(s != NULL, "flow graph: OOM rebuilding a promise resolving function");
+    s->promise = fg_rvalue(r);
+    t = fg_r8(r);
+    if (t == 'r') {
+        uint32_t i = fg_r32(r);
+        CHECK(i < r->n_shared, "flow graph: a resolving function names no already-resolved record written before it");
+        sr = r->shared[i];
+        sr->ref_count++;
+    } else {
+        CHECK(t == 'R', "flow graph: a resolving function's shared record carries a tag this reader does not know");
+        sr = js_mallocz(r->ctx, sizeof *sr);
+        CHECK(sr != NULL, "flow graph: OOM rebuilding a resolving pair's shared record");
+        sr->ref_count = 1;
+        sr->already_resolved = fg_r8(r) != 0;
+        if (r->n_shared == r->cap_shared) {
+            r->cap_shared = r->cap_shared ? r->cap_shared * 2 : 16;
+            r->shared = fg_grow(r->shared, sizeof *r->shared * r->cap_shared);
+        }
+        r->shared[r->n_shared++] = sr;
+    }
+    s->presolved = sr;
+    p->u.promise_function_data = s;
+}
 
 JSPromiseStateEnum JS_PromiseState(JSContext *ctx, JSValueConst promise)
 {
