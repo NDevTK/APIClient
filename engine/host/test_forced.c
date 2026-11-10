@@ -8354,6 +8354,67 @@ TF_UNIT void flow_graph_brand_selftest(void)
     JS_FreeRuntime(rt);
 }
 
+/* @GRAPHRT over the promise family, on a runtime of its own: two pending promises with their resolving functions,
+   the first holding a `then` reaction (a derived promise, its own resolving functions and a handler closure), the
+   second none. The six are written, rebuilt and written again; the bytes must agree, which a resolve and reject
+   pair that stopped sharing its already-resolved record would break. Both rebuilt promises must still be pending,
+   and resolving the rebuilt second promise through its rebuilt resolve function must fulfil it with the value
+   while the original stays pending. The second has no reaction, so the fulfilment queues no job. */
+TF_UNIT void flow_graph_promise_selftest(void)
+{
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx;
+    JSValue g, six, back[1], p1, p2, o2, v;
+    JSFlowGraph *g1, *g2;
+    const uint8_t *b1, *b2;
+    size_t n1, n2;
+    int32_t got = 0;
+    int same;
+
+    CHECK(rt != NULL, "the promise graph witness could not make a runtime");
+    JS_SetGCThreshold(rt, (size_t)-1);
+    ctx = JS_NewContext(rt);
+    CHECK(ctx != NULL, "the promise graph witness could not make a context");
+    JS_SetFlowGen(5);
+    six = tf_graph_program(ctx,
+        "(function () { var r, s, p = new Promise((a, b) => { r = [a, b]; }),"
+        " q = new Promise((a, b) => { s = [a, b]; }); p.then((v) => v + 1);"
+        " return [p, r[0], r[1], q, s[0], s[1]]; })()");
+    CHECK(JS_IsArray(six), "the promise graph witness's program did not return its six values");
+    g1 = JS_FlowGraphWrite(ctx, &six, 1, 2);
+    JS_SetFlowGen(9);
+    CHECK(JS_FlowGraphRead(ctx, g1, back) == 0, "the promise graph witness could not rebuild its graph");
+    g2 = JS_FlowGraphWrite(ctx, back, 1, 2);
+    n1 = JS_FlowGraphBytes(g1, &b1); n2 = JS_FlowGraphBytes(g2, &b2);
+    same = n1 == n2 && !memcmp(b1, b2, n1);
+    printf("@GRAPHRT {\"promiseBytes\":%zu,\"identical\":%d}\n", n1, same);
+    CHECK(same, "a rebuilt graph holding promises and their resolving functions did not write the same bytes");
+    p1 = JS_GetPropertyUint32(ctx, back[0], 0);
+    p2 = JS_GetPropertyUint32(ctx, back[0], 3);
+    o2 = JS_GetPropertyUint32(ctx, six, 3);
+    CHECK(JS_PromiseState(ctx, p1) == JS_PROMISE_PENDING && JS_PromiseState(ctx, p2) == JS_PROMISE_PENDING,
+          "a rebuilt pending promise is not pending, or is not a promise");
+    g = JS_GetGlobalObject(ctx);
+    CHECK(JS_SetPropertyStr(ctx, g, "rebuilt", JS_DupValue(ctx, back[0])) >= 0,
+          "the promise graph witness could not name its rebuilt values");
+    JS_FreeValue(ctx, tf_graph_program(ctx, "rebuilt[4](7), 0"));
+    v = JS_PromiseResult(ctx, p2);
+    JS_ToInt32(ctx, &got, v);
+    JS_FreeValue(ctx, v);
+    CHECK(JS_PromiseState(ctx, p2) == JS_PROMISE_FULFILLED && got == 7 &&
+              JS_PromiseState(ctx, o2) == JS_PROMISE_PENDING,
+          "a rebuilt resolve function did not fulfil its rebuilt promise with the value, or settled the original");
+    JS_FreeValue(ctx, p1); JS_FreeValue(ctx, p2); JS_FreeValue(ctx, o2);
+    JS_FlowGraphFree(ctx, g1);
+    JS_FlowGraphFree(ctx, g2);
+    JS_FreeValue(ctx, back[0]);
+    JS_FreeValue(ctx, six);
+    JS_FreeValue(ctx, g);
+    JS_SetFlowGen(0);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+}
+
 TF_UNIT void concat_keyed_selftest(JSContext *ctx)
 {
     int susp_off = 0, mach_off = 0, susp_on = 0, mach_on = 0;
@@ -44502,6 +44563,7 @@ int main(int argc, char **argv) {
     flow_graph_closure_selftest();
     flow_graph_callsite_selftest();
     flow_graph_brand_selftest();
+    flow_graph_promise_selftest();
     malloc_accounting_selftest();
     concolic_bound_selftest();
     /* AFTER the two digest primitives and for their reason: this one stands on FIPS 197's cipher
