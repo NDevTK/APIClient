@@ -1,48 +1,16 @@
-/* CSSOM VIEW §13.2 "Scrolling" — a Document's PENDING SCROLL EVENTS, the appends that fill the list, and the
- * SCROLL STEPS that drain it.
+/* CSSOM View §13.2 "Scrolling": a Document's pending scroll events, the appends that fill the list, and the
+ * scroll steps that drain it. The firing runs the page's listeners and parks, so it belongs to update the
+ * rendering's step machine (core/rendering/rendering.c).
  *
- * WHY ONE FILE. §13.2 is a queue and its drain, and the two are one contract: a list with only a writer is a
- * value nothing reads and a list with only a reader is a value nobody writes, and each of those is a defect
- * this codebase has met by name. So the appends and the drain live together, and the only thing outside is the
- * FIRING — which runs the page's listeners and therefore parks, so it belongs to the step machine that owns
- * HTML §8.1.7.3 "Processing model"'s update-the-rendering (core/rendering/rendering.c, its step 9).
+ * The list is a JS Array on a per-realm record built with the realm. It is therefore baseline, every mutation is
+ * a property write the per-flow COW delta captures, and a flow carries nothing until it scrolls. The scroll steps
+ * run for every document of every frame, so each write they make is made only when there is something to write.
  *
- * THE LIST IS A JS ARRAY ON A PER-REALM RECORD, and that is the whole of how it time-travels. §13.2 gives each
- * `Document` "an associated list of pending scroll events, which stores pairs of (`EventTarget`, `DOMString`),
- * initially empty" — platform data a FLOW queues, so it must fork per flow and park with the flow that queued
- * it. Every mutation below is an ordinary property write, which the per-flow COW delta already captures; a
- * malloc'd list captured as head/tail pointers would revert the POINTERS on a context switch and leave the
- * nodes reachable from nothing.
+ * A viewport's pair names its Document: §13.2's step 1.1 says "the viewport", which no Web IDL interface
+ * exposes, and step 2's first branch fires `scroll` and `scrollend` at a target that "is a Document".
  *
- * AND IT COSTS NOTHING PER FLOW UNTIL A FLOW QUEUES SOMETHING. The record is built WITH the realm, before any
- * page script runs, so it is part of the COW BASELINE that every flow shares rather than one object per member
- * of the frontier. What that makes load-bearing is the WRITE side: these steps run for every document of every
- * rendering opportunity, so a write made unconditionally would put an entry in EVERY live flow's delta once
- * per frame — which is why step 3's empty is conditional and why §3.1's step 7.1 mark is a write only when the
- * position actually changed. core/frame/viewport.c's §13.1 resize latch states the same rule about itself.
- *
- * TWO COLLECTIONS AND NOT ONE, because §13.2 names two. The LIST holds the pairs that will be fired. The set
- * of "each scrolling box box that was scrolled" is separate: §3.1 "Scrolling"'s perform a scroll step 7.1
- * marks a box there when the position changed, and the scroll steps' own step 1 is what turns that set into
- * (target, `scrollend`) pairs — one frame later than the `scroll` pair, which the gets-scrolled steps append
- * as the scroll happens. Collapsing the two would put `scrollend` in the list at the moment of the scroll,
- * which is the same order for an INSTANT scroll and the wrong one for a smooth scroll that is still running.
- * The set is an Array of step 1.1's targets, each held once.
- *
- * A VIEWPORT'S TARGET IS ITS DOCUMENT, AND THAT IS READ OUT OF §13.2's OWN STEP 2 RATHER THAN CHOSEN. Its step
- * 1.1 says to let target be "the viewport", and a viewport is not an object any Web IDL interface exposes —
- * §4's members are on `Window` and §12's on `VisualViewport`, and neither IS the viewport. Step 2's first
- * branch settles it: "If target is a `Document`, and type is `scroll` or `scrollend`, fire an event named type
- * that bubbles at target." A `scrollend` reaches that branch ONLY if some target that produces one is a
- * Document — an ELEMENT's scrollend takes step 2's last branch and fires at the element — so the standard
- * naming `scrollend` beside `scroll` there is the statement that a viewport's target is its Document. The
- * gets-scrolled steps for a viewport already append the DOCUMENT by name, so this makes the two halves agree.
- *
- * SNAP CONTAINERS ARE ASSERTED UNREACHABLE, not skipped: css-scroll-snap-1 declares `scroll-snap-type` and
- * this cascade models no such property, so `scroll-snap-type` computes to its initial `none` for every element
- * in every document this engine parses and no box is a snap container. Three of §13.2's steps are about one
- * (the two update-scrollsnapchanging calls and step 2's two SnapEvent branches); each is asserted at its
- * place, so the day the cascade models the property they fire where the step to build is. */
+ * Snap containers are asserted unreachable: the cascade models no `scroll-snap-type`, so no box is one, and
+ * each of §13.2's snap steps asserts at its place. */
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_SCROLL_EVENTS_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_SCROLL_EVENTS_H
 
@@ -63,12 +31,21 @@ void scroll_events_free(void);
    perform a scroll at the moment the position changes. */
 void scroll_events_viewport_scrolled(JSContext *ctx);
 
+/* The order across targets and frames is Chrome's where it differs from §13.2's text (Chrome 153.0.8010.12;
+   test_forced.c's scroll-events-element row holds the measured sequence):
+   - §13.2's scroll steps step 1 turns "each scrolling box box that was scrolled" into (target, `scrollend`)
+     pairs when the steps run, so every `scrollend` follows every pending `scroll`. Chrome fires a box's `scroll`
+     then its `scrollend` before the next box's `scroll`. So an instant scroll appends both of its pairs when it
+     happens, and there is no was-scrolled set.
+   - §13.2's step 3 empties the pending scroll events after step 2's walk. Chrome fires a pair a listener queued
+     during the walk in the next frame, even a `scroll` at the target whose `scroll` is being fired. So the steps
+     take the list whole before the walk and leave a fresh one to append to. */
+
 /* §3.1's step 7.1, "If the scroll position changed as a result of this call, emit the scrollend event", for a
-   VIEWPORT — which is to make it a member of the set §13.2's scroll steps step 1 iterates. It does NOT append
-   to the list; step 1 is what does that, on the next run of the scroll steps. */
+   viewport: appends (document, `scrollend`) unless it is already pending. */
 void scroll_events_viewport_scrollend(JSContext *ctx);
 
-/* §13.2's "Whenever an element gets scrolled" steps, and §3.1's step 7.1 mark, for an element of `ctx`'s
+/* §13.2's "Whenever an element gets scrolled" steps, and §3.1's step 7.1 append, for an element of `ctx`'s
    document. The element's `scroll` and `scrollend` fire at it and do not bubble (scroll steps step 2). */
 void scroll_events_element_scrolled(JSContext *ctx, lxb_dom_element_t *el);
 void scroll_events_element_scrollend(JSContext *ctx, lxb_dom_element_t *el);
@@ -80,17 +57,15 @@ void scroll_events_element_scrollend(JSContext *ctx, lxb_dom_element_t *el);
    `scroll` listener never runs. */
 bool scroll_events_pending(JSContext *ctx);
 
-/* §13.2's scroll steps STEP 1 — "For each scrolling box box that was scrolled" — followed by the COUNT step 2
-   will iterate. The count is taken here, at the one moment both steps' state is settled: a listener that
-   scrolls again during the drain APPENDS, and an append cannot move an item already in the list, so an index
-   below this count names the same pair for the whole of the walk. */
+/* Begins §13.2's scroll steps: takes the pending list for step 2 to walk, leaves an empty one for listeners to
+   append to, and answers the taken list's length. An index below it names one pair for the whole walk. */
 uint32_t scroll_events_scroll_steps_begin(JSContext *ctx);
 
 /* §13.2's scroll steps STEP 2, for one item: places that item's TARGET and the EVENT step 2 says to fire at
    it, which is where §13.2's four branches over the pair are decided. Both are OWNED — the caller frees. */
 void scroll_events_item(JSContext *ctx, uint32_t i, JSValue *target, JSValue *ev);
 
-/* §13.2's scroll steps STEP 3 — "Empty doc's pending scroll events." */
+/* §13.2's scroll steps step 3, "Empty doc's pending scroll events", over the list the steps took. */
 void scroll_events_scroll_steps_end(JSContext *ctx);
 
 #endif

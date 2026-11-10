@@ -125,9 +125,8 @@ void perform_scroll(JSContext *ctx, const ElementScrollingBox *box, double x, do
            core/frame/visual_viewport.h derives a scale factor of 1, at which it has no pan of its own. */
         if (box->el != NULL) scroll_events_element_scrolled(ctx, box->el);
         else                 scroll_events_viewport_scrolled(ctx);
-        /* STEP 7.1 — "If the scroll position changed as a result of this call, emit the scrollend event." —
-           which for §13.2 makes this box one that WAS SCROLLED; the scroll steps' own step 1 turns that into a
-           pair, one rendering opportunity later (core/dom/scroll_events.h). */
+        /* Step 7.1, "If the scroll position changed as a result of this call, emit the scrollend event": the
+           pair is appended now, behind this box's `scroll` (core/dom/scroll_events.h states the order). */
         if (box->el != NULL) scroll_events_element_scrollend(ctx, box->el);
         else                 scroll_events_viewport_scrollend(ctx);
     }

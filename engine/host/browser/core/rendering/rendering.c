@@ -186,9 +186,8 @@ static JSValue rendering_collect_docs(JSContext *ctx, RenderingExclusions *ex)
                  "since the last run, and at the VisualViewport when its scale, width or height has), one "     \
                  "target per rest")                                                                            \
     X(UR_SCROLL, "HTML §8.1.7.3 update the rendering step 9 (for each doc: run the SCROLL STEPS — CSSOM VIEW " \
-                 "§13.2 appends a `scrollend` for each scrolling box that was scrolled, then fires each "     \
-                 "(target, type) pair of doc's PENDING SCROLL EVENTS in the order they were added, then "     \
-                 "empties the list), one pair per rest")                                                      \
+                 "§13.2 takes doc's PENDING SCROLL EVENTS, fires each (target, type) pair in the order they "  \
+                 "were added, then empties the taken list), one pair per rest")                              \
     X(UR_MEDIA,  "HTML §8.1.7.3 update the rendering step 10 (for each doc: evaluate media queries and report " \
                  "changes — CSSOM VIEW §4.2 fires `change` at each MediaQueryList whose matches state has "     \
                  "changed, in the order they were created, oldest first), one MediaQueryList per rest")         \
@@ -878,17 +877,11 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
     }
 
     if (s->hdr.stage == UR_SCROLL) {
-        /* STEP 9: "For each doc of docs: run the SCROLL STEPS for doc." CSSOM VIEW §13.2 "Scrolling" is those
-           steps, and they are three: step 1 turns each scrolling box that was scrolled into a (target,
-           `scrollend`) pair, step 2 fires every pair of doc's pending scroll events IN THE ORDER THEY WERE
-           ADDED, and step 3 empties the list.
-           NONE OF THAT IS DECIDED HERE. The list, the appends and step 2's four branches over a pair belong to
-           core/dom/scroll_events.c, which is where §13.2 is; what this machine owns is the FIRING, because a
-           fire runs the page's `scroll` listeners and therefore parks. So this is a stage with ONE PAIR PER
-           REST, on the same terms as step 8 above and for the same reason.
-           STEPS 1 AND 3 ARE THE WALK'S TWO ENDS FOR EACH DOCUMENT, and `ssnapped` is what keeps them there: a
-           resume landing mid-drain must not re-run step 1 (which would append a second `scrollend`) and must
-           not re-measure step 2's extent. */
+        /* Step 9: "For each doc of docs: run the scroll steps for doc." CSSOM View §13.2 "Scrolling" is those
+           steps: the pending scroll events are taken, each pair is fired in the order it was added, and the
+           taken list is emptied (core/dom/scroll_events.h owns the list and the order). This machine owns the
+           firing, which runs the page's listeners and parks, so the stage rests once per pair. `ssnapped`
+           keeps the take and the empty at the walk's two ends: a resume landing mid-drain must not take again. */
         for (;;) {
             if (s->i >= s->ndocs) {
                 s->i = 0;

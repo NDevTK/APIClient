@@ -14,9 +14,10 @@
 #include "core/events/event.h"
 #include "core/realm.h"
 
-/* The record's two fields ARE §13.2's two collections — see scroll_events.h for why they are two. */
-#define SE_PENDING  "pending"
-#define SE_SCROLLED "scrolled"
+/* The record's two fields: the pending scroll events, and the list the running scroll steps took out of it
+   (scroll_events.h). */
+#define SE_PENDING "pending"
+#define SE_FIRING  "firing"
 /* A pair is stored as the two-element Array §13.2 describes, so the pair stays atomic across a park: an
    (EventTarget, DOMString) split over two parallel lists is two facts that can be appended to unequally. */
 #define SE_PAIR_TARGET 0
@@ -118,32 +119,18 @@ void scroll_events_viewport_scrolled(JSContext *ctx)
     se_append(ctx, doc, "scroll");
 }
 
-/* Adds `target` (the Document for the viewport, or the element) to the set of scrolling boxes that were
-   scrolled, once. The scroll steps' step 1 turns the set into `scrollend` pairs on their next run. */
-static void se_mark_scrolled(JSContext *ctx, JSValueConst target)
+/* §3.1 step 7.1's "emit the scrollend event" for an instant scroll: the pair is appended at once, behind the
+   target's `scroll`, where §13.2's scroll steps step 1 would append it behind every pending `scroll` (Chrome,
+   scroll_events.h). Step 1.2's snap-container step and step 1.3's already-pending test come with it. */
+static void se_scrollend(JSContext *ctx, JSValueConst target)
 {
-    JSValue rec = realm_value_get(ctx, g_slot);
-    JSValue set = JS_GetPropertyStr(ctx, rec, SE_SCROLLED);
-    uint32_t n, i;
-    bool held = false;
-
-    DCHECK(JS_IsArray(set), "§13.2's was-scrolled set is not an Array; the record is built holding one and only "
-                            "this file writes it");
-    n = se_len(ctx, set);
-    for (i = 0; i < n && !held; i++) {
-        JSValue t = JS_GetPropertyUint32(ctx, set, i);
-
-        held = JS_IsSameValue(ctx, t, target);
-        JS_FreeValue(ctx, t);
-    }
-    if (!held) JS_SetPropertyUint32(ctx, set, n, JS_DupValue(ctx, target));
-    JS_FreeValue(ctx, set);
-    JS_FreeValue(ctx, rec);
+    se_no_snap_container("the scroll steps' step 1.2");
+    se_append(ctx, target, "scrollend");
 }
 
 void scroll_events_viewport_scrollend(JSContext *ctx)
 {
-    se_mark_scrolled(ctx, document_object(ctx));
+    se_scrollend(ctx, document_object(ctx));
 }
 
 void scroll_events_element_scrolled(JSContext *ctx, lxb_dom_element_t *el)
@@ -168,57 +155,48 @@ void scroll_events_element_scrollend(JSContext *ctx, lxb_dom_element_t *el)
     JSValue target = node_wrap(ctx, lxb_dom_interface_node(el));
 
     CHECK(JS_IsObject(target), "an element that was scrolled could not be wrapped");
-    se_mark_scrolled(ctx, target);
+    se_scrollend(ctx, target);
     JS_FreeValue(ctx, target);
 }
 
 bool scroll_events_pending(JSContext *ctx)
 {
-    JSValue rec = realm_value_get(ctx, g_slot);
-    JSValue list = JS_GetPropertyStr(ctx, rec, SE_PENDING);
-    JSValue scrolled = JS_GetPropertyStr(ctx, rec, SE_SCROLLED);
-    bool any;
+    JSValue list = se_list(ctx);
+    bool any = se_len(ctx, list) > 0;
 
-    DCHECK(JS_IsArray(scrolled),
-           "§13.2's was-scrolled set is not an Array; se_mark_scrolled and the scroll steps' step 1 are its only "
-           "writers and both write one");
-    any = se_len(ctx, list) > 0 || se_len(ctx, scrolled) > 0;
-    JS_FreeValue(ctx, scrolled);
     JS_FreeValue(ctx, list);
-    JS_FreeValue(ctx, rec);
     return any;
+}
+
+/* OWNED — the caller frees. */
+static JSValue se_firing(JSContext *ctx)
+{
+    JSValue rec = realm_value_get(ctx, g_slot);
+    JSValue firing = JS_GetPropertyStr(ctx, rec, SE_FIRING);
+
+    JS_FreeValue(ctx, rec);
+    DCHECK(JS_IsArray(firing), "§13.2's firing list is not an Array; the record is built holding one and only "
+                               "this file writes it");
+    return firing;
 }
 
 uint32_t scroll_events_scroll_steps_begin(JSContext *ctx)
 {
     JSValue rec = realm_value_get(ctx, g_slot);
-    JSValue scrolled = JS_GetPropertyStr(ctx, rec, SE_SCROLLED);
-    JSValue list;
-    uint32_t n;
+    JSValue list = JS_GetPropertyStr(ctx, rec, SE_PENDING);
+    JSValue firing = se_firing(ctx);
+    uint32_t n = se_len(ctx, list);
 
-    DCHECK(JS_IsArray(scrolled), "§13.2's was-scrolled set is not an Array at the scroll steps' step 1");
-    /* Step 1, "For each scrolling box box that was scrolled": the set holds step 1.1's target (the Document for
-       the viewport, the element otherwise); step 1.2 is the snap-container step; steps 1.3 and 1.4 are se_append. */
-    if (se_len(ctx, scrolled) > 0) {
-        uint32_t m = se_len(ctx, scrolled), i;
-
-        for (i = 0; i < m; i++) {
-            JSValue target = JS_GetPropertyUint32(ctx, scrolled, i);
-
-            se_no_snap_container("the scroll steps' step 1.2");
-            se_append(ctx, target, "scrollend");
-            JS_FreeValue(ctx, target);
-        }
-        /* §13.2 never empties this set; a box "that was scrolled" is read as one scrolled since these steps
-           last ran, else one scroll would append a `scrollend` at every rendering opportunity. Written only
-           when non-empty, so an idle frame adds nothing to a flow's delta. */
-        JS_SetPropertyStr(ctx, rec, SE_SCROLLED, JS_NewArray(ctx));
+    DCHECK(se_len(ctx, firing) == 0, "§13.2's scroll steps began while an earlier run's list was still being "
+                                     "fired; update the rendering runs them once per document per frame");
+    JS_FreeValue(ctx, firing);
+    /* The pending list is taken whole and replaced, so a pair a listener appends is the next frame's and is
+       tested for "already pending" against that frame's list only (Chrome, scroll_events.h). Written only when
+       non-empty, so an idle frame adds nothing to a flow's delta. */
+    if (n > 0) {
+        JS_SetPropertyStr(ctx, rec, SE_FIRING, JS_DupValue(ctx, list));
+        JS_SetPropertyStr(ctx, rec, SE_PENDING, JS_NewArray(ctx));
     }
-    JS_FreeValue(ctx, scrolled);
-    /* STEP 2's EXTENT, taken now — see scroll_events.h for why an index below it names one pair for the whole
-       walk even though a listener may append during it. */
-    list = JS_GetPropertyStr(ctx, rec, SE_PENDING);
-    n = se_len(ctx, list);
     JS_FreeValue(ctx, list);
     JS_FreeValue(ctx, rec);
     return n;
@@ -226,14 +204,14 @@ uint32_t scroll_events_scroll_steps_begin(JSContext *ctx)
 
 void scroll_events_item(JSContext *ctx, uint32_t i, JSValue *target, JSValue *ev)
 {
-    JSValue list = se_list(ctx), pair, ty;
+    JSValue list = se_firing(ctx), pair, ty;
     const char *type;
 
     DCHECK(target != NULL && ev != NULL,
            "§13.2's scroll steps step 2 was asked for an item with nowhere to put it");
     DCHECK(i < se_len(ctx, list),
-           "§13.2's scroll steps step 2 was asked for an item past the extent step 1 measured — the list only "
-           "ever grows at its tail during the walk, so an index inside that extent cannot go out of range");
+           "§13.2's scroll steps step 2 was asked for an item past the list the steps took; nothing appends to "
+           "that list once it is taken");
     pair = JS_GetPropertyUint32(ctx, list, i);
     *target = JS_GetPropertyUint32(ctx, pair, SE_PAIR_TARGET);
     ty = JS_GetPropertyUint32(ctx, pair, SE_PAIR_TYPE);
@@ -263,21 +241,13 @@ void scroll_events_item(JSContext *ctx, uint32_t i, JSValue *target, JSValue *ev
 void scroll_events_scroll_steps_end(JSContext *ctx)
 {
     JSValue rec = realm_value_get(ctx, g_slot);
-    JSValue list = JS_GetPropertyStr(ctx, rec, SE_PENDING);
+    JSValue firing = se_firing(ctx);
 
-    /* STEP 3 — "Empty doc's pending scroll events." — WRITTEN ONLY WHEN THERE IS SOMETHING TO EMPTY, and that
-       is a load-bearing condition rather than a micro-optimisation. These steps run for EVERY document of
-       EVERY rendering opportunity, because a document reaches step 9 for any of the reasons step 4 keeps it;
-       an unconditional write here would therefore put one entry in EVERY live flow's COW delta once per frame
-       per document, for a list that was already empty. Emptying an empty list is not observable, so not
-       writing it is the same algorithm — which is the identical argument core/frame/viewport.c's §13.1 resize
-       latch makes about re-latching an unchanged pair, and for the identical reason.
-       A FRESH ARRAY rather than a length write, so a pair a listener appended DURING the walk goes with it:
-       step 3 empties the list the standard says, and a pair that arrived after step 2 measured its extent is
-       one step 2 did not iterate. */
-    if (se_len(ctx, list) > 0)
-        JS_SetPropertyStr(ctx, rec, SE_PENDING, JS_NewArray(ctx));
-    JS_FreeValue(ctx, list);
+    /* Step 3, "Empty doc's pending scroll events", over the list the steps took. Written only when there is
+       something to empty, for the reason the take gives. */
+    if (se_len(ctx, firing) > 0)
+        JS_SetPropertyStr(ctx, rec, SE_FIRING, JS_NewArray(ctx));
+    JS_FreeValue(ctx, firing);
     JS_FreeValue(ctx, rec);
 }
 
@@ -287,18 +257,18 @@ static void scroll_events_install(JSContext *ctx)
 
     CHECK(!JS_IsException(rec), "scroll_events: OOM building a realm's CSSOM VIEW §13.2 record");
     JS_SetPropertyStr(ctx, rec, SE_PENDING, JS_NewArray(ctx));
-    JS_SetPropertyStr(ctx, rec, SE_SCROLLED, JS_NewArray(ctx));
+    JS_SetPropertyStr(ctx, rec, SE_FIRING, JS_NewArray(ctx));
     realm_value_set(ctx, g_slot, rec);
 }
 
 void scroll_events_init(JSContext *ctx)
 {
     DCHECK(g_slot == JS_INVALID_CLASS_ID, "scroll_events_init ran twice — the §13.2 record's slot is declared once per AGENT");
-    g_slot = realm_value_declare(ctx, "CSSOM VIEW §13.2 a Document's pending scroll events, and the set of "
-                                     "scrolling boxes that were scrolled");
+    g_slot = realm_value_declare(ctx, "CSSOM VIEW §13.2 a Document's pending scroll events, and the list the "
+                                     "running scroll steps took from it");
     agent_state_realm_slot("scroll_events", &g_slot,
                            "CSSOM VIEW §13.2 Scrolling's realm-value slot for a Document's pending scroll events and "
-                           "its was-scrolled set");
+                           "the list being fired");
     realm_declare_intrinsic(scroll_events_install);
 }
 
