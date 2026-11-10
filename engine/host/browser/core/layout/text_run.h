@@ -38,9 +38,9 @@
    other than where explicit line breaks occur"); min-content lines end at every break.
    Forced breaks are measured: "preserved segment breaks, and—regardless of the white-space value—any Unicode
    character with the BK and NL line breaking class, must be treated as forced line breaks" (§5.5); U+000C,
-   U+000B (BK) and U+0085 (NL) are not collapsible under `normal`. Under `pre` every space and tab is measured
-   and every segment break is a forced break; `pre-line` collapses as `normal` does and keeps its segment breaks;
-   `pre-wrap` and `break-spaces` are refused (text_run.c's `tr_white_space`). */
+   U+000B (BK) and U+0085 (NL) are not collapsible under `normal`. Under `pre`, `pre-wrap` and `break-spaces`
+   every space and tab is measured and every segment break is a forced break (`TextRunSpace` says how each
+   value's spaces end a line); `pre-line` collapses as `normal` does and keeps its segment breaks. */
 
 /* §4.1.3's UA-defined choice takes the space branch ("in languages that use word separators, such as English
    and Korean, 'unbreaking' a line requires joining the two lines with a space"); the no-separator branch needs
@@ -116,12 +116,29 @@ typedef enum {
     TEXT_RUN_SIZE_MAX_CONTENT = 1,
 } TextRunSizeBasis;
 
+/* What css-text-3 §4.1 makes of a white space character (a space or a tab; a segment break is a forced break or
+   a space by then), which decides how it meets a line's two ends in §4.1.2:
+     COLLAPSIBLE  §4.1.1's surviving space of a collapsed run: removed at the beginning and at the end of a line.
+     PRESERVED    `pre`: content like any other character.
+     HANGS        `pre-wrap`: kept at the beginning of a line; at the end it hangs, so it keeps its advance and
+                  is left out of the line's size (its fit, and min-content). §4.1.2 hangs it conditionally before
+                  a forced break, which counts it in max-content.
+     BREAKS       `break-spaces`: "cannot hang nor have their advance width collapsed", and there is a soft wrap
+                  opportunity after each one. */
+typedef enum {
+    TEXT_RUN_SPACE_NONE = 0,
+    TEXT_RUN_SPACE_COLLAPSIBLE,
+    TEXT_RUN_SPACE_PRESERVED,
+    TEXT_RUN_SPACE_HANGS,
+    TEXT_RUN_SPACE_BREAKS,
+} TextRunSpace;
+
 /* One item of the collected run. Its element travels with it because the run crosses elements and both
    properties read are per-element: css-values-4 §6.1.1's advance measure is over "the element on which it is
    used", and §5.5 says whose `white-space` governs a break ("properties on the box directly containing that
    character control the line breaking at that opportunity" for a disappearing character, otherwise "the
    white-space property on the nearest common ancestor of the two characters").
-   Fields of another kind are never read: text_run.c reaches `cp`, `wraps` and `collapsible_space` only through
+   Fields of another kind are never read: text_run.c reaches `cp`, `wraps` and `space` only through
    accessors that DCHECK the kind. */
 typedef struct {
     TextRunItemKind kind;
@@ -138,9 +155,8 @@ typedef struct {
     /* css-text-3 §3's `nowrap` "suppresses line breaks (text wrapping) within the source" while leaving white
        space collapsible, so whether an opportunity exists is a second per-element fact (§5.5). */
     bool wraps;
-    /* Whether this character is §4.1.1's surviving collapsible space, which §4.1.2 trims at a line's ends; a
-       U+0020 that is content under another `white-space` value is not, so the flag is carried. */
-    bool collapsible_space;
+    /* Which white space this character is, or NONE: the same U+0020 meets a line's ends four ways. */
+    TextRunSpace space;
     /* The inline size this item occupies on its line, one per `TextRunSizeBasis`. An edge holds §2.2's outer
        contribution at one boundary of an inline box; an atomic inline holds its whole margin box (CSS 2 §8.1).
        They share a slot because the per-line sum adds either at the item's position; the kind tells them apart.
@@ -173,9 +189,10 @@ typedef struct {
    by text_run.c. */
 typedef struct {
     size_t lo, at;
-    bool   content;        /* an item §4.1.2 stops trimming at is in `[lo, at)` */
-    TextRunLineEnd sum;    /* the sized items, and the characters from the first content item on */
-    TextRunLineEnd size;   /* the line `[lo, at)`'s inline size: `sum` less the characters after the last content */
+    bool   content;        /* an item that ends §4.1.2's removal at the line's beginning is in `[lo, at)` */
+    TextRunLineEnd sum;    /* the sized items, and the characters from the first kept one on */
+    TextRunLineEnd hung;   /* `sum` less the collapsible spaces after the last kept character: hanging spaces in */
+    TextRunLineEnd size;   /* the line `[lo, at)`'s inline size: `hung` less the spaces that hang at its end */
 } TextRunLineSum;
 
 /* The running state of one inline formatting context's measurement, written and read only through the entries
@@ -246,7 +263,8 @@ void text_run_measure_init(TextRunMeasure *m);
 typedef struct {
     lxb_dom_element_t *style;
     const lxb_char_t *p, *end;              /* the node's bytes still to decode */
-    bool collapse, preserve_breaks, wraps;  /* css-text-3 §3's `white-space`, read once per node */
+    bool preserve_breaks, wraps;            /* css-text-3 §3's `white-space`, read once per node */
+    TextRunSpace space;                     /* what that value makes of this node's spaces and tabs */
     const lxb_dom_node_t *src;              /* the Text node, or NULL for supplied characters */
     uint32_t units;                         /* DOM code units of `src` decoded before `p` */
 } TextRunText;
