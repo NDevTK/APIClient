@@ -8294,6 +8294,66 @@ TF_UNIT void flow_graph_callsite_selftest(void)
     JS_FreeRuntime(rt);
 }
 
+/* @GRAPHRT over a branded host object, on a runtime of its own: a class declared with a name and nothing else (no
+   finalizer, mark, record, call or exotic methods), whose objects carry their state as properties, as an
+   Animation's internal slots are. The object holds a slots object under a symbol key with no attributes set. It is
+   written, rebuilt and written again; the bytes must agree, and the rebuilt object must be of the same class and
+   hold a slots object with the original's value. */
+TF_UNIT void flow_graph_brand_selftest(void)
+{
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx;
+    JSClassID brand = 0;
+    JSClassDef def = { "GraphBrand" };
+    JSValue sym, obj, slots, back[1], v, w;
+    JSAtom key;
+    JSFlowGraph *g1, *g2;
+    const uint8_t *b1, *b2;
+    size_t n1, n2;
+    int32_t rate = 0;
+    int same;
+
+    CHECK(rt != NULL, "the brand graph witness could not make a runtime");
+    JS_SetGCThreshold(rt, (size_t)-1);
+    ctx = JS_NewContext(rt);
+    CHECK(ctx != NULL, "the brand graph witness could not make a context");
+    JS_NewClassID(rt, &brand);
+    CHECK(JS_NewClass(rt, brand, &def) == 0, "the brand graph witness could not declare its class");
+    sym = JS_NewSymbol(ctx, "brandSlots", false);   /* generation 0: an anchor */
+    key = JS_ValueToAtom(ctx, sym);
+    JS_SetFlowGen(5);
+    obj = JS_NewObjectClass(ctx, (int)brand);
+    slots = JS_NewObjectProto(ctx, JS_NULL);
+    CHECK(!JS_IsException(obj) && !JS_IsException(slots) &&
+          JS_SetPropertyStr(ctx, slots, "rate", JS_NewInt32(ctx, 3)) >= 0 &&
+          JS_DefinePropertyValue(ctx, obj, key, slots, 0) >= 0,
+          "the brand graph witness could not build its object");
+    g1 = JS_FlowGraphWrite(ctx, &obj, 1, 2);
+    JS_SetFlowGen(9);
+    CHECK(JS_FlowGraphRead(ctx, g1, back) == 0, "the brand graph witness could not rebuild its graph");
+    g2 = JS_FlowGraphWrite(ctx, back, 1, 2);
+    n1 = JS_FlowGraphBytes(g1, &b1); n2 = JS_FlowGraphBytes(g2, &b2);
+    same = n1 == n2 && !memcmp(b1, b2, n1);
+    printf("@GRAPHRT {\"brandBytes\":%zu,\"identical\":%d}\n", n1, same);
+    CHECK(same, "a rebuilt graph holding a branded host object did not write the same bytes as its original");
+    v = JS_GetProperty(ctx, back[0], key);
+    w = JS_GetPropertyStr(ctx, v, "rate");
+    JS_ToInt32(ctx, &rate, w);
+    CHECK(JS_GetClassID(back[0]) == brand && JS_VALUE_GET_PTR(back[0]) != JS_VALUE_GET_PTR(obj) && rate == 3,
+          "a rebuilt branded object is not a new object of its class holding its slots");
+    JS_FreeValue(ctx, w);
+    JS_FreeValue(ctx, v);
+    JS_FlowGraphFree(ctx, g1);
+    JS_FlowGraphFree(ctx, g2);
+    JS_FreeValue(ctx, back[0]);
+    JS_FreeValue(ctx, obj);
+    JS_FreeAtom(ctx, key);
+    JS_FreeValue(ctx, sym);
+    JS_SetFlowGen(0);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+}
+
 TF_UNIT void concat_keyed_selftest(JSContext *ctx)
 {
     int susp_off = 0, mach_off = 0, susp_on = 0, mach_on = 0;
@@ -44441,6 +44501,7 @@ int main(int argc, char **argv) {
     flow_graph_selftest();
     flow_graph_closure_selftest();
     flow_graph_callsite_selftest();
+    flow_graph_brand_selftest();
     malloc_accounting_selftest();
     concolic_bound_selftest();
     /* AFTER the two digest primitives and for their reason: this one stands on FIPS 197's cipher
