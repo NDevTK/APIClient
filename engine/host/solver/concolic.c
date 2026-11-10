@@ -215,7 +215,8 @@ typedef struct {
     /* Which unknown owns which units of `example`: `piece_n` runs in order (JSUnknownPiece, the shape a buffer's
        runs take, here in UTF-16 code units), each owned by the operand whose example spells it. Written at a
        string concatenation whose operands' examples are both held, and on no other value; units in no piece
-       are the page's own. A run starts `image_pos` units into its unknown's example. Also written on a slice
+       are the page's own. An unknown whose example is empty owns a run of no units at its place, since its bytes
+       in another world lie there. A run starts `image_pos` units into its unknown's example. Also written on a slice
        whose range crosses pieces (pieces_clip). A slice inside one piece answers that piece's derivation
        (concolic_piece_slice). `piece_known` says the table was written, so a concatenation whose units no
        unknown owns (`piece_n` 0) is told from a value that records none. Owned, the unknowns with it. */
@@ -3236,6 +3237,16 @@ const char *concolic_source_precondition(const char *root)
             if (!strncmp(g_pres[j].src, p, n) && g_pres[j].src[n] == '\0')
                 return precondition_token(g_pres[j].kind);
     return NULL;
+}
+
+const char *concolic_value_precondition(JSValueConst v)
+{
+    const char *root = concolic_root_c(v), *p;
+    size_t n;
+
+    for (int i = 0; root_member(root, i, &p, &n); i++)
+        if (pre_row(p, n) < 0) return NULL;
+    return root ? concolic_source_precondition(root) : NULL;
 }
 
 /* The attacker's site and page (concolic.h), per process: the trusted zone states it before any document runs. */
@@ -9382,12 +9393,13 @@ static uint32_t example_units(JSContext *ctx, JSValueConst ex)
 }
 
 /* `v`'s pieces shifted by `off`, appended to `*out` (`*n` long, grown here): a concolic with recorded pieces
-   gives them, any other concolic is one piece of `units` owned by itself, and a concrete operand gives none. */
+   gives them, any other concolic is one piece of `units` owned by itself (a run of no units where its example is
+   empty), and a concrete operand gives none. */
 static void pieces_append(JSContext *ctx, JSValueConst v, uint32_t off, uint32_t units, JSUnknownPiece **out,
                           int *n)
 {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
-    int add = !c ? 0 : c->piece_known ? c->piece_n : units ? 1 : 0;
+    int add = !c ? 0 : c->piece_known ? c->piece_n : 1;
     JSUnknownPiece *g;
 
     if (!add) return;
@@ -9503,7 +9515,8 @@ static void pieces_clip(JSContext *ctx, JSValueConst r, JSValueConst s, uint32_t
         uint32_t lo = q->offset > from ? q->offset : from, hi = q->offset + q->length < to ? q->offset + q->length : to;
         JSUnknownPiece *g;
 
-        if (lo >= hi) continue;
+        /* A run of no units is kept where it lies in the range, either end included. */
+        if (q->length ? lo >= hi : (q->offset < from || q->offset > to)) continue;
         g = realloc(pc, (size_t)(n + 1) * sizeof *g);
         CHECK(g, "concolic: OOM recording which unknown owns which units of a slice");
         pc = g;
@@ -9637,6 +9650,13 @@ JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint
     int touched = 0;
 
     if (!c || !c->piece_known || to <= from) { JS_FreeValue(ctx, example); return JS_UNINITIALIZED; }
+    /* An unknown whose example is empty lies in the range where its place does, either end included: its bytes
+       in another world are among the range's, so the range is neither one piece's nor the page's own. */
+    for (int i = 0; i < c->piece_n; i++)
+        if (!c->piece[i].length && from <= c->piece[i].offset && c->piece[i].offset <= to) {
+            JS_FreeValue(ctx, example);
+            return JS_UNINITIALIZED;
+        }
     for (int i = 0; i < c->piece_n; i++) {
         const JSUnknownPiece *p = &c->piece[i];
         JSValueConst ops[3];

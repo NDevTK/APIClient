@@ -1132,19 +1132,18 @@ static void add_pending(const char *src, const char *root, int sink) {
 }
 
 /* The precondition a fire proves its bytes rest on, owned, NULL for none: a fact of the fired run, never of the
-   detection that opened the search. A verification sink parses only a String with no unknown in it (each sink
-   entry returns on a concolic argument), so the firing string holds the page's bytes and the candidate's; the
-   candidate's are a precondition's exactly where they were delivered at the root's own identity rather than at
-   a declared attacker source (concolic_candidate_at_root). Named residual: not covered — a sink string that
-   carries the candidate's bytes beside a precondition's piece, which the sinks skip as unreached; next diff —
-   parse such a string and label it from its pieces' owners; absence shows as a search parked with
-   `sinkStrings` 0 whose candidate run concatenates the payload with stored state.
+   detection that opened the search. The candidate's bytes are a precondition's where they were delivered at the
+   root's own identity rather than at a declared attacker source (concolic_candidate_at_root). The firing string
+   holds the page's bytes and the candidate's, and state no attacker writes where a sink of this run measured a
+   string unknown only through it (cand_sink_cstr, noted on the flow): the fire then rests on that state.
    The path's own arms count too: an arm the run took because app state held a value (a pinned precondition
    source) is a link the PoC rests on, so the fire is labelled with it whatever the root is. */
 static char *fired_precondition(const char *root) {
     const char *pre = concolic_candidate_at_root(root) ? NULL : concolic_source_precondition(root);
+    const Flow *f = flow_running();
     char *out;
 
+    if (!pre && f) pre = f->cand_sink_pre;
     if (!pre) pre = concolic_path_precondition();
     if (!pre) return NULL;
     out = reclaim_strdup(pre);
@@ -1877,6 +1876,31 @@ static Cand *candidate_write(JSContext *ctx, int sink) {
     return e && search_wrote_at(e, write_site_here(ctx)) ? e : NULL;
 }
 
+/* The bytes a candidate run's sink measures (JS_FreeCString's), or NULL where the injection did not reach the
+   write. A String is itself. An unknown argument is its String example where it is unknown only through
+   precondition state (concolic_value_precondition): the delivered bytes stand beside state no attacker writes,
+   and the example is what this world's state makes of them. `*rests` is then that state's token, which the
+   caller notes on the flow at a write its search owns. Any other unknown is another source's value. With
+   `strings_only`, a concrete non-String is no bytes either (the eval sink's §19.2.1.1 step 2). */
+static const char *cand_sink_cstr(JSContext *ctx, JSValueConst arg, int strings_only, const char **rests) {
+    const char *s;
+
+    *rests = NULL;
+    if (concolic_is(arg)) {
+        const char *pre = concolic_value_precondition(arg);
+        JSValue ex;
+
+        if (!pre || !concolic_example_present(arg)) return NULL;
+        ex = concolic_example(ctx, arg);
+        s = JS_IsString(ex) ? JS_ToCString(ctx, ex) : NULL;
+        JS_FreeValue(ctx, ex);
+        if (s) *rests = pre;
+        return s;
+    }
+    if (strings_only && !JS_IsString(arg)) return NULL;
+    return JS_ToCString(ctx, arg);
+}
+
 /* A string carrying the marker was handed to a sink: whether the in-place executor that may now run it is
    this flow's own (an eval write candidate_write admitted). js_x9 reads it for code no oracle queued. */
 static void marker_handed(Flow *f, int eval_owned) {
@@ -1887,9 +1911,8 @@ static void marker_handed(Flow *f, int eval_owned) {
 void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {                          /* candidate run: the arg is the injected, concrete code */
         Cand *e;
-        const char *code;
-        if (concolic_is(arg)) return;           /* injection didn't reach this read -> not our candidate */
-        /* And the half that test cannot say. "Not concolic" is also true of every literal the page writes, and a
+        const char *code, *rests;
+        /* What the argument's bytes cannot say: a concrete string is also every literal the page writes, and a
            breakout is punctuation, so a run of a byte or two is found in almost any string. What answers it is
            whether this flow's substitution has been performed (concolic.h), which only the component performing
            it knows; 0 means nothing here is this flow's. This is the whole candidate arm's precondition, so the
@@ -1901,12 +1924,12 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
            compiles nothing, so there is no context to escape and no bytes to measure. The sibling sinks must not
            copy this, since a URL or markup sink runs ToString and `location = { toString(){ return
            "javascript:…" } }` is a real vector. */
-        if (!JS_IsString(arg)) return;
-        if (!(code = JS_ToCString(ctx, arg))) return;
+        if (!(code = cand_sink_cstr(ctx, arg, 1, &rests))) return;   /* the injection did not reach this read */
         e = candidate_write(ctx, SINK_EVAL);
         /* Before the decline: the engine evaluates this string on return whoever owns the write. */
         if (strstr(code, "X9")) marker_handed(flow_running(), e != NULL);
         if (!e) { JS_FreeCString(ctx, code); return; }   /* another class's or another write's search */
+        if (rests) flow_running()->cand_sink_pre = rests;
         /* The survival rung is a distance to this search's own sink, so it is measured only at a write
            candidate_write admitted: bytes surviving into another search's write bring this one no nearer. */
         filter_survived(code);
@@ -2067,15 +2090,15 @@ static void url_fire(Cand *e, JSContext *ctx, const char *url) {
 void solve_url_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {
         Cand *e;
-        const char *url;
-        if (concolic_is(arg)) return;
-        /* The half that test cannot say (see solve_eval_sink). It matters most here: this class has no context
+        const char *url, *rests;
+        /* What the argument's bytes cannot say (see solve_eval_sink). It matters most here: this class has no context
            probe, so the marker alone identifies its bytes, and a page that builds a URL containing a minified
            `X9` would otherwise raise the arrival rung and fire its own address. */
         if (!concolic_candidate_delivered()) return;
-        if (!(url = JS_ToCString(ctx, arg))) return;
+        if (!(url = cand_sink_cstr(ctx, arg, 0, &rests))) return;   /* the injection did not reach this write */
         if (strstr(url, "X9")) marker_handed(flow_running(), 0);   /* the host's own navigation may run it */
         if (!(e = candidate_write(ctx, SINK_URL))) { JS_FreeCString(ctx, url); return; }   /* another class's or write's */
+        if (rests) flow_running()->cand_sink_pre = rests;
         filter_survived(url);   /* at this search's own write; see solve_eval_sink */
         /* The partition the other two classes make. This class has no probe, so the marker identifies its bytes
            (both CANDS_URL vectors carry X9), and the page's own javascript: hrefs are not queued per candidate. */
@@ -2091,14 +2114,14 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg) {
 void solve_html_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {
         Cand *e;
-        const char *html;
-        if (concolic_is(arg)) return;   /* injection didn't reach this write */
-        /* The half that test cannot say (see solve_eval_sink): "not concolic" is also true of every literal the
-           page writes. */
+        const char *html, *rests;
+        /* What the argument's bytes cannot say (see solve_eval_sink): a concrete string is also every literal
+           the page writes. */
         if (!concolic_candidate_delivered()) return;
-        if (!(html = JS_ToCString(ctx, arg))) return;
+        if (!(html = cand_sink_cstr(ctx, arg, 0, &rests))) return;   /* the injection did not reach this write */
         if (strstr(html, "X9")) marker_handed(flow_running(), 0);
         if (!(e = candidate_write(ctx, SINK_HTML))) { JS_FreeCString(ctx, html); return; }   /* another class's or write's */
+        if (rests) flow_running()->cand_sink_pre = rests;
         filter_survived(html);   /* at this search's own write; see solve_eval_sink */
         {
             /* Two candidate kinds reach this write, each told apart by bytes the other cannot contain: the context

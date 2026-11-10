@@ -830,6 +830,9 @@ const char *concolic_attacker_page(void);
 const char *concolic_source_attacker_page(const char *root);
 /* The precondition token of the first precondition member of `root`, or NULL when no member declares one. */
 const char *concolic_source_precondition(const char *root);
+/* That token for a value unknown only through precondition state, every member of its root naming a precondition
+   row; NULL for a value with no root or with any other member. */
+const char *concolic_value_precondition(JSValueConst v);
 
 /* THE DECLARED DELIVERY as a report states it: the mechanism's TOKEN and the address component the payload
    rides (0 for every mechanism that is not an address). Returns 0 when this source declared none — which is a

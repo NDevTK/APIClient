@@ -5390,6 +5390,7 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
         fire_target_copy(&sib->fire, &parent->fire);
         flow_deliveries_copy(sib, parent);
         sib->cand_eval_owned = parent->cand_eval_owned;
+        sib->cand_sink_pre = parent->cand_sink_pre;
         /* Where the payload came from is a fact about the bytes, so both arms have it; an arm without it would
            claim to be seeded from this session's search list with no row there, which solve.c's arrival assert
            refuses at the first branch a resumed candidate takes. */

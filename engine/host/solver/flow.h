@@ -270,6 +270,10 @@ typedef struct Flow {
     /* Whether the last write this flow handed its marker to was an eval write candidate_write admitted, whose
        code the engine runs in place: js_x9's verdict for code no oracle queued (solve.c). Carried by a fork. */
     int cand_eval_owned;
+    /* The precondition token of state a sink string of this run rested on at a write its search owns (solve.c's
+       cand_sink_cstr), NULL for none: a fire of this run is labelled with it. Static text. Carried by a fork;
+       a rebuilt candidate re-runs the write. */
+    const char *cand_sink_pre;
     int cand_verifying;    /* this flow is a candidate run: the sink takes the concrete arg */
     /* Where this candidate's payload came from: a park record it was rebuilt from (1), or this session's search
        list (0). solve.c's arrival check reads it to tell a resumed candidate, whose payload legitimately has no
