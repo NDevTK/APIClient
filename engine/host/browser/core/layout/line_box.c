@@ -1511,7 +1511,7 @@ static bool lb_fill_floats_on_line(LbFill *f, size_t k, TextRunLine line, size_t
             if (!lb_fill_place_float(f, fl, f->top)) return false;
             lb_fill_band(f, k, f->top);
             /* A line the fill closed before reaching the float keeps its content, which must still fit. */
-            DCHECKF(!closed || line.size.px <= f->line_w[k].px,
+            DCHECKF(!closed || text_run_fits(line.size, f->line_w[k]),
                     "%s: a float placed beside a closed line box leaves too little room for the content after it "
                     "on that line. BUILD the line's break taken again at the narrowed width",
                     box_subject(f->style, sbuf, sizeof sbuf));
@@ -1569,7 +1569,8 @@ static bool lb_fill_band_pull(LbFill *f)
             memmove(f->waiting, f->waiting + 1, (f->waiting_n - 1) * sizeof *f->waiting);
             f->waiting_n--;
         }
-        DCHECKF(lines[f->extents].size.px <= f->line_w[f->extents].px || f->line_w[f->extents].px >= f->content_w.px,
+        DCHECKF(text_run_fits(lines[f->extents].size, f->line_w[f->extents]) ||
+                    f->line_w[f->extents].px >= f->content_w.px,
                 "%s: a line box beside a float is too narrow for its first piece of content (%g px in %g px). "
                 "BUILD CSS 2.2 §9.5's shift of the line box below the float",
                 box_subject(f->style, sbuf, sizeof sbuf), lines[f->extents].size.px, f->line_w[f->extents].px);

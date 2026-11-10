@@ -364,6 +364,12 @@ typedef struct {
    every position is taken. `end` answers the line count and hands the newly allocated array to `*lines`, which the
    caller owns and frees. A fill abandoned before its end is released with `text_run_fill_release`. */
 void text_run_fill_begin(TextRunFill *f, const TextRunMeasure *m, CssPx available);
+/* Whether a line `size` wide fits a line box `available` wide. CSS 2.2 §9.4.2's "cannot fit horizontally within
+   a single line box" states no tolerance; Chrome's has one layout unit: the available width is rounded down to
+   1/64 px and a line up to 1/64 px wider still fits. Measured in Chrome 153.0.8010.12: text S wide is one line
+   in a box S - 1/64 wide and two in a box S - 2/64 wide, under `normal` and `pre-wrap` alike. The fill and every
+   check of a filled line against its width ask this. */
+bool text_run_fits(CssPx size, CssPx available);
 bool text_run_fill_done(const TextRunFill *f);
 void text_run_fill_step(TextRunFill *f, const TextRunMeasure *m);
 size_t text_run_fill_end(TextRunFill *f, const TextRunMeasure *m, TextRunLine **lines);

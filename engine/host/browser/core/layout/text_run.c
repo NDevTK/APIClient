@@ -1480,6 +1480,17 @@ bool text_run_measure_splits(const TextRunMeasure *m)
    a run of box edges is one line box, and LB3's break at eot closes it as it closes any other run.
    The lines are non-empty and partition `[0, count)` (`tr_item_boundary_of_cp` is strictly increasing and the
    last line closes at `count`), which bounds the allocation at `count`. */
+/* The comparison on numbers alone, so the fill's test at every position interns no form. */
+static bool tr_fits_px(double size, double available)
+{
+    return size <= (floor(available * 64.0) + 1.0) / 64.0;
+}
+
+bool text_run_fits(CssPx size, CssPx available)
+{
+    return tr_fits_px(size.px, available.px);
+}
+
 void text_run_fill_begin(TextRunFill *f, const TextRunMeasure *m, CssPx available)
 {
     tr_require_answers(m);
@@ -1573,7 +1584,7 @@ void text_run_fill_step(TextRunFill *f, const TextRunMeasure *m)
         /* "cannot fit horizontally within a single line box", measured over the line as it would be if this
            position were not taken: the comparison is at `at` and the emission at `prev`. `prev > start` is
            §9.4.2's cannot-be-split condition stated positively. */
-        if (f->prev > f->start && tr_end_size_px(m, &f->line.size) > f->available.px) {
+        if (f->prev > f->start && !tr_fits_px(tr_end_size_px(m, &f->line.size), f->available.px)) {
             tr_fill_emit(f, m, f->prev, tr_line_sum_size(m, &f->at_prev));
             f->line = f->seg;
         }
