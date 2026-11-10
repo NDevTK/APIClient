@@ -173,6 +173,10 @@ typedef struct {
     /* The value a URL-carried root's base source begins with for a candidate (concolic_url_head), composed from
        the detecting flow's facets at the capture; NULL where none composes. Owned. */
     char *url_head;
+    /* Filler units every candidate of this search delivers before its payload (search_learn_lead): how many of
+       the delivered bytes the page's derivation removed before this search's write, as a candidate's own run
+       measured. `lead_tried` says the one measurement was taken, so a lead is learned once. */
+    int lead, lead_tried;
     /* The gates: each attacker source other than the root's own that the frozen path pinned, with the String
        it was pinned to (concolic_path_gates), which every candidate of this search delivers (concolic_set_gates).
        Taken at the capture and grown by a fire whose run pinned one more; owned. */
@@ -1242,7 +1246,7 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
     *f = (Finding){
         .cls = cls,
         .source = reclaim_strdup(source ? source : "?"),
-        .poc = concolic_candidate_poc(twin->root, poc, twin->url_head),   /* named-access markup, URL head */
+        .poc = concolic_candidate_poc(twin->root, poc, twin->url_head, twin->lead),   /* named-access markup, URL head, lead */
         .root = reclaim_strdup(twin->root),
         .acts = acts,
         .under_act = under_act,
@@ -1723,6 +1727,25 @@ static void breakout_arrived(Cand *e) {
    bytes that never entered the program, a delivered flow at `cand_surv == 0` is bytes that survived to no
    sink, and a nonzero fraction is this measurement. The search-level pair is the report's ratchet over the
    best observation. CHECKs, because the pointers are dereferenced below. */
+/* A candidate of `e` reached the search's own write with its first `units` code units gone and everything after
+   them present: a derivation of the page's removes that many units of the delivered value before the write.
+   Every candidate seeded from here delivers that many filler units before its payload (concolic_set_candidate),
+   so the derivation removes the filler; the seeding cursor returns to 0, as at a route's release, so each
+   payload runs behind the lead. The removal is measured off a real run and the lead is decided by the next:
+   one that changes nothing leaves the search where it stood. One measurement per search, so a derivation that
+   removes by content rather than by position costs one re-seed.
+   Named residual. Not covered: a search rebuilt from a park record, which begins with no lead, so candidates
+   resumed with it deliver without one until a run measures it again. Next diff builds: the lead on the
+   candidate's park record. Absence shows as: a resumed search whose `survivedAt` is above 0 while the session
+   that parked it had fired or arrived whole. */
+static void search_learn_lead(Cand *e, int units) {
+    DCHECK(units > 0, "a lead of no units was learned — the caller measured a head the page removed");
+    if (e->lead_tried) return;
+    e->lead_tried = 1;
+    e->lead = units;
+    e->seeded = 0;
+}
+
 static void filter_survived(const char *out) {
     Flow *f = flow_running();
     FilterObs o;
@@ -1773,6 +1796,7 @@ static void filter_survived(const char *out) {
        and all the news to the comparator. */
     flow_observe_survival(f, (double)o.run / (double)o.len);
     if (o.run == 0) return;                  /* none of this candidate is in this string: an observation of 0 */
+    if (o.at > 0 && o.at + o.run == o.len) search_learn_lead(e, o.at);   /* its head went, its tail arrived */
     /* Which candidate this is, recorded before the ratchet erases the distinction. No row (idx < 0) is a
        cold-resumed candidate whose payload rides the flow rather than `pl`; the search-level pair still records
        it. Bytes this session also holds are one row for both, keyed by payload, as push_breakout dedups. */
@@ -2662,7 +2686,7 @@ void solve_flow_begin(Flow *f) {
     const char *root = NULL, *head = NULL;
     const Cand *rc = NULL;
     char *const *gsrc = NULL, *const *gval = NULL, *const *ghead = NULL;
-    int ngate = 0;
+    int ngate = 0, lead = 0;
 
     /* A sink candidate is delivered through its search's root, its search's gates beside it; a witness
        verification is no search's, and its identity is a declared delivery root (endpoint.c's witness_payload,
@@ -2674,6 +2698,7 @@ void solve_flow_begin(Flow *f) {
         DCHECK(rc != NULL && rc->root != NULL, "a candidate flow was switched in whose search holds no root");
         root = rc ? rc->root : NULL;
         head = rc ? rc->url_head : NULL;
+        lead = rc ? rc->lead : 0;
         gsrc = rc ? rc->gate_src : NULL;
         gval = rc ? rc->gate_val : NULL;
         ngate = rc ? rc->ngate : 0;
@@ -2682,7 +2707,7 @@ void solve_flow_begin(Flow *f) {
         head = witness_verify_head(fire_target_key(&f->fire));
         ngate = witness_verify_gates(fire_target_key(&f->fire), &gsrc, &gval, &ghead);
     }
-    concolic_set_candidate(f ? f->cand_src : NULL, root, f ? f->cand_payload : NULL, head);
+    concolic_set_candidate(f ? f->cand_src : NULL, root, f ? f->cand_payload : NULL, head, lead);
     concolic_set_deliveries(f ? f->cand_dsrc : NULL, f ? f->cand_dval : NULL, f ? f->cand_dn : 0);
     concolic_set_gates(gsrc, gval, ghead, ngate);
     concolic_set_cosources(rc ? rc->co_src : NULL, rc ? rc->nco : 0);

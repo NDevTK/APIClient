@@ -3606,12 +3606,26 @@ static char *head_join(const char *head, int row, char *bytes)
     return out;
 }
 
-char *concolic_candidate_poc(const char *root, const char *payload, const char *head)
+/* `payload` behind `lead` filler units, owned: the bytes a candidate with a lead delivers. The filler is
+   concolic_url_head's. */
+static char *lead_join(int lead, const char *payload)
 {
-    char *bytes = reclaim_strdup(payload);
+    size_t pn = strlen(payload);
+    char *out;
+
+    DCHECK(lead >= 0, "a candidate's lead is a count of units");
+    out = reclaim_malloc((size_t)lead + pn + 1);
+    CHECK(out != NULL, "concolic: OOM composing a candidate behind its lead");
+    memset(out, 'x', (size_t)lead);
+    memcpy(out + lead, payload, pn + 1);
+    return out;
+}
+
+char *concolic_candidate_poc(const char *root, const char *payload, const char *head, int lead)
+{
+    char *bytes = lead_join(lead, payload);
     int row;
 
-    CHECK(bytes != NULL, "concolic: OOM composing a PoC");
     row = row_chain_walk(root, &bytes, 1);
     DCHECK(bytes != NULL, "a fired PoC's markup could not be composed from the path its candidate was delivered by");
     return head_join(head, row, bytes);
@@ -3689,7 +3703,7 @@ char *concolic_url_head(const char *root)
     return out;
 }
 
-void concolic_set_candidate(const char *src, const char *root, const char *payload, const char *head) {
+void concolic_set_candidate(const char *src, const char *root, const char *payload, const char *head, int lead) {
     int row;
 
     free(g_cand_src); free(g_cand_payload); free(g_cand_at); free(g_cand_bytes);
@@ -3704,8 +3718,7 @@ void concolic_set_candidate(const char *src, const char *root, const char *paylo
            every read of that source answers it and every derivation re-runs on it. A root no component
            declares (a precondition) substitutes at the identity. A path the composer refuses delivers nothing,
            and the candidate cannot fire. */
-        g_cand_bytes = reclaim_strdup(payload);
-        CHECK(g_cand_bytes != NULL, "concolic: OOM installing an @S candidate's delivery");
+        g_cand_bytes = lead_join(lead, payload);
         row = row_chain_walk(root, &g_cand_bytes, 0);
         g_cand_bytes = head_join(head, row, g_cand_bytes);
         if (g_cand_bytes) {

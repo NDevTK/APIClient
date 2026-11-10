@@ -545,9 +545,11 @@ int         concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op);
    tries `payload`. Every read of the root's declared source returns the payload through that source's real
    transform, a keyed root's as its tuple in the parent component, so one delivered value answers every read in
    the world. A root no component declares (or NULL, a witness verification) substitutes at `src` itself.
-   `head` (concolic_url_head, or NULL) goes before the bytes the base source answers. NULL src and payload
-   clear it. */
-void        concolic_set_candidate(const char *src, const char *root, const char *payload, const char *head);
+   `head` (concolic_url_head, or NULL) goes before the bytes the base source answers. `lead` filler units go
+   before the payload itself, for a derivation of the page's that removes that many before the sink (solve.c's
+   search_learn_lead). NULL src and payload clear it. */
+void        concolic_set_candidate(const char *src, const char *root, const char *payload, const char *head,
+                                   int lead);
 /* The value a URL-carried base source of `root` begins with, so that every substring facet the running flow
    filed on it holds (concolic_search_facet): each occurring token at the lowest index its set admits, the
    payload to follow. Without the component's prefix; owned. NULL where the base is not URL-carried, nothing is
@@ -1209,9 +1211,9 @@ JSValue     concolic_new_json_parse(JSContext *ctx, JSValueConst text, JSValue v
    root with none. What a parked candidate carries so its resume re-derives the rows before install. */
 char       *concolic_source_chain(const char *root);
 void        concolic_declare_source_chain(const char *chain);
-/* `payload` composed through `root`'s derived rows down to its first keyed row or its base, behind `head` where
-   it reached the base: the bytes a PoC states beside its deliveryKey. Owned. */
-char       *concolic_candidate_poc(const char *root, const char *payload, const char *head);
+/* `payload` behind `lead` filler units, composed through `root`'s derived rows down to its first keyed row or its
+   base, behind `head` where it reached the base: the bytes a PoC states beside its deliveryKey. Owned. */
+char       *concolic_candidate_poc(const char *root, const char *payload, const char *head, int lead);
 /* concolic_new_derived over the elements of the array `list`, which is borrowed. */
 JSValue     concolic_new_derived_list(JSContext *ctx, const char *op, JSValueConst list, JSValue example);
 struct JSUnknownPiece;
