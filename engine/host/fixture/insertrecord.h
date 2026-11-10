@@ -6,7 +6,7 @@
    outerHTML and insertAdjacentHTML (ih, oh, ah). Each value lists the records, then the children (`_c`).
    Chrome 153 (Playwright) answers every value test_forced.c's rows expect except al and ib, where it reports the
    node's previous sibling after adopt's removal (al=p_a_rb_pa_n0~p_ab_r_pa_n0_ca.b,
-   ib=p_a_rb_pa_nc~p_ab_r_pa_nc_ca.b.c); see node_insert.c's step 6. ih, oh and ah are not measured in Chrome.
+   ib=p_a_rb_pa_nc~p_ab_r_pa_nc_ca.b.c); see node_insert.c's step 6.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_INSERTRECORD_H
