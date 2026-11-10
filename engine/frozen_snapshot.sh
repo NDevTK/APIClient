@@ -826,6 +826,30 @@ if [ $# -eq 0 ]; then
   exit 0
 fi
 cd "$DIR"
+# A run holds one build slot for as long as its command lives, so builds queue instead of contending. Lanes
+# share one fewer slot than the cores; a `coord-*` lane name takes the coordinator's own slot. The lock rides
+# file descriptor 9 into the command, so it is released when the last process of the run exits. A run started
+# from inside another run keeps its parent's slot.
+if [ -z "${FROZEN_SNAPSHOT_SLOT:-}" ]; then
+  SLOTS="${APICLIENT_BUILD_SLOTS:-$(( $(nproc) > 1 ? $(nproc) - 1 : 1 ))}"
+  mkdir -p "$ROOT/slots"
+  case "$LANE" in
+    coord-*) FROZEN_SNAPSHOT_SLOT=coord; exec 9>"$ROOT/slots/coord"
+             flock -n 9 || { echo "slot       the coordinator's slot is held; waiting"; flock 9; } ;;
+    *) _i=0
+       while [ "$_i" -lt "$SLOTS" ]; do
+         exec 9>"$ROOT/slots/$_i"
+         if flock -n 9; then FROZEN_SNAPSHOT_SLOT=$_i; break; fi
+         _i=$((_i + 1))
+       done
+       if [ -z "${FROZEN_SNAPSHOT_SLOT:-}" ]; then
+         FROZEN_SNAPSHOT_SLOT=$(( $$ % SLOTS )); exec 9>"$ROOT/slots/$FROZEN_SNAPSHOT_SLOT"
+         echo "slot       all $SLOTS lane slot(s) are held; waiting for slot $FROZEN_SNAPSHOT_SLOT"; flock 9
+       fi ;;
+  esac
+  export FROZEN_SNAPSHOT_SLOT
+  echo "slot       $FROZEN_SNAPSHOT_SLOT"
+fi
 # THE COMMAND'S OWN STATUS IS THIS SCRIPT'S, AND THAT IS WHY IT IS CAPTURED RATHER THAN LEFT TO `set -e`.
 # A gate's non-zero exit IS its verdict, so a line printed after the command may not swallow it and may not
 # be allowed to become the status either. The capture is the whole of what makes the closing line safe.
