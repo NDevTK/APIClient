@@ -1532,6 +1532,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/htmlclearrest.h"
 #include "fixture/rangerest.h"
 #include "fixture/rangeinsertrest.h"
+#include "fixture/rangedelrest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2313,6 +2314,7 @@ TF_DOCS[] = {
     { "htmlclearrest", HTML_HTMLCLEARREST },
     { "rangerest", HTML_RANGEREST },
     { "rangeinsertrest", HTML_RANGEINSERTREST },
+    { "rangedelrest", HTML_RANGEDELREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -18171,6 +18173,40 @@ TF_UNIT void probes_rangeinsertrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rangedelrest` document (fixture/rangedelrest.h). range-delete-rests: the deleting arm's
+   deleteContents of a range selecting the box of 100,002 elements rests inside the call (`sliceOverrunGapWork`
+   under one quantum), and the arm then reads the box detached and whole, both names absent and the range
+   collapsed. range-delete-sibling-tree: the sibling arm reads the box in place and both names present. */
+TF_UNIT void probes_rangedelrest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1, kt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/rd-done", "p", "1") && param_value_is(js, "/api/rd-done", "c", "100002"),
+             "NOT REACHED: no /api/rd-done?p=1&c=100002 record, so the deletion did not finish with the box "
+             "detached and whole");
+    fold_row(&tt, &why, param_value_is(js, "/api/rd-done", "n", "1") && param_value_is(js, "/api/rd-done", "w", "1"),
+             "the deleting arm still found a removed element by name: the name index kept an entry the removal took "
+             "out of the document tree");
+    fold_row(&tt, &why, param_value_is(js, "/api/rd-done", "k", "1"),
+             "DOM §5.5 deleteContents step 8: the range is not collapsed after the deletion");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: a deleteContents of 100,002 elements "
+             "removed them inside one step instead of resting per node");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/rd-kept", "p", "1") && param_value_is(js, "/api/rd-kept", "c", "100002"),
+             "NOT REACHED: no /api/rd-kept?p=1&c=100002 record, so the sibling arm did not read the box in place "
+             "with its children");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/rd-kept", "n", "1") && param_value_is(js, "/api/rd-kept", "w", "1"),
+             "the sibling arm did not find the box's named elements: the deleting arm's name-index upkeep reached a "
+             "flow whose tree still holds them");
+    const Probe rows[] = {
+        { "range-delete-rests", tt, "rdBox", SESS_EXPLORE, why },
+        { "range-delete-sibling-tree", kt, "rdBox", SESS_EXPLORE, kwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `mixinrest` document (fixture/mixinrest.h). mixin-<k>-rests, for append (ap), replaceWith (rw)
    and replaceChildren (rc): the arm's call with the box of 100,002 elements and a string rests inside itself
    (`sliceOverrunGapWork` under one quantum, a fact of the whole document), and the arm then reads the box in the
@@ -30656,6 +30692,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_htmlclearrest(js, probes, &np);
     probes_rangerest(js, probes, &np);
     probes_rangeinsertrest(js, probes, &np);
+    probes_rangedelrest(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
