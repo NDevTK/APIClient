@@ -6,6 +6,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/dom/abstract_range.h"
+#include "core/dom/node_remove.h"
 
 JSClassID range_class_id(void);
 
@@ -83,6 +84,7 @@ typedef struct RangeDelState {
     lxb_dom_node_t  *cursor, *root;
     lxb_dom_node_t **list;
     int              n, cap, i;
+    NodeRemoveState  rm;      /* step 10's removal in flight */
 } RangeDelState;
 
 extern const char *const RANGE_STR_STEPS[];

@@ -1360,7 +1360,8 @@ static const IdlStepDecl RANGE_EXTRACT = { rx_step, sizeof(RxState), rx_visit, N
     X(RD_COLLECT, "DOM §5.5 deleteContents step 4 (the nodes contained in the range whose parent is not, one " \
                   "node per step)") \
     X(RD_PLACE,   "DOM §5.5 deleteContents steps 5-9 (where the range lands, and the start node's tail)") \
-    X(RD_REMOVE,  "DOM §5.5 deleteContents step 10 (remove each collected node, one per step)") \
+    X(RD_REMOVE,  "DOM §5.5 deleteContents step 10 (the next collected node to remove)") \
+    NODE_REMOVE_ALGO_STAGES(X, RD_RM, "DOM §5.5 deleteContents step 10") \
     X(RD_TAIL,    "DOM §5.5 deleteContents step 11 (the end node's head)")
 enum { IDL_STEP_STAGE_BASE(RD_STAGES) RD_STAGES(JS_STEP_STAGE_ENUM) };
 const char *const RANGE_DEL_STEPS[] = { RD_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -1378,6 +1379,8 @@ int range_del_step(JSContext *ctx, JSStepHdr *hdr, RangeDelState *s, RangeBounds
     DCHECK(b != NULL, "§5.5's deleteContents stepped with no bounds — the caller resolves the subject before "
                       "every step and an unresolvable one is its own abrupt, not this machine's");
 
+    if (hdr->stage >= RD_RM_RANGES && hdr->stage < RD_RM_RANGES + NODE_REMOVE_PHASE_N)
+        return node_remove_run(ctx, hdr, &s->rm, RD_RM_RANGES);
     switch (hdr->stage) {
     case RD_ENTER:
         s->sn = bounds_start(b);
@@ -1435,7 +1438,8 @@ int range_del_step(JSContext *ctx, JSStepHdr *hdr, RangeDelState *s, RangeBounds
 
     case RD_REMOVE:                                                                          /* STEP 10 */
         if (s->i == s->n) { hdr->stage = RD_TAIL; return JS_STEP_YIELD; }
-        dom_cow_remove_child(s->list[s->i++]);
+        /* A contained node has a parent: the range's root is contained in no range over it. */
+        node_remove_start(hdr, &s->rm, s->list[s->i++], /*suppress_observers*/ false, RD_RM_RANGES, RD_REMOVE);
         return JS_STEP_YIELD;
 
     default:
