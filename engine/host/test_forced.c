@@ -1680,6 +1680,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/longline.h"
 #include "fixture/blocklead.h"
 #include "fixture/scrollrest.h"
+#include "fixture/prewrap.h"
 #include "fixture/jsonlead.h"
 #include "fixture/owedsale.h"
 #include "fixture/startin.h"
@@ -2471,6 +2472,7 @@ TF_DOCS[] = {
     { "longline", HTML_LONGLINE },
     { "blocklead", HTML_BLOCKLEAD },
     { "scrollrest", HTML_SCROLLREST },
+    { "prewrap", HTML_PREWRAP },
     { "jsonlead", HTML_JSONLEAD },
     { "startin", HTML_STARTIN },
     { "staticinline", HTML_STATICINLINE },
@@ -24221,6 +24223,74 @@ TF_UNIT void probes_scrollrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `prewrap` document (fixture/prewrap.h): css-text-3 §3's `pre-wrap` and `break-spaces`, each
+   case's line count, intrinsic widths and character rectangles as Chrome 153.0.8010.12 lays them out.
+   pre-wrap-hangs: preserved spaces and tabs at a line's end hang. break-spaces-wrap: they take up space and a
+   line can break after each. */
+TF_UNIT void probes_prewrap(const char *js, Probe *tab, int *n) {
+    const char *pw_why = NULL, *bs_why = NULL;
+    int pw_tt = 1, bs_tt = 1;
+
+    fold_row(&pw_tt, &pw_why, !!strstr(js, "\"/api/prewrap\""),
+             "NOT REACHED: no /api/prewrap record, so the document aborted before its fetch");
+    fold_row(&bs_tt, &bs_why, !!strstr(js, "\"/api/breakspaces\""),
+             "NOT REACHED: no /api/breakspaces record, so the document aborted before its second fetch");
+    fold_row(&pw_tt, &pw_why, param_value_is(js, "/api/prewrap", "a",
+                                             "h2mx8mn3mh2_0x0w1_1x0w1_2x0w1_3x0w1_4x0w1_0x1w1_1x1w1_2x1w1"),
+             "css-text-3 §4.1.2, `pre-wrap`: two spaces before a break stay on the first line and are left out "
+             "of min-content");
+    fold_row(&pw_tt, &pw_why, param_value_is(js, "/api/prewrap", "b",
+                                             "h2mx11mn5mh2_0x0w1_1x0w1_2x0w1_3x0w1_4x0w1_5x0w1_6x0w1_7x0w1_0x1w1_1x1w1_2x1w1"),
+             "css-text-3 §4.1.2, `pre-wrap`: spaces past the box's edge hang on their line with their advance, "
+             "and the line does not wrap for them");
+    fold_row(&pw_tt, &pw_why, param_value_is(js, "/api/prewrap", "d",
+                                             "h1mx4mn2mh2_0x0w1_1x0w1_2x0w1_3x0w1"),
+             "css-text-3 §4.1.2, `pre-wrap`: spaces that begin a line are kept, and a line can break after "
+             "them");
+    fold_row(&pw_tt, &pw_why, param_value_is(js, "/api/prewrap", "e",
+                                             "h2mx6mn4mh2_0x0w1_1x0w1_2x0w1_3x0w1_4x0w1_5x0w1_0x1w1"),
+             "css-text-3 §4.1.2, `pre-wrap`: spaces before a forced break stay on its line, count in "
+             "max-content and not in min-content");
+    fold_row(&pw_tt, &pw_why, param_value_is(js, "/api/prewrap", "f",
+                                             "h2mx9mn2mh2_0x0w1_1x0w1_2x0w1_3x0w1_4x0w1_0x1w1_1x1w1_2x1w1_3x1w1"),
+             "css-text-3 §4.1.2, `pre-wrap`: spaces that end the text count in max-content and not in "
+             "min-content");
+    fold_row(&pw_tt, &pw_why, param_value_is(js, "/api/prewrap", "h",
+                                             "h1mx7mn0mh1_0x0w1_1x0w1_2x0w1_3x0w1_4x0w1_5x0w1_6x0w1"),
+             "css-text-3 §4.1.2, `pre-wrap`: a line of only spaces is one line however long");
+    fold_row(&pw_tt, &pw_why, param_value_is(js, "/api/prewrap", "k",
+                                             "h2mx11mn1mh6_0x0w1_1x0w1_2x0w1_3x0w1_4x0w1_5x0w1_0x1w1_1x1w1_2x1w1_3x1w1_4x1w1"),
+             "css-text-3 §4.1.2, `pre-wrap`: the break is taken after the space that hangs, not before it");
+    fold_row(&pw_tt, &pw_why, param_value_is(js, "/api/prewrap", "m",
+                                             "h2mx9mn4mh2_0x0w1_1x0w1_2x0w1_3x0w1_4x0w4_0x1w1"),
+             "css-text-3 §4.1.2, `pre-wrap`: a preserved tab that ends a line hangs to its tab stop");
+    fold_row(&bs_tt, &bs_why, param_value_is(js, "/api/breakspaces", "b",
+                                             "h2mx11mn6mh2_0x0w1_1x0w1_2x0w1_3x0w1_4x0w1_5x0w1_0x1w1_1x1w1_2x1w1_3x1w1_4x1w1"),
+             "css-text-3 §4.1.2, `break-spaces`: the space after a word stays with it and overflows, and the "
+             "next line starts with the next space");
+    fold_row(&bs_tt, &bs_why, param_value_is(js, "/api/breakspaces", "c",
+                                             "h3mx12mn4mh3_0x0w1_1x0w1_2x0w1_3x0w1_4x0w1_0x1w1_1x1w1_2x1w1_3x1w1_0x2w1_1x2w1_2x2w1"),
+             "css-text-3 §4.1.2, `break-spaces`: a run of spaces wraps where the line is full");
+    fold_row(&bs_tt, &bs_why, param_value_is(js, "/api/breakspaces", "e",
+                                             "h3mx6mn5mh3_0x0w1_1x0w1_2x0w1_3x0w1_4x0w1_0x1w1_0x2w1"),
+             "css-text-3 §4.1.2, `break-spaces`: a space before a forced break takes a line of its own when "
+             "the line is full");
+    fold_row(&bs_tt, &bs_why, param_value_is(js, "/api/breakspaces", "h",
+                                             "h2mx7mn1mh7_0x0w1_1x0w1_2x0w1_3x0w1_4x0w1_0x1w1_1x1w1"),
+             "css-text-3 §4.1.2, `break-spaces`: a line of only spaces wraps, and min-content is one space");
+    fold_row(&bs_tt, &bs_why, param_value_is(js, "/api/breakspaces", "k",
+                                             "h3mx11mn2mh6_0x0w1_1x0w1_2x0w1_3x0w1_0x1w1_1x1w1_2x1w1_3x1w1_0x2w1_1x2w1_2x2w1"),
+             "css-text-3 §4.1.2, `break-spaces`: a word and its space do not separate");
+    fold_row(&bs_tt, &bs_why, param_value_is(js, "/api/breakspaces", "n",
+                                             "h3mx10mn8mh2_0x0w1_1x0w1_2x0w1_0x1w8_0x2w1_1x2w1"),
+             "css-text-3 §4.1.2, `break-spaces`: a line can break between a space and a tab");
+    const Probe rows[] = {
+        { "pre-wrap-hangs", pw_tt, "/api/prewrap", SESS_EXPLORE, pw_why },
+        { "break-spaces-wrap", bs_tt, "/api/breakspaces", SESS_EXPLORE, bs_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `jsonlead` document (fixture/jsonlead.h): ECMAScript §25.5.2 JSON.parse over a JSON text
    derived from an attacker source. */
 TF_UNIT void probes_jsonlead(const char *js, Probe *tab, int *n) {
@@ -30617,6 +30687,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_longline(js, probes, &np);
     probes_blocklead(js, probes, &np);
     probes_scrollrest(js, probes, &np);
+    probes_prewrap(js, probes, &np);
     probes_jsonlead(js, probes, &np);
     probes_owedsale(js, probes, &np);
     probes_startin(js, probes, &np);
