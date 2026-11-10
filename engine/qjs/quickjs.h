@@ -3177,15 +3177,27 @@ typedef struct JSConcolicHooks {
        integral Number, or an unknown whose example is one. Required: the engine reads no clock. */
     JSValue (*clock)(JSContext *ctx);
 } JSConcolicHooks;
-/* The members every table carries: the engine has no answer of its own to give in their place, so a realm is
-   built only on a thread whose table holds them, and JS_SetConcolicHooks refuses a table without them. */
+/* Every member is in exactly one of four lists, and JS_SetConcolicHooks makes the installed table total over
+   the first three, so the engine calls them without asking whether they are there.
+   REQUIRED: the engine has no answer of its own, so a table without one is refused and no realm is built on a
+   thread whose table lacks one. */
 #define JS_CONCOLIC_REQUIRED(X) X(random) X(clock)
-/* The members the engine calls once `is` has answered that a value is an unknown, with no answer of its own:
-   a table with an `is` carries every one. A table without one answers that no value is unknown. */
-#define JS_CONCOLIC_VALUE_SEMANTICS(X)                                                                       \
-    X(add) X(cmp) X(rel) X(derived) X(example) X(call) X(type_fix) X(key_read) X(key_domain_holds)           \
-    X(key_domain_missed) X(key_domain_stated) X(string_domain) X(string_keep_prefix) X(string_unit_map)      \
-    X(string_class)
+/* ASKED OF ANY VALUE: the engine asks before it knows whether a solver is there, and a host that installs none
+   gets the answer that declines (0, JS_UNINITIALIZED), on which the engine computes its own. `is` is one of
+   them: with none installed no value is unknown. */
+#define JS_CONCOLIC_ASKED_OF_ANY_VALUE(X) \
+    X(add) X(cmp) X(rel) X(arith) X(type_of) X(to_bool) X(is_array) X(key_name) X(key_value)                    \
+    X(own_keys_pred) X(key_read) X(example_held) X(global_named) X(global_member_named)                         \
+    X(mint_ordinal)
+/* ASKED OF AN UNKNOWN: called only on a value `is` answered for, so a table with an `is` is refused unless it
+   carries every one, and a table without an `is` never reaches them. */
+#define JS_CONCOLIC_ASKED_OF_AN_UNKNOWN(X) \
+    X(derived) X(example) X(call) X(type_fix) X(key_domain_holds) X(key_domain_missed)                          \
+    X(key_domain_stated) X(string_domain) X(string_keep_prefix) X(string_unit_map) X(string_class)              \
+    X(string_length_reached) X(json_parse) X(member_never_callable) X(has_property) X(to_str)                   \
+    X(builtin) X(lead) X(own_key_mint) X(get_value_base)
+/* THE EXPLORATION OVERLAY (absent, absent_unresolved, present, publish, unit_seq) is the fourth: NULL is the
+   host's statement that it does not explore, read at each use. */
 JS_EXTERN void JS_SetConcolicHooks(const JSConcolicHooks *hooks);
 
 /* CAN THE INJECTED-STATE CHANNEL NAME THIS KEY? The channel is a server writing a RECORD OF FIELDS into the

@@ -4256,7 +4256,26 @@ void JS_SetJobRemoveHook(JSJobRemoveHook h) { g_job_remove_hook = h; }
 /* `is` is never NULL: a runtime whose host installed no table (a self-test runtime, an agent with no solver
    after concolic_free withdrew its table) holds no unknown, and every value answers that it is not one. */
 static int js_concolic_none_is(JSValueConst v) { (void)v; return 0; }
-static _Thread_local JSConcolicHooks g_concolic = { .is = js_concolic_none_is };
+/* The declining answer of each member of JS_CONCOLIC_ASKED_OF_ANY_VALUE, which stands wherever a host installed
+   none: the engine then computes its own. */
+static int js_concolic_none_add(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) { return 0; }
+static int js_concolic_none_cmp(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op) { return 0; }
+static int js_concolic_none_rel(JSContext *ctx, JSValue *sp, int op) { return 0; }
+static int js_concolic_none_arith(JSContext *ctx, JSValue *sp, int op, int nops) { return 0; }
+static JSValue js_concolic_none_type_of(JSContext *ctx, JSValueConst v) { return JS_UNINITIALIZED; }
+static JSValue js_concolic_none_to_bool(JSContext *ctx, JSValueConst v, int negate) { return JS_UNINITIALIZED; }
+static JSValue js_concolic_none_is_array(JSContext *ctx, JSValueConst v) { return JS_UNINITIALIZED; }
+static JSValue js_concolic_none_key_name(JSContext *ctx, JSValueConst key) { return JS_UNINITIALIZED; }
+static JSValue js_concolic_none_key_value(JSContext *ctx, JSValueConst name) { return JS_UNINITIALIZED; }
+static JSValue js_concolic_none_own_keys_pred(JSContext *ctx, JSValueConst record) { return JS_UNINITIALIZED; }
+static JSValue js_concolic_none_key_read(JSContext *ctx, JSValueConst obj, JSValueConst key) { return JS_UNINITIALIZED; }
+static int js_concolic_none_example_held(JSValueConst v) { return 0; }
+static int js_concolic_none_global_named(const char *name, int typeof_only) { return 0; }
+static int js_concolic_none_global_member_named(const char *base, const char *member) { return 0; }
+static uint32_t js_concolic_none_mint_ordinal(JSContext *ctx) { return 0; }
+#define JS_CONCOLIC_NONE_ENTRY(m) .m = js_concolic_none_##m,
+static _Thread_local JSConcolicHooks g_concolic = { .is = js_concolic_none_is,
+                                                    JS_CONCOLIC_ASKED_OF_ANY_VALUE(JS_CONCOLIC_NONE_ENTRY) };
 
 /* THE ORDINAL HALF OF A PAGE-CREATED VALUE'S NAME, ASKED IN ONE PLACE — the canonical spelling of a question
    that has FOUR carriers (`func.creation_ord` for a closure, `regexp.creation_ord` for a RegExp,
@@ -4278,9 +4297,9 @@ static _Thread_local JSConcolicHooks g_concolic = { .is = js_concolic_none_is };
    the same point of the same prefix. What an identity needs is reproducibility and not density. */
 static uint32_t js_mint_creation_ord(JSContext *ctx)
 {
-    uint32_t ord = g_concolic.mint_ordinal ? g_concolic.mint_ordinal(ctx) : 0;
+    uint32_t ord = g_concolic.mint_ordinal(ctx);
 
-    DCHECK(g_concolic.mint_ordinal == NULL || ord != 0,
+    DCHECK(g_concolic.mint_ordinal == js_concolic_none_mint_ordinal || ord != 0,
            "the host's creation-ordinal hook answered 0, which this engine reads as 'this value has no "
            "creation name' — so a flow whose counter reached it would silently unname every value it made "
            "from there on, and a counter that WRAPPED to it would start handing out ordinals it has already "
@@ -8313,7 +8332,7 @@ static JSValue js_force_tostring(JSContext *ctx, JSValueConst val1, const char *
         const char *shape = NULL;
         JSValue sv = JS_UNINITIALIZED;
 
-        if (g_concolic.key_name) {
+        {
             sv = g_concolic.key_name(ctx, val1);
             if (JS_IsString(sv))
                 shape = JS_ToCString(ctx, sv);
@@ -9836,11 +9855,6 @@ static JSValue js_eval_program_source(JSContext *ctx, JSValueConst src)
            have run — a missing producer turned into a plausible datum, which is the one shape §Offensive
            programming says never to spell as a default. */
         JSValue ex;
-        DCHECK(g_concolic.example != NULL,
-               "a host installed the concolic value class without JSConcolicHooks.example — the two are one "
-               "table set by one JS_SetConcolicHooks call, so a source that IS concolic and can be asked for "
-               "nothing means the table was written half way, and every page program carried by an unknown "
-               "value would silently take 19.2.1.1 step 2's unevaluated arm");
         ex = g_concolic.example(ctx, src);
         if (JS_IsString(ex))
             text = ex;
@@ -15348,7 +15362,7 @@ static int js_key_domain_walk(JSContext *ctx, JSObject **plink, JSValueConst key
     uint64_t visited = 0;
     int r = JS_CHAIN_KEYS_ALL;
 
-    DCHECK(g_concolic.key_domain_holds != NULL && g_concolic.key_domain_stated(ctx, key),
+    DCHECK(g_concolic.key_domain_stated(ctx, key),
            "an unknown key's domain walk ran over a key whose facets state no domain");
     for (p = *plink; p != NULL; p = js_walk_proto(ctx, p)) {
         const JSClassExoticMethods *em = rt->class_array[p->class_id].exotic;
@@ -21849,7 +21863,7 @@ static JSValue JS_ToNumberHintFree(JSContext *ctx, JSValue val,
                 JSValue sv = JS_UNINITIALIZED;
 
                 snprintf(shbuf, sizeof shbuf, "%s", "(a shape this engine could not spell)");
-                if (g_concolic.key_name) {
+                {
                     sv = g_concolic.key_name(ctx, val);
                     if (JS_IsString(sv)) {
                         const char *s = JS_ToCString(ctx, sv);
@@ -22567,16 +22581,16 @@ static JSValue js_dtoa2(JSContext *ctx,
    the operation on the concrete, never a rule that predicts what performing it would have produced. */
 static JSValue js_concolic_operand(JSContext *ctx, JSValueConst v)
 {
-    if (!(g_concolic.builtin && g_concolic.is(v)))
+    if (!g_concolic.is(v))
         return JS_UNINITIALIZED;
-    return g_concolic.example ? g_concolic.example(ctx, v) : JS_UNDEFINED;
+    return g_concolic.example(ctx, v);
 }
 
 /* Whether js_concolic_operand's answer for `v` is bytes — `undefined` included — rather than the absence it also
    spells JS_UNDEFINED. A site running its algorithm on the example asks this, never the value's tag. */
 static bool js_concolic_held(JSValueConst v)
 {
-    return g_concolic.example_held && g_concolic.example_held(v);
+    return g_concolic.example_held(v);
 }
 /* The codecs' rule: the real function runs over a held example that is a primitive, whose §7.1.19 ToString runs
    no page code; an Object or a Symbol example, or none, leaves the result with none. */
@@ -22606,7 +22620,7 @@ static JSValue js_concolic_derive(JSContext *ctx, JSValueConst v, const char *op
         JS_FreeValue(ctx, JS_GetException(ctx));
         real = JS_UNDEFINED;
     }
-    if (!(g_concolic.builtin && g_concolic.is(v))) { JS_FreeValue(ctx, real); return JS_UNINITIALIZED; }
+    if (!g_concolic.is(v)) { JS_FreeValue(ctx, real); return JS_UNINITIALIZED; }
     return g_concolic.builtin(ctx, v, op, real);
 }
 
@@ -22713,7 +22727,7 @@ static JSValue JS_ToStringInternal(JSContext *ctx, JSValueConst val,
                     const char *shape = NULL;
                     JSValue sv = JS_UNINITIALIZED;
 
-                    if (g_concolic.key_name) {
+                    {
                         sv = g_concolic.key_name(ctx, val);
                         if (JS_IsString(sv))
                             shape = JS_ToCString(ctx, sv);
@@ -22852,7 +22866,7 @@ static JSValue JS_ToPropertyKeyInternal(JSContext *ctx, JSValueConst val,
        other. This is the one place all of them convert, so it is the one place the model is stated.
        It does NOT decide a READ of a slot that was never written — that is a lookup, not a coercion, and the
        operator answers it with an unknown value so a gate on it still forks (see .key_read). */
-    if (g_concolic.key_name && g_concolic.is(val)) {
+    if (g_concolic.is(val)) {
         JSValue name = g_concolic.key_name(ctx, val);
         if (!JS_IsUninitialized(name))
             return name;
@@ -23375,7 +23389,7 @@ static JSValue JS_ToBigIntFreeAt(JSContext *ctx, JSValue val, const char *file, 
                 JSValue sv = JS_UNINITIALIZED;
 
                 snprintf(shbuf, sizeof shbuf, "%s", "(a shape this engine could not spell)");
-                if (g_concolic.key_name) {
+                {
                     sv = g_concolic.key_name(ctx, val);
                     if (JS_IsString(sv)) {
                         const char *s = JS_ToCString(ctx, sv);
@@ -23487,7 +23501,7 @@ static no_inline __exception int js_unary_arith_slow(JSContext *ctx,
 
     /* forced-exec: unknown external input has a concolic RESULT here, computed by the operator, because the
        conversion boundary below owes C a real number and must never be handed one. */
-    if (g_concolic.arith) {
+    {
         int cop = op == OP_neg ? JS_CARITH_NEG : op == OP_plus ? JS_CARITH_PLUS
                 : op == OP_not ? JS_CARITH_NOT : op == OP_inc ? JS_CARITH_INC
                 : op == OP_dec ? JS_CARITH_DEC : -1;
@@ -23665,7 +23679,7 @@ static no_inline int js_not_slow(JSContext *ctx, JSValue *sp)
 
     /* the unary-arithmetic rule: `~x` over unknown external input has a concolic result, computed here, because
        the conversion below owes C a real number. */
-    if (g_concolic.arith && g_concolic.arith(ctx, sp, JS_CARITH_NOT, 1))
+    if (g_concolic.arith(ctx, sp, JS_CARITH_NOT, 1))
         return 0;
 
     op1 = sp[-1];
@@ -23701,7 +23715,7 @@ static no_inline __exception int js_binary_arith_slow(JSContext *ctx, JSValue *s
     double d1, d2;
 
     /* the unary path's rule, for two operands. */
-    if (g_concolic.arith) {
+    {
         int cop = op == OP_sub ? JS_CARITH_SUB : op == OP_mul ? JS_CARITH_MUL
                 : op == OP_div ? JS_CARITH_DIV : op == OP_mod ? JS_CARITH_MOD
                 : op == OP_pow ? JS_CARITH_POW : -1;
@@ -23904,7 +23918,7 @@ static no_inline __exception int js_add_slow(JSContext *ctx, JSValue *sp)
 
     /* forced-exec: a concolic operand -> concolic result in sp[-2]. This IS 13.15.3, so step 1.c is the hook's
        to decide — over the operands' EXAMPLES, which is where this operator's concrete half lives. */
-    if (g_concolic.add && g_concolic.add(ctx, sp, JS_CONCOLIC_ADD_PLUS)) return 0;
+    if (g_concolic.add(ctx, sp, JS_CONCOLIC_ADD_PLUS)) return 0;
 
     op1 = sp[-2];
     op2 = sp[-1];
@@ -24038,7 +24052,7 @@ static no_inline __exception int js_binary_logic_slow(JSContext *ctx,
                 : op == OP_sar ? JS_CARITH_SAR : -1;
         DCHECK(cop >= 0, "js_binary_logic_slow reached with an opcode outside the bitwise/shift family — "
                          ">>> has its own tail in js_shr_slow and every other operator has its own slow path");
-        if (g_concolic.arith && cop >= 0 && g_concolic.arith(ctx, sp, cop, 2))
+        if (cop >= 0 && g_concolic.arith(ctx, sp, cop, 2))
             return 0;
     }
     DCHECK(!js_value_is_concolic(sp[-2]) && !js_value_is_concolic(sp[-1]),
@@ -24311,7 +24325,7 @@ static no_inline int js_relational_slow(JSContext *ctx, JSValue *sp,
     /* An ORDERING over an unknown is unknown, and asking ToPrimitive for it throws — the operand is an object
        whose coercion answers with another concolic. The solver decides the result the way it already decides
        equality's, so the comparison forks instead of aborting the program. */
-    if (g_concolic.rel && g_concolic.rel(ctx, sp, op))
+    if (g_concolic.rel(ctx, sp, op))
         return 0;
 
     /* AN OBJECT HERE IS A CONCOLIC — see js_add_slow. The dispatch routes a real object operand onto the
@@ -24463,7 +24477,7 @@ static no_inline __exception int js_eq_slow(JSContext *ctx, JSValue *sp,
 
     /* 7.2.13 IsLooselyEqual ( x, y ) — NAMED, because the hook has to run this comparison on the operands'
        concrete examples and 7.2.14 answers differently for the same pair (`"1" == 1` versus `"1" === 1`). */
-    if (g_concolic.cmp && g_concolic.cmp(ctx, sp, is_neq, JS_CONCOLIC_EQ_LOOSE)) return 0;   /* forced-exec: concolic == -> concolic bool (forks) */
+    if (g_concolic.cmp(ctx, sp, is_neq, JS_CONCOLIC_EQ_LOOSE)) return 0;   /* forced-exec: concolic == -> concolic bool (forks) */
 
     op1 = sp[-2];
     op2 = sp[-1];
@@ -24598,7 +24612,7 @@ static no_inline int js_shr_slow(JSContext *ctx, JSValue *sp)
 
     /* 13.9's third operator, whose numeric result is 6.1.6.1.11 Number::unsignedRightShift ( x, y ) — the one
        that is ToUint32 on BOTH sides, which is why it has its own id rather than sharing OP_sar's. */
-    if (g_concolic.arith && g_concolic.arith(ctx, sp, JS_CARITH_SHR, 2))
+    if (g_concolic.arith(ctx, sp, JS_CARITH_SHR, 2))
         return 0;
     DCHECK(!js_value_is_concolic(sp[-2]) && !js_value_is_concolic(sp[-1]),
            "a CONCOLIC operand survived >>>'s own hook and is about to reach ToNumeric, which owes C a real "
@@ -24779,7 +24793,7 @@ static no_inline int js_strict_eq_slow(JSContext *ctx, JSValue *sp,
 {
     bool res;
     /* 7.2.14 IsStrictlyEqual ( x, y ) — see js_eq_slow's note for why the algorithm is named and not inferred. */
-    if (g_concolic.cmp && g_concolic.cmp(ctx, sp, is_neq, JS_CONCOLIC_EQ_STRICT)) return 0;   /* forced-exec: concolic === -> concolic bool (forks) */
+    if (g_concolic.cmp(ctx, sp, is_neq, JS_CONCOLIC_EQ_STRICT)) return 0;   /* forced-exec: concolic === -> concolic bool (forks) */
     res = js_strict_eq(ctx, sp[-2], sp[-1]);
     JS_FreeValue(ctx, sp[-2]);
     JS_FreeValue(ctx, sp[-1]);
@@ -25211,7 +25225,7 @@ static JSValue js_build_mapped_arguments(JSContext *ctx, int argc,
 static JSValue js_enum_key_value(JSContext *ctx, JSAtom atom)
 {
     JSValue name = JS_AtomToValue(ctx, atom);
-    if (g_concolic.key_value && JS_IsString(name)) {
+    if (JS_IsString(name)) {
         JSValue k = g_concolic.key_value(ctx, name);
         if (!JS_IsUninitialized(k)) {
             JS_FreeValue(ctx, name);
@@ -26768,18 +26782,11 @@ int step_getownprop_run(JSContext *ctx, JSStepHdr *h, JSValueConst obj, JSAtom a
 
 /* ONE MEMBER, PERFORMED — the position the chain below is standing on, materialised, and the cursor advanced
    past it so the next question is about a position nobody has answered. The two are one operation because
-   advancing without materialising would leave a member the flow decided on unnamed for ever.
-   THE NULL TEST IS A `CHECK` AND NOT A `DCHECK` because this call is the pointer's ONLY dereference and it
-   happens in every build: a host that installed the question and not its answer would segfault in release
-   where dev aborts, and the two must be the same event. */
+   advancing without materialising would leave a member the flow decided on unnamed for ever. */
 static int step_ownkeys_mint(JSContext *ctx, JSStepHdr *h, JSValueConst obj)
 {
     int r;
 
-    CHECK(g_concolic.own_key_mint != NULL,
-          "a host asked the own-key-set question and installed no way to perform its TRUE arm — the enumeration "
-          "would decide that the record holds a member and then enumerate nothing, which is the empty-List "
-          "fabrication the predicate exists to prevent, arriving one step later");
     r = g_concolic.own_key_mint(ctx, obj, h->keys_probe);
     if (r < 0)
         return -1;
@@ -26908,7 +26915,7 @@ int step_ownkeys_run(JSContext *ctx, JSStepHdr *h, JSValueConst obj, JSValue in,
            to select between — the hook itself answers JS_UNINITIALIZED for every object that carries no
            question, which is where the condition that decides that lives. */
         if (h->keys_probe == KEYS_PROBE_UNASKED) {
-            if (JS_IsUninitialized(h->keys_pred) && g_concolic.own_keys_pred)
+            if (JS_IsUninitialized(h->keys_pred))
                 h->keys_pred = g_concolic.own_keys_pred(ctx, obj);
             if (!JS_IsUninitialized(h->keys_pred)) {
                 r = step_tobool_run(ctx, h, h->keys_pred, OWNKEYS_PRED_OP, &arm);
@@ -36397,16 +36404,20 @@ void JS_SetConcolicHooks(const JSConcolicHooks *h)
 #define JS_CONCOLIC_CHECK_REQUIRED(m)                                                                        \
     CHECK(h->m != NULL, "a JSConcolicHooks table without ." #m " was installed; it is in JS_CONCOLIC_REQUIRED, "  \
                         "the members every table carries");
-#define JS_CONCOLIC_CHECK_VALUE(m)                                                                           \
+#define JS_CONCOLIC_CHECK_WITH_IS(m)                                                                         \
     CHECK(h->is == NULL || h->m != NULL,                                                                     \
-          "a JSConcolicHooks table with an .is was installed without ." #m "; it is in "                    \
-          "JS_CONCOLIC_VALUE_SEMANTICS, the members the engine calls on an unknown");
+          "a JSConcolicHooks table with an .is was installed without ." #m "; a table that calls a value "  \
+          "unknown carries every member of JS_CONCOLIC_ASKED_OF_ANY_VALUE and JS_CONCOLIC_ASKED_OF_AN_UNKNOWN");
+#define JS_CONCOLIC_FILL(m) if (!g_concolic.m) g_concolic.m = js_concolic_none_##m;
     JS_CONCOLIC_REQUIRED(JS_CONCOLIC_CHECK_REQUIRED)
-    JS_CONCOLIC_VALUE_SEMANTICS(JS_CONCOLIC_CHECK_VALUE)
-#undef JS_CONCOLIC_CHECK_REQUIRED
-#undef JS_CONCOLIC_CHECK_VALUE
+    JS_CONCOLIC_ASKED_OF_ANY_VALUE(JS_CONCOLIC_CHECK_WITH_IS)
+    JS_CONCOLIC_ASKED_OF_AN_UNKNOWN(JS_CONCOLIC_CHECK_WITH_IS)
     g_concolic = *h;
     if (!g_concolic.is) g_concolic.is = js_concolic_none_is;
+    JS_CONCOLIC_ASKED_OF_ANY_VALUE(JS_CONCOLIC_FILL)
+#undef JS_CONCOLIC_CHECK_REQUIRED
+#undef JS_CONCOLIC_CHECK_WITH_IS
+#undef JS_CONCOLIC_FILL
 }
 void JS_SetEvalSinkHook(JSEvalSinkFunc *cb) { g_eval_sink = cb; }
 
@@ -36428,8 +36439,6 @@ static int js_typeof_is_concolic(JSContext *ctx, JSValue *sp, JSAtom expected)
 {
     JSValue t, pair[2];
 
-    if (!g_concolic.type_of)
-        return 0;
     t = g_concolic.type_of(ctx, sp[-1]);
     if (JS_IsUninitialized(t))
         return 0;
@@ -36448,7 +36457,6 @@ static int js_typeof_is_concolic(JSContext *ctx, JSValue *sp, JSAtom expected)
     }
     pair[0] = t;
     /* The operand IS concolic (type_of answered), so the comparison hook owns this compare. */
-    DCHECK(g_concolic.cmp != NULL, "a concolic typeof result with no comparison hook to decide it");
     /* THE FUSED OPCODE IS A `===`. 13.5.3's `typeof` result is compared by the peephole against a string
        literal with strict equality, so this states 7.2.14 exactly as the unfused path does. */
     if (!g_concolic.cmp(ctx, pair + 2, /*is_neq*/false, JS_CONCOLIC_EQ_STRICT))
@@ -36462,8 +36470,6 @@ static int js_typeof_is_concolic(JSContext *ctx, JSValue *sp, JSAtom expected)
 static inline void js_get_value_base(JSContext *ctx, JSValueConst base)
 {
     if (unlikely(js_value_is_concolic(base))) {
-        DCHECK(g_concolic.get_value_base != NULL,
-               "an unknown base reached a property read under a host with no GetValue base hook");
         g_concolic.get_value_base(ctx, base);
     }
 }
@@ -36480,7 +36486,6 @@ static int js_nullish_is_concolic(JSContext *ctx, JSValue *sp, JSValue y, JSConc
 
     if (!(g_concolic.is(sp[-1])))
         return 0;
-    DCHECK(g_concolic.cmp != NULL, "an unknown reached a nullish test under a host with no comparison hook");
     pair[0] = js_dup(sp[-1]);
     pair[1] = y;
     if (!g_concolic.cmp(ctx, pair + 2, /*is_neq*/false, op))
@@ -42533,10 +42538,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            "10.4.5.18 TypedArraySetElement's unknown-input arm was entered with a target that "
                            "is not a TypedArray — AL_TA_PRIM is set only from the site that already resolved "
                            "one, so the phase and the target have parted company");
-                    DCHECK(g_concolic.example != NULL,
-                           "the concolic value class is installed without JSConcolicHooks.example, so an "
-                           "unknown stored into a data block could not be asked for the one projection that "
-                           "may legitimately go in it — the two come from one table set by one call");
                     ta = tap->u.typed_array;
                     abuf = ta->buffer->u.array_buffer;
                     width = 1 << typed_array_size_log2(tap->class_id);
@@ -50562,7 +50563,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    fork. The arm behind the guard is not explored badly, it does not exist — §Solver-half's
                    "where the domain permits both outcomes BOTH arms run" is false of the commonest gate shape
                    a real bundle writes, and nothing crashes to say so. */
-                if (g_concolic.to_bool) {
+                {
                     JSValue t = g_concolic.to_bool(ctx, op1, 1);
                     if (!JS_IsUninitialized(t)) {
                         JS_FreeValue(ctx, op1);
@@ -51190,14 +51191,14 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    atom. The operator answers instead — the value is a concolic derived from the base and the
                    key's source, so a gate on it still forks and a sink still solves for the key. Example-free
                    on purpose: which property was meant is exactly what is not known, and @H never invents. */
-                if (g_concolic.key_read && g_concolic.is(sp[-1])) {
+                if (g_concolic.is(sp[-1])) {
                     /* A WRITE THROUGH THIS SAME SOURCE WINS. ToPropertyKey maps an unknown key to its shape's
                        slot, so `o[x] = 1; o[x]` must read back 1 rather than "unknown" — the read is the only
                        operator that could disagree with the others, and it does not. */
                     JSValue kv = JS_UNINITIALIZED;
                     /* Only an Object stores: a write through a primitive base reaches its ToObject wrapper,
                        which nothing keeps, so a primitive leaves no slot to read back. */
-                    if (g_concolic.key_name && JS_VALUE_GET_TAG(sp[-2]) == JS_TAG_OBJECT) {
+                    if (JS_VALUE_GET_TAG(sp[-2]) == JS_TAG_OBJECT) {
                         JSValue nm = g_concolic.key_name(ctx, sp[-1]);
                         if (!JS_IsUninitialized(nm)) {
                             JSAtom na = JS_ValueToAtom(ctx, nm);
@@ -51232,7 +51233,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     /* An Object base and a key stating a String domain: OrdinaryGet over the chain asked of the
                        domain, on the keyed entry, since a link's answer may be a walk that rests. */
                     if (JS_IsUninitialized(kv) && JS_VALUE_GET_TAG(sp[-2]) == JS_TAG_OBJECT
-                        && g_concolic.key_domain_stated && g_concolic.key_domain_stated(ctx, sp[-1])) {
+                        && g_concolic.key_domain_stated(ctx, sp[-1])) {
                         JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                         if (unlikely(!ok)) { JS_ThrowOutOfMemory(ctx); goto exception; }
                         ok->pop = 2; ok->push = 1; ok->op = (uint8_t)opcode;
@@ -52533,8 +52534,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    the class's [[HasProperty]] answers true for every key, which would delete the absent arm. */
                 JSValue hb;
 
-                DCHECK(g_concolic.has_property != NULL,
-                       "a host installed the concolic value class without JSConcolicHooks.has_property");
                 hb = g_concolic.has_property(ctx, sp[-1], sp[-2]);
                 DCHECK(!JS_IsUninitialized(hb), "the `in` hook declined an operand `is` answered unknown for");
                 if (JS_IsException(hb)) goto exception;
@@ -52597,7 +52596,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JSAtom atom;
 
                 op1 = sp[-1];
-                if (g_concolic.type_of) {
+                {
                     JSValue t = g_concolic.type_of(ctx, op1);
                     if (!JS_IsUninitialized(t)) {
                         JS_FreeValue(ctx, op1);
@@ -77577,8 +77576,7 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
            a declaration reaches nothing, and never on the nest, because the fact is about one body's text.
            IT IS AN OR AND NOT A STORE: one body can resolve several entry names and several occurrences of one,
            and the bit answers whether ANY of them is there. */
-        if (g_concolic.global_named &&
-            g_concolic.global_named(JS_AtomGetStr(ctx, gn_buf, sizeof(gn_buf), var_name),
+        if (g_concolic.global_named(JS_AtomGetStr(ctx, gn_buf, sizeof(gn_buf), var_name),
                                     op == OP_scope_get_var_undef)) {
             s->spells_net_entry = true;
             js_net_spell_add(ctx, s, var_name, JS_ATOM_NULL);
@@ -77595,7 +77593,7 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
            guard is invisible. That is not a gap in this report — a property of an object never throws for a
            missing key, so §13.5.3 step 2.a has nothing to patch and the two spellings are the same bytecode.
            A host must therefore not sum this into the population it keeps for uses. */
-        if (next_field != JS_ATOM_NULL && g_concolic.global_member_named) {
+        if (next_field != JS_ATOM_NULL) {
             char mn_buf[ATOM_GET_STR_BUF_SIZE];
             /* INTO THE SAME BIT AS THE FREE-IDENTIFIER REPORT, because `globalThis.fetch(u)` and `fetch(u)` are
                one fact about this body — its source reaches a network door — and the walk below orders on the
@@ -93086,7 +93084,6 @@ static bool js_ta_first_arg_count_unknown(JSContext *ctx, JSValueConst v)
     bool r = false;
 
     if (!js_value_is_concolic(v)) return false;
-    DCHECK(g_concolic.type_of != NULL, "an unknown reached the TypedArray constructor with no type_of hook");
     t = g_concolic.type_of(ctx, v);
     if (JS_IsString(t) && (str = JS_ToCString(ctx, t)) != NULL) {
         r = strcmp(str, "object") && strcmp(str, "function");
@@ -93230,7 +93227,7 @@ static JSValue js_array_isArray(JSContext *ctx, JSValueConst this_val,
     int ret;
 
     /* 23.1.2.2 step 1 over an unknown argument: IsArray is the solver's question (g_concolic.is_array). */
-    if (g_concolic.is_array) {
+    {
         JSValue u = g_concolic.is_array(ctx, argv[0]);
         if (!JS_IsUninitialized(u)) return u;
     }
@@ -94644,7 +94641,6 @@ static int js_ta_search_unknown_from(JSContext *ctx, JSTACoerce *s)
             /* step 6's loop meets the occurrence when k is at or before it in the loop's direction */
             sp[0] = last ? js_int64(s->match) : js_dup(s->from_k);
             sp[1] = last ? js_dup(s->from_k) : js_int64(s->match);
-            DCHECK(g_concolic.rel != NULL, "a fromIndex is unknown with no JSConcolicHooks.rel installed");
             CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined a search's start test");
             s->pred = sp[0];
         }
@@ -95099,7 +95095,6 @@ static int js_array_concat_spreadable(JSContext *ctx, JSArrayConcat *s, JSValueC
         if (js_value_is_concolic(s->spread)) {
             JSValue pair[2] = { js_dup(s->spread), JS_UNDEFINED };
 
-            DCHECK(g_concolic.cmp != NULL, "an unknown @@isConcatSpreadable under a host with no comparison hook");
             if (!g_concolic.cmp(ctx, pair + 2, true, JS_CONCOLIC_EQ_STRICT))
                 DFAIL("the concolic comparison hook declined an unknown @@isConcatSpreadable");
             s->test = pair[0];
@@ -95121,7 +95116,7 @@ static int js_array_concat_spreadable(JSContext *ctx, JSArrayConcat *s, JSValueC
         if (r) return r;
     } else {
         DCHECK(s->spread_ph == ACAT_SP_ISARRAY, "IsConcatSpreadable resumed at a step it does not have");
-        if (JS_IsUninitialized(s->test) && g_concolic.is_array)
+        if (JS_IsUninitialized(s->test))
             s->test = g_concolic.is_array(ctx, e);
         if (!JS_IsUninitialized(s->test)) {
             r = js_array_concat_ask(ctx, s, cb_result, ACAT_ISARRAY_OP, &b);
@@ -96186,7 +96181,6 @@ static int js_array_search_step(JSContext *ctx, void *st, JSValue cb_result, JSV
                 if (JS_IsUninitialized(s->test)) {
                     JSValue pair[2] = { js_dup(target), js_dup(s->val) };
 
-                    DCHECK(g_concolic.cmp != NULL, "an unknown search operand under a host with no comparison hook");
                     if (!g_concolic.cmp(ctx, pair + 2, false, eq == JS_EQ_STRICT ? JS_CONCOLIC_EQ_STRICT
                                                                                   : JS_CONCOLIC_EQ_SAME_VALUE_ZERO))
                         DFAIL("the concolic comparison hook declined an unknown search operand");
@@ -100710,8 +100704,6 @@ static void js_concolic_call_unit_map(JSContext *ctx, JSConcolicCall *s)
     uint32_t one[2], *pairs = one;
     int all, n, m, unicode = 0;
 
-    DCHECK(g_concolic.string_unit_map != NULL, "a host installed the concolic call machine without the unit-map "
-                                               "hook, so a replace over an unknown would state no facet");
     if (fp->u.cfunc.cproto != JS_CFUNC_step ||
         (fp->u.cfunc.magic != STEPDEF_STR_REPLACE && fp->u.cfunc.magic != STEPDEF_STR_REPLACE_ALL) ||
         s->hdr.argc < 2 || !g_concolic.is(s->hdr.this_val))
@@ -100764,8 +100756,6 @@ static int js_concolic_call_prefix_begin(JSContext *ctx, JSConcolicCall *s)
     JSString *p;
     int wide = 0, alloc, r;
 
-    DCHECK(g_concolic.string_domain != NULL && g_concolic.string_keep_prefix != NULL,
-           "a host installed the concolic call machine without the String domain hooks a replace's matcher reads");
     if (fp->u.cfunc.cproto != JS_CFUNC_step ||
         (fp->u.cfunc.magic != STEPDEF_STR_REPLACE && fp->u.cfunc.magic != STEPDEF_STR_REPLACE_ALL) ||
         s->hdr.argc < 1 || !g_concolic.is(s->hdr.this_val))
@@ -100890,9 +100880,6 @@ static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JS
     JSConcolicCall *s = st;
     int i, n = s->hdr.argc, arm, r;
 
-    DCHECK(g_concolic.call != NULL && g_concolic.example != NULL && g_concolic.derived != NULL,
-           "an unknown was called under a host that installed `.is` without `.call`, `.example` and `.derived` "
-           "— the machine has no way to mint the call's result or a replacer's arguments");
     if (s->hdr.stage == CCALL_ENTRY) {
         JSValue fex = g_concolic.example(ctx, s->hdr.func_obj);
         bool runs = JS_VALUE_GET_TAG(fex) == JS_TAG_OBJECT
@@ -103136,7 +103123,7 @@ static JSValue sort_order_unknown(JSContext *ctx, JSValue a, JSValue b, OPCodeEn
 {
     JSValue sp[2] = { a, b };
 
-    DCHECK(g_concolic.rel != NULL && (g_concolic.is(a) || g_concolic.is(b)),
+    DCHECK((g_concolic.is(a) || g_concolic.is(b)),
            "a sort's order question over unknown input has no unknown operand, or no relational hook to ask");
     if (!g_concolic.rel(ctx, sp + 2, op)) {
         JS_FreeValue(ctx, a);
@@ -103162,7 +103149,6 @@ static JSValue sort_unknown_string(JSContext *ctx, JSStepHdr *h)
 {
     JSValue u = sort_take_unknown(h), r;
 
-    DCHECK(g_concolic.to_str != NULL, "a sort met an unknown element under a host with no ToString hook");
     r = g_concolic.to_str(ctx, u);
     DCHECK(!JS_IsUninitialized(r), "the ToString hook declined the operand the coercion reported unknown");
     JS_FreeValue(ctx, u);
@@ -103754,7 +103740,7 @@ static int js_array_iter_next_step(JSContext *ctx, void *st, JSValue cb_result, 
 
                 sp[0] = js_int64(s->idx);
                 sp[1] = js_dup(ap->u.typed_array->length_unknown);
-                CHECK(g_concolic.rel && g_concolic.rel(ctx, sp + 2, OP_lt),
+                CHECK(g_concolic.rel(ctx, sp + 2, OP_lt),
                       "the relation hook declined a typed array's unknown length");
                 s->pred = sp[0];
             }
@@ -105343,7 +105329,7 @@ static int js_num_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        answers, because the ToNumber boundary owes C a real number. `new Number(x)` is a wrapper and is not this
        case. The derived value IS the number-hint coercion, so .arith's identity operator is what names it. */
     if (!s->coerced && s->hdr.argc > 0 && JS_IsUndefined(nt) &&
-        g_concolic.arith && g_concolic.is(arg)) {
+        g_concolic.is(arg)) {
         JSValue slot[1];
         slot[0] = JS_DupValue(ctx, arg);
         if (g_concolic.arith(ctx, slot + 1, JS_CARITH_PLUS, 1)) {
@@ -105763,10 +105749,6 @@ static JSValue js_boolean_ctor_body(JSContext *ctx, JSValueConst obj_, int argc,
                RELEASE build, where a DCHECK is compiled out: the choice there is between a named abort and a
                segfault, and the state it would segfault on is one where every predicate behind this call has
                already been answered concretely. That is the data-integrity case, so it is fatal in both. */
-            CHECK(g_concolic.to_bool != NULL,
-                  "§7.1.2 ToBoolean's own hook is absent while unknown-input value semantics are installed — "
-                  "the hook set is one struct and a plain Boolean(x) has no other answer, so proceeding would "
-                  "decide every gate behind it concretely");
             return g_concolic.to_bool(ctx, argv[0], 0);   /* step 2: the call form IS the primitive */
         }
         /* RESIDUAL — THE WRAPPER IS DERIVED, NOT BUILT, so `new Boolean(unknown)` is an unknown and not a
@@ -105960,9 +105942,6 @@ static JSValue js_str_ctor_unknown(JSContext *ctx, JSValueConst nt, JSValueConst
     if (!(g_concolic.is(v)))
         return JS_UNINITIALIZED;
     if (JS_IsUndefined(nt)) {
-        DCHECK(g_concolic.to_str != NULL,
-               "22.1.1.1's own coercion hook is absent while unknown-input value semantics are installed — the "
-               "hook set is one struct and a plain String(x) has no other answer");
         c = g_concolic.to_str(ctx, v);
     } else {
         c = js_concolic_derive(ctx, v, "new String", JS_UNDEFINED);
@@ -107210,7 +107189,6 @@ static int js_loc_canonicalize_locale_list_string(JSContext *ctx, JSValueConst l
    ToClampedIndex is `length`, so step 7's from ≥ to returns the empty String. JS_UNINITIALIZED otherwise. */
 static JSValue js_str_slice_over_unknown(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
-    DCHECK(g_concolic.string_length_reached != NULL, "a host installed the concolic hooks without the length one");
     if (argc < 1 || (argc > 1 && !JS_IsUndefined(argv[1])))
         return JS_UNINITIALIZED;
     if (!g_concolic.string_length_reached(ctx, argv[0], this_val))
@@ -107710,7 +107688,7 @@ static int js_str_concat_join(JSContext *ctx, JSStrConcat *s, JSValue val, bool 
 {
     JSValue pair[2], str;
 
-    if (g_concolic.add && g_concolic.is(val)) {
+    if (g_concolic.is(val)) {
         if (first) { s->acc = val; return 0; }
         pair[0] = s->acc; pair[1] = val;
         if (!g_concolic.add(ctx, pair + 2, JS_CONCOLIC_ADD_CONCAT))
@@ -107723,7 +107701,7 @@ static int js_str_concat_join(JSContext *ctx, JSStrConcat *s, JSValue val, bool 
     JS_FreeValue(ctx, val);
     if (JS_IsException(str)) return -1;
     if (first) { s->acc = str; return 0; }
-    if (g_concolic.add && g_concolic.is(s->acc)) {
+    if (g_concolic.is(s->acc)) {
         /* the accumulator went concolic earlier: every later piece joins it the same way. */
         pair[0] = s->acc; pair[1] = str;
         if (!g_concolic.add(ctx, pair + 2, JS_CONCOLIC_ADD_CONCAT))
@@ -114070,7 +114048,7 @@ static int js_json_parse_vstep(JSContext *ctx, void *st, JSValue cb_result, JSVa
                    exactly that (it takes the example only `if (JS_IsString(example))`). Declaring a completion
                    from a coercion the arm would not perform would make the declaration and the arm two answers
                    to one question. */
-                JSValue example = g_concolic.example ? g_concolic.example(ctx, text) : JS_UNDEFINED;
+                JSValue example = g_concolic.example(ctx, text);
                 if (JS_IsString(example)) {
                     s->text_str = example;
                     s->probe_phase = PROBE_PH_PARSE;
@@ -114144,7 +114122,7 @@ static int js_json_parse_vstep(JSContext *ctx, void *st, JSValue cb_result, JSVa
         }
         if (g_concolic.is(text)) {
             int arm, real = JS_OUTCOME_REAL_UNSTATED;
-            if (!json_text_may_start_with(g_concolic.lead ? g_concolic.lead(text) : 0)) {
+            if (!json_text_may_start_with(g_concolic.lead(text))) {
                 /* THE PARSE ARM IS INFEASIBLE and is pruned rather than forked. The component that owns this
                    source declares what the browser's delivery guarantees — a fragment is empty or begins with
                    `#` — and neither an empty text nor one beginning with `#` is a JSON text, so §25.5.2.1
@@ -114205,7 +114183,7 @@ static int js_json_parse_vstep(JSContext *ctx, void *st, JSValue cb_result, JSVa
                sibling and a memcpy'd `text` would be freed twice. HOW ITS ABSENCE SHOWS: the parse time for an
                unknown text's example is exactly double the parse time for the same bytes handed to JSON.parse
                concretely — measurable on a document whose unknown text carries a large learned reply body. */
-            JSValue example = g_concolic.example ? g_concolic.example(ctx, text) : JS_UNDEFINED;
+            JSValue example = g_concolic.example(ctx, text);
             s->unknown = js_dup(text);
             if (JS_IsString(example)) {
                 s->text_str = example;
@@ -114319,13 +114297,8 @@ static JSValue js_json_parse_vfini(JSContext *ctx, void *st, bool take_result)
            read out of `location.hash`, so a branch on it must still fork and a sink fed from it must still
            solve for that source. Not a bare unknown either — that would throw away the one concrete thing the
            engine ran the real operation to get. */
-        DCHECK(g_concolic.builtin != NULL,
-               "JSON.parse took its unknown-text arm in a host with no derivation hook — the completion has "
-               "nothing to carry the source's identity, so the value would leave here as a bare parse result");
         if (take_result) {
             /* `early` is set exactly when no reviver is callable, and then step 4 returns ParseJSON's value. */
-            DCHECK(g_concolic.json_parse != NULL,
-                   "JSON.parse took its unknown-text arm in a host that cannot state a ParseJSON value");
             r = s->early ? g_concolic.json_parse(ctx, unknown, r) : js_concolic_derive(ctx, unknown, "JSON.parse", r);
         }
         JS_FreeValue(ctx, unknown);
@@ -122321,17 +122294,10 @@ static int js_promise_resolvefn_step(JSContext *ctx, void *st, JSValue cb_result
          * stage needs no re-entry shape of its own to reason about. */
         if (js_value_is_concolic(resolution)) {
             JSValue ex;
-            DCHECK(g_concolic.example != NULL,
-                   "a host installed the concolic value class without JSConcolicHooks.example — the two are "
-                   "one table set by one JS_SetConcolicHooks call, so a resolution that IS unknown and can be "
-                   "asked for nothing would take 27.5.1.3 step 2.f's read on the stand-in and adopt the "
-                   "promise into a `then` this engine cannot call");
             ex = g_concolic.example(ctx, resolution);
             if (JS_IsUndefined(ex)) {
                 /* A JSON value's `then` is a JSON value or its type's chain's, so the host can often state 2.i's
                    IsCallable false for every reply; then nothing is undetermined and step 2.i fulfils. */
-                DCHECK(g_concolic.member_never_callable != NULL,
-                       "a host installed the concolic value class without JSConcolicHooks.member_never_callable");
                 if (g_concolic.member_never_callable(ctx, resolution, JS_ATOM_then))
                     return js_promise_resolvefn_settle(ctx, s, resolution, false);
                 m->hdr.stage = PRF_THENABLE;
@@ -122478,11 +122444,6 @@ static int js_promise_resolvefn_step(JSContext *ctx, void *st, JSValue cb_result
                    "pending world returns above, so the only arms that reach here are the two that CALL a "
                    "capability, and a third arriving with them would settle this promise under the other "
                    "one's name");
-            DCHECK(g_concolic.builtin != NULL,
-                   "a host installed the concolic value class without JSConcolicHooks.builtin — the two "
-                   "are one table set by one JS_SetConcolicHooks call, so §27.5.2.2's adopt arm could not "
-                   "derive the value its unknown thenable settles with and would settle this promise with "
-                   "a value that is not one");
             v = js_concolic_derive(ctx, resolution,
                                    adopt == PRF_ADOPT_REJECT ? "thenable.reject" : "thenable.resolve",
                                    JS_UNDEFINED);
@@ -125525,7 +125486,6 @@ static void js_uri_encode_class(JSContext *ctx, JSValueConst r, int isComponent)
     uint32_t pairs[2 * 64];
     int n = 0, c;
 
-    DCHECK(g_concolic.string_class != NULL, "a host installed the concolic hooks without the String class one");
     for (c = 0; c < 0x80; c++) {
         if (!isURIUnescaped(c, isComponent) && c != '%') continue;
         if (n > 0 && pairs[2 * n - 1] == (uint32_t)c - 1) { pairs[2 * n - 1] = (uint32_t)c; continue; }
@@ -128003,9 +127963,6 @@ static JSValue js_ab_image_element(JSContext *ctx, JSObject *p, uint32_t idx, co
     JSValue ex = JS_UNDEFINED, ops[3], r;
     char op[96];
 
-    DCHECK(g_concolic.derived != NULL,
-           "an IMAGE span exists with no JSConcolicHooks.derived installed — JS_NewUint8ArrayImage records one "
-           "only over an unknown, which only an installed concolic class can mint");
     if (!js_get_fast_array_element_concrete(ctx, p, idx, &ex))
         DFAIL("an in-range typed-array element had no concrete value to serve as an IMAGE element's example");
     ops[0] = s->unknown;
@@ -128064,7 +128021,7 @@ static bool js_ab_span_get(JSContext *ctx, JSObject *p, uint32_t idx, JSValue *p
                `obj[x]` with an unknown x — "a lookup that names no particular slot" — and this is that lookup
                with the buffer as the base. Reaching for it rather than minting something new is why an unknown
                offset needs no new value-side mechanism at all. */
-            if (g_concolic.key_read) {
+            {
                 JSValue kv = g_concolic.key_read(ctx, JS_MKPTR(JS_TAG_OBJECT, bufobj), s->index);
 
                 if (!JS_IsUninitialized(kv)) {
@@ -128493,7 +128450,6 @@ static JSValue js_ab_length_derive(JSContext *ctx, const JSArrayBuffer *abuf, co
 
     DCHECK(!JS_IsUninitialized(abuf->length_unknown) && !abuf->detached,
            "a length was derived for a buffer whose length is stated");
-    DCHECK(g_concolic.derived != NULL, "a buffer's length is an unknown's with no JSConcolicHooks.derived installed");
     ex = js_concolic_operand(ctx, abuf->length_unknown);
     held = js_concolic_codec_operand(abuf->length_unknown, ex);
     JS_FreeValue(ctx, ex);
@@ -129550,13 +129506,11 @@ static int js_ab_unknown_pieces(JSContext *ctx, const JSArrayBuffer *abuf, JSObj
             u->example = true;
         } else if (s->kind == JS_AB_SPAN_AT) {
             u->unknown = js_dup(s->unknown);
-            u->example = g_concolic.example_held && g_concolic.example_held(s->unknown);
+            u->example = g_concolic.example_held(s->unknown);
         } else if (!JS_IsUninitialized(s->unknown)) {
             u->unknown = js_dup(s->unknown);
             u->example = false;
         } else {
-            DCHECK(g_concolic.key_read != NULL, "an ANY span over a concrete value exists with no "
-                                                "JSConcolicHooks.key_read to derive the element from");
             u->unknown = g_concolic.key_read(ctx, JS_MKPTR(JS_TAG_OBJECT, bufobj), s->index);
             DCHECK(!JS_IsUninitialized(u->unknown), "an ANY span's unknown offset derived no unknown element");
             u->example = false;
@@ -130761,7 +130715,6 @@ static int js_ta_slice_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 JS_ToFloat64(ctx, &b, sp[1]);
                 s->pred = js_bool(a < b);
             } else {
-                DCHECK(g_concolic.rel != NULL, "a slice's count is unknown with no JSConcolicHooks.rel installed");
                 CHECK(g_concolic.rel(ctx, sp + 2, OP_lt), "the relation hook declined a slice's count test");
                 s->pred = sp[0];
             }
@@ -131077,7 +131030,6 @@ static int js_ta_set_from_ta_unknown(JSContext *ctx, JSTAIdx *s, JSValue cb_resu
             /* both lengths stated (an offset is what is unknown): the test is decided */
             s->pred = js_bool((double)sp->u.array.count + (double)s->idx <= (double)p->u.array.count);
         } else {
-            DCHECK(g_concolic.rel != NULL, "a view's length is unknown with no JSConcolicHooks.rel installed");
             CHECK(g_concolic.rel(ctx, sv + 2, OP_lte), "the relation hook declined set's range test");
             s->pred = sv[0];
         }
@@ -131194,7 +131146,6 @@ static int js_ta_idx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
 
                 sv[0] = js_int32(0);
                 sv[1] = js_dup(s->offset_v);
-                DCHECK(g_concolic.rel != NULL, "an offset is unknown with no JSConcolicHooks.rel installed");
                 CHECK(g_concolic.rel(ctx, sv + 2, OP_lte), "the relation hook declined set's targetOffset sign test");
                 s->pred = sv[0];
             }
@@ -131255,7 +131206,6 @@ static int js_ta_idx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
                                          "23.2.3.26.1 step 6 (sourceLength + targetOffset)");
                 sv[1] = JS_IsUninitialized(tp->u.typed_array->length_unknown) ? js_int64(s->len)
                       : js_dup(tp->u.typed_array->length_unknown);
-                DCHECK(g_concolic.rel != NULL, "an offset is unknown with no JSConcolicHooks.rel installed");
                 CHECK(g_concolic.rel(ctx, sv + 2, OP_lte), "the relation hook declined set's range test");
                 s->pred = sv[0];
             }
@@ -132070,7 +132020,6 @@ static JSValue js_ta_ctor_offset_test(JSContext *ctx, JSTACtor *s, int size_log2
         sp[1] = js_int32(0);
         break;
     }
-    DCHECK(g_concolic.rel != NULL, "an offset is unknown with no JSConcolicHooks.rel installed");
     CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined an unknown byteOffset");
     return sp[0];
 }
@@ -132243,7 +132192,6 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
 
                 sp[0] = s->count_fork == 0 ? js_int32(0) : js_dup(s->len_unknown);
                 sp[1] = s->count_fork == 0 ? js_dup(s->len_unknown) : js_float64(MAX_SAFE_INTEGER);
-                DCHECK(g_concolic.rel != NULL, "an element count is unknown with no JSConcolicHooks.rel installed");
                 CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined an unknown element count");
                 s->count_pred = sp[0];
             }
@@ -132357,7 +132305,6 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
                 sp[1] = JS_IsUninitialized(abuf->length_unknown) ? JS_NewInt64(ctx, abuf->byte_length)
                       : js_ab_length_derive(ctx, abuf, "25.1.6.1 get ArrayBuffer.prototype.byteLength", 0, 0,
                                             abuf->byte_length);
-                DCHECK(g_concolic.rel != NULL, "a buffer's length is unknown with no JSConcolicHooks.rel installed");
                 CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined a view's unknown range");
                 s->range_pred = sp[0];
             }
@@ -132962,9 +132909,6 @@ static JSValue js_dataview_span_value(JSContext *ctx, JSObject *bufobj, uint32_t
     n = js_ab_unknown_pieces(ctx, bufobj->u.array_buffer, bufobj, start, start + (uint32_t)size, &pc);
     if (n == 0)
         return real;
-    DCHECK(g_concolic.derived != NULL,
-           "a buffer holds a span over unknown input with no JSConcolicHooks.derived installed — only an installed "
-           "concolic class mints the unknowns a span records");
     ops = js_malloc(ctx, sizeof(JSValue) * (size_t)(4 * n + 1));
     CHECK(ops != NULL, "OOM deriving a DataView read over unknown bytes — dropping it would hand the page the "
                        "example as a concrete number");
@@ -133140,7 +133084,6 @@ static int js_dv_get_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         if (JS_IsUninitialized(s->pred)) {
             JSValue sp[2];
 
-            DCHECK(g_concolic.rel != NULL, "a view's length is unknown with no JSConcolicHooks.rel installed");
             sp[0] = js_float64(s->index + size);
             sp[1] = js_dup(ta->length_unknown);
             CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined a view's unknown length");
