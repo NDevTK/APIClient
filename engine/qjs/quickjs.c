@@ -56699,7 +56699,20 @@ void JS_FlowReachEnd(JSFlowReach *out)
 
 /* JS_FlowGraph* — see quickjs.h. Host memory throughout, spelled `(free)`/`(realloc)` for the reason the reach
    census gives: a write runs where a runtime allocation could ask for a sale. */
-enum { FG_PLAIN = 1, FG_ARRAY = 2, FG_ERROR = 3, FG_RECORD = 4, FG_CLOSURE = 5 };
+enum { FG_PLAIN = 1, FG_ARRAY = 2, FG_ERROR = 3, FG_RECORD = 4, FG_CLOSURE = 5, FG_BRAND = 6 };
+/* Whether `id` is a class whose objects are a brand over ordinary properties: registered by the host, with no
+   finalizer, mark, record, call or exotic methods. Host classes only, because a predefined class keeps state in
+   the object's union whether or not it declares a hook, and a host class's only state outside its properties is
+   the opaque, which the writer asks of each object. */
+static bool fg_class_is_brand(JSRuntime *rt, JSClassID id)
+{
+    const JSClass *c;
+
+    if (id < JS_CLASS_INIT_COUNT || id >= rt->class_count) return false;
+    c = &rt->class_array[id];
+    return c->class_id == id && !c->finalizer && !c->gc_mark && !c->record && !c->call && !c->exotic &&
+           !c->is_realm_value_slot;
+}
 static const char *js_ab_codec_intern(JSRuntime *rt, const uint8_t *name, uint32_t len);
 /* A parked graph this writer cannot write whole would resume as a different heap, so the release build stops
    too; the dev build's DCHECK above each use names what to build. */
@@ -56908,7 +56921,8 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
             uint8_t kind = p->class_id == JS_CLASS_OBJECT ? FG_PLAIN : p->class_id == JS_CLASS_ARRAY ? FG_ARRAY
                          : p->class_id == JS_CLASS_ERROR ? FG_ERROR
                          : js_class_has_bytecode(p->class_id) ? FG_CLOSURE
-                         : w->ctx->rt->class_array[p->class_id].record ? FG_RECORD : 0;
+                         : w->ctx->rt->class_array[p->class_id].record ? FG_RECORD
+                         : fg_class_is_brand(w->ctx->rt, p->class_id) && p->u.opaque == NULL ? FG_BRAND : 0;
             if (kind == 0 && w->survey) { fg_gap(w, out, FG_GAP_CLASS, p->class_id); return; }
             if (kind == 0) {
                 DCHECKF(false, "flow graph: a private object of class %d is on a parked graph and has no writer — give "
@@ -57135,8 +57149,9 @@ static void fg_closure(FGWriter *w, FGBuf *out, JSObject *p)
    writes first whether its elements are dense ('F': stored apart, written as a count and the values) or ordinary
    properties ('S'), then its length's attributes and value, then the properties after the length slot. An Error
    follows its properties with its uncatchable flag and its stack slot, and an object of a class with a record
-   layout writes its record ahead of them, so a rebuilt one holds it before its exotic methods are asked. A weak
-   key or target has no writer yet. */
+   layout writes its record ahead of them, so a rebuilt one holds it before its exotic methods are asked. A
+   branded host object (fg_class_is_brand) is its class and its properties. A weak key or target has no writer
+   yet. */
 static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
 {
     JSObject *p = w->order[id];
@@ -57193,8 +57208,8 @@ static JSFlowGraph *fg_write(JSContext *ctx, const JSValueConst *roots, int n, u
     g->n_objs = w.n_order;
     fg_u32(&g->bytes, w.n_order);
     if (w.n_order) fg_put(&g->bytes, w.kinds, w.n_order);
-    for (uint32_t i = 0; i < w.n_order; i++)   /* a record object's class, which its shell is created with */
-        if (w.kinds[i] == FG_RECORD || w.kinds[i] == FG_CLOSURE) fg_u32(&g->bytes, w.order[i]->class_id);
+    for (uint32_t i = 0; i < w.n_order; i++)   /* the class of each object whose kind does not fix it */
+        if (w.kinds[i] >= FG_RECORD) fg_u32(&g->bytes, w.order[i]->class_id);
     fg_u32(&g->bytes, (uint32_t)n);
     if (rbuf.len) fg_put(&g->bytes, rbuf.b, rbuf.len);
     if (bbuf.len) fg_put(&g->bytes, bbuf.b, bbuf.len);
@@ -57549,11 +57564,13 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
     for (uint32_t i = 0; i < r.n_objs; i++) {
         JSClassID cid = kinds[i] == FG_ERROR ? JS_CLASS_ERROR : JS_CLASS_OBJECT;
 
-        if (kinds[i] == FG_RECORD || kinds[i] == FG_CLOSURE) {
+        CHECK(kinds[i] >= FG_PLAIN && kinds[i] <= FG_BRAND, "flow graph: an object kind this reader does not know");
+        if (kinds[i] >= FG_RECORD) {
             cid = fg_r32(&r);
             CHECK(cid < ctx->rt->class_count &&
-                      (kinds[i] == FG_RECORD ? ctx->rt->class_array[cid].record != NULL : js_class_has_bytecode(cid)),
-                  "flow graph: a record or closure object names a class of another kind in this runtime");
+                      (kinds[i] == FG_RECORD ? ctx->rt->class_array[cid].record != NULL
+                       : kinds[i] == FG_CLOSURE ? js_class_has_bytecode(cid) : fg_class_is_brand(ctx->rt, cid)),
+                  "flow graph: a record, closure or branded object names a class of another kind in this runtime");
         }
         r.objs[i] = kinds[i] == FG_ARRAY ? JS_NewArray(ctx) : JS_NewObjectProtoClass(ctx, JS_NULL, cid);
         if (kinds[i] == FG_CLOSURE && !JS_IsException(r.objs[i])) {
@@ -57563,9 +57580,6 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
             fp->u.func.home_object = NULL;
             fp->u.func.var_refs = NULL;
         }
-        CHECK(kinds[i] == FG_ARRAY || kinds[i] == FG_PLAIN || kinds[i] == FG_ERROR || kinds[i] == FG_RECORD ||
-                  kinds[i] == FG_CLOSURE,
-              "flow graph: an object kind this reader does not know");
         CHECK(!JS_IsException(r.objs[i]), "flow graph: OOM rebuilding an object");
     }
     n = fg_r32(&r);
