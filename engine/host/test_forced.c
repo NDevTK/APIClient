@@ -24053,6 +24053,9 @@ TF_UNIT void probes_scrollrest(const char *js, Probe *tab, int *n) {
              "for-in key, or clones: its scroll position is not held where the page cannot reach");
     fold_row(&lk_tt, &lk_why, param_value_is(js, "/api/srleak", "f", "0.0.0.0.0.DataCloneError.DataCloneError"),
              "a frozen scrolled element shows the page an own key, symbol or clone");
+    fold_row(&lk_tt, &lk_why, param_value_is(js, "/api/srleak", "p", "30"),
+             "CSSOM View §6: the scrollTop setter did not scroll the unfrozen box to 30, so its reads above saw "
+             "an element that holds no scroll position");
     fold_row(&lk_tt, &lk_why, param_value_is(js, "/api/srleak", "s", "10"),
              "CSSOM View §6: a frozen element's scrollTop setter did not scroll it to 10 — freezing the wrapper "
              "is the page's act on its own object and does not reach the element's scroll position");

@@ -2,8 +2,9 @@
    `overflow:auto` box below 20,000 one-pixel block boxes (test_forced.c's COLLREST_10000, twice, each `<i>` made
    a block). Both scrolling boxes' area walks and step 2.2's border box read are CSS 2.1 §9.4.1's walk over those
    boxes, which a resting drive must hold. Chrome scrolls the box to 160 and the window to 19,330, then fires
-   §13.2's `scroll` and `scrollend` at the box (neither bubbles) and at the document (both bubble). A scrolled
-   box, and a frozen one, show the page no own key, symbol or clone, and the frozen one still scrolls.
+   §13.2's `scroll` and `scrollend` at the box (neither bubbles) and at the document (both bubble). Two more
+   boxes, which hold no other engine state (no listener), are scrolled by `scrollTop`, one of them frozen first:
+   each shows the page no own key, symbol or clone, and the frozen one still scrolls.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_SCROLLREST_H
@@ -19,6 +20,8 @@ static const char HTML_SCROLLREST[] =
     "<div id=srT style=\"height:10px\"></div></div>"
     "<div id=srBox2 style=\"position:absolute;top:0;overflow:auto;width:20px;height:20px\">"
     "<div style=\"height:100px\"></div></div>"
+    "<div id=srBox3 style=\"position:absolute;top:0;overflow:auto;width:20px;height:20px\">"
+    "<div style=\"height:100px\"></div></div>"
     "<script>"
     "var srBox = document.getElementById('srBox'), srB = '', srD = '';"
     "function srF(e) { return (e.bubbles ? 1 : 0) + '' + (e.cancelable ? 1 : 0); }"
@@ -32,9 +35,10 @@ static const char HTML_SCROLLREST[] =
     "});"
     "document.getElementById('srT').scrollIntoView();"
     "fetch('/api/scrollintorest?t=' + srBox.scrollTop + '&y=' + window.scrollY);"
-    "var srBox2 = document.getElementById('srBox2');"
+    "var srBox2 = document.getElementById('srBox2'), srBox3 = document.getElementById('srBox3');"
     "Object.freeze(srBox2);"
     "srBox2.scrollTop = 10;"
+    "srBox3.scrollTop = 30;"
     "function srLeak(el) {"
     "  var own = 0, k, c, p;"
     "  for (k in el) if (Object.prototype.hasOwnProperty.call(el, k)) own++;"
@@ -44,7 +48,8 @@ static const char HTML_SCROLLREST[] =
     "         Reflect.ownKeys(new Proxy(el, {})).length + '.' +"
     "         Reflect.ownKeys(Object.getOwnPropertyDescriptors(el)).length + '.' + own + '.' + c + '.' + p;"
     "}"
-    "fetch('/api/srleak?k=' + srLeak(srBox) + '&f=' + srLeak(srBox2) + '&s=' + srBox2.scrollTop);"
+    "fetch('/api/srleak?k=' + srLeak(srBox3) + '&f=' + srLeak(srBox2) + '&s=' + srBox2.scrollTop +"
+    "      '&p=' + srBox3.scrollTop);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
