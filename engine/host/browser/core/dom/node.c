@@ -3371,8 +3371,7 @@ static JSValue js_node_root(JSContext *ctx, JSValueConst this_val, int argc, JSV
 }
 
 /* §4.4 normalize — remove empty Text nodes and merge adjacent ones. A page calls it before comparing or
-   serialising a tree it built piecemeal, and both halves go through the per-flow chokepoints so a forked arm
-   normalising its own subtree does not normalise its sibling's.
+   serialising a tree it built piecemeal; each removal is DOM §4.2.3's remove machine.
    A MACHINE with TWO cursors and two stages, because there are two loops and both are of the page's size: the
    walk over the subtree, and the absorption of a run of adjacent Text siblings into the first of them. A page
    that built its text a chunk at a time has runs as long as the number of chunks, so folding the inner loop
@@ -3388,19 +3387,20 @@ static JSValue js_node_root(JSContext *ctx, JSValueConst this_val, int argc, JSV
     X(NODE_NORM_EACH,   "DOM §4.4 normalize() (the iteration: this's first descendant exclusive Text node)") \
     X(NODE_NORM_AT,     "DOM §4.4 normalize() steps 1-2 (length; remove the node when it is zero)") \
     X(NODE_NORM_ABSORB, "DOM §4.4 normalize() steps 3-4 and 7 (absorb one contiguous exclusive Text sibling " \
-                        "and remove it)")
+                        "and remove it)") \
+    NODE_REMOVE_ALGO_STAGES(X, NODE_NORM_RM, "DOM §4.4 normalize() step 2 or step 7")
 enum { IDL_STEP_STAGE_BASE(NODE_NORM_STAGES) NODE_NORM_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const NODE_NORM_STEPS[] = { NODE_NORM_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     lxb_dom_node_t *root, *n, *next;
+    NodeRemoveState rm;   /* step 2's or step 7's removal in flight */
 } NodeNormState;
 
 static void node_norm_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    /* NOTHING OWNED — Lexbor nodes, which belong to the document. The MUTATIONS this makes are captured by the
-       chokepoints into the running flow's delta, which is what a forked arm's isolation is made of; the cursors
-       themselves are just positions. */
+    /* Nothing owned: the cursors are positions in the document's tree, and the remove machine's state names
+       nodes only. */
     (void)ctx; (void)st; (void)v;
 }
 
@@ -3413,6 +3413,8 @@ static int js_node_normalize(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
 
+    if (hdr->stage >= NODE_NORM_RM_RANGES && hdr->stage < NODE_NORM_RM_RANGES + NODE_REMOVE_PHASE_N)
+        return node_remove_run(ctx, hdr, &s->rm, NODE_NORM_RM_RANGES);
     if (hdr->stage == NODE_NORM_EACH) {
         s->root = node_of(hdr->this_val);
         if (!s->root) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
@@ -3426,9 +3428,11 @@ static int js_node_normalize(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         s->next = node_next_in(s->n, s->root);
         if (s->n->type != LXB_DOM_NODE_TYPE_TEXT) { s->n = s->next; return JS_STEP_YIELD; }
         cd = lxb_dom_interface_character_data(s->n);
-        if (cd->data.length == 0) {
-            dom_cow_remove_child(s->n);
+        if (cd->data.length == 0) {                                          /* STEP 2 */
+            lxb_dom_node_t *empty = s->n;
+
             s->n = s->next;
+            node_remove_start(hdr, &s->rm, empty, /*suppress_observers*/ false, NODE_NORM_RM_RANGES, NODE_NORM_AT);
             return JS_STEP_YIELD;
         }
         hdr->stage = NODE_NORM_ABSORB;
@@ -3459,13 +3463,12 @@ static int js_node_normalize(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             uint32_t before = node_length(s->n);
             dom_cow_set_text(s->n, buf, len);
             range_normalize_absorb_steps(ctx, s->n, sib, before);
-            /* §4.10 replace data's last step, for the replace data §4.4 step 4 writes out here. The removal
-               below fires it a second time through the chokepoint, which costs a recomputation and cannot
-               change an answer — see node.h on why every registrant of this family is idempotent. */
+            /* §4.10 replace data's last step, for the replace data §4.4 step 4 writes out here; the removal's own
+               step 17 runs the children changed steps again, which every registrant answers idempotently. */
             node_children_changed(ctx, s->n->parent);
         }
-        dom_cow_remove_child(sib);
         free(buf);
+        node_remove_start(hdr, &s->rm, sib, /*suppress_observers*/ false, NODE_NORM_RM_RANGES, NODE_NORM_ABSORB);
         return JS_STEP_YIELD;
     }
     s->n = s->next;
