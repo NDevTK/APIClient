@@ -65,6 +65,11 @@ bool stacking_generates_box(lxb_dom_element_t *el)
     return !boxless;
 }
 
+/* The assert that `el` generates a box, its answer asked as engine work in both builds: the ask fills the cascade's
+   record, which later priced asks read, so an ask inside an assert's span would leave a dev build retiring less. */
+#define SO_ASSERT_BOX(el, ...) \
+    do { bool so_box_ = stacking_generates_box(el); DCHECKF(so_box_, __VA_ARGS__); } while (0)
+
 /* CSS 2.1 §9.3 "Positioning schemes"'s POSITIONED BOX, widened by css-position-3 §2 to the value CSS 2.1 does
    not have. §9.3.1: a box is positioned when its `position` is other than `static`; css-position-3 §2.2 states
    the same set from the other end — "The z-index property applies to all positioned boxes" — over the four
@@ -195,7 +200,7 @@ bool stacking_context_forms(lxb_dom_element_t *el)
     bool forms;
 
     DCHECK(el != NULL, "CSS 2.1 §9.9.1's stacking-context test was asked about no element");
-    DCHECKF(stacking_generates_box(el),
+    SO_ASSERT_BOX(el,
             "%s: CSS 2.1 §9.9.1's stacking-context test was asked about an element that generates no box. "
             "CSS 2.1 §9.9 is stated over BOXES throughout — \"each box has a position in three dimensions\" — so there "
             "is nothing here to form a context or to fail to, and answering `false` would put an absent box "
@@ -255,7 +260,7 @@ int stacking_level(lxb_dom_element_t *el)
        own three tests in. A `display: none; position: absolute` element satisfies the test beneath this
        one, so asking the two the other way round hands a stack level to a box CSS 2.1 §9.2
        "Controlling box generation" generates none of. */
-    DCHECKF(stacking_generates_box(el),
+    SO_ASSERT_BOX(el,
             "%s: CSS 2.1 §9.9.1's stack level was asked of an element that generates no box. The concept is "
             "stated over one — \"Each positioned box in a given stacking context has an integer stack "
             "level\" — and css-display-3 §2.5 \"Box Generation: the none and contents keywords\" says there "
@@ -296,7 +301,7 @@ lxb_dom_element_t *stacking_context_of(lxb_dom_element_t *el)
     lxb_dom_element_t *p;
 
     DCHECK(el != NULL, "the stacking context of no element was asked for");
-    DCHECKF(stacking_generates_box(el),
+    SO_ASSERT_BOX(el,
             "%s: the stacking context of an element that generates no box was asked for. CSS 2.1 §9.9.1 "
             "states that membership over a BOX and never over an element — \"Each box belongs to one "
             "stacking context\" — so there is no member here for any context to hold. THE WALK BELOW STILL "
@@ -346,7 +351,7 @@ StackingLayer stacking_layer_of(lxb_dom_element_t *el)
        not a convenience: `display` decides whether there is a box at all, then `position` takes it out of
        flow, and only then does `float` apply. Asking `float` first reports a float for `display: none;
        float: left`, which is a box §9.7 says does not exist. */
-    DCHECKF(stacking_generates_box(el),
+    SO_ASSERT_BOX(el,
             "%s: CSS 2.1 §9.9.1's layer was asked of an element that generates no box. The seven layers are a "
             "partition of a stacking context's BOXES, so there is no member here to place, and a layer "
             "returned for one would put ink in a sequence for an element css-display-3 §2.5 says draws none",
@@ -473,7 +478,7 @@ int stacking_order_compare(JSContext *ctx, lxb_dom_element_t *a, lxb_dom_element
        the address printed is a helper two frames down. It is ONE check per operand so the abort names
        WHICH of the two, and it runs before the `a == b` arm because a caller comparing a boxless element
        with itself has made the identical mistake and a 0 would answer it. */
-    DCHECKF(stacking_generates_box(a),
+    SO_ASSERT_BOX(a,
             "%s: CSS 2.1 §9.9.1's paint order was asked about a FIRST element that generates no box. Every "
             "sentence the order is built out of is stated over one — \"Each box belongs to one stacking "
             "context\", \"Boxes with greater stack levels are always formatted in front of boxes with lower "
@@ -481,7 +486,7 @@ int stacking_order_compare(JSContext *ctx, lxb_dom_element_t *a, lxb_dom_element
             "returned for it would order a box css-display-3 §2.5 \"Box Generation: the none and contents "
             "keywords\" says draws nothing",
             box_subject(a, nbuf, sizeof nbuf));
-    DCHECKF(stacking_generates_box(b),
+    SO_ASSERT_BOX(b,
             "%s: CSS 2.1 §9.9.1's paint order was asked about a SECOND element that generates no box — see "
             "the first operand's abort above this line for why the order has no answer over one",
             box_subject(b, nbuf, sizeof nbuf));
