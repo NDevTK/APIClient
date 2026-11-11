@@ -95,6 +95,10 @@ void document_paint_frame_free(DocumentPaintFrame *f);
 /* A finished frame's record layout, which the object that publishes it is declared with. */
 extern const JSRecordLayout DOCUMENT_PAINT_FRAME_LAYOUT;
 
+/* A finished frame's display list, borrowed for the frame's lifetime: CSS 2.1 §E.2's marks and the bitmaps they
+   index, whatever part of them the rendered region shows. */
+const DisplayList *document_paint_list(const DocumentPaintFrame *f);
+
 /* Rasterize `f` into `out`, writing what the paint and the raster did to `count`. False where the frame holds no
    rendered region, and then `out` is a zero-area surface and every field of `count` is zero. `out` is
    initialised on every arm and is the caller's to free on every arm; it may not already hold pixels. */

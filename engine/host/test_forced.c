@@ -39674,12 +39674,25 @@ static bool tf_document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSu
     return drew;
 }
 
-/* @GRAPHRT over a published paint frame: the fixture's document, given a red 4x3 canvas so the frame holds a
-   bitmap mark, is painted and its frame published at generation 1, above the floor of 0, and the frame's object is
-   written, rebuilt and written again. The bytes must agree, the original must hold the canvas's red, and the
-   rebuilt frame must raster the same as the original, mark for mark and pixel for pixel. The canvas is removed
-   again, so the document later rows read is the one they were written against. Generation 1 is at or below
-   every floor a later sale writes with, so the frame left on the realm's record is baseline to every flow. */
+/* @GRAPHRT over a published paint frame: the fixture's document, given a red 4x3 canvas, is painted and its
+   frame published at generation 1, above the floor of 0, and the frame's object is written, rebuilt and written
+   again. The bytes must agree, the rebuilt frame's display list must hold the original's bitmaps pixel for
+   pixel, and the two must raster the same. This runs in every fixture document, and whether a document's layout
+   gives the canvas a box, and where, is that document's fact: the row reports the bitmaps and red pixels the
+   frame's list holds (`bitmaps`, `red`) and the red its rendered region shows (`shown`), and asserts only what
+   holds of any frame. The canvas is removed again, so the document later rows read is the one they were written
+   against. Generation 1 is at or below every floor a later sale writes with, so the frame left on the realm's
+   record is baseline to every flow. */
+static size_t tf_bitmap_red(const DisplayList *dl)
+{
+    size_t red = 0;
+
+    for (size_t i = 0; i < dl->img_n; i++)
+        for (size_t k = 0; k + 3 < dl->img[i].n; k += 4)
+            red += dl->img[i].rgba[k] == 255 && dl->img[i].rgba[k + 1] == 0 && dl->img[i].rgba[k + 2] == 0 &&
+                   dl->img[i].rgba[k + 3] == 255;
+    return red;
+}
 TF_UNIT void painted_frame_graph_selftest(JSContext *ctx, lxb_html_document_t *dom)
 {
     LayoutJob *job = layout_job_new();
@@ -39690,10 +39703,10 @@ TF_UNIT void painted_frame_graph_selftest(JSContext *ctx, lxb_html_document_t *d
     size_t n1, n2;
     RasterSurface s1, s2;
     DocumentPaintCount c1, c2;
+    const DisplayList *l1, *l2;
     bool d1, d2;
     int same;
-
-    size_t red = 0;
+    size_t shown = 0;
 
     JS_FreeValue(ctx, tf_graph_program(ctx,
         "(function () { var c = document.createElement('canvas'), g; c.width = 4; c.height = 3;"
@@ -39727,12 +39740,19 @@ TF_UNIT void painted_frame_graph_selftest(JSContext *ctx, lxb_html_document_t *d
     d1 = document_paint_raster(painted_frame_of(obj), &s1, &c1);
     d2 = document_paint_raster(painted_frame_of(back[0]), &s2, &c2);
     for (size_t k = 0; d1 && k < (size_t)s1.width * (size_t)s1.height; k++)
-        red += s1.px[4 * k] == 255 && s1.px[4 * k + 1] == 0 && s1.px[4 * k + 2] == 0 && s1.px[4 * k + 3] == 255;
-    printf("@GRAPHRT {\"paintFrameBytes\":%zu,\"identical\":%d,\"marks\":%zu,\"red\":%zu}\n", n1, same,
-           c1.marks, red);
-    CHECKF(red > 0, "the painted frame holds none of the canvas's red over %zu marks: the frame has no bitmap mark, "
-           "so the layout's bitmap half is not round-tripped by this row", c1.marks);
+        shown += s1.px[4 * k] == 255 && s1.px[4 * k + 1] == 0 && s1.px[4 * k + 2] == 0 && s1.px[4 * k + 3] == 255;
+    l1 = document_paint_list(painted_frame_of(obj));
+    l2 = document_paint_list(painted_frame_of(back[0]));
+    printf("@GRAPHRT {\"paintFrameBytes\":%zu,\"identical\":%d,\"marks\":%zu,\"bitmaps\":%zu,\"red\":%zu,"
+           "\"shown\":%zu}\n", n1, same, c1.marks, l1->img_n, tf_bitmap_red(l1), shown);
     CHECK(same, "a rebuilt graph holding a published paint frame did not write the same bytes as its original");
+    CHECKF(l1->n == l2->n && l1->img_n == l2->img_n,
+           "a rebuilt paint frame's list holds %zu marks and %zu bitmaps, and its original %zu and %zu", l2->n,
+           l2->img_n, l1->n, l1->img_n);
+    for (size_t i = 0; i < l1->img_n; i++)
+        CHECKF(l1->img[i].w == l2->img[i].w && l1->img[i].h == l2->img[i].h && l1->img[i].n == l2->img[i].n &&
+                   !memcmp(l1->img[i].rgba, l2->img[i].rgba, l1->img[i].n),
+               "a rebuilt paint frame's bitmap %zu is not its original's, pixel for pixel", i);
     CHECK(d1 == d2 && c1.marks == c2.marks && c1.elements == c2.elements && s1.width == s2.width &&
               s1.height == s2.height &&
               (s1.width * s1.height == 0 || !memcmp(s1.px, s2.px, (size_t)s1.width * s1.height * 4)),

@@ -220,6 +220,12 @@ void document_paint_frame_free(DocumentPaintFrame *f)
     free(f);
 }
 
+const DisplayList *document_paint_list(const DocumentPaintFrame *f)
+{
+    DCHECK(f != NULL && f->walk == NULL, "a frame's display list was asked for while its paint is still walking");
+    return &f->dl;
+}
+
 bool document_paint_raster(const DocumentPaintFrame *f, RasterSurface *out, DocumentPaintCount *count)
 {
     DisplayListRasterCount rc;
