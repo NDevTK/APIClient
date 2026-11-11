@@ -19704,12 +19704,12 @@ TF_UNIT void probes_compilerest(const char *js, Probe *tab, int *n) {
         { "compile-regexp-rest", "/api/cmp-re", "m", "false",
           "a turn held the thread for a quantum or more between two offers: the compile of a regular expression "
           "literal of 200,001 characters ran a stint that offered no suspend point" },
-        { "compile-label-rest", "/api/cmp-label", "r", "function",
+        { "compile-label-rest", "/api/cmp-label", "r", "1",
           "a turn held the thread for a quantum or more between two offers: the compile of a function body of "
           "100,000 conditional jumps ran a stint that offered no suspend point" },
-        { "compile-paren-rest", "/api/cmp-paren", "r", "function",
+        { "compile-paren-rest", "/api/cmp-paren", "r", "30000",
           "a turn held the thread for a quantum or more between two offers: the compile of a parenthesized "
-          "function of 50,000 statements ran a stint that offered no suspend point" },
+          "function of 30,000 statements ran a stint that offered no suspend point" },
         { "compile-array-rest", "/api/cmp-array", "n", "100000",
           "a turn held the thread for a quantum or more between two offers: the compile of an array literal "
           "of 100,000 elements ran a stint that offered no suspend point" },
