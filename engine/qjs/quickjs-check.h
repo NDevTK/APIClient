@@ -3,8 +3,8 @@
  * cannot include the host header, exactly as extension/check.js mirrors the same law on the JS side). Same
  * semantics: DFAIL = a DEV-ONLY should-never-happen (design invariant / not-yet-built capability) — emits
  * @WHY at the origin then aborts; CHECK/CHECK_FAIL = ALWAYS fatal (dev AND release) for a "must-not-proceed
- * even in production" invariant. DFAIL compiles out in release (APICLIENT_DEV=0); its condition must be
- * side-effect-free and never recoverable control flow.
+ * even in production" invariant. In release (APICLIENT_DEV=0) a DFAIL records its site as reached
+ * (quickjs-gap.h) and continues; a DCHECK compiles out, so its condition must be side-effect-free.
  * Every name here is the host header's and the JS mirror's. Only the EMIT is this file's (a plain @WHY/@E line
  * rather than the host's JSON), because the submodule cannot include the host header.
  * It lives in its OWN header because every translation unit of the fork asserts — libregexp's parser as much as
@@ -29,6 +29,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+
+#include "quickjs-gap.h"   /* the release form of DFAIL: the sites this instance crossed */
 
 /* WHAT A COMPOSED REASON GETS INTACT, and the TAIL reserved BEYOND it so a cut can say it was cut. Sized here
    rather than at the call sites for the reason the host header gives: a per-site `char msg[400]` is a cap
@@ -111,7 +113,8 @@ static inline void apiclient_qjs_reason_mark(char *r, int n)
 }
 
 #if defined(APICLIENT_DEV) && APICLIENT_DEV == 0
-#define DFAIL(msg)         ((void)0)
+/* A release DFAIL records its construct as reached and continues, as engine/host/check.h's does. */
+#define DFAIL(msg)         APICLIENT_GAP_REACH((msg))
 #define DCHECK(cond, msg)  ((void)0)
 #define DCHECKF(cond, ...) do { (void)sizeof(cond); APICLIENT_QJS_FMT_UNUSED(__VA_ARGS__); } while (0)
 #else

@@ -495,6 +495,7 @@ function _clearDocLearning() {
     delete doc._astError;
     delete doc._securityFindings;
     delete doc._resolverErrors;
+    delete doc._instanceGaps;
     delete doc._epNorm;
   });
 }
@@ -601,6 +602,19 @@ function _recordEnginePageErrors(doc, analysis) {
     doc._resolverErrors.push(analysis.resolverErrors[_j]);
 }
 
+/* The engine instance's gap list onto a document: the DFAIL constructs a release engine crossed and continued
+   past (bridge.js's `_instanceGaps`, solver/gap_report.h). Every engine document restates the instance's whole
+   lifetime list, so a delivery supersedes. An analysis with no engine document states nothing about gaps, so
+   what the document holds stands; absent stays "no engine document has stated it", never an empty list. */
+function _recordEngineGaps(doc, analysis) {
+  if (!analysisHasDocument(analysis)) return;
+  DCHECK(Array.isArray(analysis._instanceGaps),
+         "an analysis with an engine document carries no _instanceGaps array — bridge.js refuses a document " +
+         "without one and copies it onto the analysis, so its absence is that relay broken and a page whose " +
+         "engine crossed unbuilt code would read as one that crossed none");
+  doc._instanceGaps = analysis._instanceGaps;
+}
+
 /* Merge ONE engine advance — a mid-run snapshot of a live document, or the whole output of an engine with no
    live caller (a child navigable the engine announced, a rehydrated cold recipe) — into the moat AND into the
    documents it belongs to.
@@ -678,7 +692,7 @@ function _mergeFrontierResult(sourceUrl, documentIds, result, epoch) {
        `securitySinks`, owed at the sibling and not made: a fix of the form "this is not how to ask whether
        there is anything to report" is not finished at the first surface somebody asked it about. */
     if (!result.fetchCallSites.length && !result.securitySinks.length &&
-        !result.resolverErrors.length) return;   // legitimately empty (nothing learned yet) — not an invariant break
+        !result.resolverErrors.length && !result._instanceGaps.length) return;   // legitimately empty (nothing learned yet) — not an invariant break
     /* TWO NAMES FOR ONE FACT, ASKED TO AGREE INSTEAD OF ONE OVERWRITING THE OTHER. `result.sourceUrl =
        sourceUrl || result.sourceUrl || ""` stood here: a three-rung ladder in which the argument won, the
        record's own statement was the consolation, and `""` was what both absences collapsed to. Neither
@@ -723,6 +737,7 @@ function _mergeFrontierResult(sourceUrl, documentIds, result, epoch) {
          delivered, so neither half was falsifiable while the other stood. Repairing the gate alone would
          have widened a path that still drops them. */
       _recordEnginePageErrors(doc, result);
+      _recordEngineGaps(doc, result);
       mergeASTResultsIntoVDD(doc, [result]);
       mergeToGlobal(doc);
     }
@@ -1157,6 +1172,7 @@ async function _dispatchDocument(docKey) {
      analysis carries an engine document, which is what tells this arm from the crash arm that carries only
      the host's own `@E`/`@WHY` rows. */
   _recordEnginePageErrors(tab, analysis);
+  _recordEngineGaps(tab, analysis);
 
   /* WHETHER THIS RUN PRODUCED A DOCUMENT AT ALL, ASKED ONCE AND USED THREE TIMES BELOW. It is a fact about
      the RECORD, not a length: bridge.js writes the two finding arrays exactly where the engine handed it an

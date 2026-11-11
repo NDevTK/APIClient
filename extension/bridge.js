@@ -361,6 +361,13 @@ function docRoutedPost(p, f) {
            typeof s.shape === "string" && typeof s.path === "string")
     ? null : f + " is not {id: 16 hex, target, targetOrigin, relation, symbols: [{source, shape, path}, ...]}";
 }
+/* A row of `_instanceGaps` (solver/gap_report.h): one DFAIL construct the engine instance crossed in a release
+   build, by the construct's file and message, with a line that locates it and its lifetime count of crossings. */
+function docGap(g, f) {
+  return docIsRecord(g) && docIsName(g.siteFile) && docIsName(g.message) && Number.isSafeInteger(g.siteLine) &&
+         g.siteLine > 0 && typeof g.composed === "boolean" && Number.isSafeInteger(g.reached) && g.reached > 0
+    ? null : f + " is not {siteFile, siteLine, message, composed, reached} with a positive line and count";
+}
 /* A row of a census keyed by what the run met (`_forkAt` by predicate, `_absent` by global name), which no
    declaration fixes: a finite number or a histogram whose arms are finite numbers or positional tuples of them. */
 function docCensusRow(v, f) {
@@ -473,7 +480,10 @@ function resultDocumentRefusal(r, complete) {
     docArray(r.securitySinks, "securitySinks") || docEach(r.securitySinks, "securitySinks", docSink) ||
     docArray(r.pageErrors, "pageErrors") ||
     docArray(r.pageErrorsRetracted, "pageErrorsRetracted") || docArray(r.pageErrorsExplored, "pageErrorsExplored") ||
-    docArray(r.routedPosts, "routedPosts") || docEach(r.routedPosts, "routedPosts", docRoutedPost);
+    docArray(r.routedPosts, "routedPosts") || docEach(r.routedPosts, "routedPosts", docRoutedPost) ||
+    /* Present on every document, so its absence is refused: an empty list states that the instance crossed no
+       unbuilt code, which a document without the field does not state. */
+    docArray(r._instanceGaps, "_instanceGaps") || docEach(r._instanceGaps, "_instanceGaps", docGap);
   if (why !== null) return why;
   for (const k of RESULT_COUNTERS) if ((why = docCount(r[k], k)) !== null) return why;
   why = docMetricsFamilies(r) || docWfq(r._wfq) || docQuantum(r._quantum);
@@ -829,6 +839,9 @@ function linesToAnalysis(lines, msg, outcome, eng) {
         /* Standard-owned names the document read and this realm did not answer, with the population of global
            reads they are drawn from. */
         absent: result._absent,
+        /* The DFAIL constructs this instance crossed, in first-reach order (solver/gap_report.h). Lifetime
+           counts of the instance, so a later row of one instance restates and extends an earlier one. */
+        instanceGaps: result._instanceGaps,
         /* What the order above was denominated in, relayed whole: the slice in engine work and the clock the
            census's microsecond rows are priced on, a property of the host and build constant for the session.
            No wall clock ends a slice (this frame's turns are taken between steps, solver/engine.h's
@@ -971,28 +984,30 @@ function linesToAnalysis(lines, msg, outcome, eng) {
     analysis._parkWhy = result._parkWhy;
     /* The run's novelty record, which the finish checks its parked row's value against (`landed`, `paid`). */
     analysis._novelty = result._novelty;
+    /* The unbuilt engine code the instance crossed, which the popup states beside the surface and findings. */
+    analysis._instanceGaps = result._instanceGaps;
   }
   return analysis;
 }
 /* The engine-document fields every consumer reads, refused at linesToAnalysis' door when any is absent. */
-const ENGINE_DOC_FIELDS = ["fetchCallSites", "securitySinks", "_park", "_parkWhy", "_novelty"];
-/* Whether an analysis carries an engine document, asked in one place so the five fields cannot drift apart
-   across consumers. True means an @RESULT arrived and was accepted; false means none did and `_run` says which
-   absence. linesToAnalysis copies all five or none and refuses a document missing one, so a record with some is
-   that composition broken, which is this zone's own code. */
+const ENGINE_DOC_FIELDS = ["fetchCallSites", "securitySinks", "_park", "_parkWhy", "_novelty", "_instanceGaps"];
+/* Whether an analysis carries an engine document, asked in one place so the fields cannot drift apart across
+   consumers. True means an @RESULT arrived and was accepted; false means none did and `_run` says which
+   absence. linesToAnalysis copies all of them or none and refuses a document missing one, so a record with some
+   is that composition broken, which is this zone's own code. */
 function analysisHasDocument(a) {
   DCHECK(a && typeof a === "object", "an analysis record is not an object — every producer of one is in this file");
   const n = ENGINE_DOC_FIELDS.filter((k) => a[k] !== undefined).length;
-  DCHECK(n === 0 || n === 5,
-         "an analysis carries " + n + " of the five engine-document fields (fetchCallSites, securitySinks, " +
-         "_park, _parkWhy, _novelty) — linesToAnalysis writes all five or none, because their presence IS " +
-         "the statement that an @RESULT document arrived, and a partial set would be read by every consumer " +
+  DCHECK(n === 0 || n === ENGINE_DOC_FIELDS.length,
+         "an analysis carries " + n + " of the " + ENGINE_DOC_FIELDS.length + " engine-document fields (" +
+         ENGINE_DOC_FIELDS.join(", ") + ") — linesToAnalysis writes all of them or none, because their presence " +
+         "IS the statement that an @RESULT document arrived, and a partial set would be read by every consumer " +
          "as a document that is there while one of the surfaces it travels in is silently gone");
-  DCHECK(n === 5 || a._run === "crashed" || a._run === "nothing-to-run",
+  DCHECK(n === ENGINE_DOC_FIELDS.length || a._run === "crashed" || a._run === "nothing-to-run",
          "an analysis marked `" + a._run + "` carries no engine document — only a crashed instance and a page " +
          "with nothing to run may lack one, so a partial/complete run without one is the @RESULT relay broken " +
          "and reporting it as a page with no API surface is a false clean bill");
-  return n === 5;
+  return n === ENGINE_DOC_FIELDS.length;
 }
 self.analysisHasDocument = analysisHasDocument;   // read by offscreen-brain.js and lib/merge.js across the zone's one realm
 
@@ -6862,8 +6877,10 @@ const _hostOps = {
            "an incremental snapshot carried no resolverErrors array — linesToAnalysis builds one on every " +
            "arm it has, so its absence is that composition changed under this reader and every uncaught " +
            "throw the engine recorded for this page would be discarded with the snapshot that carries it");
+    /* …and a crossed gap is a fourth: a snapshot whose only statement is that the instance ran unbuilt code
+       still qualifies everything a later snapshot adds. */
     const hasWork = partial.fetchCallSites.length || partial.securitySinks.length ||
-                    partial.resolverErrors.length;
+                    partial.resolverErrors.length || partial._instanceGaps.length;
     if (!hasWork) return;
     /* The merge callback is the other half of this edge: offscreen-brain.js installs it before this file
        loads, so its absence is a broken load order. */

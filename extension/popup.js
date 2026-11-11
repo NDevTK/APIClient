@@ -1483,6 +1483,34 @@ function renderDeepStatus() {
       domElement("summary", {}, [`Analyzer gaps — reached-but-unresolved / host-model (${rerrs.length})`]), rows,
     ]));
   }
+  /* The unbuilt engine code this page's analysis crossed: each row is a DFAIL construct a release engine
+     recorded and continued past (solver/gap_report.h), by file and message, with its count and its place in
+     first-reach order. The list is the engine instance's, which may hold other documents of the same agent
+     cluster. `null` is "no engine document has stated it" and renders nothing; an empty list is the statement
+     that the instance crossed none, and is said as zero. */
+  DCHECK(tabData.instanceGaps === null || Array.isArray(tabData.instanceGaps),
+         "GET_STATE answered without an instanceGaps field — serializeTabData writes it on every path " +
+         "(lib/serialize.js), so its absence is that serializer broken and an analysis that crossed unbuilt " +
+         "engine code would render exactly like one that crossed none");
+  if (tabData.instanceGaps !== null) {
+    const gaps = tabData.instanceGaps;
+    const rows = gaps.map((g, i) => {
+      DCHECK(typeof g.siteFile === "string" && typeof g.message === "string" && typeof g.siteLine === "number" &&
+             typeof g.reached === "number" && typeof g.composed === "boolean",
+             "an engine gap row reached the popup without its file, line, message, composed flag and count — " +
+             "bridge.js's docGap refuses a document whose row lacks one, so this is the relay after it broken");
+      return deepRow([`${i + 1}. ${g.siteFile}:${g.siteLine} · reached ${g.reached}× · `
+                      + (g.composed ? "(text of its first reach) " : "") + g.message.slice(0, 160)],
+                     { title: g.message });
+    });
+    sections.push(domElement("details", { class: "deep-cross-tab" }, [
+      domElement("summary", {}, [`Unbuilt engine code this analysis crossed: ${gaps.length} distinct site(s)`]),
+      gaps.length === 0 ? [] : deepRow(["Listed in the order first reached. The engine continued past each, "
+        + "so a site after the first may be a consequence of an earlier one, and what is shown elsewhere in "
+        + "this popup was computed on code the engine has not built."]),
+      rows,
+    ]));
+  }
   if (sections.flat().length === 0) { el.style.display = "none"; return; }
   domReplaceChildren(el, sections);
   el.style.display = "block";

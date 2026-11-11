@@ -13,8 +13,8 @@
  *    HANDLED at runtime, that is an `if`, not a DCHECK.
  *
  *  DFAIL(msg) — the UNCONDITIONAL DCHECK: control reached a point it should-never reach (a @WHY gap, an
- *    unimplemented case). Same dev-abort / release-continue semantics as DCHECK; use where there is no single
- *    boolean to test (the caller falls through to a best-effort path in release).
+ *    unimplemented case). It aborts in dev as DCHECK does. In release it records its site as reached
+ *    (quickjs-gap.h) and continues on the code beneath it, and the result document states the site.
  *
  *  CHECK(cond, msg) — ALWAYS active (dev AND release). A UNIVERSAL invariant that must hold in EVERY build:
  *    memory-allocation success (a dropped flow corrupts the frontier), a physical floor (RAM/disk — a real
@@ -54,6 +54,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>   /* write(2) — the record is ONE syscall; see the emitter */
+
+#include "quickjs-gap.h"   /* the release form of DFAIL: the sites this instance crossed */
 
 #ifndef APICLIENT_DEV
 #define APICLIENT_DEV 1   /* development is the default; a release build compiles with -DAPICLIENT_DEV=0 */
@@ -310,14 +312,13 @@ static inline int apiclient_assert_fmt_check(const char *fmt, ...) { (void) fmt;
 #define DCHECKF(cond, ...) do { if (!(cond)) { APICLIENT_ASSERT_EMITF("@WHY", #cond, __VA_ARGS__); abort(); } } while (0)
 #define DFAILF(...)        do { APICLIENT_ASSERT_EMITF("@WHY", "unreachable", __VA_ARGS__); abort(); } while (0)
 #else
-/* Named residual. Not covered: a release DFAIL records nothing, so a result cannot list the engine gaps its page
-   crossed. The next diff has DFAIL and DFAILF count their site, by file and message, and the result document
-   carry the list to the popup. Its absence shows as a release result with no gap list for a page whose dev run
-   aborts. */
 #define DCHECK(cond, msg) ((void)sizeof(cond))   /* type-checked, never evaluated */
-#define DFAIL(msg)        ((void)0)
+/* A release DFAIL records its construct as reached and continues. A DFAILF is recorded by its format, so its
+   identity does not vary with the run, and its arguments stay unevaluated. */
+#define DFAIL(msg)        APICLIENT_GAP_REACH((msg))
 #define DCHECKF(cond, ...) do { (void)sizeof(cond); APICLIENT_FMT_UNUSED(__VA_ARGS__); } while (0)
-#define DFAILF(...)        APICLIENT_FMT_UNUSED(__VA_ARGS__)
+#define DFAILF(...)        do { APICLIENT_FMT_UNUSED(__VA_ARGS__); \
+                                APICLIENT_GAP_REACH(APICLIENT_GAP_FORMAT(__VA_ARGS__, 0)); } while (0)
 #endif
 
 /* COUNTOF(a) — THE EXTENT OF AN ARRAY, AND A COMPILE ERROR ON A POINTER.

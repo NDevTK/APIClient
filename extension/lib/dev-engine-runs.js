@@ -345,6 +345,16 @@ function devEngineRunsSection(runs) {
     censusRows.push(label([Object.keys(m.forkAt).length === 0
       ? `forked at: nothing — no predicate of this document ever split a flow`
       : `forked at: ` + Object.keys(m.forkAt).map((f) => String(f) + " ×" + String(m.forkAt[f])).join(" · ")]));
+    /* The DFAIL constructs the instance crossed (solver/gap_report.h), which a release engine records and
+       continues past. Lifetime counts of the instance, in first-reach order. */
+    DCHECK(Array.isArray(m.instanceGaps),
+           "an engine run record reached the diagnostics page with no `instanceGaps` list — bridge.js refuses a " +
+           "document without one and relays it whole, so its absence is that relay broken and not a run that " +
+           "crossed no unbuilt code, which is `[]`");
+    censusRows.push(label([m.instanceGaps.length === 0
+      ? `unbuilt engine code crossed: none`
+      : `unbuilt engine code crossed (${m.instanceGaps.length} site(s), first reached first): `
+        + m.instanceGaps.map((g) => `${g.siteFile}:${g.siteLine} ×${g.reached}`).join(" · ")]));
     // A snapshot's numbers are real observations of a page still being analysed, labelled as a running total.
     const head = live
       ? [domElement("strong", {}, ["still running"]), ` — snapshot, not a total; ${resumedTxt}; ${coldTxt} · so far: `]

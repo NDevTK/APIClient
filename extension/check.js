@@ -22,8 +22,8 @@
 //
 //   DCHECK(cond, msg) / DFAIL(msg) — a DEV-ONLY should-never-happen: a design invariant, a not-yet-built
 //     capability, or an engine↔JS contract the engine must guarantee. Throws LOUD (@WHY) in dev at the
-//     origin so the bug surfaces where it is BORN; NO-OP in release (APICLIENT_DEV=false), so the condition
-//     MUST be side-effect-free and NEVER recoverable control flow. Asserts "our OWN logic is correct".
+//     origin so the bug surfaces where it is BORN. In release (APICLIENT_DEV=false) a DCHECK is a no-op, so
+//     its condition MUST be side-effect-free, and a DFAIL records its message as reached and continues.
 //
 //   CHECK(cond, msg) / CHECK_FAIL(msg) — ALWAYS fatal (dev AND release, @E) for a UNIVERSAL invariant that
 //     must hold in production too: a security/authorization boundary (SECURITY.md), data integrity, an
@@ -46,8 +46,24 @@
     throw e;
   }
 
+  // The DFAIL sites this realm crossed in a release packaging, keyed by message, in first-reach order: the
+  // mirror of engine/qjs/quickjs-gap.h. Lifetime counts of the realm, never reset. A JS site has no file of its
+  // own to state, and its message is composed at the call, so the message text is the whole identity.
+  // Named residual. Not covered: nothing relays a realm's list, so the popup states the engine's gaps only.
+  // Next diff builds: the release packaging step that sets APICLIENT_DEV false, which no file in this tree does
+  // yet, and with it the trusted zone's list on GET_STATE beside `instanceGaps`. How its absence would show: a
+  // release-packaged zone that crossed a DFAIL states it nowhere but in that realm's apiclientGapsReached().
+  const gapsReached = new Map();
+  g.apiclientGapsReached = function () {
+    return Array.from(gapsReached, function (e) { return { message: e[0], reached: e[1] }; });
+  };
+
   g.DCHECK = function (cond, msg) { if (g.APICLIENT_DEV && !cond) fail("@WHY DCHECK failed:", msg); };
-  g.DFAIL  = function (msg)       { if (g.APICLIENT_DEV) fail("@WHY DFAIL:", msg); };
+  g.DFAIL  = function (msg) {
+    if (g.APICLIENT_DEV) fail("@WHY DFAIL:", msg);
+    const key = String(msg);
+    gapsReached.set(key, (gapsReached.has(key) ? gapsReached.get(key) : 0) + 1);
+  };
   g.CHECK  = function (cond, msg) { if (!cond) fail("@E CHECK failed:", msg); };
   g.CHECK_FAIL = function (msg)   { fail("@E CHECK_FAIL:", msg); };
 

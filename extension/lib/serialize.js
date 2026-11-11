@@ -328,6 +328,16 @@ function serializeTabData(tab) {
              "{context, message} records into it and the popup's diagnostic view iterates them");
       return tab._resolverErrors;
     })(),
+    /* The DFAIL constructs this document's engine instance crossed (offscreen-brain.js's _recordEngineGaps), in
+       first-reach order. `null` states that no engine document has said, which is a different fact from an
+       empty list: only a list states how many. */
+    instanceGaps: (function () {
+      if (tab._instanceGaps === undefined) return null;
+      DCHECK(Array.isArray(tab._instanceGaps),
+             "a DocView's _instanceGaps is present but is not an array — offscreen-brain.js writes the engine " +
+             "document's own list there, so anything else is that relay broken");
+      return tab._instanceGaps;
+    })(),
     /* WHETHER THIS DOCUMENT'S BUNDLE EVER REACHED THE ANALYSIS, WHICH `analysisRun` ABOVE CANNOT SAY. A page
        whose page source could not be obtained never starts a run, so `analysisRun` is `null` for it — and
        `null` is also what a page still being explored carries, and what a page nobody has reported on

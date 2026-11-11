@@ -95,7 +95,7 @@ DocumentLoad *document_load_begin(lxb_html_document_t *document, DomParseRootKin
            the crash is what names it — and the alternative here is not "no support for this arm", it is the
            silent wrong tree the file comment describes. */
         DFAIL(document_load_type_section(arm));
-        /* THE RELEASE HALF. `DFAIL` is compiled out at APICLIENT_DEV=0 and the caller's own always-fatal CHECK
+        /* The release half. `DFAIL` records and continues at APICLIENT_DEV=0 and the caller's own always-fatal CHECK
            on the status `document_load` returns is what stops the response there — in release the same error
            is still correct, because the capability is not supportable outside dev either. */
         return NULL;

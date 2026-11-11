@@ -1112,9 +1112,10 @@ static const RefUnbuilt REF_UNBUILT[] = {
 static JSValue ref_unbuilt(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     (void)this_val; (void)argc; (void)argv;
-    DCHECK(magic >= 0 && magic < REF_UNBUILT_N, "a cross-agent trap ran under a magic that names no operation");
+    /* A CHECK: the release DFAIL below reads the table's row to record its site. */
+    CHECK(magic >= 0 && magic < REF_UNBUILT_N, "a cross-agent trap ran under a magic that names no operation");
     DFAIL(REF_UNBUILT[magic].what);
-    /* In RELEASE the DFAIL compiles out and there is deliberately nothing to fall back to: failing visibly is
+    /* In release the DFAIL records its site and there is deliberately nothing to fall back to: failing visibly is
        right where answering out of the empty target is not. */
     JS_ThrowInternalError(ctx, "%s", REF_UNBUILT[magic].what);
     return JS_EXCEPTION;

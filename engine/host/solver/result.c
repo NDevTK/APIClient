@@ -23,6 +23,7 @@
 /* The reply door's rate, asked of the component that owns both ends of its membership rather than recomputed. */
 #include "solver/pending_index.h"
 #include "solver/dom_cow.h"   /* the DOM half of the swap census — see result_swap_json */
+#include "solver/gap_report.h"   /* `_instanceGaps`: the DFAIL sites this instance crossed */
 #include "solver/decide.h"    /* …and which predicate grew the frontier — see decide_fork_json */
 #include "solver/absent.h"    /* …and which names a standard owns this realm answered with silence */
 #include "solver/source_cut.h" /* …and the snapshots first reads left, which candidates forked from */
@@ -2075,6 +2076,9 @@ char *result_json_census(JSContext *ctx, const ResultCensus *c) {
     /* …and what this instance's emissions were worth against the product (solver/novelty.h): the credit census,
        and every identity it filed, which is how the trusted zone's known set grows. */
     char *novelty = novelty_json();
+    /* …and the unbuilt code this instance crossed (solver/gap_report.h). Emitted on every document, an empty
+       list included, since an absent field and a run that crossed none are different statements. */
+    char *gaps = gap_report_json();
     SourceCutCensus cuts = source_cut_census();
     /* No `probeResults` surface: a probe answer is the reply to a deliberately malformed request, which this
        engine cannot make (its only network edge is the pending register, and the host performs a GET through
@@ -2083,10 +2087,10 @@ char *result_json_census(JSContext *ctx, const ResultCensus *c) {
     char *out;
 
     if (!eps || !sinks || !errs || !errsRetracted || !errsExplored || !wfq || !cold || !heap || !swap ||
-        !forkAt || !quantum || !absent || !novelty) {
+        !forkAt || !quantum || !absent || !novelty || !gaps) {
         free(eps); free(sinks); free(errs); free(errsRetracted); free(errsExplored);
         if (!c) { free(wfq); free(cold); free(heap); free(swap); free(forkAt); }
-        free(quantum); free(absent); free(novelty);
+        free(quantum); free(absent); free(novelty); free(gaps);
         return NULL;
     }
     /* Sized by composef (solver/compose.h), so a field added below needs no count, slack or margin. The fit is
@@ -2171,6 +2175,7 @@ char *result_json_census(JSContext *ctx, const ResultCensus *c) {
                                 this array decides. */
                              "\"pageErrorsExplored\":%s,"
                              "\"routedPosts\":%s,"
+                             "\"_instanceGaps\":%s,"
                              /* `_switches` is not `_unitsDone`'s denominator. A switch is counted only where the
                                 pick returns a different member (engine.c, beside flow_credit_pick); a unit at
                                 every entry into flow_step, so `_unitsDone / _switches` can exceed 1. The
@@ -2284,7 +2289,7 @@ char *result_json_census(JSContext *ctx, const ResultCensus *c) {
                              "\"_firstFireWork\":%lld,\"_workRetired\":%lld,"
                              "\"_novelty\":%s,"
                              "\"_quantum\":%s,\"_park\":%s,\"_parkWhy\":\"%s\"}",
-                     eps, sinks, errs, errsRetracted, errsExplored, posts,
+                     eps, sinks, errs, errsRetracted, errsExplored, posts, gaps,
                      engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), engine_units_done(), held, made, segf,
                      routedDelivered, routedRefused, routedZeroDelivery, engine_peer_marks_refused(),
@@ -2323,5 +2328,6 @@ char *result_json_census(JSContext *ctx, const ResultCensus *c) {
     free(absent);
     free(quantum);
     free(novelty);
+    free(gaps);
     return out;
 }
