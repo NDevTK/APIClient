@@ -713,7 +713,7 @@ function renderSecurityPanel() {
   // A securitySink is one of TWO records (see the split below): a FIRED PoC — a concrete candidate driven
   // through the real code + branches + filters that BROKE OUT at the sink, self-verifying by replay — or a
   // PARKED search on a sink attacker input demonstrably reaches. Neither carries a verdict to compute: a
-  // proven exploit is HIGH unless the page's own policy kills the vector (see _policyBlockers), and the
+  // proven exploit states that it fired and which page policy blocks the vector (see _policyBlockers), and the
   // absence of either record is NOT "safe".
   /* THE FINGERPRINT IS OVER WHAT THE CARDS CLAIM, NOT OVER HOW MANY THERE ARE. It was
      `findings.length + ":" + secCount`, and every event this panel exists to show leaves BOTH numbers
@@ -798,7 +798,7 @@ function renderSecurityPanel() {
     for (var si = 0; si < f.securitySinks.length; si++) {
       var it = f.securitySinks[si];
       // THE TWO SHAPES ARE ASSERTED ON THE LINE THAT TELLS THEM APART, because this is where the panel decides
-      // which CLAIM it makes about a sink: a fired record gets a HIGH badge and a payload, a parked one gets
+      // which CLAIM it makes about a sink: a fired record gets a fact badge and a payload, a parked one gets
       // neither. `it && it.search === "parked"` guarded a null the DCHECK further down says cannot exist, and
       // the guard was not harmless — ANYTHING that is not exactly the string "parked" (a null element, a third
       // state, a record from some other producer) routed into the FIRED list, where a missing `poc` renders as
@@ -833,7 +833,7 @@ function renderSecurityPanel() {
     cards.push(domElement("div", { class: "section-header" }, [
       "Breakouts the engine FIRED ", domElement("span", { class: "badge badge-status" }, [String(allItems.length)]),
       blockedCount
-        ? [" ", domElement("span", { class: "badge badge-medium", title: "the sink is REAL and the breakout fired " +
+        ? [" ", domElement("span", { class: "badge badge-conditional", title: "the sink is REAL and the breakout fired " +
                                      "in the model, but the page's own policy kills the vector on real Chrome — " +
                                      "each needs a policy-permitted vector" }, [blockedCount + " policy-blocked"])]
         : [],
@@ -971,23 +971,26 @@ function renderSecurityPanel() {
                                                               "delivers the payload to the page the sink was observed on"]);
     }
 
-    // POLICY-RELATIVE severity, over BOTH policy facts the engine emits — see _policyBlockers for why reading
-    // only `cspBlocks` here was the same live defect as reading a name the engine never wrote.
-    var sevBadge = item.precondition
-      ? domElement("span", { class: "badge badge-medium",
+    // The badge states computed facts and never a rank: a precondition, the page policies that block this
+    // vector (_policyBlockers reads both the engine emits), or that it fired with neither.
+    var factBadge = item.precondition
+      ? domElement("span", { class: "badge badge-conditional",
                              title: "fired in the model, but " + _deliverySentence(item) },
                    ["PRECONDITION · " + item.precondition])
       : blockers.length
-      ? domElement("span", { class: "badge badge-medium",
+      ? domElement("span", { class: "badge badge-conditional",
                              title: "broke out and fired in the model, but the page's own policy (" +
                                     _blockerNames(blockers) + ") kills THIS vector on real Chrome — the sink is " +
                                     "REAL and needs a policy-permitted vector" },
                    ["POLICY-BLOCKED · " + _blockerNames(blockers)])
-      : domElement("span", { class: "badge badge-high" }, ["HIGH"]);
+      : domElement("span", { class: "badge badge-fired",
+                             title: "broke out and fired in the model with no precondition, and the page's own " +
+                                    "policy (CSP, Trusted Types) does not block this vector" },
+                   ["FIRED · NO POLICY BLOCK"]);
     cards.push(domElement("div", { class: "card", "data-finding-key": key }, [
       domElement("div", { class: "card-label" }, [
         domElement("span", { class: "badge badge-xss" }, [item.precondition ? "Sink reached" : "XSS PoC"]), " ",
-        sevBadge, " ", item.sink,
+        factBadge, " ", item.sink,
       ]),
       srcRow, pocRow, envRow,
       domElement("div", { class: "card-meta" }, srcLink),
@@ -1486,7 +1489,7 @@ function messageOriginClause(a) {
     : " (engine-fired, live-unverified: a document on the attacker's own site)");
 }
 /* The acts a PoC was verified under (solve.c's `acts`, validated by bridge.js docSinkAct), as the reader's
-   steps after the delivery: the finding needs that interaction, which lowers its severity and not its truth. */
+   steps after the delivery: the finding needs that interaction. */
 function _actsSentence(acts) {
   return acts.map(function (a) {
     if (a.kind === "message") return "a message posted to `" + a.target + "` " + messageOriginClause(a);

@@ -699,17 +699,13 @@ pre.code-context > code {
 .ws-send-btn:hover { background: #a371f7; }
 .ws-send-btn:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
 
-.badge-high {
+.badge-fired {
   background: #3d1418;
   color: #f85149;
 }
-.badge-medium {
+.badge-conditional {
   background: #2d1b00;
   color: #f0883e;
-}
-.badge-low {
-  background: #1c2536;
-  color: #79c0ff;
 }
 .badge-xss {
   background: #3d1418;
