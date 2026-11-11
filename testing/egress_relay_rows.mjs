@@ -21,7 +21,8 @@ if (typeof Z.resultDocumentRefusal !== 'function') {
 }
 
 const VECTOR = { destination: 'value', actor: 'page', provenance: 'derived' };
-const entry = (over) => Object.assign({ url: 'https://a.test/api', vector: VECTOR, how: 'sent', refusal: null,
+const PARTS = { address: 'concrete', headers: [], body: 'none' };
+const entry = (over) => Object.assign({ url: 'https://a.test/api', vector: VECTOR, parts: PARTS, how: 'sent', refusal: null,
                                         admittedBy: { kind: 'default', arm: 2, why: 'the page\'s own run' } }, over);
 /* What a function of the zone answers, or the word for its absence or its abort. */
 const asked = (name, ...args) => {
@@ -48,7 +49,7 @@ const ROWS = [
               ['what admitted it', Array.isArray(s) && s[0].admittedBy.kind, 'default']]; } },
   { label: 'a refused request and a cache hit are entries too', run: () => {
       const log = taken([['GET', { egress: [entry({ how: 'not-sent', admittedBy: null, refusal: 'provenance=forced' })] }],
-                         ['GET', { egress: [entry({ how: 'answered-locally', vector: null, admittedBy: null })] }]]);
+                         ['GET', { egress: [entry({ how: 'answered-locally', vector: null, parts: null, admittedBy: null })] }]]);
       const s = log && log.sends;
       return [['entries', Array.isArray(s) ? s.length : String(log), 2],
               ['the refusal', Array.isArray(s) && s[0].refusal, 'provenance=forced'],
@@ -60,6 +61,7 @@ const ROWS = [
       [['an unknown how', asked('egressRecordRefusal', { egress: [entry({ how: 'maybe' })] }) === null, false],
        ['an unknown admitting kind', asked('egressRecordRefusal', { egress: [entry({ admittedBy: { kind: 'other' } })] }) === null, false],
        ['a sent entry nothing admitted', asked('egressRecordRefusal', { egress: [entry({ admittedBy: null })] }) === null, false],
+       ['a judged entry with no parts', asked('egressRecordRefusal', { egress: [entry({ parts: null })] }) === null, false],
        ['a well-formed record', asked('egressRecordRefusal', { egress: [entry({})] }), null]] },
   { label: 'an analysis states its instance\'s list, and one without the field is refused', run: () =>
       [['a list', asked('analysisEgressRefusal', { egressSends: [Object.assign({ method: 'GET' }, entry({}))] }), null],

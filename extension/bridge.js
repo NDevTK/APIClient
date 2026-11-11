@@ -1016,6 +1016,12 @@ function egressEntryRefusal(e) {
   if (e.admittedBy !== null && (!docIsRecord(e.admittedBy) || EGRESS_ADMITTED.indexOf(e.admittedBy.kind) < 0))
     return "an entry states the admitting kind " + JSON.stringify(e.admittedBy && e.admittedBy.kind);
   if (e.refusal !== null && typeof e.refusal !== "string") return "an entry's refusal is neither a token nor null";
+  /* The class of each part the `bytes` row is the weakest of (safe-fetch.js's _bytesParts), present exactly
+     where the vector is. */
+  if ((e.parts === null) !== (e.vector === null)) return "an entry states parts and a vector disagreeing";
+  if (e.parts !== null && (!docIsRecord(e.parts) || typeof e.parts.address !== "string" ||
+                           !Array.isArray(e.parts.headers) || typeof e.parts.body !== "string"))
+    return "an entry's parts are not {address, headers, body}";
   if (e.vector === null) return e.admittedBy === null && e.how === "answered-locally" ? null
     : "an entry with no vector is not a cache hit";
   if ((e.admittedBy === null) !== (e.how === "not-sent")) return "an entry is " + e.how + " and " +
@@ -1039,7 +1045,7 @@ function egressTake(log, method, r) {
   CHECK(why === null, "a " + method + " request settled and " + why);
   CHECK(log && Array.isArray(log.sends), "a settled request's sends were taken into no instance's log");
   for (const e of r.egress)
-    log.sends.push({ method, url: e.url, vector: e.vector, admittedBy: e.admittedBy, how: e.how,
+    log.sends.push({ method, url: e.url, vector: e.vector, parts: e.parts, admittedBy: e.admittedBy, how: e.how,
                      refusal: e.refusal });
 }
 /* The census of a list, keyed as safeFetchEgressCensus keys the zone's: "<how> <what admitted it>". */
