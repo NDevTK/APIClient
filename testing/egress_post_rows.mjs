@@ -3,10 +3,12 @@
 // zone's `@EGRESS` lines. The page's unforced boot POSTs JSON and reads the reply; it POSTs two bodies to one
 // address; and on an arm that assumes absent state it POSTs to a new address and repeats a POST its unforced run
 // already made. It POSTs JSON.stringify over unknowns: with examples on the unforced run (sent as the serializer's
-// text over them), on the forced arm (not sent), with no example (not sent), and once more on an arm whose example
-// differs (a second request, not the first one's record). It also sends a header whose value is an unknown with an example (`navigator.language`) and, on
-// the arm that contradicts that example, the same unknown with no bytes, by fetch() and by XMLHttpRequest.// XMLHttpRequests POST JSON and read the reply, POST binary bytes, and POST on the forced arm. The control is
-// the seed load: the server served the page, or nothing below is a reading.
+// text over them), on the forced arm (not sent), with no example (not sent), and once more on an arm pinning
+// the referrer to another value (a second request, not the first one's record). It also sends a header whose
+// value is an unknown with an example (`navigator.language`) and, on the arm that contradicts that example, the
+// same unknown with no bytes, by fetch() and by XMLHttpRequest. Its XMLHttpRequests POST JSON and read the
+// reply, POST binary bytes, and POST on the forced arm. The control is the seed load: the server served the
+// page, or nothing below is a reading.
 //
 //   node testing/egress_post_rows.mjs [path-to-native-binary]      (after `node engine/build.mjs native`)
 "use strict";
@@ -43,7 +45,7 @@ xp.onload = function () { fetch('/api/xhr-read?n=' + JSON.parse(xp.responseText)
 xp.send(JSON.stringify({ x: 1 }));
 var xb = new XMLHttpRequest(); xb.open('POST', '/api/xhr-bin'); xb.send(new Uint8Array([0, 255, 1, 128]));
 fetch('/api/body-ex', { method: 'POST', body: JSON.stringify({ u: location.href, l: navigator.language }) });
-function bodyTwo() { fetch('/api/body-two', { method: 'POST', body: JSON.stringify({ l: navigator.language }) }); }
+function bodyTwo() { fetch('/api/body-two', { method: 'POST', body: JSON.stringify({ r: document.referrer }) }); }
 bodyTwo();
 fetch('/api/hdr-ex', { headers: { 'X-Probe': navigator.language } });
 var xe = new XMLHttpRequest(); xe.open('GET', '/api/xhr-ex'); xe.setRequestHeader('X-Probe', navigator.language); xe.send();
@@ -52,9 +54,7 @@ if (navigator.language !== 'en-US') {
   var xu = new XMLHttpRequest(); xu.open('GET', '/api/xhr-unk'); xu.setRequestHeader('X-Probe', navigator.language); xu.send();
   fetch('/api/body-unk', { method: 'POST', body: JSON.stringify({ l: navigator.language }) });
 }
-/* Only the arm that contradicted the example reaches a second test, so the arm pinning another value is one of
-   its descendants and every row above reads its world unchanged. */
-if (navigator.language === 'fr') bodyTwo();
+if (document.referrer === 'https://attacker.example/') bodyTwo();
 </script>`;
 
 /* Every request that arrived, as "METHOD path?query <body> <content-type> <x-page>". */
@@ -95,10 +95,12 @@ const got = (method, path) => arrived.filter((a) => a.method === method && a.pat
 const egress = err.split('\n').map((l) => l.indexOf('@EGRESS ') < 0 ? null : JSON.parse(l.slice(l.indexOf('@EGRESS ') + 8)))
   .filter((e) => e !== null);
 const sends = (method, path) => egress.filter((e) => e.method === method && new URL(e.url).pathname === path);
-/* One entry as "how/admitting kind", then what refused the send a record answered, then the refusal. */
-const said = (list) => list.map((e) => e.how + '/' + (e.admittedBy ? e.admittedBy.kind : 'none') +
+/* Each distinct answer as "how/admitting kind", then what refused the send a record answered, then the refusal.
+   Distinct, because every world standing when a forced arm is reached asks it again, and how many worlds that is
+   at the backstop is a fact about the schedule, not about the zone. */
+const said = (list) => [...new Set(list.map((e) => e.how + '/' + (e.admittedBy ? e.admittedBy.kind : 'none') +
                                        (e.admittedBy && e.admittedBy.refused ? ' ' + e.admittedBy.refused : '') +
-                                       (e.refusal ? ' ' + e.refusal : '')).sort().join(' | ');
+                                       (e.refusal ? ' ' + e.refusal : '')))].sort().join(' | ');
 
 /* What the judged entries say each header's bytes are, after the row that folds them: the distinct statements,
    since a request asked again in several worlds is judged once per ask. */
@@ -123,7 +125,7 @@ const ROWS = [
   ['two POSTs to one address with different bodies are two sends',
    [['POST /api/two', got('POST', '/api/two').length, 2],
     ['their bodies', got('POST', '/api/two').map((a) => a.body).sort().join('|'), 'b=1|b=2'],
-    ['how the zone answered them', said(sends('POST', '/api/two')), 'sent/default | sent/default']]],
+    ['how the zone answered them', said(sends('POST', '/api/two')), 'sent/default']]],
   ['a POST on a forced path is recorded and not sent',
    [['POST /api/forced', got('POST', '/api/forced').length, 0],
     ['how the zone answered it', said(sends('POST', '/api/forced')), 'not-sent/none provenance=forced']]],
@@ -172,21 +174,21 @@ const ROWS = [
     ['how the zone answered it', said(sends('POST', '/api/body-ex')), 'sent/default'],
     ['what the entry states', bodyIs(sends('POST', '/api/body-ex')), 'example body:example']]],
   ['a POST on a forced path whose body is serialized over the arm\'s pinned value is recorded and not sent, its ' +
-   'body an example',
+   'body concrete (an equality-pinned value is concrete)',
    [['POST /api/body-forced', got('POST', '/api/body-forced').length, 0],
     ['how the zone answered it', said(sends('POST', '/api/body-forced')), 'not-sent/none provenance=forced'],
-    ['what the entry states', bodyIs(sends('POST', '/api/body-forced')), 'example body:example']]],
+    ['what the entry states', bodyIs(sends('POST', '/api/body-forced')), 'concrete body:concrete']]],
   ['a POST whose body is serialized over an unknown with no example is listed, judged and not sent',
    [['POST /api/body-unk', got('POST', '/api/body-unk').length, 0],
     ['what refused it', refusals(sends('POST', '/api/body-unk')), 'bytes=unknown'],
     ['what the entry states', bodyIs(sends('POST', '/api/body-unk')), 'unknown body:unknown']]],
-  ['one POST in two worlds whose examples differ is two requests: the unforced one is sent, and the forced ' +
-   'one is not answered from its record',
+  ['one POST in two worlds whose bytes differ (the referrer\'s example, and the attacker\'s value an arm pins) is ' +
+   'two requests: the unforced one is sent, and the forced one is not answered from its record',
    [['POST /api/body-two', got('POST', '/api/body-two').length, 1],
-    ['its body', bodies('POST', '/api/body-two'), JSON.stringify({ l: 'en-US' }) + ' text/plain;charset=UTF-8'],
+    ['its body', bodies('POST', '/api/body-two'), JSON.stringify({ r: '' }) + ' text/plain;charset=UTF-8'],
     ['how the zone answered the two asks', said(sends('POST', '/api/body-two')),
      'not-sent/none provenance=forced | sent/default'],
-    ['what the entries state', bodyIs(sends('POST', '/api/body-two')), 'example body:example']]],
+    ['what the entries state', bodyIs(sends('POST', '/api/body-two')), 'concrete body:concrete | example body:example']]],
 ];
 let bad = 0;
 for (const [label, notes] of ROWS) {
