@@ -2028,6 +2028,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/compileparenrest.h"
 #include "fixture/compilearrayrest.h"
 #include "fixture/compileasyncrest.h"
+#include "fixture/compilelookstrrest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2863,6 +2864,7 @@ TF_DOCS[] = {
     { "compileparenrest", HTML_COMPILEPARENREST },
     { "compilearrayrest", HTML_COMPILEARRAYREST },
     { "compileasyncrest", HTML_COMPILEASYNCREST },
+    { "compilelookstrrest", HTML_COMPILELOOKSTRREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -19916,8 +19918,8 @@ TF_UNIT void probes_htmlbytesrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the six compile-rest documents (fixture/compilestrrest.h, compilererest.h, compilelabelrest.h,
-   compileparenrest.h, compilearrayrest.h, compileasyncrest.h): the indirect eval's answer reached its record, and no turn of the
+/* The rows of the seven compile-rest documents (fixture/compilestrrest.h, compilererest.h, compilelabelrest.h,
+   compileparenrest.h, compilearrayrest.h, compileasyncrest.h, compilelookstrrest.h): the indirect eval's answer reached its record, and no turn of the
    document held the thread for a quantum between two offers (`sliceOverrunGapWork`), so the compile rested
    inside the stint the document makes long. A row's key is its own document's record address, so each
    document selects one row. */
@@ -19941,6 +19943,9 @@ TF_UNIT void probes_compilerest(const char *js, Probe *tab, int *n) {
         { "compile-async-rest", "/api/cmp-async", "n", "100001",
           "a turn held the thread for a quantum or more between two offers: the compile of `async (` before an "
           "argument list of 100,001 elements ran a stint that offered no suspend point" },
+        { "compile-lookahead-string-rest", "/api/cmp-lookstr", "n", "100000",
+          "a turn held the thread for a quantum or more between two offers: the lookahead over an object literal "
+          "holding a string of 100,000 characters scanned the string with no suspend point offered" },
     };
     const char *at = strstr(js, "\"sliceOverrunGapWork\":");
     long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;

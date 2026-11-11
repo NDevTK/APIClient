@@ -55393,6 +55393,12 @@ static int js_parse_skip_step(JSParseState *s, bool can_rest, int *pbits, bool *
         }
         DCHECK(s->token.ptr > tok_at, "a bracket lookahead reached its rest point without reading a token "
                "since the last: the rest is offered once per token, so a resume could rest again without progress");
+        /* A string token's body is scanned here, resting inside it, rather than whole by the next token's ask;
+           a rest inside it resumes at the drive's dispatch, which completes the body before this scan goes on. */
+        if (can_rest && s->pd_tok.pending && js_parse_token_step(s, true) > 0) {
+            *prested = true;
+            return 0;
+        }
         if (can_rest && js_parse_want_yield(s)) {
             *prested = true;
             return 0;
