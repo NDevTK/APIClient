@@ -9,6 +9,8 @@
 // destination; the seed is the one load this zone composes that leaves; a refusal names the fact that decided.
 // Third group: a refused request byte-identical to a send the same document's unforced run made is answered
 // from that send's record, and the server's count does not move.
+// Fourth group, the address class: the engine's word for whether the address is bytes the page computed or its
+// unknown's example is shown on the vector and decides nothing by default; an address with no bytes never leaves.
 //
 //   node testing/egress_rows.mjs
 "use strict";
@@ -55,10 +57,10 @@ const docOf = (page, reach, driven = 'undriven', pinned = 'unpinned') =>
 
 /* A page request as engine/trusted.mjs's workFetch states it, from the document `docKey` at `page`. */
 async function ask(page, url, docKey, { destination = '', mode = 'cors', provenance = 'derived', pinned = 'unpinned',
-                                        driven = 'undriven', reach = 'observed', headers } = {}) {
+                                        driven = 'undriven', reach = 'observed', headers, address } = {}) {
   const origin = new URL(page).origin;
   return ZONE.safeFetch(url, {
-    pageOrigin: origin, destination, mode, provenance, pinned, driven,
+    pageOrigin: origin, destination, mode, provenance, pinned, driven, ...(address === undefined ? {} : { address }),
     actor: 'page', credentialed: false, credentials: 'same-origin', useCorsPreflight: false, headers,
     doc: docOf(page, reach),
     identity: await ZONE.pageRequestIdentity(origin, page, docKey, url, 'same-origin', mode,
@@ -189,16 +191,47 @@ const ROWS = [
       const after = await ask(PAGE_W, `${W}/tool-made`, 'engine:toolmade', { provenance: 'forced' });
       return [['GET /tool-made', count('GET', '/tool-made'), 1], ['made', arm(only(made)), 'widened'],
               ['after the narrowing', refusalOf(after), 'blocked-signal:provenance=forced']]; } },
+  { label: 'an address that is its unknown\'s example is sent on the unforced run, and the entry states the class',
+    run: async () => {
+      const r = await ask(PAGE_A, `${A}/ex-own`, 'engine:addr', { address: 'example' }).catch(() => null);
+      const e = r === null ? null : only(r);
+      return [['GET /ex-own', count('GET', '/ex-own'), 1], ['admitted by', arm(e), 'default'],
+              ['the class on the vector', e && e.vector && e.vector.address, 'example'],
+              ['the control\'s class', (only(await ask(PAGE_A, `${A}/own`, 'engine:own')).vector || {}).address, 'concrete']]; } },
+  { label: 'an address with no bytes never leaves, at an unwidened origin or a widened one', run: async () => {
+      const refused = async (page, url) => refusalOf(await ask(page, url, 'engine:addr', { address: 'unknown' })
+                                                     .catch(() => ({ refusal: { reason: 'aborted' } })));
+      const own = await refused(PAGE_A, `${A}/no-bytes`);
+      ZONE.safeFetchWiden(W);
+      const wide = await refused(PAGE_W, `${W}/no-bytes`);
+      const exampleWide = ZONE.safeFetchFiringRefusal({
+        url: `${W}/x`, destination: '', provenance: 'forced', pinned: 'unpinned', actor: 'page', driven: 'undriven',
+        doc: docOf(PAGE_W, 'observed'), credentialed: false, headers: null, address: 'example' });
+      ZONE.safeFetchUnwiden(W);
+      return [['GET /no-bytes', count('GET', '/no-bytes'), 0], ['unwidened', own, 'blocked-signal:address=unknown'],
+              ['widened', wide, 'blocked-signal:address=unknown'],
+              ['no grant can name it', ZONE.safeFetchSignalUsable('address', 'unknown'), 'never-permitted'],
+              ['a widened origin admits a forced example address', exampleWide, null]]; } },
+  { label: 'a request that states no address class is refused at the entry', run: async () => {
+      const r = await ZONE.safeFetch(`${A}/unclassed`, {
+        pageOrigin: A, destination: '', mode: 'cors', provenance: 'derived', pinned: 'unpinned', driven: 'undriven',
+        actor: 'page', credentialed: false, credentials: 'same-origin', useCorsPreflight: false,
+        doc: docOf(PAGE_A, 'observed'),
+        identity: await ZONE.pageRequestIdentity(A, PAGE_A, 'engine:addr', `${A}/unclassed`, 'same-origin', 'cors',
+                                                 'strict-origin-when-cross-origin', PAGE_A) })
+        .then(() => 'answered', () => 'aborted');
+      return [['GET /unclassed', count('GET', '/unclassed'), 0], ['the ask', r, 'aborted']]; } },
   { label: 'the zone counts its sends by how each left and what admitted it', run: async () => {
       const c = typeof ZONE.safeFetchEgressCensus === 'function' ? ZONE.safeFetchEgressCensus() : null;
       const sum = c === null ? -1 : Object.values(c).reduce((a, n) => a + n, 0);
       /* Sent by a default arm: own, twice, hop, landed, own.js, reached.js, reached.css, own-nav, seed. Sent
          widened: wide, wide.js. Not sent: pin, forced-value, assumed.js, forced.png, forced-nav, probe,
          driven.js. Twice's second ask was answered locally. The third group adds served and served-h sent by
-         a default arm, tool-made sent widened, three asks not sent and one served from the record. */
-      return [['entries counted', sum, 26], ['sent by a default arm', c && c['sent default'], 11],
-              ['sent at a widened origin', c && c['sent widened'], 3], ['not sent', c && c['not-sent none'], 10],
-              ['answered locally', c && c['answered-locally default'], 1],
+         a default arm, tool-made sent widened, three asks not sent and one served from the record. The fourth
+         adds ex-own sent by a default arm and the control's second ask answered locally, and two asks not sent. */
+      return [['entries counted', sum, 30], ['sent by a default arm', c && c['sent default'], 12],
+              ['sent at a widened origin', c && c['sent widened'], 3], ['not sent', c && c['not-sent none'], 12],
+              ['answered locally', c && c['answered-locally default'], 2],
               ['served from the record', c && c['answered-locally record'], 1]]; } },
 ];
 
