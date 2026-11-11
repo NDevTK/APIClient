@@ -3077,6 +3077,10 @@ typedef struct JSConcolicHooks {
     /* The type set (JS_LANG_TYPE_* bits) the standard fixes for `v`, an unknown `derived` just answered: the
        solver's type facet for it, so a later §6.1 type test over it is decided (`𝔽(countBytes)` is a Number). */
     void (*type_fix)(JSContext *ctx, JSValueConst v, unsigned lang_types);
+    /* The type set a built-in's definition declares for its normal completion (JSTrampStepDef.result_types),
+       for `v`, an unknown a call of it completed with that is none of the call's operands: stated where `v`
+       states none, so `Math.max(x) == undefined` is decided. A value that states one must share a type. */
+    void (*result_types)(JSContext *ctx, JSValueConst v, unsigned lang_types);
     /* WHETHER THAT ANSWER IS BYTES: 1 when the operand holds an example or a determined value, either of which may
        be `undefined`, 0 when it has none. `example` spends JS_UNDEFINED on both, so an operation over a value
        whose example is `undefined` — a member the served record holds as `undefined` — asks this first. */
@@ -3194,7 +3198,7 @@ typedef struct JSConcolicHooks {
 /* ASKED OF AN UNKNOWN: called only on a value `is` answered for, so a table with an `is` is refused unless it
    carries every one, and a table without an `is` never reaches them. */
 #define JS_CONCOLIC_ASKED_OF_AN_UNKNOWN(X) \
-    X(derived) X(example) X(call) X(type_fix) X(key_domain_holds) X(key_domain_missed)                          \
+    X(derived) X(example) X(call) X(type_fix) X(result_types) X(key_domain_holds) X(key_domain_missed)          \
     X(key_domain_stated) X(string_domain) X(string_keep_prefix) X(string_unit_map) X(string_class)              \
     X(string_length_reached) X(json_parse) X(member_never_callable) X(has_property) X(to_str)                   \
     X(builtin) X(lead) X(own_key_mint) X(get_value_base)

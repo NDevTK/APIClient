@@ -5311,6 +5311,20 @@ static void concolic_type_fix_hook(JSContext *ctx, JSValueConst v, unsigned lang
     concolic_type_state(v, cty_of_tyf(lang_types));
 }
 
+/* JSConcolicHooks.result_types: the set a built-in's definition declares for the completion `v`. */
+static void concolic_result_types_hook(JSContext *ctx, JSValueConst v, unsigned lang_types)
+{
+    Concolic *c = concolic_is(v) ? JS_GetOpaque(v, g_concolic_class) : NULL;
+
+    (void)ctx;
+    DCHECK(c != NULL && lang_types != 0, "a completion's types were declared for no unknown, or as the empty set");
+    if (!c->ty) { concolic_type_state(v, cty_of_tyf(lang_types)); return; }
+    DCHECKF(tyf_of_cty(c->ty) & lang_types,
+            "a built-in whose definition declares the completion types 0x%x completed with `%s`, whose own "
+            "mint states 0x%x: the two share no type, so one of the declarations is wrong", lang_types,
+            c->shape ? c->shape : "{}", tyf_of_cty(c->ty));
+}
+
 /* The equality algorithms, spelled once: the identity's operator field. concolic_new_cmp composes the same
    field for a component whose IDL member is a comparison, and the two must agree exactly or a page writing
    the comparison the component declares would fork again over the same predicate. There is no inequality
@@ -10340,6 +10354,7 @@ static JSConcolicHooks g_hooks = {
     .call = concolic_call_hook,
     .derived = concolic_new_derived,
     .type_fix = concolic_type_fix_hook,
+    .result_types = concolic_result_types_hook,
     .example_held = concolic_example_present,
     /* The ordinal half of a page-created value's name. With the member NULL the engine stamps 0,
        JS_CreationName answers absent for every value, and literal_ident's creation-name arm returns NULL: a host

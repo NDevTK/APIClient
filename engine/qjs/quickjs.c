@@ -34907,6 +34907,18 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        threw, so the definition's `onerror` (IfAbruptCloseIterator and its kin) must not run. */
                     if (st == JS_STEP_UNKNOWN) { JS_FreeValue(ctx, r); r = JS_UNDEFINED; }
                     if (!JS_IsUninitialized(unk)) r = js_step_unknown_result(ctx, udef, ustage, unk, r);
+                    /* The completion's type where the definition declares one. An operand returned as itself
+                       is of that type on this path only (thisNumberValue returns its argument or throws), so
+                       it is left as it was. */
+                    if (udef->result_types && g_concolic.is(r)) {
+                        JSValue *ops = sp - cargc;
+                        int own = 0;
+
+                        for (i = cfirst; i < cargc; i++)
+                            own |= JS_VALUE_GET_TAG(ops[i]) == JS_TAG_OBJECT &&
+                                   JS_VALUE_GET_OBJ(ops[i]) == JS_VALUE_GET_OBJ(r);
+                        if (!own) g_concolic.result_types(ctx, r, udef->result_types);
+                    }
                     if (souter_kind == CONT_FOROF_NEXT) {
                         /* the machine WAS a for-of .next(). Its operands are dropped and its result enters the
                            loop's protocol exactly where a returned heap frame's does. */
@@ -78562,25 +78574,25 @@ static const JSTrampStepDef js_array_find_def          = { sizeof(JSArrayFind), 
                                                         .steps = js_array_find_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_findIndex_def     = { sizeof(JSArrayFind), js_array_find_step, js_array_find_fini, ArrayFindIndex , .visit = js_array_find_visit,
                                                         .algorithm = "23.1.3.10 Array.prototype.findIndex",
-                                                        .steps = js_array_findIndex_steps, .forwards_unknown_receiver = 1 };
+                                                        .steps = js_array_findIndex_steps, .forwards_unknown_receiver = 1, .result_types = JS_LANG_TYPE_NUMBER };
 static const JSTrampStepDef js_array_findLast_def      = { sizeof(JSArrayFind), js_array_find_step, js_array_find_fini, ArrayFindLast , .visit = js_array_find_visit,
                                                         .algorithm = "23.1.3.11 Array.prototype.findLast",
                                                         .steps = js_array_findLast_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_array_findLastIndex_def = { sizeof(JSArrayFind), js_array_find_step, js_array_find_fini, ArrayFindLastIndex , .visit = js_array_find_visit,
                                                         .algorithm = "23.1.3.12 Array.prototype.findLastIndex",
-                                                        .steps = js_array_findLastIndex_steps, .forwards_unknown_receiver = 1 };
+                                                        .steps = js_array_findLastIndex_steps, .forwards_unknown_receiver = 1, .result_types = JS_LANG_TYPE_NUMBER };
 static const JSTrampStepDef js_ta_find_def             = { sizeof(JSArrayFind), js_array_find_step, js_array_find_fini, ArrayFind | FIND_TA , .visit = js_array_find_visit,
                                                         .algorithm = "23.2.3.11 %TypedArray%.prototype.find",
                                                         .steps = js_ta_find_steps };
 static const JSTrampStepDef js_ta_findIndex_def        = { sizeof(JSArrayFind), js_array_find_step, js_array_find_fini, ArrayFindIndex | FIND_TA , .visit = js_array_find_visit,
                                                         .algorithm = "23.2.3.12 %TypedArray%.prototype.findIndex",
-                                                        .steps = js_ta_findIndex_steps };
+                                                        .steps = js_ta_findIndex_steps, .result_types = JS_LANG_TYPE_NUMBER };
 static const JSTrampStepDef js_ta_findLast_def         = { sizeof(JSArrayFind), js_array_find_step, js_array_find_fini, ArrayFindLast | FIND_TA , .visit = js_array_find_visit,
                                                         .algorithm = "23.2.3.13 %TypedArray%.prototype.findLast",
                                                         .steps = js_ta_findLast_steps };
 static const JSTrampStepDef js_ta_findLastIndex_def    = { sizeof(JSArrayFind), js_array_find_step, js_array_find_fini, ArrayFindLastIndex | FIND_TA , .visit = js_array_find_visit,
                                                         .algorithm = "23.2.3.14 %TypedArray%.prototype.findLastIndex",
-                                                        .steps = js_ta_findLastIndex_steps };
+                                                        .steps = js_ta_findLastIndex_steps, .result_types = JS_LANG_TYPE_NUMBER };
 static const JSTrampStepDef js_re_replace_def          = { sizeof(JSReRep), js_re_rep_vstep, js_re_rep_fini, 0, .visit = js_re_rep_visit,
                                                      .algorithm = "22.2.6.11 RegExp.prototype [ @@replace ]",
                                                      .steps = js_re_replace_steps };
@@ -78624,7 +78636,7 @@ static void js_re_search_visit(JSContext *ctx, void *st, JSStepVisit *v);
 static const JSTrampStepDef js_re_test_def =
     { sizeof(JSReSearch), js_re_search_step, js_re_search_fini, 0, .visit = js_re_search_visit,
       .algorithm = "22.2.6.16 RegExp.prototype.test",
-      .steps = js_re_test_steps };
+      .steps = js_re_test_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_re_search_def =
     { sizeof(JSReSearch), js_re_search_step, js_re_search_fini, 1, .visit = js_re_search_visit,
       .algorithm = "22.2.6.12 RegExp.prototype [ @@search ]",
@@ -78658,10 +78670,10 @@ static const JSTrampStepDef js_str_replaceAll_def      = { sizeof(JSStrReplace),
                                                      .steps = js_str_replaceAll_steps };
 static const JSTrampStepDef js_array_every_def     = { sizeof(JSArrayEvery), js_array_every_vstep, js_array_every_vfini, special_every, .visit = js_array_every_visit,
                                                      .algorithm = "23.1.3.6 Array.prototype.every",
-                                                     .steps = js_array_every_steps, .forwards_unknown_receiver = 1 };
+                                                     .steps = js_array_every_steps, .forwards_unknown_receiver = 1, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_array_some_def      = { sizeof(JSArrayEvery), js_array_every_vstep, js_array_every_vfini, special_some, .visit = js_array_every_visit,
                                                      .algorithm = "23.1.3.29 Array.prototype.some",
-                                                     .steps = js_array_some_steps, .forwards_unknown_receiver = 1 };
+                                                     .steps = js_array_some_steps, .forwards_unknown_receiver = 1, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_array_forEach_def   = { sizeof(JSArrayEvery), js_array_every_vstep, js_array_every_vfini, special_forEach, .visit = js_array_every_visit,
                                                      .algorithm = "23.1.3.15 Array.prototype.forEach",
                                                      .steps = js_array_forEach_steps, .forwards_unknown_receiver = 1 };
@@ -78673,10 +78685,10 @@ static const JSTrampStepDef js_array_filter_def    = { sizeof(JSArrayEvery), js_
                                                      .steps = js_array_filter_steps, .forwards_unknown_receiver = 1 };
 static const JSTrampStepDef js_ta_every_def        = { sizeof(JSArrayEvery), js_array_every_vstep, js_array_every_vfini, special_every | special_TA, .visit = js_array_every_visit,
                                                      .algorithm = "23.2.3.8 %TypedArray%.prototype.every",
-                                                     .steps = js_ta_every_steps };
+                                                     .steps = js_ta_every_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_ta_some_def         = { sizeof(JSArrayEvery), js_array_every_vstep, js_array_every_vfini, special_some | special_TA, .visit = js_array_every_visit,
                                                      .algorithm = "23.2.3.28 %TypedArray%.prototype.some",
-                                                     .steps = js_ta_some_steps };
+                                                     .steps = js_ta_some_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_ta_forEach_def      = { sizeof(JSArrayEvery), js_array_every_vstep, js_array_every_vfini, special_forEach | special_TA, .visit = js_array_every_visit,
                                                      .algorithm = "23.2.3.15 %TypedArray%.prototype.forEach",
                                                      .steps = js_ta_forEach_steps };
@@ -78987,10 +78999,10 @@ static JSValue js_iter_setter_fini(JSContext *ctx, void *st, bool take_result)
 
 static const JSTrampStepDef js_hasown_def      = { sizeof(JSHasOwn), js_hasown_step, js_hasown_fini, HASOWN_STATIC, .visit = js_hasown_visit,
                      .algorithm = "20.1.2.14 Object.hasOwn",
-                     .steps = js_hasown_steps };
+                     .steps = js_hasown_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_hasownprop_def  = { sizeof(JSHasOwn), js_hasown_step, js_hasown_fini, 0, .visit = js_hasown_visit,
                      .algorithm = "20.1.3.2 Object.prototype.hasOwnProperty",
-                     .steps = js_hasownprop_steps };
+                     .steps = js_hasownprop_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_lookupgetter_def = { sizeof(JSLookupAcc), js_lookup_acc_step, js_lookup_acc_fini, 0, .visit = js_lookup_acc_visit,
                       .algorithm = "20.1.3.9.3 Object.prototype.__lookupGetter__ ( key )",
                       .steps = js_lookupgetter_steps };
@@ -79020,13 +79032,13 @@ static const JSTrampStepDef js_instanceof_def  = { sizeof(JSInstanceOf), js_inst
                         .algorithm = "13.10.2 InstanceofOperator", .steps = js_instanceof_steps };
 static const JSTrampStepDef js_ordinary_hasinst_def = { sizeof(JSInstanceOf), js_instanceof_step, js_instanceof_fini, INSTOF_ORDINARY, .visit = js_instanceof_visit,
                         .algorithm = "20.2.3.6 Function.prototype [ %Symbol.hasInstance% ], which is 7.3.21 OrdinaryHasInstance",
-                        .steps = js_instanceof_steps };
+                        .steps = js_instanceof_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_obj_tolocale_def = { sizeof(JSObjToLocale), js_object_tolocale_step, js_object_tolocale_fini, 0, .visit = js_object_tolocale_visit,
                       .algorithm = "20.1.3.5 Object.prototype.toLocaleString",
                       .steps = js_obj_tolocale_steps };
 static const JSTrampStepDef js_obj_tostring_def = { sizeof(JSObjToString), js_object_tostring_step, js_object_tostring_fini, 0, .visit = js_object_tostring_visit,
                       .algorithm = "20.1.3.6 Object.prototype.toString",
-                      .steps = js_obj_tostring_steps };
+                      .steps = js_obj_tostring_steps, .result_types = JS_LANG_TYPE_STRING };
 static const JSTrampStepDef js_obj_seal_def     = { sizeof(JSIntegrity), js_integrity_step, js_integrity_fini, 0, .visit = js_integrity_visit,
                       .algorithm = "20.1.2.22 Object.seal",
                       .steps = js_obj_seal_steps };
@@ -79035,10 +79047,10 @@ static const JSTrampStepDef js_obj_freeze_def   = { sizeof(JSIntegrity), js_inte
                       .steps = js_obj_freeze_steps };
 static const JSTrampStepDef js_obj_issealed_def = { sizeof(JSIntegrity), js_integrity_step, js_integrity_fini, INTEG_TEST, .visit = js_integrity_visit,
                       .algorithm = "20.1.2.18 Object.isSealed",
-                      .steps = js_obj_issealed_steps };
+                      .steps = js_obj_issealed_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_obj_isfrozen_def = { sizeof(JSIntegrity), js_integrity_step, js_integrity_fini, INTEG_TEST | INTEG_FREEZE, .visit = js_integrity_visit,
                       .algorithm = "20.1.2.17 Object.isFrozen",
-                      .steps = js_obj_isfrozen_steps };
+                      .steps = js_obj_isfrozen_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_iter_helper_return_def = { sizeof(JSIterHelperReturn), js_iter_helper_return_step, js_iter_helper_return_fini, 0, .visit = js_iter_helper_return_visit,
                                                          .algorithm = "27.1.2.1.2 %IteratorHelperPrototype%.return",
                                                          .steps = js_iter_helper_return_steps };
@@ -79057,7 +79069,7 @@ static const JSTrampStepDef js_json_str_def      = { sizeof(JSJsonStr), js_json_
                           declares — two `.algorithm` labels claiming one section made every §25.5.2 citation
                           in this file read as misattributed, the parse's correct ones included. */
                        .algorithm = "25.5.4 JSON.stringify ( value [ , replacer [ , space ] ] )",
-                       .steps = js_json_str_steps };
+                       .steps = js_json_str_steps, .result_types = JS_LANG_TYPE_STRING | JS_LANG_TYPE_UNDEFINED };
 static const char *const js_ta_slice_steps[];
 static const JSTrampStepDef js_ta_slice_def     = { sizeof(JSTASlice), js_ta_slice_step, js_ta_slice_fini, 0, .visit = js_ta_slice_visit,
         .algorithm = "23.2.3.27 %TypedArray%.prototype.slice",
@@ -79065,10 +79077,10 @@ static const JSTrampStepDef js_ta_slice_def     = { sizeof(JSTASlice), js_ta_sli
 static const char *const js_str_concat_steps[];
 static const JSTrampStepDef js_str_concat_def   = { sizeof(JSStrConcat), js_str_concat_step, js_str_concat_fini, 0, .visit = js_str_concat_visit,
                                                    .algorithm = "22.1.3.5 String.prototype.concat",
-                                                   .steps = js_str_concat_steps };
+                                                   .steps = js_str_concat_steps, .result_types = JS_LANG_TYPE_STRING };
 static const char *const js_str_ctor_steps[];
 static const JSTrampStepDef js_str_ctor_def     = { sizeof(JSStrCtor), js_str_ctor_step, js_str_ctor_fini, 0, .visit = js_str_ctor_visit,
-                        .algorithm = "22.1.1.1 String ( value )", .steps = js_str_ctor_steps };
+                        .algorithm = "22.1.1.1 String ( value )", .steps = js_str_ctor_steps, .result_types = JS_LANG_TYPE_STRING | JS_LANG_TYPE_OBJECT };
 static const char *const js_array_at_steps[];
 static const JSTrampStepDef js_array_at_def     = { sizeof(JSArrayAt), js_array_at_step, js_array_at_fini, 0, .visit = js_array_at_visit,
                         .algorithm = "23.1.3.1 Array.prototype.at", .steps = js_array_at_steps };
@@ -79096,13 +79108,13 @@ static const JSTrampStepDef js_ta_copyWithin_def = { sizeof(JSTACoerce), js_ta_c
                        .steps = js_ta_copyWithin_steps };
 static const JSTrampStepDef js_ta_indexOf_def     = { sizeof(JSTACoerce), js_ta_coerce_step, js_ta_coerce_fini, TAPRO_SEARCH_ARG(special_indexOf), .visit = js_ta_coerce_visit,
                         .algorithm = "23.2.3.17 %TypedArray%.prototype.indexOf",
-                        .steps = js_ta_indexOf_steps };
+                        .steps = js_ta_indexOf_steps, .result_types = JS_LANG_TYPE_NUMBER };
 static const JSTrampStepDef js_ta_lastIndexOf_def = { sizeof(JSTACoerce), js_ta_coerce_step, js_ta_coerce_fini, TAPRO_SEARCH_ARG(special_lastIndexOf), .visit = js_ta_coerce_visit,
                         .algorithm = "23.2.3.20 %TypedArray%.prototype.lastIndexOf",
-                        .steps = js_ta_lastIndexOf_steps };
+                        .steps = js_ta_lastIndexOf_steps, .result_types = JS_LANG_TYPE_NUMBER };
 static const JSTrampStepDef js_ta_includes_def    = { sizeof(JSTACoerce), js_ta_coerce_step, js_ta_coerce_fini, TAPRO_SEARCH_ARG(special_includes), .visit = js_ta_coerce_visit,
                         .algorithm = "23.2.3.16 %TypedArray%.prototype.includes",
-                        .steps = js_ta_includes_steps };
+                        .steps = js_ta_includes_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_ta_subarray_def    = { sizeof(JSTASubarray), js_ta_subarray_step, js_ta_subarray_fini, 0, .visit = js_ta_subarray_visit,
                         .algorithm = "23.2.3.30 %TypedArray%.prototype.subarray",
                         .steps = js_ta_subarray_steps };
@@ -79176,13 +79188,13 @@ static const char *const js_str_endswith_steps[];
 static const char *const js_str_startswith_steps[];
 static const JSTrampStepDef js_str_includes_def   =
     { sizeof(JSStrIncludes), js_string_includes_step, js_string_includes_fini, 0, .visit = js_string_includes_visit,
-      .algorithm = "22.1.3.8 String.prototype.includes", .steps = js_str_includes_steps };
+      .algorithm = "22.1.3.8 String.prototype.includes", .steps = js_str_includes_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_str_endswith_def   =
     { sizeof(JSStrIncludes), js_string_includes_step, js_string_includes_fini, 2, .visit = js_string_includes_visit,
-      .algorithm = "22.1.3.7 String.prototype.endsWith", .steps = js_str_endswith_steps };
+      .algorithm = "22.1.3.7 String.prototype.endsWith", .steps = js_str_endswith_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_str_startswith_def =
     { sizeof(JSStrIncludes), js_string_includes_step, js_string_includes_fini, 1, .visit = js_string_includes_visit,
-      .algorithm = "22.1.3.24 String.prototype.startsWith", .steps = js_str_startswith_steps };
+      .algorithm = "22.1.3.24 String.prototype.startsWith", .steps = js_str_startswith_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static int js_string_wellformed_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
 static JSValue js_string_wellformed_fini(JSContext *ctx, void *st, bool take_result);
 static void js_string_wellformed_visit(JSContext *ctx, void *st, JSStepVisit *v);
@@ -79191,10 +79203,10 @@ static const char *const js_str_towellformed_steps[];
 static const char *const js_str_iterator_steps[];
 static const JSTrampStepDef js_str_iswellformed_def =
     { sizeof(JSStrWellFormed), js_string_wellformed_step, js_string_wellformed_fini, 0 , .visit = js_string_wellformed_visit,
-      .algorithm = "22.1.3.10 String.prototype.isWellFormed", .steps = js_str_iswellformed_steps };
+      .algorithm = "22.1.3.10 String.prototype.isWellFormed", .steps = js_str_iswellformed_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_str_towellformed_def =
     { sizeof(JSStrWellFormed), js_string_wellformed_step, js_string_wellformed_fini, 1 , .visit = js_string_wellformed_visit,
-      .algorithm = "22.1.3.31 String.prototype.toWellFormed", .steps = js_str_towellformed_steps };
+      .algorithm = "22.1.3.31 String.prototype.toWellFormed", .steps = js_str_towellformed_steps, .result_types = JS_LANG_TYPE_STRING };
 static const JSTrampStepDef js_str_iterator_def =
     { sizeof(JSStrIterCreate), js_string_iterator_create_step, js_string_iterator_create_fini, 0 , .visit = js_string_iterator_create_visit,
       .algorithm = "22.1.3.36 String.prototype [ @@iterator ]", .steps = js_str_iterator_steps };
@@ -79331,9 +79343,9 @@ static const JSTrampStepDef js_array_shift_def   = { sizeof(JSArrayPop),  js_arr
 static const char *const js_array_push_steps[];
 static const char *const js_array_unshift_steps[];
 static const JSTrampStepDef js_array_push_def    = { sizeof(JSArrayPush), js_array_push_step, js_array_push_fini, 0, .visit = js_array_push_visit,
-                        .algorithm = "23.1.3.23 Array.prototype.push", .steps = js_array_push_steps };
+                        .algorithm = "23.1.3.23 Array.prototype.push", .steps = js_array_push_steps, .result_types = JS_LANG_TYPE_NUMBER };
 static const JSTrampStepDef js_array_unshift_def = { sizeof(JSArrayPush), js_array_push_step, js_array_push_fini, 1, .visit = js_array_push_visit,
-                        .algorithm = "23.1.3.37 Array.prototype.unshift", .steps = js_array_unshift_steps };
+                        .algorithm = "23.1.3.37 Array.prototype.unshift", .steps = js_array_unshift_steps, .result_types = JS_LANG_TYPE_NUMBER };
 static const JSTrampStepDef js_array_ctor_def =
     CREATECTOR_DEF(JS_CLASS_ARRAY, 0, generic, js_array_ctor_body, 0);
 static const char *const js_array_slice_steps[];
@@ -79409,7 +79421,7 @@ static const JSTrampStepDef js_boolean_ctor_def =
 static const JSTrampStepDef js_bigint_ctor_def =
     { sizeof(JSPrimArgs), js_primargs_step, js_primargs_fini, PRIMARGS(0x1, HINT_NUMBER, 1),
       { .generic = js_bigint_constructor }, JS_CFUNC_constructor_or_func, 0, NULL, NULL, NULL, .visit = js_primargs_visit,
-      .algorithm = "21.2.1.1 BigInt ( value )", .steps = js_primargs_steps };
+      .algorithm = "21.2.1.1 BigInt ( value )", .steps = js_primargs_steps, .result_types = JS_LANG_TYPE_BIGINT };
 static JSValue js_symbol_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv);
 static int js_symbol_ctor_precheck(JSContext *ctx, const JSStepHdr *h);
 /* 20.4.1.1 Symbol([description]): step 1 rejects a NewTarget, step 2 is `? ToString(description)`, and the rest
@@ -79427,28 +79439,28 @@ static void js_error_tostring_visit(JSContext *ctx, void *st, JSStepVisit *v);
 static const char *const js_error_tostring_steps[];
 static const JSTrampStepDef js_error_tostring_def =
     { sizeof(JSErrToString), js_error_tostring_step, js_error_tostring_fini, 0 , .visit = js_error_tostring_visit,
-      .algorithm = "20.5.3.4 Error.prototype.toString", .steps = js_error_tostring_steps };
+      .algorithm = "20.5.3.4 Error.prototype.toString", .steps = js_error_tostring_steps, .result_types = JS_LANG_TYPE_STRING };
 static const JSTrampStepDef js_symbol_ctor_def =
     { sizeof(JSPrimArgs), js_primargs_step, js_primargs_fini, PRIMARGS(0x1, HINT_STRING, 1),
       { .generic = js_symbol_constructor }, JS_CFUNC_constructor_or_func, 0, js_symbol_ctor_precheck, NULL, NULL,
       .visit = js_primargs_visit, .algorithm = "20.4.1.1 Symbol ( [ description ] )",
-      .steps = js_primargs_steps };
+      .steps = js_primargs_steps, .result_types = JS_LANG_TYPE_SYMBOL };
 static const char *const js_array_indexOf_steps[];
 static const char *const js_array_lastIndexOf_steps[];
 static const char *const js_array_includes_steps[];
 static const JSTrampStepDef js_array_indexOf_def     = { sizeof(JSArraySearch), js_array_search_step, js_array_search_fini, SEARCH_INDEXOF, .visit = js_array_search_visit,
-                        .algorithm = "23.1.3.17 Array.prototype.indexOf", .steps = js_array_indexOf_steps, .forwards_unknown_receiver = 1 };
+                        .algorithm = "23.1.3.17 Array.prototype.indexOf", .steps = js_array_indexOf_steps, .forwards_unknown_receiver = 1, .result_types = JS_LANG_TYPE_NUMBER };
 static const JSTrampStepDef js_array_lastIndexOf_def = { sizeof(JSArraySearch), js_array_search_step, js_array_search_fini, SEARCH_LASTINDEXOF, .visit = js_array_search_visit,
-                        .algorithm = "23.1.3.20 Array.prototype.lastIndexOf", .steps = js_array_lastIndexOf_steps, .forwards_unknown_receiver = 1 };
+                        .algorithm = "23.1.3.20 Array.prototype.lastIndexOf", .steps = js_array_lastIndexOf_steps, .forwards_unknown_receiver = 1, .result_types = JS_LANG_TYPE_NUMBER };
 static const JSTrampStepDef js_array_includes_def    = { sizeof(JSArraySearch), js_array_search_step, js_array_search_fini, SEARCH_INCLUDES, .visit = js_array_search_visit,
-                        .algorithm = "23.1.3.16 Array.prototype.includes", .steps = js_array_includes_steps, .forwards_unknown_receiver = 1 };
+                        .algorithm = "23.1.3.16 Array.prototype.includes", .steps = js_array_includes_steps, .forwards_unknown_receiver = 1, .result_types = JS_LANG_TYPE_BOOLEAN };
 static int js_string_raw_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
 static JSValue js_string_raw_fini(JSContext *ctx, void *st, bool take_result);
 static void js_string_raw_visit(JSContext *ctx, void *st, JSStepVisit *v);
 static const char *const js_string_raw_steps[];
 static const JSTrampStepDef js_string_raw_def =
     { sizeof(JSStringRaw), js_string_raw_step, js_string_raw_fini, 0, .visit = js_string_raw_visit,
-      .algorithm = "22.1.2.4 String.raw", .steps = js_string_raw_steps };
+      .algorithm = "22.1.2.4 String.raw", .steps = js_string_raw_steps, .result_types = JS_LANG_TYPE_STRING };
 /* Declared where the machine is; a definition sits with its siblings rather than with the algorithm it
    belongs to, so the labels are named here and written there. */
 static const char *const js_str_trim_steps[];
@@ -79496,10 +79508,10 @@ static const JSTrampStepDef js_str_trimEnd_def    = { sizeof(JSStrRecv), js_str_
                                                     .steps = js_str_trimEnd_steps };
 static const JSTrampStepDef js_str_at_def         = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_AT, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.1 String.prototype.at",
-                                                    .steps = js_str_at_steps };
+                                                    .steps = js_str_at_steps, .result_types = JS_LANG_TYPE_STRING | JS_LANG_TYPE_UNDEFINED };
 static const JSTrampStepDef js_str_codePointAt_def= { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_CODEPOINTAT, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.4 String.prototype.codePointAt",
-                                                    .steps = js_str_codePointAt_steps };
+                                                    .steps = js_str_codePointAt_steps, .result_types = JS_LANG_TYPE_NUMBER | JS_LANG_TYPE_UNDEFINED };
 static const JSTrampStepDef js_str_substring_def  = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SUBSTRING, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "22.1.3.25 String.prototype.substring",
                                                     .steps = js_str_substring_steps };
@@ -79515,13 +79527,13 @@ static const JSTrampStepDef js_str_lastIndexOf_def= { sizeof(JSStrRecv), js_str_
                                                     .steps = js_str_lastIndexOf_steps };
 static const JSTrampStepDef js_str_normalize_def  = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_NORMALIZE, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.15 String.prototype.normalize",
-                                                    .steps = js_str_normalize_steps };
+                                                    .steps = js_str_normalize_steps, .result_types = JS_LANG_TYPE_STRING };
 static const JSTrampStepDef js_str_charAt_def     = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_CHARAT, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "22.1.3.2 String.prototype.charAt",
                                                     .steps = js_str_charAt_steps };
 static const JSTrampStepDef js_str_charCodeAt_def = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_CHARCODEAT, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.3 String.prototype.charCodeAt",
-                                                    .steps = js_str_charCodeAt_steps };
+                                                    .steps = js_str_charCodeAt_steps, .result_types = JS_LANG_TYPE_NUMBER };
 static JSValue js_str_slice_over_unknown(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static const JSTrampStepDef js_str_slice_def      = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SLICE, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING, .over_unknown_receiver = js_str_slice_over_unknown,
                                                     .algorithm = "22.1.3.22 String.prototype.slice",
@@ -79540,7 +79552,7 @@ static const JSTrampStepDef js_str_padEnd_def     = { sizeof(JSStrRecv), js_str_
                                                     .steps = js_str_padEnd_steps };
 static const JSTrampStepDef js_str_localeCmp_def  = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_LOCALECOMPARE, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.12 String.prototype.localeCompare",
-                                                    .steps = js_str_localeCmp_steps };
+                                                    .steps = js_str_localeCmp_steps, .result_types = JS_LANG_TYPE_NUMBER };
 /* THE `, and 22.1.3.26 .toLocaleLowerCase` THAT STOOD IN THIS NAME IS GONE, AND IT WAS NOT MERELY UNTIDY — IT
    NAMED A DEFINITION THE STANDARD ITSELF RETIRES. ECMA-402 §20.1.2 "String.prototype.toLocaleLowerCase ( [
    locales ] )" opens "This definition supersedes the definition provided in ECMA-262, 22.1.3.26.", and ECMA-402 §20.1.3
@@ -79555,52 +79567,52 @@ static const JSTrampStepDef js_str_toUpper_def    = { sizeof(JSStrRecv), js_str_
                                                     .steps = js_str_toUpper_steps };
 static const JSTrampStepDef js_str_toLocaleLower_def = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TOLOCALELOWER, .visit = js_str_recv_visit,
                                                     .algorithm = "ECMA-402 §20.1.2 String.prototype.toLocaleLowerCase",
-                                                    .steps = js_str_toLocaleLower_steps };
+                                                    .steps = js_str_toLocaleLower_steps, .result_types = JS_LANG_TYPE_STRING };
 static const JSTrampStepDef js_str_toLocaleUpper_def = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TOLOCALEUPPER, .visit = js_str_recv_visit,
                                                     .algorithm = "ECMA-402 §20.1.3 String.prototype.toLocaleUpperCase",
-                                                    .steps = js_str_toLocaleUpper_steps };
+                                                    .steps = js_str_toLocaleUpper_steps, .result_types = JS_LANG_TYPE_STRING };
 /* Written out rather than built by a macro: each tag is its own Annex B algorithm with its own steps
    array, and a macro body carrying `.steps` as a PARAMETER names an array the step gate cannot resolve. */
 static const JSTrampStepDef js_str_html_defs[STRRECV_HTML_COUNT] = {
     [0] = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_HTML_BASE + 0,
              .visit = js_str_recv_visit,
-             .algorithm = "B.2.2.2 String.prototype.anchor", .steps = js_str_anchor_steps },
+             .algorithm = "B.2.2.2 String.prototype.anchor", .steps = js_str_anchor_steps, .result_types = JS_LANG_TYPE_STRING },
     [1] = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_HTML_BASE + 1,
              .visit = js_str_recv_visit,
-             .algorithm = "B.2.2.3 String.prototype.big", .steps = js_str_big_steps },
+             .algorithm = "B.2.2.3 String.prototype.big", .steps = js_str_big_steps, .result_types = JS_LANG_TYPE_STRING },
     [2] = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_HTML_BASE + 2,
              .visit = js_str_recv_visit,
-             .algorithm = "B.2.2.4 String.prototype.blink", .steps = js_str_blink_steps },
+             .algorithm = "B.2.2.4 String.prototype.blink", .steps = js_str_blink_steps, .result_types = JS_LANG_TYPE_STRING },
     [3] = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_HTML_BASE + 3,
              .visit = js_str_recv_visit,
-             .algorithm = "B.2.2.5 String.prototype.bold", .steps = js_str_bold_steps },
+             .algorithm = "B.2.2.5 String.prototype.bold", .steps = js_str_bold_steps, .result_types = JS_LANG_TYPE_STRING },
     [4] = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_HTML_BASE + 4,
              .visit = js_str_recv_visit,
-             .algorithm = "B.2.2.6 String.prototype.fixed", .steps = js_str_fixed_steps },
+             .algorithm = "B.2.2.6 String.prototype.fixed", .steps = js_str_fixed_steps, .result_types = JS_LANG_TYPE_STRING },
     [5] = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_HTML_BASE + 5,
              .visit = js_str_recv_visit,
-             .algorithm = "B.2.2.7 String.prototype.fontcolor", .steps = js_str_fontcolor_steps },
+             .algorithm = "B.2.2.7 String.prototype.fontcolor", .steps = js_str_fontcolor_steps, .result_types = JS_LANG_TYPE_STRING },
     [6] = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_HTML_BASE + 6,
              .visit = js_str_recv_visit,
-             .algorithm = "B.2.2.8 String.prototype.fontsize", .steps = js_str_fontsize_steps },
+             .algorithm = "B.2.2.8 String.prototype.fontsize", .steps = js_str_fontsize_steps, .result_types = JS_LANG_TYPE_STRING },
     [7] = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_HTML_BASE + 7,
              .visit = js_str_recv_visit,
-             .algorithm = "B.2.2.9 String.prototype.italics", .steps = js_str_italics_steps },
+             .algorithm = "B.2.2.9 String.prototype.italics", .steps = js_str_italics_steps, .result_types = JS_LANG_TYPE_STRING },
     [8] = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_HTML_BASE + 8,
              .visit = js_str_recv_visit,
-             .algorithm = "B.2.2.10 String.prototype.link", .steps = js_str_link_steps },
+             .algorithm = "B.2.2.10 String.prototype.link", .steps = js_str_link_steps, .result_types = JS_LANG_TYPE_STRING },
     [9] = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_HTML_BASE + 9,
              .visit = js_str_recv_visit,
-             .algorithm = "B.2.2.11 String.prototype.small", .steps = js_str_small_steps },
+             .algorithm = "B.2.2.11 String.prototype.small", .steps = js_str_small_steps, .result_types = JS_LANG_TYPE_STRING },
     [10] = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_HTML_BASE + 10,
              .visit = js_str_recv_visit,
-             .algorithm = "B.2.2.12 String.prototype.strike", .steps = js_str_strike_steps },
+             .algorithm = "B.2.2.12 String.prototype.strike", .steps = js_str_strike_steps, .result_types = JS_LANG_TYPE_STRING },
     [11] = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_HTML_BASE + 11,
              .visit = js_str_recv_visit,
-             .algorithm = "B.2.2.13 String.prototype.sub", .steps = js_str_sub_steps },
+             .algorithm = "B.2.2.13 String.prototype.sub", .steps = js_str_sub_steps, .result_types = JS_LANG_TYPE_STRING },
     [12] = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_HTML_BASE + 12,
              .visit = js_str_recv_visit,
-             .algorithm = "B.2.2.14 String.prototype.sup", .steps = js_str_sup_steps },
+             .algorithm = "B.2.2.14 String.prototype.sup", .steps = js_str_sup_steps, .result_types = JS_LANG_TYPE_STRING },
 };
 #undef STR_HTML_DEF
 static const char *const js_ta_at_steps[];
@@ -79618,11 +79630,11 @@ static const JSTrampStepDef js_json_raw_def       = { sizeof(JSJsonRaw), js_json
                         .steps = js_json_raw_steps };
 static const JSTrampStepDef js_proto_chain_def    = { sizeof(JSProtoChain), js_proto_chain_step, js_proto_chain_fini, 0, .visit = js_proto_chain_visit,
                         .algorithm = "20.1.3.3 Object.prototype.isPrototypeOf",
-                        .steps = js_proto_chain_steps };
+                        .steps = js_proto_chain_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const char *const js_regexp_tostring_steps[];
 static const JSTrampStepDef js_regexp_tostring_def = { sizeof(JSRegExpToString), js_regexp_tostring_step, js_regexp_tostring_fini, 0, .visit = js_regexp_tostring_visit,
                                                     .algorithm = "22.2.6.17 RegExp.prototype.toString",
-                                                    .steps = js_regexp_tostring_steps };
+                                                    .steps = js_regexp_tostring_steps, .result_types = JS_LANG_TYPE_STRING };
 static const char *const js_re_str_iter_steps[];
 static const JSTrampStepDef js_re_str_iter_def    = { sizeof(JSReStrIter), js_re_str_iter_step, js_re_str_iter_fini, 0, .visit = js_re_str_iter_visit,
                                                     .algorithm = "22.2.9.2.1 %RegExpStringIteratorPrototype%.next",
@@ -79634,7 +79646,7 @@ static const JSTrampStepDef js_regexp_set_input_def = { sizeof(JSReSetInput), js
 static const char *const js_regexp_flags_steps[];
 static const JSTrampStepDef js_regexp_flags_def   = { sizeof(JSRegExpFlags), js_regexp_flags_step, js_regexp_flags_fini, 0, .visit = js_regexp_flags_visit,
                                                     .algorithm = "22.2.6.4 get RegExp.prototype.flags",
-                                                    .steps = js_regexp_flags_steps };
+                                                    .steps = js_regexp_flags_steps, .result_types = JS_LANG_TYPE_STRING };
 static const JSTrampStepDef js_proto_get_def      = { sizeof(JSProtoAccessor), js_proto_accessor_step, js_proto_accessor_fini, PROTOACC_GET, .visit = js_proto_accessor_visit,
                         .algorithm = "20.1.3.8.1 get Object.prototype.__proto__",
                         .steps = js_proto_get_steps };
@@ -79643,7 +79655,7 @@ static const JSTrampStepDef js_proto_set_def      = { sizeof(JSProtoAccessor), j
                         .steps = js_proto_set_steps };
 static const JSTrampStepDef js_prop_is_enum_def   = { sizeof(JSHasOwnEnum), js_has_own_enum_step, js_has_own_enum_fini, 0, .visit = js_has_own_enum_visit,
                                                      .algorithm = "20.1.3.4 Object.prototype.propertyIsEnumerable",
-                                                     .steps = js_prop_is_enum_steps };
+                                                     .steps = js_prop_is_enum_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_obj_defprop_def    = { sizeof(JSObjDefProp), js_obj_defprop_step, js_obj_defprop_fini, 0, .visit = js_obj_defprop_visit,
                                                      .algorithm = "20.1.2.4 Object.defineProperty",
                                                      .steps = js_obj_defprop_steps };
@@ -79655,7 +79667,7 @@ static const JSTrampStepDef js_obj_defsetter_def  = { sizeof(JSObjDefAccessor), 
                                                      .steps = js_obj_defsetter_steps };
 static const JSTrampStepDef js_refl_defprop_def   = { sizeof(JSObjDefProp), js_obj_defprop_step, js_obj_defprop_fini, 1, .visit = js_obj_defprop_visit,
                                                      .algorithm = "28.1.3 Reflect.defineProperty",
-                                                     .steps = js_reflect_defprop_steps };
+                                                     .steps = js_reflect_defprop_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static int js_ownkeys_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
 static JSValue js_ownkeys_fini(JSContext *ctx, void *st, bool take_result);
 static const JSTrampStepDef js_ownkeys_names_def  = { sizeof(JSOwnKeys), js_ownkeys_step, js_ownkeys_fini, JS_GPN_STRING_MASK, .visit = js_ownkeys_visit,
@@ -79669,10 +79681,10 @@ static const JSTrampStepDef js_reflect_ownkeys_def = { sizeof(JSOwnKeys), js_own
                                                      .steps = js_reflect_ownkeys_steps };
 static const JSTrampStepDef js_parseInt_def       = { sizeof(JSParseNum), js_parse_num_step, js_parse_num_fini, 1 , .visit = js_parse_num_visit,
                         .algorithm = "19.2.5 parseInt",
-                        .steps = js_parseInt_steps };
+                        .steps = js_parseInt_steps, .result_types = JS_LANG_TYPE_NUMBER };
 static const JSTrampStepDef js_parseFloat_def     = { sizeof(JSParseNum), js_parse_num_step, js_parse_num_fini, 0 , .visit = js_parse_num_visit,
                         .algorithm = "19.2.4 parseFloat",
-                        .steps = js_parseFloat_steps };
+                        .steps = js_parseFloat_steps, .result_types = JS_LANG_TYPE_NUMBER };
 static const char *const js_str_split_steps[];
 static const JSTrampStepDef js_str_split_def      = { sizeof(JSStrSplit), js_str_split_step, js_str_split_fini, 0, .visit = js_str_split_visit,
                                                      .string_split = 1,
@@ -79683,13 +79695,13 @@ static const char *const js_array_tolocale_steps[];
 static const char *const js_ta_join_steps[];
 static const char *const js_ta_tolocale_steps[];
 static const JSTrampStepDef js_array_join_def     = { sizeof(JSArrayJoin), js_array_join_step, js_array_join_fini, JOIN_ARRAY, .visit = js_array_join_visit,
-                        .algorithm = "23.1.3.18 Array.prototype.join", .steps = js_array_join_steps, .forwards_unknown_receiver = 1 };
+                        .algorithm = "23.1.3.18 Array.prototype.join", .steps = js_array_join_steps, .forwards_unknown_receiver = 1, .result_types = JS_LANG_TYPE_STRING };
 static const JSTrampStepDef js_array_tolocale_def = { sizeof(JSArrayJoin), js_array_join_step, js_array_join_fini, JOIN_ARRAY_LOCALE, .visit = js_array_join_visit,
-                        .algorithm = "23.1.3.32 Array.prototype.toLocaleString", .steps = js_array_tolocale_steps };
+                        .algorithm = "23.1.3.32 Array.prototype.toLocaleString", .steps = js_array_tolocale_steps, .result_types = JS_LANG_TYPE_STRING };
 static const JSTrampStepDef js_ta_join_def        = { sizeof(JSArrayJoin), js_array_join_step, js_array_join_fini, JOIN_TA, .visit = js_array_join_visit,
-                        .algorithm = "23.2.3.18 %TypedArray%.prototype.join", .steps = js_ta_join_steps };
+                        .algorithm = "23.2.3.18 %TypedArray%.prototype.join", .steps = js_ta_join_steps, .result_types = JS_LANG_TYPE_STRING };
 static const JSTrampStepDef js_ta_tolocale_def    = { sizeof(JSArrayJoin), js_array_join_step, js_array_join_fini, JOIN_TA_LOCALE, .visit = js_array_join_visit,
-                        .algorithm = "23.2.3.31 %TypedArray%.prototype.toLocaleString", .steps = js_ta_tolocale_steps };
+                        .algorithm = "23.2.3.31 %TypedArray%.prototype.toLocaleString", .steps = js_ta_tolocale_steps, .result_types = JS_LANG_TYPE_STRING };
 static const char *const js_enum_own_props_steps[];
 static const char *const js_obj_descs_steps[];
 static const char *const js_obj_assign_steps[];
@@ -79716,13 +79728,13 @@ static const JSTrampStepDef js_reflect_get_def    = { sizeof(JSReflectProp), js_
                                                      .steps = js_reflect_get_steps };
 static const JSTrampStepDef js_reflect_set_def    = { sizeof(JSReflectProp), js_reflect_prop_step, js_reflect_prop_fini, GP_SET, .visit = js_reflect_prop_visit,
                                                      .algorithm = "28.1.12 Reflect.set",
-                                                     .steps = js_reflect_set_steps };
+                                                     .steps = js_reflect_set_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_reflect_has_def    = { sizeof(JSReflectProp), js_reflect_prop_step, js_reflect_prop_fini, GP_HAS, .visit = js_reflect_prop_visit,
                                                      .algorithm = "28.1.8 Reflect.has",
-                                                     .steps = js_reflect_has_steps };
+                                                     .steps = js_reflect_has_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_reflect_del_def    = { sizeof(JSReflectProp), js_reflect_prop_step, js_reflect_prop_fini, GP_DELETE, .visit = js_reflect_prop_visit,
                                                      .algorithm = "28.1.4 Reflect.deleteProperty",
-                                                     .steps = js_reflect_del_steps };
+                                                     .steps = js_reflect_del_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_obj_entries_def    = { sizeof(JSPropWalk), js_prop_walk_step, js_prop_walk_fini, PROPWALK_ENTRIES, .visit = js_prop_walk_visit,
                         .algorithm = "20.1.2.5 Object.entries, which is 7.3.23 EnumerableOwnProperties with kind key+value",
                         .steps = js_enum_own_props_steps };
@@ -79765,13 +79777,16 @@ static const char *const js_primargs_steps[];
    question nobody asked. The STAGE half stays shared and stays right: what this machine performs is 7.1.1 over
    the arguments the definition declares, and that is what its labels say. A parameter with no default is what
    makes forgetting one a compile error rather than a silent collision. */
-#define PRIMARGS_DEF_FULL(spec, proto, fn, magic, pre, mid, err, algo) \
+/* `rt` is JSTrampStepDef.result_types: the language types the algorithm's normal completion takes, or 0 where
+   the standard fixes no set this table states. */
+#define PRIMARGS_DEF_FULL(spec, proto, fn, magic, pre, mid, err, rt, algo) \
     { sizeof(JSPrimArgs), js_primargs_step, js_primargs_fini, (spec), { .proto = (fn) }, JS_CFUNC_##proto, (magic), (pre), (mid), (err), \
       .visit = js_primargs_visit, \
       .algorithm = (algo), \
+      .result_types = (rt), \
       .steps = js_primargs_steps }
-#define PRIMARGS_DEF(spec, proto, fn, magic, algo)                PRIMARGS_DEF_FULL(spec, proto, fn, magic, NULL, NULL, NULL, algo)
-#define PRIMARGS_DEF_PRE(spec, proto, fn, magic, pre, mid, algo)  PRIMARGS_DEF_FULL(spec, proto, fn, magic, pre, mid, NULL, algo)
+#define PRIMARGS_DEF(spec, proto, fn, magic, rt, algo)                PRIMARGS_DEF_FULL(spec, proto, fn, magic, NULL, NULL, NULL, rt, algo)
+#define PRIMARGS_DEF_PRE(spec, proto, fn, magic, pre, mid, rt, algo)  PRIMARGS_DEF_FULL(spec, proto, fn, magic, pre, mid, NULL, rt, algo)
 static JSValue js_global_decodeURI(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int isComponent);
 static JSValue js_global_encodeURI(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int isComponent);
 static JSValue js_global_escape(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
@@ -79788,21 +79803,21 @@ static JSValue js_global_unescape(JSContext *ctx, JSValueConst this_val, int arg
    the site the ToPrimitive forcing function named, and the fix is the mechanism that already exists rather
    than a second one. */
 static JSValue js_bigint_toString(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-static const JSTrampStepDef js_bigint_tostring_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), generic, js_bigint_toString, 0, "21.2.3.3 BigInt.prototype.toString ( [ radix ] )");
-static const JSTrampStepDef js_decodeURI_def      = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic_magic, js_global_decodeURI, 0, "19.2.6.1 decodeURI ( encodedURI )");
-static const JSTrampStepDef js_decodeURIComp_def  = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic_magic, js_global_decodeURI, 1, "19.2.6.2 decodeURIComponent ( encodedURIComponent )");
-static const JSTrampStepDef js_encodeURI_def      = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic_magic, js_global_encodeURI, 0, "19.2.6.3 encodeURI ( uri )");
-static const JSTrampStepDef js_encodeURIComp_def  = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic_magic, js_global_encodeURI, 1, "19.2.6.4 encodeURIComponent ( uriComponent )");
-static const JSTrampStepDef js_global_escape_def  = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_global_escape, 0, "B.2.1.1 escape ( string )");
-static const JSTrampStepDef js_global_unescape_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_global_unescape, 0, "B.2.1.2 unescape ( string )");
+static const JSTrampStepDef js_bigint_tostring_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), generic, js_bigint_toString, 0, JS_LANG_TYPE_STRING, "21.2.3.3 BigInt.prototype.toString ( [ radix ] )");
+static const JSTrampStepDef js_decodeURI_def      = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic_magic, js_global_decodeURI, 0, JS_LANG_TYPE_STRING, "19.2.6.1 decodeURI ( encodedURI )");
+static const JSTrampStepDef js_decodeURIComp_def  = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic_magic, js_global_decodeURI, 1, JS_LANG_TYPE_STRING, "19.2.6.2 decodeURIComponent ( encodedURIComponent )");
+static const JSTrampStepDef js_encodeURI_def      = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic_magic, js_global_encodeURI, 0, JS_LANG_TYPE_STRING, "19.2.6.3 encodeURI ( uri )");
+static const JSTrampStepDef js_encodeURIComp_def  = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic_magic, js_global_encodeURI, 1, JS_LANG_TYPE_STRING, "19.2.6.4 encodeURIComponent ( uriComponent )");
+static const JSTrampStepDef js_global_escape_def  = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_global_escape, 0, JS_LANG_TYPE_STRING, "B.2.1.1 escape ( string )");
+static const JSTrampStepDef js_global_unescape_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_global_unescape, 0, JS_LANG_TYPE_STRING, "B.2.1.2 unescape ( string )");
 /* HTML §8.3 Base64 utility methods: each `data` is a DOMString, whose Web IDL conversion is ToString — the
    page's toString or @@toPrimitive — so it is coerced before the body runs. */
 static JSValue js_atob(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-static const JSTrampStepDef js_atob_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_atob, 0, "HTML §8.3 Base64 utility methods atob(data)");
+static const JSTrampStepDef js_atob_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_atob, 0, JS_LANG_TYPE_STRING, "HTML §8.3 Base64 utility methods atob(data)");
 static JSValue js_btoa(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-static const JSTrampStepDef js_btoa_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_btoa, 0, "HTML §8.3 Base64 utility methods btoa(data)");
+static const JSTrampStepDef js_btoa_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_btoa, 0, JS_LANG_TYPE_STRING, "HTML §8.3 Base64 utility methods btoa(data)");
 /* "This function applies the ToString operator to its argument", which is the page's toString. */
-static const JSTrampStepDef js_date_parse_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_Date_parse, 0, "21.4.3.2 Date.parse ( string )");
+static const JSTrampStepDef js_date_parse_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_Date_parse, 0, JS_LANG_TYPE_NUMBER, "21.4.3.2 Date.parse ( string )");
 static const JSTrampStepDef js_error_capture_def = { sizeof(JSErrCapture), js_error_capture_step, js_error_capture_fini, 0,
                         .visit = js_error_capture_visit,
                         .algorithm = "proposal-error-capturestacktrace §20.5.2.1 Error.captureStackTrace ( O [ , limit ] )",
@@ -79944,12 +79959,12 @@ static const JSTrampStepDef js_atomics_notify_def = ATOMICS_DEF(0x6, 3, 1, 0, ge
 /* 25.4.8 Atomics.isLockFree ( size ) takes a plain number and no typed array, so it is the ordinary
    one-argument declaration. */
 static const JSTrampStepDef js_atomics_islockfree_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), generic,
-                                                                    js_atomics_isLockFree, 0, "25.4.8 Atomics.isLockFree ( size )");
+                                                                    js_atomics_isLockFree, 0, 0, "25.4.8 Atomics.isLockFree ( size )");
 #endif /* CONFIG_ATOMICS */
 static const JSTrampStepDef js_date_setTime_def = PRIMARGS_DEF_PRE(PRIMARGS(0x1, HINT_NUMBER, 1), generic,
-                                                                  js_date_setTime, 0, js_date_this_precheck, NULL, "21.4.4.27 Date.prototype.setTime ( time )");
-static const JSTrampStepDef js_bigint_asUintN_def = PRIMARGS_DEF(PRIMARGS(0x3, HINT_NUMBER, 2), generic_magic, js_bigint_asUintN, 0, "21.2.2.2 BigInt.asUintN ( bits, bigint )");
-static const JSTrampStepDef js_bigint_asIntN_def  = PRIMARGS_DEF(PRIMARGS(0x3, HINT_NUMBER, 2), generic_magic, js_bigint_asUintN, 1, "21.2.2.1 BigInt.asIntN ( bits, bigint )");
+                                                                  js_date_setTime, 0, js_date_this_precheck, NULL, JS_LANG_TYPE_NUMBER, "21.4.4.27 Date.prototype.setTime ( time )");
+static const JSTrampStepDef js_bigint_asUintN_def = PRIMARGS_DEF(PRIMARGS(0x3, HINT_NUMBER, 2), generic_magic, js_bigint_asUintN, 0, JS_LANG_TYPE_BIGINT, "21.2.2.2 BigInt.asUintN ( bits, bigint )");
+static const JSTrampStepDef js_bigint_asIntN_def  = PRIMARGS_DEF(PRIMARGS(0x3, HINT_NUMBER, 2), generic_magic, js_bigint_asUintN, 1, JS_LANG_TYPE_BIGINT, "21.2.2.1 BigInt.asIntN ( bits, bigint )");
 static int js_gopd_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
 static JSValue js_gopd_fini(JSContext *ctx, void *st, bool take_result);
 static void js_gopd_visit(JSContext *ctx, void *st, JSStepVisit *v);
@@ -79975,16 +79990,16 @@ static JSValue js_extop_fini(JSContext *ctx, void *st, bool take_result);
 static void js_extop_visit(JSContext *ctx, void *st, JSStepVisit *v);
 static const JSTrampStepDef js_obj_isext_def      = { sizeof(JSExtOp), js_extop_step, js_extop_fini, 0, .visit = js_extop_visit,
                                                      .algorithm = "20.1.2.16 Object.isExtensible",
-                                                     .steps = js_obj_isext_steps };
+                                                     .steps = js_obj_isext_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_reflect_isext_def  = { sizeof(JSExtOp), js_extop_step, js_extop_fini, EXTOP_REFLECT, .visit = js_extop_visit,
                                                      .algorithm = "28.1.9 Reflect.isExtensible",
-                                                     .steps = js_reflect_isext_steps };
+                                                     .steps = js_reflect_isext_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_obj_prevext_def    = { sizeof(JSExtOp), js_extop_step, js_extop_fini, EXTOP_PREVENT, .visit = js_extop_visit,
                                                      .algorithm = "20.1.2.20 Object.preventExtensions",
                                                      .steps = js_obj_prevext_steps };
 static const JSTrampStepDef js_reflect_prevext_def= { sizeof(JSExtOp), js_extop_step, js_extop_fini, EXTOP_PREVENT | EXTOP_REFLECT, .visit = js_extop_visit,
                                                      .algorithm = "28.1.11 Reflect.preventExtensions",
-                                                     .steps = js_reflect_prevext_steps };
+                                                     .steps = js_reflect_prevext_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static int js_setproto_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
 static JSValue js_setproto_fini(JSContext *ctx, void *st, bool take_result);
 static void js_setproto_visit(JSContext *ctx, void *st, JSStepVisit *v);
@@ -79993,7 +80008,7 @@ static const JSTrampStepDef js_obj_setproto_def     = { sizeof(JSSetProto), js_s
                                                         .steps = js_obj_setproto_steps };
 static const JSTrampStepDef js_reflect_setproto_def = { sizeof(JSSetProto), js_setproto_step, js_setproto_fini, 1, .visit = js_setproto_visit,
                                                         .algorithm = "28.1.13 Reflect.setPrototypeOf",
-                                                        .steps = js_reflect_setproto_steps };
+                                                        .steps = js_reflect_setproto_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 /* ALL FIVE iterator-helper factories, as ONE machine. take/drop were a coerce-then-compute definition and
    map/filter/flatMap were plain C functions, and the `next` READ their shared body performed could be routed from
    neither shape. The kind rides body_magic, exactly as it did on the C function; onerror is the IfAbruptClose. */
@@ -80021,11 +80036,11 @@ static const JSTrampStepDef js_iter_flatmap_def   = ITER_HELPER_NEW_DEF(JS_ITERA
                                                         "27.1.3.3.6 Iterator.prototype.flatMap", js_iter_flatmap_steps);
 /* resize/grow and the three transfers are the same declared shape: ONE numeric argument, then a tail that runs
    no user code. The receiver validation the spec orders ahead of the coercion is the precheck. */
-static const JSTrampStepDef js_ab_resize_def     = PRIMARGS_DEF_PRE(PRIMARGS(0x1, HINT_NUMBER, 1), generic_magic, js_array_buffer_resize, JS_CLASS_ARRAY_BUFFER, js_array_buffer_resize_precheck, NULL, "25.1.6.6 ArrayBuffer.prototype.resize ( newLength )");
-static const JSTrampStepDef js_sab_grow_def      = PRIMARGS_DEF_PRE(PRIMARGS(0x1, HINT_NUMBER, 1), generic_magic, js_array_buffer_resize, JS_CLASS_SHARED_ARRAY_BUFFER, js_array_buffer_resize_precheck, NULL, "25.2.5.3 SharedArrayBuffer.prototype.grow ( newLength )");
-static const JSTrampStepDef js_ab_transfer_def   = PRIMARGS_DEF_PRE(PRIMARGS(0x1, HINT_NUMBER, 1), generic_magic, js_array_buffer_transfer, JS_ARRAY_BUFFER_TRANSFER, js_array_buffer_transfer_precheck, NULL, "25.1.6.8 ArrayBuffer.prototype.transfer ( [ newLength ] )");
-static const JSTrampStepDef js_ab_transferImm_def = PRIMARGS_DEF_PRE(PRIMARGS(0x1, HINT_NUMBER, 1), generic_magic, js_array_buffer_transfer, JS_ARRAY_BUFFER_TRANSFER_TO_IMMUTABLE, js_array_buffer_transfer_precheck, NULL, "ArrayBuffer.prototype.transferToImmutable ( ), the Immutable ArrayBuffer proposal, which ECMA-262 does not number yet");
-static const JSTrampStepDef js_ab_transferFix_def = PRIMARGS_DEF_PRE(PRIMARGS(0x1, HINT_NUMBER, 1), generic_magic, js_array_buffer_transfer, JS_ARRAY_BUFFER_TRANSFER_TO_FIXED_LENGTH, js_array_buffer_transfer_precheck, NULL, "25.1.6.9 ArrayBuffer.prototype.transferToFixedLength ( [ newLength ] )");
+static const JSTrampStepDef js_ab_resize_def     = PRIMARGS_DEF_PRE(PRIMARGS(0x1, HINT_NUMBER, 1), generic_magic, js_array_buffer_resize, JS_CLASS_ARRAY_BUFFER, js_array_buffer_resize_precheck, NULL, 0, "25.1.6.6 ArrayBuffer.prototype.resize ( newLength )");
+static const JSTrampStepDef js_sab_grow_def      = PRIMARGS_DEF_PRE(PRIMARGS(0x1, HINT_NUMBER, 1), generic_magic, js_array_buffer_resize, JS_CLASS_SHARED_ARRAY_BUFFER, js_array_buffer_resize_precheck, NULL, 0, "25.2.5.3 SharedArrayBuffer.prototype.grow ( newLength )");
+static const JSTrampStepDef js_ab_transfer_def   = PRIMARGS_DEF_PRE(PRIMARGS(0x1, HINT_NUMBER, 1), generic_magic, js_array_buffer_transfer, JS_ARRAY_BUFFER_TRANSFER, js_array_buffer_transfer_precheck, NULL, 0, "25.1.6.8 ArrayBuffer.prototype.transfer ( [ newLength ] )");
+static const JSTrampStepDef js_ab_transferImm_def = PRIMARGS_DEF_PRE(PRIMARGS(0x1, HINT_NUMBER, 1), generic_magic, js_array_buffer_transfer, JS_ARRAY_BUFFER_TRANSFER_TO_IMMUTABLE, js_array_buffer_transfer_precheck, NULL, 0, "ArrayBuffer.prototype.transferToImmutable ( ), the Immutable ArrayBuffer proposal, which ECMA-262 does not number yet");
+static const JSTrampStepDef js_ab_transferFix_def = PRIMARGS_DEF_PRE(PRIMARGS(0x1, HINT_NUMBER, 1), generic_magic, js_array_buffer_transfer, JS_ARRAY_BUFFER_TRANSFER_TO_FIXED_LENGTH, js_array_buffer_transfer_precheck, NULL, 0, "25.1.6.9 ArrayBuffer.prototype.transferToFixedLength ( [ newLength ] )");
 /* the step table is defined with the machine; the definition here needs its name */
 static const char *const js_regexp_exec_steps[];
 static const JSTrampStepDef js_regexp_exec_def    = { sizeof(JSRegExpExec), js_regexp_exec_step, js_regexp_exec_fini, 0,
@@ -80037,44 +80052,44 @@ static const JSTrampStepDef js_regexp_exec_def    = { sizeof(JSRegExpExec), js_r
    themselves — so a page's `valueOf` containing a loop aborted in `Math.max(o, 1)` while the identical method
    suspended in `o + 1`. They are all the same shape: coerce the named arguments left to right, then compute from
    primitives, which is exactly what PRIMARGS says, so each is ONE line and none of them grows a machine. */
-static const JSTrampStepDef js_math_abs_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_fabs, 0, "21.3.2.1 Math.abs ( x )");
-static const JSTrampStepDef js_math_floor_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_floor, 0, "21.3.2.16 Math.floor ( x )");
-static const JSTrampStepDef js_math_ceil_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_ceil, 0, "21.3.2.10 Math.ceil ( x )");
-static const JSTrampStepDef js_math_round_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_round, 0, "21.3.2.29 Math.round ( x )");
-static const JSTrampStepDef js_math_sqrt_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_sqrt, 0, "21.3.2.33 Math.sqrt ( x )");
-static const JSTrampStepDef js_math_acos_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_acos, 0, "21.3.2.2 Math.acos ( x )");
-static const JSTrampStepDef js_math_asin_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_asin, 0, "21.3.2.4 Math.asin ( x )");
-static const JSTrampStepDef js_math_atan_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_atan, 0, "21.3.2.6 Math.atan ( x )");
-static const JSTrampStepDef js_math_cos_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_cos, 0, "21.3.2.12 Math.cos ( x )");
-static const JSTrampStepDef js_math_exp_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_exp, 0, "21.3.2.14 Math.exp ( x )");
-static const JSTrampStepDef js_math_log_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_log, 0, "21.3.2.21 Math.log ( x )");
-static const JSTrampStepDef js_math_sin_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_sin, 0, "21.3.2.31 Math.sin ( x )");
-static const JSTrampStepDef js_math_tan_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_tan, 0, "21.3.2.35 Math.tan ( x )");
-static const JSTrampStepDef js_math_trunc_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_trunc, 0, "21.3.2.37 Math.trunc ( x )");
-static const JSTrampStepDef js_math_sign_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_sign, 0, "21.3.2.30 Math.sign ( x )");
-static const JSTrampStepDef js_math_cosh_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_cosh, 0, "21.3.2.13 Math.cosh ( x )");
-static const JSTrampStepDef js_math_sinh_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_sinh, 0, "21.3.2.32 Math.sinh ( x )");
-static const JSTrampStepDef js_math_tanh_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_tanh, 0, "21.3.2.36 Math.tanh ( x )");
-static const JSTrampStepDef js_math_acosh_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_acosh, 0, "21.3.2.3 Math.acosh ( x )");
-static const JSTrampStepDef js_math_asinh_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_asinh, 0, "21.3.2.5 Math.asinh ( x )");
-static const JSTrampStepDef js_math_atanh_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_atanh, 0, "21.3.2.7 Math.atanh ( x )");
-static const JSTrampStepDef js_math_expm1_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_expm1, 0, "21.3.2.15 Math.expm1 ( x )");
-static const JSTrampStepDef js_math_log1p_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_log1p, 0, "21.3.2.22 Math.log1p ( x )");
-static const JSTrampStepDef js_math_log2_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_log2, 0, "21.3.2.24 Math.log2 ( x )");
-static const JSTrampStepDef js_math_log10_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_log10, 0, "21.3.2.23 Math.log10 ( x )");
-static const JSTrampStepDef js_math_cbrt_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_cbrt, 0, "21.3.2.9 Math.cbrt ( x )");
-static const JSTrampStepDef js_math_f16round_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_f16round, 0, "21.3.2.18 Math.f16round ( x )");
-static const JSTrampStepDef js_math_fround_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_fround, 0, "21.3.2.17 Math.fround ( x )");
-static const JSTrampStepDef js_math_atan2_def = PRIMARGS_DEF(PRIMARGS(0x3, HINT_NUMBER, 2), f_f_f, js_math_atan2, 0, "21.3.2.8 Math.atan2 ( y, x )");
-static const JSTrampStepDef js_math_pow_def = PRIMARGS_DEF(PRIMARGS(0x3, HINT_NUMBER, 2), f_f_f, js_math_pow, 0, "21.3.2.27 Math.pow ( base, exponent )");
-static const JSTrampStepDef js_math_min_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 2), generic_magic, js_math_min_max, 0, "21.3.2.26 Math.min ( ...args )");
-static const JSTrampStepDef js_math_max_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 2), generic_magic, js_math_min_max, 1, "21.3.2.25 Math.max ( ...args )");
-static const JSTrampStepDef js_math_hypot_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 2), generic, js_math_hypot, 0, "21.3.2.19 Math.hypot ( ...args )");
-static const JSTrampStepDef js_math_imul_def = PRIMARGS_DEF(PRIMARGS(0x3, HINT_NUMBER, 2), generic, js_math_imul, 0, "21.3.2.20 Math.imul ( x, y )");
-static const JSTrampStepDef js_math_clz32_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), generic, js_math_clz32, 0, "21.3.2.11 Math.clz32 ( x )");
-static const JSTrampStepDef js_str_fromCharCode_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 1), generic, js_string_fromCharCode, 0, "22.1.2.1 String.fromCharCode ( ...codeUnits )");
-static const JSTrampStepDef js_str_fromCodePoint_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 1), generic, js_string_fromCodePoint, 0, "22.1.2.2 String.fromCodePoint ( ...codePoints )");
-static const JSTrampStepDef js_date_UTC_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 7), generic, js_Date_UTC, 0, JS_DATE_UTC_ALGORITHM);
+static const JSTrampStepDef js_math_abs_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_fabs, 0, JS_LANG_TYPE_NUMBER, "21.3.2.1 Math.abs ( x )");
+static const JSTrampStepDef js_math_floor_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_floor, 0, JS_LANG_TYPE_NUMBER, "21.3.2.16 Math.floor ( x )");
+static const JSTrampStepDef js_math_ceil_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_ceil, 0, JS_LANG_TYPE_NUMBER, "21.3.2.10 Math.ceil ( x )");
+static const JSTrampStepDef js_math_round_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_round, 0, JS_LANG_TYPE_NUMBER, "21.3.2.29 Math.round ( x )");
+static const JSTrampStepDef js_math_sqrt_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_sqrt, 0, JS_LANG_TYPE_NUMBER, "21.3.2.33 Math.sqrt ( x )");
+static const JSTrampStepDef js_math_acos_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_acos, 0, JS_LANG_TYPE_NUMBER, "21.3.2.2 Math.acos ( x )");
+static const JSTrampStepDef js_math_asin_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_asin, 0, JS_LANG_TYPE_NUMBER, "21.3.2.4 Math.asin ( x )");
+static const JSTrampStepDef js_math_atan_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_atan, 0, JS_LANG_TYPE_NUMBER, "21.3.2.6 Math.atan ( x )");
+static const JSTrampStepDef js_math_cos_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_cos, 0, JS_LANG_TYPE_NUMBER, "21.3.2.12 Math.cos ( x )");
+static const JSTrampStepDef js_math_exp_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_exp, 0, JS_LANG_TYPE_NUMBER, "21.3.2.14 Math.exp ( x )");
+static const JSTrampStepDef js_math_log_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_log, 0, JS_LANG_TYPE_NUMBER, "21.3.2.21 Math.log ( x )");
+static const JSTrampStepDef js_math_sin_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_sin, 0, JS_LANG_TYPE_NUMBER, "21.3.2.31 Math.sin ( x )");
+static const JSTrampStepDef js_math_tan_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_tan, 0, JS_LANG_TYPE_NUMBER, "21.3.2.35 Math.tan ( x )");
+static const JSTrampStepDef js_math_trunc_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_trunc, 0, JS_LANG_TYPE_NUMBER, "21.3.2.37 Math.trunc ( x )");
+static const JSTrampStepDef js_math_sign_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_sign, 0, JS_LANG_TYPE_NUMBER, "21.3.2.30 Math.sign ( x )");
+static const JSTrampStepDef js_math_cosh_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_cosh, 0, JS_LANG_TYPE_NUMBER, "21.3.2.13 Math.cosh ( x )");
+static const JSTrampStepDef js_math_sinh_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_sinh, 0, JS_LANG_TYPE_NUMBER, "21.3.2.32 Math.sinh ( x )");
+static const JSTrampStepDef js_math_tanh_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_tanh, 0, JS_LANG_TYPE_NUMBER, "21.3.2.36 Math.tanh ( x )");
+static const JSTrampStepDef js_math_acosh_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_acosh, 0, JS_LANG_TYPE_NUMBER, "21.3.2.3 Math.acosh ( x )");
+static const JSTrampStepDef js_math_asinh_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_asinh, 0, JS_LANG_TYPE_NUMBER, "21.3.2.5 Math.asinh ( x )");
+static const JSTrampStepDef js_math_atanh_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_atanh, 0, JS_LANG_TYPE_NUMBER, "21.3.2.7 Math.atanh ( x )");
+static const JSTrampStepDef js_math_expm1_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_expm1, 0, JS_LANG_TYPE_NUMBER, "21.3.2.15 Math.expm1 ( x )");
+static const JSTrampStepDef js_math_log1p_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_log1p, 0, JS_LANG_TYPE_NUMBER, "21.3.2.22 Math.log1p ( x )");
+static const JSTrampStepDef js_math_log2_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_log2, 0, JS_LANG_TYPE_NUMBER, "21.3.2.24 Math.log2 ( x )");
+static const JSTrampStepDef js_math_log10_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_log10, 0, JS_LANG_TYPE_NUMBER, "21.3.2.23 Math.log10 ( x )");
+static const JSTrampStepDef js_math_cbrt_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_cbrt, 0, JS_LANG_TYPE_NUMBER, "21.3.2.9 Math.cbrt ( x )");
+static const JSTrampStepDef js_math_f16round_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_f16round, 0, JS_LANG_TYPE_NUMBER, "21.3.2.18 Math.f16round ( x )");
+static const JSTrampStepDef js_math_fround_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), f_f, js_math_fround, 0, JS_LANG_TYPE_NUMBER, "21.3.2.17 Math.fround ( x )");
+static const JSTrampStepDef js_math_atan2_def = PRIMARGS_DEF(PRIMARGS(0x3, HINT_NUMBER, 2), f_f_f, js_math_atan2, 0, JS_LANG_TYPE_NUMBER, "21.3.2.8 Math.atan2 ( y, x )");
+static const JSTrampStepDef js_math_pow_def = PRIMARGS_DEF(PRIMARGS(0x3, HINT_NUMBER, 2), f_f_f, js_math_pow, 0, JS_LANG_TYPE_NUMBER, "21.3.2.27 Math.pow ( base, exponent )");
+static const JSTrampStepDef js_math_min_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 2), generic_magic, js_math_min_max, 0, JS_LANG_TYPE_NUMBER, "21.3.2.26 Math.min ( ...args )");
+static const JSTrampStepDef js_math_max_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 2), generic_magic, js_math_min_max, 1, JS_LANG_TYPE_NUMBER, "21.3.2.25 Math.max ( ...args )");
+static const JSTrampStepDef js_math_hypot_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 2), generic, js_math_hypot, 0, JS_LANG_TYPE_NUMBER, "21.3.2.19 Math.hypot ( ...args )");
+static const JSTrampStepDef js_math_imul_def = PRIMARGS_DEF(PRIMARGS(0x3, HINT_NUMBER, 2), generic, js_math_imul, 0, JS_LANG_TYPE_NUMBER, "21.3.2.20 Math.imul ( x, y )");
+static const JSTrampStepDef js_math_clz32_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), generic, js_math_clz32, 0, JS_LANG_TYPE_NUMBER, "21.3.2.11 Math.clz32 ( x )");
+static const JSTrampStepDef js_str_fromCharCode_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 1), generic, js_string_fromCharCode, 0, JS_LANG_TYPE_STRING, "22.1.2.1 String.fromCharCode ( ...codeUnits )");
+static const JSTrampStepDef js_str_fromCodePoint_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 1), generic, js_string_fromCodePoint, 0, JS_LANG_TYPE_STRING, "22.1.2.2 String.fromCodePoint ( ...codePoints )");
+static const JSTrampStepDef js_date_UTC_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 7), generic, js_Date_UTC, 0, JS_LANG_TYPE_NUMBER, JS_DATE_UTC_ALGORITHM);
 /* new Function(a, b, body) / the generator and async variants. The receiver slot is new_target on a constructor
    step, which is what step 29's GetPrototypeFromConstructor reads. */
 static const char *const js_dynfunc_steps[];
@@ -80091,43 +80106,43 @@ static const JSTrampStepDef js_asyncgenfn_ctor_def= DYNFUNC_DEF(JS_FUNC_ASYNC_GE
 #undef DYNFUNC_DEF
 #define DV_STEPDEF_DEF(N, GALG, SALG) \
     static const JSTrampStepDef js_dv_get_##N##_def = { sizeof(JSDvGet), js_dv_get_step, js_dv_get_fini, JS_CLASS_##N##_ARRAY, .visit = js_dv_get_visit, .algorithm = GALG, .steps = js_dv_get_steps }; \
-    static const JSTrampStepDef js_dv_set_##N##_def = PRIMARGS_DEF_PRE(PRIMARGS(0x3, HINT_NUMBER, 3), generic_magic, js_dataview_setValue, JS_CLASS_##N##_ARRAY, js_dataview_set_precheck, js_dataview_set_midcheck, SALG);
+    static const JSTrampStepDef js_dv_set_##N##_def = PRIMARGS_DEF_PRE(PRIMARGS(0x3, HINT_NUMBER, 3), generic_magic, js_dataview_setValue, JS_CLASS_##N##_ARRAY, js_dataview_set_precheck, js_dataview_set_midcheck, 0, SALG);
 DV_STEPDEF_LIST(DV_STEPDEF_DEF)
 #undef DV_STEPDEF_DEF
 static const char *const js_num_ctor_steps[];
 static const JSTrampStepDef js_num_ctor_def       = { sizeof(JSNumCtor), js_num_ctor_step, js_num_ctor_fini, 0, .visit = js_num_ctor_visit,
                         .algorithm = "21.1.1.1 Number ( value )",
-                        .steps = js_num_ctor_steps };
+                        .steps = js_num_ctor_steps, .result_types = JS_LANG_TYPE_NUMBER | JS_LANG_TYPE_OBJECT };
 static const char *const js_num_tostring_steps[];
 static const JSTrampStepDef js_num_tostring_def   = { sizeof(JSNumberFmt), js_number_fmt_step, js_number_fmt_fini, NUMFMT_TOSTRING, .visit = js_number_fmt_visit,
                         .algorithm = "21.1.3.6 Number.prototype.toString",
-                        .steps = js_num_tostring_steps };
+                        .steps = js_num_tostring_steps, .result_types = JS_LANG_TYPE_STRING };
 static const char *const js_num_tolocale_steps[];
 static const JSTrampStepDef js_num_tolocale_def   = { sizeof(JSNumberFmt), js_number_fmt_step, js_number_fmt_fini, NUMFMT_TOLOCALESTRING, .visit = js_number_fmt_visit,
                         .algorithm = "21.1.3.4 Number.prototype.toLocaleString",
-                        .steps = js_num_tolocale_steps };
+                        .steps = js_num_tolocale_steps, .result_types = JS_LANG_TYPE_STRING };
 static const char *const js_num_tofixed_steps[];
 static const JSTrampStepDef js_num_tofixed_def    = { sizeof(JSNumberFmt), js_number_fmt_step, js_number_fmt_fini, NUMFMT_TOFIXED, .visit = js_number_fmt_visit,
                         .algorithm = "21.1.3.3 Number.prototype.toFixed",
-                        .steps = js_num_tofixed_steps };
+                        .steps = js_num_tofixed_steps, .result_types = JS_LANG_TYPE_STRING };
 static const char *const js_num_toexp_steps[];
 static const JSTrampStepDef js_num_toexp_def      = { sizeof(JSNumberFmt), js_number_fmt_step, js_number_fmt_fini, NUMFMT_TOEXPONENTIAL, .visit = js_number_fmt_visit,
                         .algorithm = "21.1.3.2 Number.prototype.toExponential",
-                        .steps = js_num_toexp_steps };
+                        .steps = js_num_toexp_steps, .result_types = JS_LANG_TYPE_STRING };
 static const char *const js_num_toprec_steps[];
 static const JSTrampStepDef js_num_toprec_def     = { sizeof(JSNumberFmt), js_number_fmt_step, js_number_fmt_fini, NUMFMT_TOPRECISION, .visit = js_number_fmt_visit,
                         .algorithm = "21.1.3.5 Number.prototype.toPrecision",
-                        .steps = js_num_toprec_steps };
+                        .steps = js_num_toprec_steps, .result_types = JS_LANG_TYPE_STRING };
 static const char *const js_global_eval_steps[];
 static const JSTrampStepDef js_global_eval_def    = { sizeof(JSProgEval), js_global_eval_step, js_global_eval_fini, 0, .visit = js_global_eval_visit,
                         .algorithm = "19.2.1 eval",
                         .steps = js_global_eval_steps };
 static const JSTrampStepDef js_isNaN_def          = { sizeof(JSCoerce1), js_coerce1_step, js_coerce1_fini, 0 , .visit = js_coerce1_visit,
                         .algorithm = "19.2.3 isNaN",
-                        .steps = js_isNaN_steps };
+                        .steps = js_isNaN_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const JSTrampStepDef js_isFinite_def       = { sizeof(JSCoerce1), js_coerce1_step, js_coerce1_fini, 1 , .visit = js_coerce1_visit,
                         .algorithm = "19.2.2 isFinite",
-                        .steps = js_isFinite_steps };
+                        .steps = js_isFinite_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
 static const char *const js_function_call_steps[];
 static const JSTrampStepDef js_function_call_def  = { sizeof(JSFuncCall), js_function_call_step, js_function_call_fini, 0, .visit = js_function_call_visit,
                         .algorithm = "20.2.3.3 Function.prototype.call",
