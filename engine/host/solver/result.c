@@ -836,11 +836,13 @@ char *result_wfq_json(void) {
         CHECK(!w.observed_oldest.ops.present || ops, "result: OOM composing the oldest observed member's operands");
         /* The operands are absent, not null, for a held or cold member: a census object carries numbers only. */
         observed_oldest = composef("{\"seq\":%llu,\"cursor\":%d,\"ownWork\":%lld,\"picks\":%lld,"
-                                   "\"stepUnit\":%d,\"unit\":%d,\"hostOwed\":%d,\"indexed\":%d%s%s}",
+                                   "\"stepUnit\":%d,\"unit\":%d,\"hostOwed\":%d,\"indexed\":%d,\"cold\":%d,"
+                                   "\"written\":%d%s%s}",
                                    (unsigned long long)w.observed_oldest.seq, w.observed_oldest.cursor,
                                    (long long)w.observed_oldest.own_work, (long long)w.observed_oldest.picks,
                                    (int)w.observed_oldest.step_unit, w.observed_oldest.unit,
-                                   w.observed_oldest.host_owed, w.observed_oldest.indexed,
+                                   w.observed_oldest.host_owed, w.observed_oldest.indexed, w.observed_oldest.cold,
+                                   w.observed_oldest.written,
                                    ops ? ",\"terms\":" : "", ops ? ops : "");
         free(ops);
         CHECK(observed_oldest, "result: OOM composing the oldest observed-class member");

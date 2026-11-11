@@ -6574,6 +6574,8 @@ void flow_wfq_census(WfqCensus *out) {
                 out->observed_oldest.step_unit = f->step_unit;
                 out->observed_oldest.host_owed = flow_host_owed(f);
                 out->observed_oldest.indexed = f->ix_in;
+                out->observed_oldest.cold = f->cold;
+                out->observed_oldest.written = f->sold != NULL;
                 out->observed_oldest.unit = f == g_running ? FLOW_UNIT_RUNNING
                                           : flow_frame(f) ? FLOW_UNIT_PROGRAM
                                           : flow_agent_running(f)->parked ? FLOW_UNIT_PARKED

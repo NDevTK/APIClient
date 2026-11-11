@@ -1608,11 +1608,12 @@ typedef struct {
     long observed_members;
     long observed_env_members;
     /* The oldest observed-class member by birth sequence, indexed or not: the program row its cursor names, the
-       work its agents retired, the arm its last step returned through, where it rests (FLOW_UNIT_*), and whether
-       it is host-owed and indexed; and its weight's operands, `ops.present` 0 where it is held or cold. `present`
-       is 0 where no observed-class member stands. */
+       work its agents retired, the arm its last step returned through, where it rests (FLOW_UNIT_*), whether
+       it is host-owed and indexed, whether it is a stub (`cold`) and whether that stub holds written bytes its pick
+       restores in this session (`written`); and its weight's operands, `ops.present` 0 where it is held or cold.
+       `present` is 0 where no observed-class member stands. */
     struct {
-        int present, cursor, host_owed, indexed, unit;
+        int present, cursor, host_owed, indexed, unit, cold, written;
         uint64_t seq;
         int64_t own_work, picks;
         StepUnit step_unit;

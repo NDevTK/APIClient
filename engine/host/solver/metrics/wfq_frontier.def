@@ -243,8 +243,8 @@ METRIC(observed_terms, "observedTerms", GAUGE, "operand", AGENT, "solver/flow.c"
 /* …and the members the observed class leaves out only for an arm against an environment unknown's example; the
    class's oldest member by birth sequence, indexed or not (`cursor` its program row, `ownWork` the work its
    agents retired, `stepUnit` the arm its last step returned through, as its position in solver/step_unit.h's list,
-   the order `_cold.stepUnitRuns` names its arms in, since a census object row holds numbers only), absent where
-   the class is empty; and the
+   the order `_cold.stepUnitRuns` names its arms in, since a census object row holds numbers only; `cold` 1 for a
+   stub, `written` 1 for a stub whose pick restores it this session), absent where the class is empty; and the
    dispatches of a priced member made while an indexed observed-class member of its family weighed strictly
    less. */
 METRIC(observed_env_members, "observedEnvMembers", GAUGE, "member", AGENT, "solver/flow.c", INT)
