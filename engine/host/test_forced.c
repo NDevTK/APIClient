@@ -1598,6 +1598,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/envarm.h"
 #include "fixture/envtypes.h"
 #include "fixture/framerace.h"
+#include "fixture/waitclock.h"
 #include "fixture/shuffle.h"
 #include "fixture/storearm.h"
 #include "fixture/pagewrite.h"
@@ -2393,6 +2394,7 @@ TF_DOCS[] = {
     { "envarm", HTML_ENVARM },
     { "envtypes", HTML_ENVTYPES },
     { "framerace", HTML_FRAMERACE },
+    { "waitclock", HTML_WAITCLOCK },
     { "shuffle", HTML_SHUFFLE },
     { "storearm", HTML_STOREARM },
     { "pagewrite", HTML_PAGEWRITE },
@@ -19117,6 +19119,54 @@ TF_UNIT void probes_framerace(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `waitclock` document (fixture/waitclock.h). The waiting arm of a refused request has taken
+   two replies when its timer and its frame stand ahead of the clock, so a race there would be keyed on arrival
+   number 3; the request in flight beside the refusal is issued after a third reply, so its race is keyed on
+   number 4. */
+TF_UNIT void probes_waitclock(const char *js, Probe *tab, int *n) {
+    static const char WAITING_ARRIVAL[] = "the arrival of the replies in flight, number 3";
+    static const char MIXED_ARRIVAL[] = "the arrival of the replies in flight, number 4";
+    const char *ran_why = NULL; int ran_tt = 1;
+    const char *fork_why = NULL; int fork_tt = 1;
+    const char *mixed_why = NULL; int mixed_tt = 1;
+    const int ran = param_undriven_count(js, "/api/wclkwaiting", "v", "frame-timer-wcWaiting") +
+                    param_undriven_count(js, "/api/wclkwaiting", "v", "timer-frame-wcWaiting");
+    const int m_rt = param_undriven_count(js, "/api/wclkmixed", "v", "reply-timer-wcWaiting");
+    const int m_tr = param_undriven_count(js, "/api/wclkmixed", "v", "timer-reply-wcWaiting");
+
+    fold_row(&ran_tt, &ran_why,
+             param_undriven_count(js, "/api/wclksettled", "v", "wcFailed") > 0 &&
+                 param_undriven_count(js, "/api/wclksettled", "v", "wcAnswered") > 0,
+             "NOT REACHED: /api/wclksettled does not record both `wcFailed` and `wcAnswered`, so the POST's "
+             "refusal did not fork its failure and success arms and no arm is the waiting one");
+    fold_row(&ran_tt, &ran_why, ran > 0,
+             "the waiting arm of a refused request did not run both its timer and its animation frame: HTML §8.7 "
+             "Timers and HTML §8.1.7.3 Processing model make neither wait on the network, and no reply is coming");
+    fold_row(&ran_tt, &ran_why, ran == param_undriven_count(js, "/api/wclkwaiting", "v", NULL),
+             "/api/wclkwaiting recorded a value from an arm whose POST had settled, or an order of other parts");
+    fold_row(&fork_tt, &fork_why, tf_fork_rows(js, WAITING_ARRIVAL, NULL) >= 0,
+             "the result document carries no `_forkAt` census");
+    fold_row(&fork_tt, &fork_why, tf_fork_rows(js, WAITING_ARRIVAL, NULL) == 0,
+             "a deadline in the waiting arm of a refused request forked against the arrival of a reply while "
+             "nothing was in flight: the refused record is not a reply in flight, so the arm where the arrival "
+             "comes first parks for good on an event that cannot happen");
+    fold_row(&mixed_tt, &mixed_why, m_rt > 0 && m_tr > 0,
+             "NOT REACHED or wrong: a 50 ms timer beside a fetch() in flight did not run in both orders against "
+             "the reply in a register that also holds a refused record (`reply-timer` and `timer-reply`)");
+    fold_row(&mixed_tt, &mixed_why, m_rt + m_tr == param_undriven_count(js, "/api/wclkmixed", "v", NULL),
+             "/api/wclkmixed recorded an order that is neither, or a POST that had settled");
+    fold_row(&mixed_tt, &mixed_why, tf_fork_rows(js, MIXED_ARRIVAL, NULL) > 0,
+             "the fork census holds no row over the fourth arrival: the race beside the refusal was not asked "
+             "of the reply's unknown arrival");
+    const Probe rows[] = {
+        { "waiting-arm-deadlines-run", ran_tt, "/api/wclkwaiting", SESS_EXPLORE, ran_why },
+        { "waiting-arm-no-arrival-fork", fork_tt, "/api/wclkwaiting", SESS_EXPLORE, fork_why,
+          .reach = "waiting-arm-deadlines-run" },
+        { "waiting-arm-in-flight-races", mixed_tt, "/api/wclkmixed", SESS_EXPLORE, mixed_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `shuffle` document (fixture/shuffle.h): element accesses at an index that is an environment
    unknown holding an example run on the example's index. */
 TF_UNIT void probes_shuffle(const char *js, Probe *tab, int *n) {
@@ -31555,6 +31605,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_envarm(js, probes, &np);
     probes_envtypes(js, probes, &np);
     probes_framerace(js, probes, &np);
+    probes_waitclock(js, probes, &np);
     probes_shuffle(js, probes, &np);
     probes_storearm(js, probes, &np);
     probes_pagewrite(js, probes, &np);
