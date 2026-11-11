@@ -388,9 +388,12 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
             thread_work_end(&tw, THREAD_WORK_HTML_PARSE, 1);
             CHECK(fst == LXB_STATUS_OK, "the fragment parse failed on a byte of its markup");
             s->pc->fed++;
+            /* The bytes are charged as the feed consumes them, a KiB at a time: a charge rounds up to a whole
+               unit, so a charge per byte would price the markup at thirteen times the HTML parse's rate. */
+            if ((s->pc->fed & 1023) == 0) thread_work_charge(THREAD_WORK_HTML_PARSE, 1024);
             return JS_STEP_YIELD;
         }
-        thread_work_charge(THREAD_WORK_HTML_PARSE, s->len);   /* the fragment's bytes, charged once, whole */
+        thread_work_charge(THREAD_WORK_HTML_PARSE, s->len & 1023);   /* the bytes past the last whole KiB */
         s->frag = lxb_html_parse_fragment_chunk_end(s->pc->parser);
         /* AFTER the end and BEFORE the parser goes: `lxb_html_tree_end` runs the EOF token through the
            insertion modes, which is §13.2.6 writing this tree one last time, and `lxb_html_parser_destroy`
