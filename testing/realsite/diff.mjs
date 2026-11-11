@@ -32,8 +32,8 @@ const pathKey = (method, origin, path) => method + ' ' + origin + path;
 /* ── Chromium ── */
 const loads = readdirSync(capDir).filter((f) => /^chrome-\d+\.json$/.test(f)).sort().map((f) => readJson(join(capDir, f)));
 if (loads.length === 0) throw new Error(`${capDir} holds no chrome-<n>.json`);
-/* `evalThrew` is how a capture made before `crashed` was recorded shows a renderer that died. */
-const whole = (l) => l.crashed !== true && !(l.document && l.document.evalThrew);
+/* A capture made before `crashed` was recorded shows a dead renderer only as `document.evalThrew`. */
+const whole = (l) => l.crashed === undefined ? !(l.document && l.document.evalThrew) : !l.crashed;
 const counted = loads.filter((l) => whole(l) && l.nav && typeof l.nav.status === 'number' && l.nav.status >= 200 && l.nav.status < 400);
 const refused = loads.filter((l) => !counted.includes(l))
   .map((l) => ({ load: l.load, nav: l.nav, ...(whole(l) ? {} : { renderer: 'crashed' }) }));
