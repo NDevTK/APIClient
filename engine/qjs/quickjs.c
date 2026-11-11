@@ -49136,7 +49136,7 @@ static void js_eval_compile_drop(JSContext *ctx, JSEvalCompile **slot);
    run-test262 drives many tests on parallel OS threads.
    THERE ARE TWO SUCH ENTRIES AND THIS SENTENCE SAID `THE ONE ENTRY`, which was exact while only a CLASSIC
    program could park a parse and is rewritten rather than deleted because a reader meeting one carrier type
-   and one slot will re-derive it. JS_FlowCompileStep and JS_FlowEvalModule are §8.1.4.4 "Calling scripts"'
+   and one slot will re-derive it. JS_FlowCompileStep and JS_FlowCompileModule are §8.1.4.4 "Calling scripts"'
    two entries and they offer the SAME slot to the SAME driver; that is the point rather than a duplication,
    because what they hand over is an address on the calling thread's stack and the arrangement is a property
    of __JS_EvalInternal's take-and-clear below, not of either caller. A THIRD entry is the same two lines
@@ -49346,76 +49346,35 @@ static int flow_settle_await(JSContext *ctx, JSAsyncFunctionState *s) {
     return 1;
 }
 
-/* MODULE evaluation under the flow feature. A module is not a program JS_FlowNew can wrap: it is a GRAPH that
-   must be linked and then evaluated in dependency order. But every bytecode module BODY is already an async
-   function driven through async_func_resume — the same seam a flow's base runs on, which is why
-   step_module_evaluate_run treats them all as async-evaluated — so each body parks at a back-edge and the
-   host pump (JS_ResumeParkedFlow) resumes it, exactly like any other flow. What was missing was only the ENTRY:
-   JS_FlowNew compiled with JS_EVAL_TYPE_GLOBAL and threw the caller's MODULE flag away, so a module source was
-   parsed as a classic script and every import/export came back as "unsupported keyword" — a parser error for a
-   parser that is fine. The module's evaluation PROMISE — which is what evaluating a module yields — comes back
-   through `pev`, and the caller settles it through the same job pump it uses for an async script. (This read
-   "Returns the module's evaluation PROMISE", which was exact while the entry answered a value; it answers a
-   STATUS now because the parse can rest, and the sentence is corrected rather than dropped because the fact
-   about WHAT a module evaluation completes with is the part a reader needs.)
-   AND ITS PARSE RESTS, WHICH IS WHAT THE CARRIER IS FOR AND WHY THIS IS A STEP ENTRY RATHER THAN A VALUE ONE.
-   `pd_can_yield` is set from `g_eval_compile_slot` and from nowhere else (__JS_EvalInternal reads it at its
-   own entry), and the slot's only non-NULL write was JS_FlowCompileStep's — so a module compile reached
-   js_parse_want_yield with the seam DISARMED and parsed a program of the page's chosen length with no suspend
-   point anywhere in it. That is the one span §NO BOUNDS names as unrestable, on the half of §8.1.4.4 "Calling
-   scripts" a modern bundle actually uses: the EVALUATION half was already preemptible (a module body is an
-   async function js_async_function_resume_as_flow installs a base for), so the gap was the parse alone and
-   nothing in the evaluate half could see it.
-   THE ANSWER IS JS_FlowCompileStep's ANSWER, for the reason that entry gives for having one: 1 (the graph was
-   linked and evaluated, `*pev` holds the evaluation promise and the caller owns it), 0 (the PARSE handed the
-   thread back — `*pcompile` holds it, call again with the same arguments) or -1 (the compile or the evaluation
-   failed, the exception is pending and `*pev` is undefined). The link-and-evaluate half is BEHIND THE
-   FINISHED-PARSE ARM: a suspended parse has produced no module record to link, and 16.2.1.7.1 ParseModule is
-   the step that ends where the carrier parks.
-   A `pcompile` OF NULL IS A HOST DECLINING THE EDGE, which is JS_FlowNew's arrangement for the classic entry
-   and JSFlowControlHooks.budget's one level up — the same parse through the same driver with the seam
-   unarmed, so a 0 is unreachable and the suspend assert below is what says so where both operands are in one
-   hand.
-   THE SOURCE AND THE FILENAME ARE BORROWED FOR THE WHOLE COMPILE and not for one call, exactly as they are
-   for the classic entry: the parse reads them across every stint, so a caller that offers `pcompile` is
-   promising those bytes outlive it. The scheduler's caller satisfies it by construction — a program's text is
-   a refcounted row of the flow's sequence and a module's name is its own address or its document's, both of
-   which outlive the step that began the parse. NOTHING ELSE CROSSES: the module record, its request and
-   export tables, the descent's frame stack and the JSFunctionDef chain are all on the carrier, which is why
-   this signature grew a slot and not a context. */
-int JS_FlowEvalModule(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags,
-                      JSValue *pev, void **pcompile) {
+/* A document's root module, in two entries (HTML §8.1.4.4 "Calling scripts", run a module script). A module is a
+   graph to link and evaluate, and every module body is an async function on the flow's seam, so the evaluation
+   rests like any flow; the parse rests through the carrier, as JS_FlowCompileStep's does, and 16.2.1.7.1
+   ParseModule ends where the carrier parks, so there is no record to evaluate until the parse has finished.
+
+   JS_FlowCompileModule is ParseModule: 1 with `*pmod` the Source Text Module Record, which the caller owns; 0
+   with the parse parked in `*pcompile` (call again with the same arguments); -1 with the SyntaxError pending. A
+   `pcompile` of NULL declines the rest, so 0 is unreachable. `src` and `filename` are borrowed for the whole
+   compile. The name is the record's identity (the module map key, the base of a nested import,
+   import.meta.url), so there is no placeholder for it. */
+int JS_FlowCompileModule(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags,
+                         JSValue *pmod, void **pcompile) {
     JSEvalCompile *carrier = NULL;
     JSValue bc;
 
-    DCHECK(pev != NULL,
-           "a module evaluation was started with nowhere to put the promise it completes with — 16.2.1.6.1.3 "
-           "Evaluate ( ) returns a Promise and HTML §8.1.4.4 \"Calling scripts\"' module entry step 8 reports "
-           "its rejection, so the capability is part of the completion and not an optional out-parameter");
-    *pev = JS_UNDEFINED;
-    /* A MODULE'S NAME IS NOT A LABEL, it is the record's [[HostDefined]] identity: it keys the module map, it is
-       the base a nested `import` and an `import.meta.url` resolve against, and it is what the loader registers a
-       fetched dependency under. So there is no placeholder to substitute the way JS_FlowNew substitutes
-       "<flow>" — a made-up name silently makes two documents' modules the same module and resolves relative
-       specifiers against nothing. It is also a plain strlen away from the parser's atom table, so a NULL here is
-       a segfault inside js_parse_init rather than anything a reader could trace back to this call.
-       ASKED ON EVERY STINT AND NOT ONLY THE FIRST, which costs two loads and is what makes it a claim about the
-       CALLER rather than about one call: a resume that passed a different name would be resuming this parse
-       against a record keyed on another one, and the resume arm below never reads `filename` at all — so this
-       is the only line that can notice. */
+    DCHECK(pmod != NULL, "a module compile was started with nowhere to put the record it produces");
+    *pmod = JS_UNDEFINED;
+    /* Asked on every stint: a resume under another name would continue a parse whose record is keyed on the
+       first, and the resume arm below never reads `filename`. */
     DCHECK(filename != NULL && filename[0] != '\0',
-           "JS_FlowEvalModule was given no name for the module — a module's name is its resolution base (the "
-           "module map key, the base of a nested import, import.meta.url), so the caller must pass the script's "
-           "base URL rather than leave it to be invented here");
+           "a module compile was given no name — a module's name is its resolution base, so the caller passes the "
+           "script's base URL rather than leave it to be invented here");
     if (pcompile != NULL && *pcompile != NULL) {
         carrier = (JSEvalCompile *)*pcompile;
         *pcompile = NULL;
         bc = js_eval_compile_continue(ctx, &carrier);
     } else {
         JSEvalCompile **outer = g_eval_compile_slot;
-        /* THE OFFER, MADE FOR THE DURATION OF ONE CALL — the same address-on-the-stack JS_FlowCompileStep
-           hands the classic parse, and the whole of what crosses: no host header, no new hook, and no second
-           spelling of the seam for the module entry to drift from. */
+        /* The offer of a rest, made for the duration of one call, as JS_FlowCompileStep makes it. */
         g_eval_compile_slot = (pcompile != NULL) ? &carrier : NULL;
         bc = JS_Eval(ctx, src, len, filename,
                      JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY |
@@ -49424,21 +49383,27 @@ int JS_FlowEvalModule(JSContext *ctx, const char *src, size_t len, const char *f
     }
     if (JS_VALUE_GET_TAG(bc) == JS_TAG_UNINITIALIZED) {
         DCHECK(carrier != NULL && pcompile != NULL,
-               "a module compile answered SUSPENDED with nothing parked — the marker and the carrier are "
-               "written by one function and read by this one, so they cannot disagree unless a third site "
-               "produced it");
+               "a module compile answered suspended with nothing parked — the marker and the carrier are written "
+               "by one function");
         *pcompile = carrier;
         return 0;
     }
     DCHECK(carrier == NULL, "a module compile that finished left a parked parse behind it");
-    if (JS_IsException(bc)) return -1;   /* 16.2.1.7.1 ParseModule failed: the SyntaxError is already pending */
-    DCHECK(JS_VALUE_GET_TAG(bc) == JS_TAG_MODULE, "a MODULE compile must yield a module");
-    *pev = JS_EvalFunction(ctx, bc);   /* create the module function, link the graph, evaluate; consumes bc */
+    if (JS_IsException(bc)) return -1;   /* 16.2.1.7.1 ParseModule failed: the SyntaxError is pending */
+    DCHECK(JS_VALUE_GET_TAG(bc) == JS_TAG_MODULE, "a module compile must yield a module record");
+    *pmod = bc;
+    return 1;
+}
+
+/* Loads, links and evaluates the record `mod` (16.2.1.6.1.1 LoadRequestedModules, 16.2.1.6.1.2 Link,
+   16.2.1.6.1.3 Evaluate) in the running flow: 1 with `*pev` the evaluation promise, which the caller owns; -1
+   with the exception pending and `*pev` undefined. `mod` is borrowed; a record is evaluated once per flow, each
+   flow's status and bindings riding its own delta, so one record serves every world that reaches its body. */
+int JS_FlowEvalModuleRecord(JSContext *ctx, JSValueConst mod, JSValue *pev) {
+    DCHECK(pev != NULL, "a module evaluation was started with nowhere to put the promise it completes with");
+    DCHECK(JS_VALUE_GET_TAG(mod) == JS_TAG_MODULE, "a module evaluation was asked of a value that is no record");
+    *pev = JS_EvalFunction(ctx, JS_DupValue(ctx, mod));
     if (JS_IsException(*pev)) {
-        /* THE EXCEPTION IS THE ANSWER AND THE SLOT IS NOT, so the two are not both handed back. `started` at
-           the one scheduler caller was `!JS_IsException(ev)` before this entry answered a status, and folding
-           an abrupt evaluation into -1 is what keeps that predicate the same predicate rather than a second
-           reading of one the caller would have to compose from two values. */
         *pev = JS_UNDEFINED;
         return -1;
     }

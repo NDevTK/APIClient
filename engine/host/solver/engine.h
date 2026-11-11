@@ -410,7 +410,7 @@ void engine_set_provider_host_holds(int (*holds)(const char *record));
    or NULL/"" for none; it seeds the frontier instead of the boot flow, never beside it, because a resumed flow
    already re-runs the document under its recorded arms.
    `types[i]` is entry i's HTML §4.12.1.1 script type: a classic script runs in a preemptible program frame
-   (JS_FlowNew) and completes with a value, a module is linked and evaluated (JS_FlowEvalModule) and completes
+   (JS_FlowNew) and completes with a value, a module is linked and evaluated (JS_FlowEvalModuleRecord) and completes
    with a promise, and the body cannot say which (top-level `await`).
    `bodies[i]` and `srcs[i]` are core/loader/document_scripts.h's two independent items, source text and the
    HTML §8.1.4.1 "Scripts" base URL; an already-fetched external entry passes both, and an entry with neither

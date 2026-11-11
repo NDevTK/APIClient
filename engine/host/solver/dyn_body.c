@@ -147,7 +147,10 @@ void dyn_body_unref(DynBody *b)
            "are written together at the mint and at the hold, so a body carrying one without the other is a "
            "closure this release either leaks or frees through nothing");
     if (b->parse_realm != NULL) {
+        int module = JS_IsModule(b->parse);
+
         JS_FreeValue(b->parse_realm, b->parse);
+        if (module) JS_FreeContext(b->parse_realm);   /* the reference the hold took for a record */
         b->parse = JS_UNDEFINED;
         b->parse_realm = NULL;
         g_dyn_body_parses--;
@@ -282,9 +285,10 @@ void dyn_body_parse_hold(DynBody *b, JSContext *realm, const char *name, int fla
     DCHECK(realm != NULL,
            "a parse was held with no realm named — the realm is half the key AND the whole of the free path, "
            "so a body holding a closure without one is a reference nothing can release");
-    DCHECK(JS_IsObject(fn),
-           "a parse was held that is not a program at all — what this slot answers is instantiated directly "
-           "into a preemptible frame, so a non-object here is a frame built over something with no bytecode");
+    DCHECK(JS_IsObject(fn) || JS_IsModule(fn),
+           "a parse was held that is neither a classic program's closure nor a module record — what this slot "
+           "answers is instantiated into a frame or evaluated as a record, so anything else is a program with no "
+           "bytecode");
     /* THE MARK AND THE HOLD ARE TWO STATEMENTS ABOUT ONE EVENT, ASSERTED ACROSS THE FILES THAT MAKE THEM. The
        compile site raises `dyn_body_note_parsed` and then holds, on adjacent lines of one straight-line block;
        a hold against an unmarked body is therefore a caller that shared a parse the repeat census does not
@@ -321,6 +325,8 @@ void dyn_body_parse_hold(DynBody *b, JSContext *realm, const char *name, int fla
         if (own == NULL) return;
     }
     b->parse = JS_DupValue(realm, fn);
+    /* A closure's bytecode keeps its realm alive; a module record does not, so the hold does. */
+    if (JS_IsModule(fn)) (void)JS_DupContext(realm);
     b->parse_name = own;
     b->parse_flags = flags;
     /* THE PREDICATE LAST, so that a body is never observable as holding a parse whose key is half written. */

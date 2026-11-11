@@ -18,7 +18,7 @@
  * O(entries), not O(bytes)." One column of the flow was left holding raw bytes; this is that column.
  *
  * WHY NOT A JS STRING, which is what that rule reaches for first. Two facts about THIS column and not that
- * one: (1) every reader hands the text to `JS_FlowNew`/`JS_FlowEvalModule` as a `const char *`, so a JSString
+ * one: (1) every reader hands the text to `JS_FlowNew`/`JS_FlowCompileModule` as a `const char *`, so a JSString
  * would be converted back with `JS_ToCString` — a full copy at EVERY compile, which is the cost this file
  * exists to remove, moved rather than deleted; (2) a row never crosses a park, because the cold tier stores a
  * RECIPE and a resumed flow re-queues its rows from the replayed document (solver/flow.h), so the one thing a
@@ -71,7 +71,7 @@ typedef struct DynBody DynBody;
    type: every entry here takes a length, and `dyn_body_len` is what every reader asks rather than `strlen`.
 
    One body over a COPY of `text[0 .. len)`, with one reference. The copy is NUL-terminated at `len` because
-   the compiler entries (`JS_FlowNew` / `JS_FlowEvalModule`) take the pair AND lexbor's arena scans want a
+   the compiler entries (`JS_FlowNew` / `JS_FlowCompileModule`) take the pair AND lexbor's arena scans want a
    sentinel, but that terminator is a guard and never the length. NULL only if the allocation failed — the
    callers CHECK, because a program that cannot be stored is a program the sequence silently would not run. */
 DynBody *dyn_body_new(const char *text, size_t len);

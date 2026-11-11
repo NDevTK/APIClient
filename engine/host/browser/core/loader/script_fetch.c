@@ -16,7 +16,7 @@
  * SNIFF over three rows where #utf-8-decode's is a three-byte comparison against one.
  *
  * WHAT RAN BEFORE THIS FILE EXISTED: neither algorithm, for any script this engine has ever fetched. The reply's
- * bytes went from the host's reply record to JS_FlowNew / JS_FlowEvalModule unchanged, which is wrong in both
+ * bytes went from the host's reply record to JS_FlowNew / JS_FlowCompileModule unchanged, which is wrong in both
  * directions at once. The two runs below are the SUBMODULE'S OWN WORDS and so go in BACKTICKS, the way
  * core/byte_reader.c and core/fetch/fetch.h write this same decoder: a quotation mark claims a STANDARD's
  * sentence, and the anchor nearest them is Fetch §3.5, so quickjs in quotation marks is judged against a

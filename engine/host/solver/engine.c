@@ -4522,7 +4522,7 @@ static bool module_reply_is_javascript(JSContext *ctx, JSValueConst reply)
 }
 
 /* The program queue carries `len` bytes, NUL or not: `dyn_body_adopt` takes the decode's `(src, src_n)`, the row
-   keeps both, and flow_step hands both to JS_FlowNew / JS_FlowEvalModule, so the length never becomes a `strlen`
+   keeps both, and flow_step hands both to JS_FlowNew / JS_FlowCompileModule, so the length never becomes a `strlen`
    before the compiler. Real scripts contain U+0000 (ECMAScript §11.1 Source Text), and running one only to its
    first NUL would be a silently shorter program. dyn_body_adopt's invariant is about the guard byte. */
 
@@ -9442,10 +9442,20 @@ static int flow_step_agent(JSContext *ctx, Flow *f) {
         int r;
 
         g_step_unit = STEP_UNIT_AGENT_EVAL_MODULE;
-        r = JS_FlowEvalModule(a->realm, c->src, c->n, c->url, JS_EVAL_TYPE_MODULE, &ev, &c->carrier);
+        {
+            JSValue rec = JS_UNDEFINED;
+
+            r = JS_FlowCompileModule(a->realm, c->src, c->n, c->url, JS_EVAL_TYPE_MODULE, &rec, &c->carrier);
+            if (r == 0)
+                return 0;
+            if (r > 0) {
+                JSContext *realm = a->realm;
+
+                r = JS_FlowEvalModuleRecord(realm, rec, &ev);
+                JS_FreeValue(realm, rec);
+            }
+        }
         a = flow_agent_running(f);   /* the evaluation may have added an agent, moving the list */
-        if (r == 0)
-            return 0;
         program_ran = r > 0;
         if (!program_ran) JS_FreeValue(a->realm, JS_GetException(a->realm));
         flow_agent_compile_drop(a);
@@ -10538,7 +10548,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    it and nothing else, so the park arm's assert reads a value this line put there. */
                 JSValue ev = JS_UNDEFINED;
                 /* `prog_name` is this module's record identity: it keys the module map, it is `import.meta.url`,
-                   and it is the base the loader registers each fetched dependency under, so JS_FlowEvalModule
+                   and it is the base the loader registers each fetched dependency under, so JS_FlowCompileModule
                    asserts it is non-empty. */
                 /* §4.12.1.1 Processing model, "execute the script element", the module arm's first step: "Assert:
                    document's currentScript attribute is null." The module arm has no set/restore bracket (a module
@@ -10548,32 +10558,46 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "§4.12.1.1's module arm asserts this document's currentScript is null and it is not — "
                        "a classic script's §3.1.7 bracket has outlived the program it belonged to, so this "
                        "module would run with some other script element globally exposed");
-                /* Passing `&f->compile` lets 16.2.1.7.1 ParseModule give the thread back part way through (the
-                   third answer), so a module's length, which the page chooses, never appears in a step's cost
-                   (solver/rest_unit.h's bound (1)). Nothing here is bracketed or counted: this entry compiles and
-                   evaluates, so a timing bracket would time a parse and an execution together and a `compiles` row
-                   would count a program that has already run. Nor is the shared parse consulted:
-                   `dyn_body_parse_ref` holds a closure a later flow instantiates, while a module's parse produces a
-                   record linked and evaluated once under its name, and the module map (js_find_loaded_module) is
-                   that phase's own memo. */
-                int mr = JS_FlowEvalModule(prog_ctx, body, body_n, prog_name, src_flags, &ev, &f->compile);
-                if (mr == 0) {
-                    /* Parked mid-parse. No ENGINE_LEAVE_ROW and no cursor move, as in the classic arm: no bytecode
-                       has run, this row is still the flow's row, and the ladder re-enters here when the flow is next
-                       picked. The pair of asserts above this block keeps the parked parse from resuming against
-                       another row; both read the one field both entries park into. */
-                    DCHECK(f->compile != NULL && JS_IsUndefined(ev),
-                           "a module compile answered suspended and left neither a parked parse nor an evaluation");
-                    g_step_unit = STEP_UNIT_MODULE_COMPILE_YIELDED;
-                    return 0;
+                DCHECK(f->script_i < f->dyn_n && dyn_body_text(f->dyn[f->script_i]) == body,
+                       "the row the cursor names is not the row whose bytes this module compile is about — the "
+                       "record asked of the body below would be another row's");
+                DynBody *pb = f->dyn[f->script_i];
+                /* 16.2.1.7.1 ParseModule's record is a fact about the row's bytes under the row's key, so one
+                   parse serves every world that reaches the row. The body is asked before every stint, a parked
+                   one included: where another world's parse has finished, this flow drops its own and evaluates
+                   that record. The identity is the body, as for a classic row; the module map cannot be it, since
+                   every inline module of a document is named by the document's address. */
+                JSValue rec = JS_UNDEFINED;
+                int have = dyn_body_parse_ref(pb, prog_ctx, prog_name, src_flags, &rec);
+                if (have) {
+                    if (f->compile != NULL) JS_FlowCompileDrop(prog_ctx, &f->compile);
+                    g_module_parse_shared++;
+                } else {
+                    /* The parse rests through `&f->compile` (solver/rest_unit.h's bound (1)); a parked stint
+                       leaves the row and the cursor as they are, and the ladder re-enters here. */
+                    int mr = JS_FlowCompileModule(prog_ctx, body, body_n, prog_name, src_flags, &rec, &f->compile);
+                    if (mr == 0) {
+                        DCHECK(f->compile != NULL && JS_IsUndefined(rec),
+                               "a module compile answered suspended and left neither a parked parse nor a record");
+                        g_step_unit = STEP_UNIT_MODULE_COMPILE_YIELDED;
+                        return 0;
+                    }
+                    if (mr > 0) {
+                        /* Held for every later world, the mark and the hold at one event as in the classic arm.
+                           A failed parse holds nothing: its SyntaxError is this flow's completion. */
+                        g_module_compiles++;
+                        g_module_compile_bytes += (int64_t)body_n;
+                        (void)dyn_body_note_parsed(pb);
+                        dyn_body_parse_hold(pb, prog_ctx, prog_name, src_flags, rec);
+                        have = 1;
+                    }
                 }
                 DCHECK(f->compile == NULL,
-                       "a module compile that finished left a parked parse behind it — the next step would "
+                       "a module row is past its compile and still holds a parked parse — the next step would "
                        "resume a parse for a module that has already been linked and evaluated");
-                /* `started` is asked of the entry's one answer: it folds an abrupt evaluation into -1 rather than
-                   returning a status beside a value. */
-                started = (mr > 0);
-                if (started) { g_module_compiles++; g_module_compile_bytes += (int64_t)body_n; }
+                /* The evaluation folds an abrupt completion into its status, so `started` is one answer. */
+                started = have && JS_FlowEvalModuleRecord(prog_ctx, rec, &ev) > 0;
+                JS_FreeValue(prog_ctx, rec);
                 if (started) module_report_rejection(prog_ctx, ev);   /* §8.1.4.4 step 8 */
                 JS_FreeValue(prog_ctx, ev);
             } else {
@@ -10615,8 +10639,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 } else {
                     /* The compile, bracketed (see g_classic_compiles): the parse's work is its bytes at the
                      * tokenizer's rate, the units it retired, so the comparison is the inequality
-                     * engine_quantum_spent asks. Only the classic arm is bracketed: JS_FlowEvalModule compiles and
-                     * evaluates. A failed compile is counted, because it parsed the bytes. Nothing branches on
+                     * engine_quantum_spent asks. Only the classic arm is bracketed. A failed compile is counted, because it parsed the bytes. Nothing branches on
                      * either.
                      *
                      * JS_FlowCompileStep polls the same budget hook and preempt policy as the interpreter's
@@ -11369,11 +11392,14 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        marked for, so the bodies holding one now cannot exceed the parses ever finished. Comparing a gauge with a
        lifetime total is sound in this direction only (solver/dyn_body.h's `dyn_body_parses_held` states its
        kind). */
-    DCHECKF(dyn_body_parses_held() <= out->classic_compiles,
+    DCHECKF(dyn_body_parses_held() <= out->classic_compiles + out->module_compiles,
             "solver/engine.c: %ld program text(s) are holding a parse against %ld parse(s) ever finished — a "
-            "body is marked by the stint that finishes its parse and holds at most one closure, so more held "
-            "parses than finished ones is a closure held by a body nothing here compiled",
-            dyn_body_parses_held(), out->classic_compiles);
+            "body is marked by the stint that finishes its parse and holds at most one closure or record, so more "
+            "held parses than finished ones is a parse held by a body nothing here compiled",
+            dyn_body_parses_held(), out->classic_compiles + out->module_compiles);
+    DCHECKF(out->module_parse_shared == 0 || out->module_compiles > 0,
+            "solver/engine.c: %ld root module(s) were evaluated from a shared record while no module parse "
+            "finished — a body holds a record only from a finished parse", out->module_parse_shared);
     /* The byte total against its count, which catches the overflow its type is chosen against
        (g_classic_compile_again_bytes): a body is at least one byte and the accumulator only climbs, so a total
        below its count, or negative, is that narrowing. */

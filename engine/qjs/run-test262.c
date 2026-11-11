@@ -1813,12 +1813,17 @@ static JSValue fork_preempt_eval(JSContext *ctx, const char *buf, size_t buf_len
         /* NO CARRIER: this host runs ONE test at a time and has no frontier to be fair between, so it declines
            the parse seam exactly as fork_preempt_run_program's JS_FlowNew does one line down — the same parse
            through the same driver, with js_parse_want_yield unarmed. A SUSPENDED answer (0) is therefore
-           unreachable here and is folded in with the failure arm rather than re-asked: JS_FlowEvalModule's own
+           unreachable here and is folded in with the failure arm rather than re-asked: JS_FlowCompileModule's own
            suspend assert forbids it where both operands are in one hand, which is the argument JS_FlowNew
            records for the identical shape. */
-        JSValue ev = JS_UNDEFINED;
-        if (JS_FlowEvalModule(ctx, buf, buf_len, filename, eval_flags, &ev, NULL) <= 0)
-            return JS_EXCEPTION;   /* the compile or the evaluation failed; the exception is pending */
+        JSValue ev = JS_UNDEFINED, rec = JS_UNDEFINED;
+        int ran;
+        if (JS_FlowCompileModule(ctx, buf, buf_len, filename, eval_flags, &rec, NULL) <= 0)
+            return JS_EXCEPTION;   /* the compile failed; the exception is pending */
+        ran = JS_FlowEvalModuleRecord(ctx, rec, &ev);
+        JS_FreeValue(ctx, rec);
+        if (ran <= 0)
+            return JS_EXCEPTION;   /* the evaluation failed; the exception is pending */
         return ev;                 /* the module's evaluation PROMISE — eval_buf pumps the jobs that settle it */
     }
     JS_SetFlowControlHooks(&fork_hooks_ON);
