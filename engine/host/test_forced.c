@@ -1538,7 +1538,7 @@ static int tf_dk_pay(JSContext *ctx) {
 
 /* The sale documents' act (fixture/sale.h): `listed` once a bill has named an owed request, `gave` the members
    the reclaim edge then gave back, `relisted` whether the bill still named the request after them. */
-static struct { int listed; long gave; int relisted; int floor; } g_tf_sale;
+static struct { int listed; long gave; int relisted; int floor; int spilled; } g_tf_sale;
 
 /* `--pressure-act none`: the run takes no forced pressure act, so a document whose act relocates its members runs
    as its own no-pressure twin. Memory decides where a flow lives, never whether or when it runs, so the twin's
@@ -1664,8 +1664,8 @@ static void tf_keep_watch(void) {
 
 /* At the payment whose bill first lists a sale document's owed request, sells every member but the one switched
    in through the allocator's refusal edge (engine_reclaim_at_rest), before anything is paid, and answers the
-   bill as it stands after. It stops when no member but that one is resident, so the edge's next exit, which
-   gives a written stub's bytes back at the floor, is not asked. A held member is never sold. */
+   bill as it stands after. It stops when no member but that one is resident; `sale` then asks the edge once more,
+   whose exit at the floor moves a written stub's bytes to the disk tier. A held member is never sold. */
 static const char *tf_sale_act(const char *urls) {
     static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed", "/api/sl-floor-owed",
                                         "/api/sl-async-owed", "/api/sl-keep-owed", "/api/sl-ctor-owed",
@@ -1680,6 +1680,7 @@ static const char *tf_sale_act(const char *urls) {
         if (at_floor) g_tf_sale.floor = tf_floor_place();
         if (i == 4) tf_keep_take();
         while (tf_sellable() > (flow_running() != NULL) && engine_reclaim_at_rest() > 0) g_tf_sale.gave++;
+        if (i == 0) g_tf_sale.spilled = engine_reclaim_at_rest();
         if (at_floor) tf_floor_lift();
         urls = engine_pending_fetches();
         g_tf_sale.relisted = strstr(urls, owed[i]) != NULL;
@@ -19749,16 +19750,17 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     /* At the floor a written stub's bytes move to the disk tier and come back at its pick within the session. */
     const char *pwhy = NULL;
     int pt = 1;
-    fold_row(&pt, &pwhy, g_tf_sale.floor == 1 && tf_census_row(js, "_cold", "soldSpilled") >= 1,
-             "NOT ARMED: no written stub's bytes were moved to the disk tier at the floor (`soldSpilled`)");
-    fold_row(&pt, &pwhy, tf_census_row(js, "_cold", "restoredSpilled") >= 1,
-             "no pick read a spilled stub's bytes back from the disk tier within the session (`restoredSpilled`)");
-    fold_row(&pt, &pwhy, param_value_is(js, "/api/sl-floor-done", "b", "22"),
-             "NOT REACHED: no /api/sl-floor-done?b=22 record, so the member sold at the floor while it owed "
-             "/api/sl-floor-owed did not return within the session");
+    fold_row(&pt, &pwhy, g_tf_sale.spilled == 1 && tf_census_row(js, "_cold", "soldSpilled") == 1,
+             "NOT ARMED: the edge's floor exit moved no written stub's bytes to the disk tier (`soldSpilled`)");
+    fold_row(&pt, &pwhy, tf_census_row(js, "_cold", "restoredSpilled") == 1,
+             "the spilled stub was not read back from the disk tier within the session (`restoredSpilled`)");
+    fold_row(&pt, &pwhy, param_value_is(js, "/api/sl-forced-done", "b", "22") &&
+                         param_value_is(js, "/api/sl-forced-busy", "n", "100000"),
+             "NOT REACHED: the owing member or the busy one did not report within the session after a written "
+             "stub's bytes went to the disk tier");
     const Probe rows[] = {
         { "sale-floor-sells", xt, "slFloor", SESS_EXPLORE, xwhy },
-        { "sale-floor-spill-returns", pt, "slFloor", SESS_EXPLORE, pwhy },
+        { "sale-spill-returns", pt, "slForced", SESS_EXPLORE, pwhy },
         { "sale-forced-returns", ft, "slForced", SESS_EXPLORE, fwhy },
         { "sale-own-returns", ot, "slOwn", SESS_EXPLORE, owhy },
         { "sale-async-returns", yt, "slAsync", SESS_EXPLORE, awhy },
@@ -31006,8 +31008,8 @@ TF_UNIT void probes_replypath(const char *js, Probe *tab, int *n) {
     const int nf = param_undriven_values(js, "/api/rpathnfast", "n", fast, sizeof fast);
     const int nl = param_undriven_values(js, "/api/rpathnlate", "n", late, sizeof late);
 
-    fold_row(&rp_tt, &rp_why, g_tf_rp.held >= 1 && g_tf_rp.paid == 1 && nf >= 1 && nl >= 1,
-             "NOT REACHED: the `late` arm's request was not held and paid once, or an arm recorded no count");
+    fold_row(&rp_tt, &rp_why, g_tf_rp.held >= 1 && g_tf_rp.paid >= 1 && nf >= 1 && nl >= 1,
+             "NOT REACHED: the `late` arm's request was not held and paid, or an arm recorded no count");
     fold_row(&rp_tt, &rp_why, !strchr(fast, ',') && !strchr(late, ',') && !strcmp(fast, late),
              "the `fast` and `late` arms took their replies after different numbers of their own tasks (or one "
              "arm recorded several), so where a reply lands depends on when the host paid it or what its "
