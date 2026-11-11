@@ -978,6 +978,8 @@ static const TfServed TF_SERVED[] = {
      * THE ADDRESSES ARE THREE AND NONE IS A PREFIX OF ANOTHER, because `emitted_records` matches
      * `"url":"<addr>"` and a row that could be answered by a sibling statement's record is a row that cannot
      * fail. */
+    /* fixture/deferframe.h's root module: how many animation frames ran before it. */
+    { "https://x.test/chunk/df-main.js", "text/javascript", "fetch('/api/dfran?w=dfF' + dfFrames);" },
     /* fixture/modpreload.h's chunks. Every token is a literal; `mp-a.js` also imports `mp-c.js`, so two importers
        wait on one preload's fetch. */
     { "https://x.test/chunk/mp-main.js", "text/javascript",
@@ -2365,6 +2367,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/modshare.h"
 #include "fixture/compilejoin.h"
 #include "fixture/modpreload.h"
+#include "fixture/deferframe.h"
 #include "fixture/slicelen.h"
 #include "fixture/strsearch.h"
 #include "fixture/rxsearch.h"
@@ -3227,6 +3230,7 @@ TF_DOCS[] = {
     { "compilejoin", HTML_COMPILEJOIN },
     { "compilejoinclassic", HTML_COMPILEJOINCLASSIC },
     { "modpreload", HTML_MODPRELOAD },
+    { "deferframe", HTML_DEFERFRAME },
     { "candcontra", HTML_CANDCONTRA },
     { "candweak", HTML_CANDWEAK },
     { "candoutcome", HTML_CANDOUTCOME },
@@ -23960,6 +23964,37 @@ TF_UNIT void probes_modpreload(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `deferframe` document (fixture/deferframe.h): the module's bytes are answered while a frame is
+   still ahead of the clock. HTML §8.1.7.3 Processing model runs a task already queued before a rendering
+   opportunity that has not come, so the run carrying the examples delivers the answered bytes first; a frame
+   ahead of an arrival the host has paid is an assumption, explored on a priced arm. */
+TF_UNIT void probes_deferframe(const char *js, Probe *tab, int *n) {
+    static const char *const late[] = { "dfF1", "dfF2", "dfF3" };
+    const char *o_why = NULL, *f_why = NULL;
+    int o_tt = 1, f_tt = 1, forced = 0;
+
+    fold_row(&o_tt, &o_why, param_undriven_count(js, "/api/dfran", "w", NULL) > 0,
+             "NOT REACHED: /api/dfran has no record, so the root module never ran");
+    fold_row(&o_tt, &o_why, emitted_record_graded_has(js, "/api/dfran", "derived", "dfF0"),
+             "no derived /api/dfran record carries `dfF0`: the observed world did not deliver the answered module "
+             "before the frame ahead of the clock");
+    for (size_t i = 0; i < COUNTOF(late); i++) {
+        fold_row(&o_tt, &o_why, !emitted_record_graded_has(js, "/api/dfran", "derived", late[i]),
+                 "a derived /api/dfran record carries a frame count above zero: a world that ran a frame ahead "
+                 "of the paid arrival was graded as the observed world, so the frame-first order is its "
+                 "primary arm at every race and the module waits behind every frame");
+        forced += emitted_record_graded_has(js, "/api/dfran", "forced", late[i]);
+    }
+    fold_row(&f_tt, &f_why, forced > 0,
+             "no forced /api/dfran record carries a frame count above zero: the frame-first order was not "
+             "explored as an assumption beside the observed one");
+    const Probe rows[] = {
+        { "df-arrival-first-observed", o_tt, "/chunk/df-main.js", SESS_EXPLORE, o_why },
+        { "df-frame-first-priced", f_tt, "/chunk/df-main.js", SESS_EXPLORE, f_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `rxtest` document (fixture/rxtest.h): `test` over an unknown subject is a predicate of the
    match, decided where the page's units decide the match and forked where the subject's domain allows both. */
 TF_UNIT void probes_rxtest(const char *js, Probe *tab, int *n) {
@@ -34050,6 +34085,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_modshare(js, probes, &np);
     probes_compilejoin(js, probes, &np);
     probes_modpreload(js, probes, &np);
+    probes_deferframe(js, probes, &np);
     probes_slicelen(js, probes, &np);
     probes_strsearch(js, probes, &np);
     probes_rxsearch(js, probes, &np);
