@@ -98,13 +98,16 @@ static DeflateWrapping cs_wrapping(uint8_t format)
 }
 
 /* The derivation's operation name: the algorithm and the format, so a chunk and a flush over one history, or
-   two formats over one input, are two identities. Static strings, because a codec image names its codec. */
+   two formats over one input, are two identities. */
 static const char *const CS_OP[ALG_N][CF_N] = {
     { NULL, "CompressionStream(deflate) compress", "CompressionStream(deflate-raw) compress",
       "CompressionStream(gzip) compress" },
     { NULL, "CompressionStream(deflate) flush", "CompressionStream(deflate-raw) flush",
       "CompressionStream(gzip) flush" },
 };
+
+/* What a compressed chunk's bytes are of its unknown: the bytes the string's code points are. */
+static const char CS_IMAGE[] = "the byte sequence whose isomorphic decode is this compressed chunk";
 
 /* Append `more` (an operand list, consumed) to the record's history. */
 static void cs_hold(JSContext *ctx, CompressionStreamData *d, JSValue more)
@@ -172,14 +175,26 @@ static JSValue cs_compress(JSContext *ctx, JSValueConst self, JSValueConst chunk
         free(o.b);
         return out;
     }
-    /* The chunk is the codec's image of an unknown derived from the whole history; its example is the real
-       compressor's output over the runs' examples, absent where some run had none. */
-    example = d->held_example ? JS_NewUint8ArrayCopy(ctx, o.b, o.n) : JS_UNDEFINED;
+    /* The chunk is an unknown derived from the whole history, whose example is the real compressor's output
+       over the runs' examples as Infra's isomorphic decode spells bytes as a string (absent where some run had
+       none); the Uint8Array is that string's image, so each element derives from it. */
+    if (d->held_example) {
+        uint16_t *w = lexbor_malloc(o.n * sizeof *w);
+        size_t i;
+
+        CHECK(w != NULL, "compression: OOM spelling a compressed chunk's example");
+        for (i = 0; i < o.n; i++) w[i] = o.b[i];
+        example = JS_NewStringUTF16(ctx, w, o.n);
+        lexbor_free(w);
+        CHECK(!JS_IsException(example), "compression: OOM spelling a compressed chunk's example");
+    } else {
+        example = JS_UNDEFINED;
+    }
     unknown = concolic_new_derived_list(ctx, CS_OP[which][d->format], d->held, example);
     DCHECK(!JS_IsUninitialized(unknown),
            "a CompressionStream recorded unknown input in its history and the derivation found none");
-    out = d->held_example ? JS_NewUint8ArrayImage(ctx, o.b, o.n, unknown, CS_OP[which][d->format])
-                          : JS_NewUint8ArrayImage(ctx, NULL, 0, unknown, CS_OP[which][d->format]);
+    out = d->held_example ? JS_NewUint8ArrayImage(ctx, o.b, o.n, unknown, CS_IMAGE)
+                          : JS_NewUint8ArrayImage(ctx, NULL, 0, unknown, CS_IMAGE);
     JS_FreeValue(ctx, unknown);
     free(o.b);
     return out;
