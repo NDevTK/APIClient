@@ -340,7 +340,7 @@ static int el_rel_nonforking(JSContext *ctx, JSValueConst a, JSValueConst b, con
 static int el_rel(JSContext *ctx, JSValueConst a, JSValueConst b, const char *op, int ask)
 {
     JSValue pred;
-    int d;
+    int d, real;
 
     DCHECK(op == EL_BEFORE || op == EL_SAME,
            "the event loop's clock was asked a relation that is neither of the two its order is composed of — "
@@ -361,6 +361,11 @@ static int el_rel(JSContext *ctx, JSValueConst a, JSValueConst b, const char *op
     if (!concolic_is(a) && !concolic_is(b))
         return op == EL_BEFORE ? el_num_before(ctx, a, b) : 0;   /* identical was handled above, so == is 0 */
     pred = concolic_new_rel(ctx, op, a, b);
+    /* The relation over the two moments' examples is the predicate's example, so the arm a session carrying
+       those values takes is the primary one and the other is priced as an assumption (decide.c's real arm).
+       concolic_new_rel attaches none because it holds the relation's name and not its semantics. */
+    real = el_rel_nonforking(ctx, a, b, op);
+    if (real != SOLVER_NO_NONFORKING_ARM) concolic_set_example(ctx, pred, JS_NewBool(ctx, real));
     if (!ask) {
         d = decide_value_arm(pred);
         JS_FreeValue(ctx, pred);
@@ -368,7 +373,7 @@ static int el_rel(JSContext *ctx, JSValueConst a, JSValueConst b, const char *op
     }
     /* THE SEAM BUILDS THE SIBLING BEFORE ANSWERING, so the FORKED bit never comes back here — see decide.h,
        and see event_loop.h for why every caller of the ask is between a flow's tasks and can promise it. */
-    d = solver_decide_restartable(ctx, pred, el_rel_nonforking(ctx, a, b, op));
+    d = solver_decide_restartable(ctx, pred, real);
     JS_FreeValue(ctx, pred);
     DCHECK(d >= 0,
            "the event loop's clock was asked to order two moments and the solver answered that neither is "
@@ -459,16 +464,26 @@ static const char EL_ARRIVAL[] = "HTML §8.1.7.3 Processing model: the arrival o
 /* `when` < the timeline's next arrival, the one predicate both halves ask. The arrival is named by how many
    replies this timeline has taken: one unknown per arrival, so after one arrives the deadline is raced against
    the next, and a request issued with none arriving only moves the next arrival earlier, which an answered race
-   already covers. */
-static int el_deadline_before_next_arrival(JSContext *ctx, JSValueConst when)
+   already covers. `answered` is the delivery half: the host has paid the reply, so it arrived no later than the
+   clock, and the clock's example is the arrival's; the idle half's reply is still owed and has none. */
+static int el_deadline_before_next_arrival(JSContext *ctx, JSValueConst when, int answered)
 {
     char src[sizeof EL_ARRIVAL + 32], shape[sizeof src + 2];
-    JSValue arrival;
+    JSValue arrival, example = JS_UNDEFINED;
     int first;
 
     snprintf(src, sizeof src, "%s, number %u", EL_ARRIVAL, (unsigned)flow_running()->replies_taken + 1);
     snprintf(shape, sizeof shape, "{%s}", src);   /* a source's shape is its provenance in braces */
-    arrival = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, CONCOLIC_TYF_NUMBER, JS_UNDEFINED);
+    if (answered) {
+        JSValue now = event_loop_now(ctx);
+
+        example = concolic_is(now) ? concolic_example(ctx, now) : JS_DupValue(ctx, now);
+        JS_FreeValue(ctx, now);
+        DCHECK(JS_IsUndefined(example) || JS_IsNumber(example),
+               "the clock's example is not a moment — event_loop_now answers a number or an unknown whose example "
+               "the real `+` computed over numbers");
+    }
+    arrival = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, CONCOLIC_TYF_NUMBER, example);
     first = event_loop_before(ctx, when, arrival);
     JS_FreeValue(ctx, arrival);
     if (first) el_num_set(ctx, g_atom_licence, 1);
@@ -479,13 +494,13 @@ int event_loop_deadline_first(JSContext *ctx, JSValueConst when)
 {
     if (event_loop_may_advance()) return 1;
     g_deadline_race_asked++;
-    return el_deadline_before_next_arrival(ctx, when);
+    return el_deadline_before_next_arrival(ctx, when, 0);
 }
 
 int event_loop_deadline_before_arrival(JSContext *ctx, JSValueConst when)
 {
     g_deadline_arrival_asked++;
-    return el_deadline_before_next_arrival(ctx, when);
+    return el_deadline_before_next_arrival(ctx, when, 1);
 }
 
 void event_loop_deadline_source_set(EventLoopDeadline which, const EventLoopDeadlineOps *ops)

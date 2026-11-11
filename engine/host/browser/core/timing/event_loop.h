@@ -271,7 +271,8 @@ int event_loop_deadline_first(JSContext *ctx, JSValueConst when);
 
 /* The same predicate asked before an arrival that has already been answered: the delivery arm's half of the
    race (event_loop_race_arrival below). Asked whatever is owed, since the reply about to be delivered is the
-   arrival in question; a 1 licenses the move as above. */
+   arrival in question; a 1 licenses the move as above. The paid arrival's example is the clock, so the run
+   carrying the examples delivers it first and the deadline-first arm is an assumption. */
 int event_loop_deadline_before_arrival(JSContext *ctx, JSValueConst when);
 
 /* The event loop's clock-driven task sources, in the order the idle ladder asks them: HTML §8.1.7.3 Processing
