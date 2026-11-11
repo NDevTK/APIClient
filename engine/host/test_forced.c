@@ -1843,6 +1843,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/uriclass.h"
 #include "fixture/candslot.h"
 #include "fixture/modshare.h"
+#include "fixture/compilejoin.h"
 #include "fixture/slicelen.h"
 #include "fixture/strsearch.h"
 #include "fixture/rxsearch.h"
@@ -2655,6 +2656,8 @@ TF_DOCS[] = {
     { "modshare", HTML_MODSHARE },
     { "modshare2", HTML_MODSHARE2 },
     { "modsharebig", HTML_MODSHAREBIG },
+    { "compilejoin", HTML_COMPILEJOIN },
+    { "compilejoinclassic", HTML_COMPILEJOINCLASSIC },
     { "candcontra", HTML_CANDCONTRA },
     { "candweak", HTML_CANDWEAK },
     { "candarrive", HTML_CANDARRIVE },
@@ -21775,6 +21778,62 @@ TF_UNIT void probes_modshare(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the compile-join documents (fixture/compilejoin.h). In each, several worlds stand inside the long
+   row's compile at once, which the handover count witnesses, and the compile is the body's: the tokenizer consumes
+   the body once whichever worlds ran its stints, no world parses bytes another has parsed, and every world that
+   reached the row starts its program. The requests carry what the regular expression literal, the template object
+   and the computed class keys of the shared parse evaluate to. */
+TF_UNIT void probes_compilejoin(const char *js, Probe *tab, int *n) {
+    const char *h_why = NULL, *p_why = NULL, *s_why = NULL, *v_why = NULL, *ch_why = NULL, *ca_why = NULL,
+               *cv_why = NULL;
+    int h_tt = 1, p_tt = 1, s_tt = 1, v_tt = 1, ch_tt = 1, ca_tt = 1, cv_tt = 1;
+    static char h_buf[200], p_buf[256], s_buf[256], ca_buf[256];
+    long handovers = engine_compile_handovers(), reached = engine_module_rows_reached();
+    long starts = engine_module_starts();
+    int64_t consumed = engine_module_parse_bytes(), one = ms_body_bytes(HTML_COMPILEJOIN);
+    EngineStepUnitRuns runs;
+
+    engine_step_unit_runs(&runs);
+    snprintf(h_buf, sizeof h_buf, "%ld compile stint(s) ran in a world other than the one that parked the compile: "
+             "no two worlds stood inside the long row's compile at once, so the rows behind this one are unarmed",
+             handovers);
+    fold_row(&h_tt, &h_why, handovers > 0, h_buf);
+    snprintf(p_buf, sizeof p_buf, "the tokenizer consumed %lld source byte(s) over the module's compile stints "
+             "where the one body is %lld: a world parsed bytes another world had parsed", (long long)consumed,
+             (long long)one);
+    fold_row(&p_tt, &p_why, handovers > 0, h_buf);
+    fold_row(&p_tt, &p_why, consumed == one, p_buf);
+    snprintf(s_buf, sizeof s_buf, "%ld world(s) reached the module row and %ld started the module: a world that "
+             "stood inside the compile did not complete it, or fewer than two reached it", reached, starts);
+    fold_row(&s_tt, &s_why, reached >= 2 && starts == reached, s_buf);
+    fold_row(&v_tt, &v_why,
+             param_value_is(js, "/api/cj-mod", "rx", "bbb") && param_value_is(js, "/api/cj-mod", "t", "x-y-z2") &&
+                 param_value_is(js, "/api/cj-mod", "c", "10"),
+             "the module's request does not carry what its regular expression literal, template object and "
+             "computed class keys evaluate to");
+    fold_row(&ch_tt, &ch_why, handovers > 0, h_buf);
+    snprintf(ca_buf, sizeof ca_buf, "%ld classic parse(s) finished over bytes another flow had already parsed to "
+             "completion: a world mid-parse finished its own parse of a body another world had finished",
+             runs.classic_compile_again);
+    fold_row(&ca_tt, &ca_why, handovers > 0, h_buf);
+    fold_row(&ca_tt, &ca_why, runs.classic_compile_again == 0, ca_buf);
+    fold_row(&cv_tt, &cv_why,
+             param_value_is(js, "/api/cjc-cls", "rx", "bbb") && param_value_is(js, "/api/cjc-cls", "t", "x-y-z2") &&
+                 param_value_is(js, "/api/cjc-cls", "c", "10"),
+             "the classic script's request does not carry what its regular expression literal, template object "
+             "and computed class keys evaluate to");
+    const Probe rows[] = {
+        { "cj-handover", h_tt, "/api/cj-mod", SESS_EXPLORE, h_why },
+        { "cj-one-parse", p_tt, "/api/cj-mod", SESS_EXPLORE, p_why, .gate = "cj-handover" },
+        { "cj-every-world-starts", s_tt, "/api/cj-mod", SESS_EXPLORE, s_why },
+        { "cj-values", v_tt, "/api/cj-mod", SESS_EXPLORE, v_why },
+        { "cjc-handover", ch_tt, "/api/cjc-cls", SESS_EXPLORE, ch_why },
+        { "cjc-no-second-parse", ca_tt, "/api/cjc-cls", SESS_EXPLORE, ca_why, .gate = "cjc-handover" },
+        { "cjc-values", cv_tt, "/api/cjc-cls", SESS_EXPLORE, cv_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `rxtest` document (fixture/rxtest.h): `test` over an unknown subject is a predicate of the
    match, decided where the page's units decide the match and forked where the subject's domain allows both. */
 TF_UNIT void probes_rxtest(const char *js, Probe *tab, int *n) {
@@ -31298,6 +31357,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_uriclass(js, probes, &np);
     probes_candslot(js, probes, &np);
     probes_modshare(js, probes, &np);
+    probes_compilejoin(js, probes, &np);
     probes_slicelen(js, probes, &np);
     probes_strsearch(js, probes, &np);
     probes_rxsearch(js, probes, &np);

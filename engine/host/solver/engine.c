@@ -9346,6 +9346,28 @@ static long    g_module_parse_shared;
 long    engine_module_compiles(void)      { return g_module_compiles; }
 int64_t engine_module_compile_bytes(void) { return g_module_compile_bytes; }
 long    engine_module_parse_shared(void)  { return g_module_parse_shared; }
+/* What a root module row's compile cost across the worlds that reached it: the worlds that reached the compile
+   arm, the modules whose evaluation started, and the source bytes the tokenizer consumed over every stint, which
+   exceed the bytes of the bodies parsed by whatever a world parsed and did not use. Lifetime; a report. */
+static long    g_module_rows_reached;
+static long    g_module_starts;
+static int64_t g_module_parse_bytes;
+long    engine_module_rows_reached(void) { return g_module_rows_reached; }
+long    engine_module_starts(void)       { return g_module_starts; }
+int64_t engine_module_parse_bytes(void)  { return g_module_parse_bytes; }
+/* Compile stints run by a world other than the one whose stint last left that body's compile parked: the
+   witness that two worlds stood inside one row's compile at once. Lifetime; a report. */
+static const DynBody *g_stint_parked_body;
+static uint64_t g_stint_parked_by;
+static long     g_compile_handovers;
+long engine_compile_handovers(void) { return g_compile_handovers; }
+static void compile_stint_begins(const Flow *f, const DynBody *pb) {
+    if (g_stint_parked_body == pb && g_stint_parked_by != flow_birth_seq(f)) g_compile_handovers++;
+}
+static void compile_stint_ended(const Flow *f, const DynBody *pb, int parked) {
+    g_stint_parked_body = parked ? pb : NULL;
+    g_stint_parked_by = parked ? flow_birth_seq(f) : 0;
+}
 /* The width of the byte total as a build failure: the runtime check in engine_step_unit_runs is a DCHECKF, compiled
    out in release, the build real pages are measured on. Both the accumulator and the field it is copied into, since
    narrowing either loses the run. */
@@ -10696,6 +10718,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    that record. The identity is the body, as for a classic row; the module map cannot be it, since
                    every inline module of a document is named by the document's address. */
                 JSValue rec = JS_UNDEFINED;
+                if (f->compile == NULL) g_module_rows_reached++;
                 int have = dyn_body_parse_ref(pb, prog_ctx, prog_name, src_flags, &rec);
                 if (have) {
                     if (f->compile != NULL) JS_FlowCompileDrop(prog_ctx, &f->compile);
@@ -10703,7 +10726,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 } else {
                     /* The parse rests through `&f->compile` (solver/rest_unit.h's bound (1)); a parked stint
                        leaves the row and the cursor as they are, and the ladder re-enters here. */
+                    uint64_t parsed0 = JS_FlowParseBytesLife();
+                    compile_stint_begins(f, pb);
                     int mr = JS_FlowCompileModule(prog_ctx, body, body_n, prog_name, src_flags, &rec, &f->compile);
+                    g_module_parse_bytes += (int64_t)(JS_FlowParseBytesLife() - parsed0);
+                    compile_stint_ended(f, pb, mr == 0);
                     if (mr == 0) {
                         DCHECK(f->compile != NULL && JS_IsUndefined(rec),
                                "a module compile answered suspended and left neither a parked parse nor a record");
@@ -10725,6 +10752,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "resume a parse for a module that has already been linked and evaluated");
                 /* The evaluation folds an abrupt completion into its status, so `started` is one answer. */
                 started = have && JS_FlowEvalModuleRecord(prog_ctx, rec, &ev) > 0;
+                if (started) g_module_starts++;
                 JS_FreeValue(prog_ctx, rec);
                 if (started) module_report_rejection(prog_ctx, ev);   /* §8.1.4.4 step 8 */
                 JS_FreeValue(prog_ctx, ev);
@@ -10788,7 +10816,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     ThreadWorkSpan tw;
                     uint64_t parsed0 = JS_FlowParseBytesLife();
                     thread_work_begin(&tw);
+                    compile_stint_begins(f, pb);
                     int cr = JS_FlowCompileStep(prog_ctx, body, body_n, prog_name, src_flags, &fn, &f->compile);
+                    compile_stint_ended(f, pb, cr == 0);
                     thread_work_end(&tw, THREAD_WORK_SCRIPT_PARSE, JS_FlowParseBytesLife() - parsed0);
                     if ((int64_t)((JS_FlowParseBytesLife() - parsed0) * THREAD_WORK_UNITS_PER_BYTE_SCRIPT) >=
                         ENGINE_QUANTUM_WORK)
