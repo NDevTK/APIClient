@@ -12409,7 +12409,7 @@ static void engine_sale_release(Flow *tail) {
        `fetch.cancel` is sent for a request the stub still owes its replay. */
     stand_ins = pending_stand_ins(tail->pending);
     flow_release_bulk(g_sess_ctx, tail);
-    flow_sale_end(g_sess_ctx, tail, stand_ins);
+    flow_sale_end(tail, stand_ins);
     g_flows_sold++;
     if (was_cand) g_flows_sold_cands++; else g_flows_sold_flows++;
 }

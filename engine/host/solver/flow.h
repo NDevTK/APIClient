@@ -2055,12 +2055,12 @@ void  flow_release(JSContext *ctx, Flow *f);
 void  flow_release_bulk(JSContext *ctx, Flow *f);
 /* A sale (the pager's, engine.c): `f` stays a registry member as a cold-resident stub (`cold`). Begin takes it
    out of the order's index or the host-owed list and marks it; the caller then builds its stand-in register and
-   runs flow_release_bulk; end gives back what a replay re-derives (queued jobs, program rows, the references on
-   its history's snapshots, a drive's function, which leaves the drive waiting for its body as a rebuilt one
-   does), installs `stand_ins` (owned) as its register and asserts the order key is the one begin read. One sale
-   at a time, asserted. flow_release frees a stub's remainder like any member's. */
+   runs flow_release_bulk, which for a stub also gives back its queued jobs and a drive's function (the drive is
+   left waiting for its body, as a rebuilt one is); end gives back the program rows and the references on its
+   history's snapshots, installs `stand_ins` (owned) as its register and asserts the order key is the one begin
+   read. One sale at a time, asserted. flow_release frees a stub's remainder like any member's. */
 void  flow_sale_begin(Flow *f);
-void  flow_sale_end(JSContext *ctx, Flow *f, JSValue stand_ins);
+void  flow_sale_end(Flow *f, JSValue stand_ins);
 int   flow_cold(const Flow *f);
 /* The stubs standing, and the stubs that have left the registry (flow_remove): every member ever sold is one or
    the other. */

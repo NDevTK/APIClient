@@ -2709,31 +2709,19 @@ void flow_sale_begin(Flow *f) {
     frontier_rank_changed();
 }
 
-void flow_sale_end(JSContext *ctx, Flow *f, JSValue stand_ins) {
+void flow_sale_end(Flow *f, JSValue stand_ins) {
     DCHECK(f != NULL && f == g_sale_of && f->cold && f->bulk_released && JS_IsUndefined(f->pending),
            "a sale ended on a member it did not begin on, or before its bulk and register were given back");
     DCHECK(flow_park_reads_unchanged(f),
            "a field a park record reads changed when the flow's bulk was released — flow_release_bulk freed "
            "something a stub keeps, so move that release out of the bulk");
-    /* What a replay re-derives. The references on the history's snapshots go so a standby nothing else names can
-       be shed; the delivery log and an open hold stay, since a replay delivers by them. */
+    /* What a replay re-derives and no collection frees (the bulk release gave back the rest). The references on
+       the history's snapshots go so a standby nothing else names can be shed; the delivery log and an open hold
+       stay, since a replay delivers by them. */
     source_cut_flow_cold(f);
     flow_rows_release(f);
-    for (int i = 0; i < f->n_agents; i++) { JS_FreeValue(ctx, f->agents[i].jobs); f->agents[i].jobs = JS_UNDEFINED; }
-    /* A drive waits for its body again, the state the cold tier's rebuild leaves one in: the function is this
-       session's heap object, and the chain names every member a replay calls. */
-    JS_FreeValue(ctx, f->fn); f->fn = JS_UNDEFINED;
-    JS_FreeValue(ctx, f->orphan_claim_fn); f->orphan_claim_fn = JS_UNDEFINED;
-    if (f->orphan) {
-        DCHECK(f->orphan_chain_n > 0, "a sold drive names no member of its chain");
-        f->orphan_want = 1;
-        f->orphan_hash = 0;
-        f->orphan_claim_at = 0;
-        for (int k = 0; f->orphan_acts && k < f->orphan_chain_n; k++) {
-            free(f->orphan_acts[k]);
-            f->orphan_acts[k] = NULL;
-        }
-    }
+    /* A stub stands at no row: its replay starts the sequence again. */
+    f->script_i = 0; f->last_compiled = -1; f->imm_at = -1; f->imm_next = 0;
     f->pending = stand_ins;
 #if APICLIENT_DEV
     {
@@ -2800,6 +2788,27 @@ void flow_release_bulk(JSContext *ctx, Flow *f) {
     f->dom = NULL; f->dom_n = f->dom_cap = 0;
     dom_base_release(f->dom_base); f->dom_base = NULL;
     concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
+    /* A stub also gives back, here so one release scope sees them, the values a replay re-derives: its queued
+       jobs, and a drive's function, which leaves the drive waiting for its body as the cold tier's rebuild leaves
+       one (the chain names every member a replay calls). A stub's record reads the locator, not the function. */
+    if (f->cold) {
+        for (int i = 0; i < f->n_agents; i++) { JS_FreeValue(ctx, f->agents[i].jobs); f->agents[i].jobs = JS_UNDEFINED; }
+        JS_FreeValue(ctx, f->fn); f->fn = JS_UNDEFINED;
+        JS_FreeValue(ctx, f->orphan_claim_fn); f->orphan_claim_fn = JS_UNDEFINED;
+#if APICLIENT_DEV
+        f->bulk_reads.fn = JS_VALUE_GET_PTR(f->fn);
+#endif
+        if (f->orphan) {
+            DCHECK(f->orphan_chain_n > 0, "a sold drive names no member of its chain");
+            f->orphan_want = 1;
+            f->orphan_hash = 0;
+            f->orphan_claim_at = 0;
+            for (int k = 0; f->orphan_acts && k < f->orphan_chain_n; k++) {
+                free(f->orphan_acts[k]);
+                f->orphan_acts[k] = NULL;
+            }
+        }
+    }
     f->bulk_released = 1;
 }
 
@@ -6185,11 +6194,11 @@ void flow_wfq_census(WfqCensus *out) {
            quantity. This walk skips nothing, so its count is the frontier's size per sample, which makes the
            identity below an assertion. */
         g_scan_weights[FLOW_SCAN_CENSUS]++;
-        /* A held member is a snapshot out of the order for good (flow_set_held), so the front, the floor, every
-           holder a gap is taken from and the never-dispatched population are the order's members; the held ones
-           are counted apart. */
-        const int ordered = !f->held;
-        if (!ordered) out->held_members++;
+        /* A held member is a snapshot out of the order for good (flow_set_held), and a stub is out of it while it
+           is cold, so the front, the floor, every holder a gap is taken from and the never-dispatched population
+           are the order's members; the held ones are counted apart. */
+        const int ordered = !f->held && !f->cold;
+        if (f->held) out->held_members++;
         /* And where this member stands in the document's program table, kept for the deepest row anybody is at
            (flow.h). Rewritten when a deeper member is met and accumulated on an equal one, because the population
            is the members at the maximum. It costs no weighing. `Flow.script_i`, the field cold.c's
@@ -6591,7 +6600,7 @@ void flow_wfq_census(WfqCensus *out) {
        an ordinary reading for a leader that just emitted, so the assert makes the zeros below mean only an order
        with no member. The `if` stays because it keeps these reads off a NULL in release, where the DCHECK is
        compiled out. */
-    DCHECK((top != NULL) == (g_flows_n > out->held_members) && (top == NULL || !top->held),
+    DCHECK((top != NULL) == (g_flows_n > out->held_members + g_cold_n) && (top == NULL || !top->held),
            "the WFQ census's front is a held member, or it is absent while a member of the order stands — "
            "flow_best excludes exactly the held members, so every row derived from the top would describe a "
            "member no dispatch can pick, or silently read as a zero");
@@ -6715,7 +6724,7 @@ void flow_wfq_census(WfqCensus *out) {
        to flow_best or a `continue` added to the walk would make the census's price and population differ. A reader of `scanCensusWeights` alone prices a
        sample at one frontier; the second is charged to the shared OTHER entry (the host's read and the pager's tail
        run under it), which is why `other_before` brackets the call. */
-    DCHECK(g_scan_weights[FLOW_SCAN_OTHER] - other_before == (long)(g_flows_n - out->held_members),
+    DCHECK(g_scan_weights[FLOW_SCAN_OTHER] - other_before == (long)(g_flows_n - out->held_members - g_cold_n),
            "the census and the flow_best inside it weighed different numbers of members — a sample weighs every "
            "member once and the order's members a second time, so one of the walks acquired a filter");
     /* And non-negative by the same construction: `w_top` is flow_best's maximum over the order's members, and a
