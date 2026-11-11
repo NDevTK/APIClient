@@ -156,7 +156,9 @@ typedef enum {
     X(LIST_STYLE_TYPE,     "list-style-type",     LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(LIST_STYLE_IMAGE,    "list-style-image",    LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(FONT_FAMILY,         "font-family",         LXB_CSS_PROPERTY_FONT_FAMILY,    TEXT, ALL, UNTYPED)            \
-    X(FONT_WEIGHT,         "font-weight",         LXB_CSS_PROPERTY_FONT_WEIGHT,    TEXT, ALL, UNTYPED)
+    X(FONT_WEIGHT,         "font-weight",         LXB_CSS_PROPERTY_FONT_WEIGHT,    TEXT, ALL, UNTYPED)            \
+    X(FONT_STYLE,          "font-style",          LXB_CSS_PROPERTY_FONT_STYLE,     TEXT, ALL, UNTYPED)            \
+    X(FONT_STRETCH,        "font-stretch",        LXB_CSS_PROPERTY_FONT_STRETCH,   TEXT, ALL, UNTYPED)
 
 typedef enum {
 #define CSS_PROPERTY_ID_ROW(id, name, lxb, shape, range, keywords) CSS_PROPERTY_##id,

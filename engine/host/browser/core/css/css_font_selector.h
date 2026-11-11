@@ -18,10 +18,6 @@
  * the sfnt core/fonts/open_type_metrics.h reads, a per-document face the fallback list can hold beside an
  * installed one, and the relayout a finished load owes. Absence shows as a run in a web font measuring at
  * its fallback family's advances after the font reply has arrived. */
-/* NAMED RESIDUAL, one face per family and character. Not covered: §5.2's narrowing by font-width, font-style
- * and font-weight, so a family whose rules give several faces for a character loads none of them. Next diff
- * builds: the three descriptors' ranges on the collected rule and §5.2's narrowing against the element's
- * computed values. Absence shows as no font request for text in a family declared with several weights. */
 /* NAMED RESIDUAL, where a face is needed. Not covered: the first available font (a line box's strut, an `ex`
  * length) and a collapsible space start no load, and a shadow root's `@font-face` rules and CSS Font Loading
  * §3's manually added faces are not in the walk. Next diff builds: the first-available-font ask at the

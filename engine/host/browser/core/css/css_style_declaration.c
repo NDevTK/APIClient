@@ -110,6 +110,7 @@
 #include "core/css/css_defaulting.h"
 #include "core/css/css_font_family.h"
 #include "core/css/css_font_feature_values.h"   /* css-fonts-4 §6.9.1's seven feature value blocks, which are not property bodies */
+#include "core/css/css_font_face_descriptors.h"
 #include "core/css/css_font_src.h"
 #include "core/css/css_unicode_range.h"
 #include "core/css/css_keyframes.h"
@@ -920,7 +921,10 @@ static void cssd_decls_collect_declaration(CssDecls *d, const char *name, const 
            shorthand expansion applies to each component — and an invalid value is a DROPPED declaration. */
         char *v;
 
-        if (!value || !css_shorthand_validates_longhand(name)) {
+        /* A css-fonts-4 §4.4 descriptor has been through its own grammar at cssd_decl_take, and the
+           property grammar of the same name would refuse its ranges. */
+        if (!value || !css_shorthand_validates_longhand(name) ||
+            (cssd_block_is_descriptor_body(d->context) && css_font_face_property_descriptor(name))) {
             cssd_decls_collect(d, name, value ? cssd_strdup(value) : NULL, important);
             return;
         }
@@ -1128,6 +1132,19 @@ static bool cssd_decl_take(const lxb_css_rule_declaration_t *d, const char *text
         char *raw = cssd_decl_source_value(d, text, len);
 
         value = raw ? css_unicode_range_descriptor_value(raw) : NULL;
+        free(raw);
+        if (!value) { free(name); return false; }
+        *pname = name;
+        *pvalue = value;
+        return true;
+    }
+    /* css-fonts-4 §4.4 "Font property descriptors: the font-style, font-weight, and font-width descriptors":
+       in a descriptor body these three names (and `font-stretch`, the legacy alias) take the descriptor's
+       range grammar and not the property's, so `font-weight: 100 900` is a declaration there. */
+    if (cssd_block_is_descriptor_body(context) && css_font_face_property_descriptor(name)) {
+        char *raw = cssd_decl_source_value(d, text, len);
+
+        value = raw ? css_font_face_property_descriptor_value(name, raw) : NULL;
         free(raw);
         if (!value) { free(name); return false; }
         *pname = name;

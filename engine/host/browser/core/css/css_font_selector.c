@@ -11,6 +11,7 @@
 #include "core/realm.h"
 #include "core/css/css_author_sheets.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_font_face_descriptors.h"
 #include "core/css/css_font_family.h"
 #include "core/css/css_font_selector.h"
 #include "core/css/css_font_src.h"
@@ -41,6 +42,9 @@ typedef struct {
     char *location;             /* the rule's sheet's location, or NULL for an embedded sheet. Owned. */
     CssUnicodeRangeSet range;   /* css-fonts-4 §4.5's set; unread where `all` */
     bool all;                   /* the rule declares no unicode-range: the initial U+0-10FFFF */
+    CssFontRange weight, width; /* css-fonts-4 §4.4's ranges the face supports */
+    CssFontFaceStyle style;
+    bool matched;               /* in §5.2's matching set for the walk's element, after its narrowing */
     bool rests;                 /* this walk has found the face loading, loaded or local */
 } SelFace;
 
@@ -313,6 +317,17 @@ static void sel_push_face(CssFontSelectorWalk *w, const CssRuleFontFace *rule)
     f->location = rule->location != NULL ? reclaim_strdup(rule->location) : NULL;
     CHECK(f->src != NULL && (rule->location == NULL || f->location != NULL),
           "css-fonts: OOM copying an `@font-face` rule's descriptors");
+    /* An absent descriptor is the initial `auto`; a stored one passed the descriptor's grammar at the parse. */
+    {
+        bool weight = css_font_face_weight(rule->weight != NULL ? rule->weight : "auto", &f->weight);
+        bool width = css_font_face_width(rule->width != NULL ? rule->width : "auto", &f->width);
+        bool style = css_font_face_style(rule->style != NULL ? rule->style : "auto", &f->style);
+
+        DCHECK(weight && width && style,
+               "an `@font-face` rule's stored font-weight, font-width or font-style descriptor is outside "
+               "css-fonts-4 §4.4's grammar, which the descriptor's own parse admitted when the block was stored");
+        (void)weight; (void)width; (void)style;
+    }
     f->all = rule->unicode_range == NULL;
     if (!f->all) {
         bool parsed = css_unicode_range_parse(rule->unicode_range, &f->range);
@@ -322,6 +337,166 @@ static void sel_push_face(CssFontSelectorWalk *w, const CssRuleFontFace *rule)
                 rule->unicode_range);
         (void)parsed;
     }
+}
+
+/* ---- css-fonts-4 §5.2's narrowing of a family's faces ------------------------------------------------------ */
+
+static bool sel_in(CssFontRange r, double v) { return v >= r.lo && v <= r.hi; }
+
+/* The value §5.2 determines for one axis when no face's range includes `want`: the nearest supported value
+   on the preferred side, else the nearest on the other. `r(f)` is face `f`'s range on the axis. */
+typedef CssFontRange (*SelAxis)(const SelFace *f);
+static CssFontRange sel_axis_width(const SelFace *f) { return f->width; }
+static CssFontRange sel_axis_weight(const SelFace *f) { return f->weight; }
+
+/* The nearest supported value below `want` (the greatest `hi` under it) or above it (the least `lo` over it),
+   within `[floor, ceil]`, over the matched faces. False when no face has one. */
+static bool sel_nearest(const SelFace *f, size_t n, SelAxis r, double want, bool below, double floor,
+                        double ceil, double *out)
+{
+    bool found = false;
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        CssFontRange x = r(&f[i]);
+        double v = below ? x.hi : x.lo;
+
+        if (!f[i].matched || (below ? v >= want : v <= want) || v < floor || v > ceil) continue;
+        if (!found || (below ? v > *out : v < *out)) { *out = v; found = true; }
+    }
+    return found;
+}
+
+/* Removes from the matching set the faces whose range on axis `r` does not include `v`. */
+static void sel_keep(SelFace *f, size_t n, SelAxis r, double v)
+{
+    size_t i;
+
+    for (i = 0; i < n; i++)
+        if (f[i].matched && !sel_in(r(&f[i]), v)) f[i].matched = false;
+}
+
+/* §5.2: "font-width is tried first." A desired width at or under 100% checks narrower values first, a wider
+   one checks wider values first. */
+static void sel_narrow_width(SelFace *f, size_t n, double want)
+{
+    double v = want;
+    size_t i;
+
+    for (i = 0; i < n; i++)
+        if (f[i].matched && sel_in(f[i].width, want)) { sel_keep(f, n, sel_axis_width, want); return; }
+    if (sel_nearest(f, n, sel_axis_width, want, want <= 100.0, -1e9, 1e9, &v) ||
+        sel_nearest(f, n, sel_axis_width, want, want > 100.0, -1e9, 1e9, &v))
+        sel_keep(f, n, sel_axis_width, v);
+}
+
+/* §5.2: "font-weight is matched next." A desired weight in [400, 500] checks up to 500, then below, then
+   above 500; one under 400 checks below then above; one over 500 checks above then below. */
+static void sel_narrow_weight(SelFace *f, size_t n, double want)
+{
+    double v = want;
+    bool found;
+    size_t i;
+
+    for (i = 0; i < n; i++)
+        if (f[i].matched && sel_in(f[i].weight, want)) { sel_keep(f, n, sel_axis_weight, want); return; }
+    if (want >= 400.0 && want <= 500.0)
+        found = sel_nearest(f, n, sel_axis_weight, want, false, -1e9, 500.0, &v) ||
+                sel_nearest(f, n, sel_axis_weight, want, true, -1e9, 1e9, &v) ||
+                sel_nearest(f, n, sel_axis_weight, want, false, -1e9, 1e9, &v);
+    else if (want < 400.0)
+        found = sel_nearest(f, n, sel_axis_weight, want, true, -1e9, 1e9, &v) ||
+                sel_nearest(f, n, sel_axis_weight, want, false, -1e9, 1e9, &v);
+    else
+        found = sel_nearest(f, n, sel_axis_weight, want, false, -1e9, 1e9, &v) ||
+                sel_nearest(f, n, sel_axis_weight, want, true, -1e9, 1e9, &v);
+    if (found) sel_keep(f, n, sel_axis_weight, v);
+}
+
+/* How far face style `have` is from the desired `want` in §5.2's search order for font-style; the least is
+   the match and 0 is a face that has the desired style. The bands are the order the spec checks kinds in
+   (for italic: italic, oblique from 11deg up, oblique under 11deg down, normal, then negative angles), and
+   the offset inside a band is the order within it. */
+static double sel_style_distance(CssFontFaceStyle want, CssFontFaceStyle have)
+{
+    /* A face's oblique range as the positive angle nearest the desired one, mirrored for a negative ask. */
+    double sign = (want.slant == CSS_FONT_FACE_OBLIQUE && want.angle.lo < 0.0) ? -1.0 : 1.0;
+    double a = sign * want.angle.lo, lo = sign > 0 ? have.angle.lo : -have.angle.hi,
+           hi = sign > 0 ? have.angle.hi : -have.angle.lo;
+    bool have_normal = have.slant == CSS_FONT_FACE_NORMAL || (have.slant == CSS_FONT_FACE_OBLIQUE && lo <= 0.0 && hi >= 0.0);
+    bool have_oblique = have.slant == CSS_FONT_FACE_OBLIQUE && hi > 0.0 && !(lo <= 0.0 && want.slant != CSS_FONT_FACE_OBLIQUE);
+
+    if (want.slant == CSS_FONT_FACE_NORMAL) {
+        if (have_normal) return 0.0;
+        if (have.slant == CSS_FONT_FACE_OBLIQUE && lo > 0.0) return 1000.0 + lo;
+        if (have.slant == CSS_FONT_FACE_ITALIC) return 2000.0;
+        return 3000.0 - hi;
+    }
+    if (want.slant == CSS_FONT_FACE_ITALIC) {
+        if (have.slant == CSS_FONT_FACE_ITALIC) return 0.0;
+        if (have_oblique && hi >= 11.0) return 1000.0 + (lo > 11.0 ? lo - 11.0 : 0.0);
+        if (have_oblique) return 2000.0 + (11.0 - hi);
+        if (have_normal) return 3000.0;
+        return 4000.0 - hi;
+    }
+    if (have.slant == CSS_FONT_FACE_OBLIQUE && a >= lo && a <= hi) return 0.0;
+    if (have.slant == CSS_FONT_FACE_OBLIQUE && hi > 0.0) {
+        /* An angle of 11deg or more checks larger angles first; a smaller one checks smaller angles first. */
+        if (lo > a) return (a >= 11.0 ? 1000.0 : 2000.0) + (lo - a);
+        return (a >= 11.0 ? 2000.0 : 1000.0) + (a - hi);
+    }
+    if (have.slant == CSS_FONT_FACE_ITALIC) return 3000.0;
+    if (have_normal) return 4000.0;
+    return 5000.0 - hi;
+}
+
+/* §5.2: "font-style is tried next." The faces at the least distance stay in the matching set. */
+static void sel_narrow_style(SelFace *f, size_t n, CssFontFaceStyle want)
+{
+    double best = 0.0;
+    bool any = false;
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        double d;
+
+        if (!f[i].matched) continue;
+        d = sel_style_distance(want, f[i].style);
+        if (!any || d < best) { best = d; any = true; }
+    }
+    for (i = 0; i < n; i++)
+        if (f[i].matched && sel_style_distance(want, f[i].style) != best) f[i].matched = false;
+}
+
+/* §5.2's narrowing of one family's faces "to a single face using other font properties", against `style`'s
+   computed font-width, font-style and font-weight. What stays matched is one composite face: rules "with
+   identical font descriptor values but differing unicode-range values". */
+static void sel_narrow(lxb_dom_element_t *style, SelFace *f, size_t n)
+{
+    char *weight = css_computed_value(style, "font-weight"), *slant = css_computed_value(style, "font-style"),
+         *width = css_computed_value(style, "font-stretch");
+    CssFontRange w, s;
+    CssFontFaceStyle st;
+    bool read;
+    size_t i;
+
+    /* A computed value of each property is a value its descriptor's grammar reads too: the property's values
+       are the descriptor's single-value forms. */
+    read = weight != NULL && slant != NULL && width != NULL && css_font_face_weight(weight, &w) &&
+           css_font_face_style(slant, &st) && css_font_face_width(width, &s);
+    if (!read)
+        DFAILF("an element's computed font-weight `%s`, font-style `%s` or font-stretch `%s` is not a "
+               "number, a keyword or an angle; build the missing form (a math function, `left`/`right`) in "
+               "core/css/css_font_face_descriptors.c's property-side reads", weight ? weight : "(none)",
+               slant ? slant : "(none)", width ? width : "(none)");
+    free(weight);
+    free(slant);
+    free(width);
+    for (i = 0; i < n; i++) f[i].matched = true;
+    if (!read) return;
+    sel_narrow_width(f, n, s.lo);
+    sel_narrow_style(f, n, st);
+    sel_narrow_weight(f, n, w.lo);
 }
 
 CssFontSelectorWalk *css_font_selector_walk_open(lxb_dom_element_t *style)
@@ -359,6 +534,7 @@ CssFontSelectorWalk *css_font_selector_walk_open(lxb_dom_element_t *style)
                 if (sel_names_match(list.v[i].name, rules[r].family)) sel_push_face(w, &rules[r]);
         fam.n = w->nfaces - fam.first;
         if (fam.n > 0) {
+            sel_narrow(style, &w->faces[fam.first], fam.n);
             fam.web = true;
             any_web = true;
             sel_push_family(w, fam);
@@ -401,8 +577,6 @@ void css_font_selector_walk_character(CssFontSelectorWalk *w, uint32_t cp)
     if (flow_running() == NULL) return;
     for (i = 0; i < w->nfamilies; i++) {
         const SelFamily *fam = &w->families[i];
-        SelFace *face = NULL;
-        size_t matched = 0;
 
         if (!fam->web) {
             /* An installed family earlier in the list that has the character ends the walk: Chrome 153
@@ -410,19 +584,19 @@ void css_font_selector_walk_character(CssFontSelectorWalk *w, uint32_t cp)
             if (open_type_metrics_covers(installed_font_metrics(fam->installed), cp)) return;
             continue;
         }
-        for (k = fam->first; k < fam->first + fam->n; k++)
-            if (w->faces[k].all || css_unicode_range_includes(&w->faces[k].range, cp)) {
-                face = &w->faces[k];
-                matched++;
+        /* §5.2: the composite face's faces are taken "in reverse order of @font-face rule definition", and
+           css-fonts-4 §4.5 forbids a download "for codepoints outside this set". Chrome 153 requests only the
+           later of two same-style rules whose ranges both hold the character. A face whose every src item
+           failed is "treated as not present" and the walk moves on. */
+        for (k = fam->first + fam->n; k-- > fam->first;) {
+            SelFace *face = &w->faces[k];
+
+            if (!face->matched || !(face->all || css_unicode_range_includes(&face->range, cp))) continue;
+            if (face->rests) return;
+            if (sel_face_load(w, face)) {
+                face->rests = true;
+                return;
             }
-        /* css-fonts-4 §4.5: "User agents must not download or use the font for codepoints outside this set." */
-        if (matched == 0) continue;
-        /* Several faces for one character need §5.2's narrowing (css_font_selector.h's second residual). */
-        if (matched > 1) return;
-        if (face->rests) return;
-        if (sel_face_load(w, face)) {
-            face->rests = true;
-            return;
         }
     }
 }

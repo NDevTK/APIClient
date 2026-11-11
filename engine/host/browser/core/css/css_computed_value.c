@@ -19,6 +19,7 @@
 #include "core/css/css_display.h"
 #include "core/css/css_filter.h"
 #include "core/css/css_font_family.h"
+#include "core/css/css_font_face_descriptors.h"
 #include "core/css/css_grid_template_areas.h"
 #include "core/css/css_grid_track_list.h"
 #include "core/css/css_image.h"
@@ -1736,6 +1737,20 @@ static char *computed_font_weight(lxb_dom_element_t *el, char *spec)
     return css_length_serialize_number(out, "");
 }
 
+/* css-fonts-4 §2.3 "Font width: the font-width property" (`font-stretch` is its legacy name alias):
+   `Computed value: a percentage`, each keyword mapped by that section's table. css-fonts-4 §5.2 "Matching
+   font styles" narrows a family's faces by it. */
+static char *computed_font_stretch(char *spec)
+{
+    CssFontRange r;
+
+    if (!css_font_face_width(spec, &r) || r.lo != r.hi)
+        DFAILF("`font-stretch: %s`: css-values-4 §10 admits a math function for §2.3's <percentage [0,∞]>, "
+               "and this computed value evaluates none; build it through core/css/css_math.h", spec);
+    free(spec);
+    return css_length_serialize_number(r.lo, "%");
+}
+
 /* ---- the computed value ----------------------------------------------------------------------------------- */
 
 /* Which properties are length-shaped, and why each is, is core/css/css_property_id.h's table. */
@@ -2928,6 +2943,8 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
         return computed_text_align(el, name, spec);
     case CSS_PROPERTY_FONT_WEIGHT:
         return computed_font_weight(el, spec);
+    case CSS_PROPERTY_FONT_STRETCH:
+        return computed_font_stretch(spec);
     /* css-transforms-1 §3 "The transform Property" states `Computed value: as specified, but with lengths made
        absolute` — TWO CLAUSES, and `none` satisfies the second vacuously because it contains no lengths, so
        for that value the specified value IS the computed one and this is a derivation rather than a default.
@@ -3083,6 +3100,9 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        reads it off the originating element, after `list-style-image`, which §3.2 "Generating Marker
        Contents" orders first. */
     case CSS_PROPERTY_LIST_STYLE_TYPE:
+    /* css-fonts-4 §2.4 "Font style: the font-style property": `Computed value: the keyword specified, plus
+       angle in degrees if specified`. css-fonts-4 §5.2 narrows a family's faces by it. */
+    case CSS_PROPERTY_FONT_STYLE:
         return spec;
     default:
         DFAILF("`%s` reached the text derivation and is not a text-shaped row — css_computed_value refuses "

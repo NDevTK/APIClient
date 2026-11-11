@@ -5122,8 +5122,11 @@ void css_rule_font_face_free(CssRuleFontFace *f)
     free(f->family);
     free(f->src);
     free(f->unicode_range);
+    free(f->weight);
+    free(f->style);
+    free(f->width);
     free(f->location);
-    f->family = f->src = f->unicode_range = f->location = NULL;
+    f->family = f->src = f->unicode_range = f->weight = f->style = f->width = f->location = NULL;
 }
 
 /* `r`'s face, appended to `e`'s in document order, or nothing for a rule css-fonts-4 §4.1 excludes from font
@@ -5131,7 +5134,7 @@ void css_rule_font_face_free(CssRuleFontFace *f)
 static void cascade_emit_font_face(JSContext *ctx, CascadeEmit *e, const CssRuleData *r)
 {
     CssFontFamilyList names = { 0 };
-    CssRuleFontFace f = { NULL, NULL, NULL, NULL };
+    CssRuleFontFace f = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     char *block, *family;
     size_t len;
     bool parsed;
@@ -5165,6 +5168,11 @@ static void cascade_emit_font_face(JSContext *ctx, CascadeEmit *e, const CssRule
     names.v[0].name = NULL;
     css_font_family_list_free(&names);
     f.unicode_range = cssom_declared_value(block, len, "unicode-range");
+    f.weight = cssom_declared_value(block, len, "font-weight");
+    f.style = cssom_declared_value(block, len, "font-style");
+    /* css-fonts-4 §4.4.1: `font-stretch` is the legacy name alias of the `font-width` descriptor. */
+    f.width = cssom_declared_value(block, len, "font-width");
+    if (f.width == NULL) f.width = cssom_declared_value(block, len, "font-stretch");
     free(block);
     if (JS_IsObject(r->parent_style_sheet)) {
         JSValue loc = css_style_sheet_location(ctx, r->parent_style_sheet);

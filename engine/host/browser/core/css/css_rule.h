@@ -384,6 +384,9 @@ typedef struct {
     char *family;          /* §4.2's `font-family` descriptor, the decoded family name */
     char *src;             /* §4.3's `src` descriptor, serialized */
     char *unicode_range;   /* §4.5's `unicode-range` descriptor, serialized; NULL where the rule declares none */
+    /* §4.4's `font-weight`, `font-style` and `font-width` descriptors, serialized; each NULL where the rule
+       declares none, which is the initial `auto` */
+    char *weight, *style, *width;
     char *location;        /* the parent style sheet's CSSOM §6.1 location; NULL for an embedded sheet */
 } CssRuleFontFace;
 
