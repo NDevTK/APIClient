@@ -1161,6 +1161,17 @@ static const TfServed *tf_served_at(const char *abs) {
     return NULL;
 }
 
+/* How many times this host answered each TF_SERVED address, one per request it was shown: the network's count of
+   fetches, which a row about fetch deduplication reads. */
+static int g_tf_served_answers[sizeof(TF_SERVED) / sizeof(TF_SERVED[0])];
+
+static int tf_served_answers(const char *abs) {
+    const TfServed *sv = tf_served_at(abs);
+
+    CHECK(sv != NULL, "a row asked how often this host answered an address TF_SERVED does not hold");
+    return g_tf_served_answers[sv - TF_SERVED];
+}
+
 /* The (address, witness mark, provenance) triples the zone was shown, deduplicated: the egress signals a request
    carries are on its pending line and not in the result document, so a row about them reads this. */
 typedef struct { char *url, *pinned, *prov, *address; } TfSeenLine;
@@ -1702,6 +1713,7 @@ static int fixture_provide(JSContext *ctx) {
                and giving them all one would change what several statements that read `r.headers` observe — a
                change to rows under test, made in passing, to tidy a reply nobody is asking about. */
             if (sv) header_list_append(&eh, "content-type", rtype);
+            if (sv) g_tf_served_answers[sv - TF_SERVED]++;
             reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody),
                                     (const char *const *)&abs, 1, rtype, "basic");
             header_list_free(&eh);
@@ -23182,8 +23194,8 @@ TF_UNIT void probes_compilejoin(const char *js, Probe *tab, int *n) {
 
 /* The rows of the `modpreload` document (fixture/modpreload.h): the graph evaluates, every preload fires `load`,
    the chunk reached only by `import()` loads, and no chunk a preload names is fetched a second time by an import
-   (HTML §8.1.4.2 "Fetching scripts"' fetch a single module script keys one fetch per (url, module type)). An
-   import's own park is the record whose door is `module-import`; the preload's is `link-element`. */
+   (HTML §8.1.4.2 "Fetching scripts"' fetch a single module script keys one fetch per (url, module type)), read
+   as how many times this host answered the chunk's address. */
 TF_UNIT void probes_modpreload(const char *js, Probe *tab, int *n) {
     static const char *const chunks[] = { "https://x.test/chunk/mp-a.js", "https://x.test/chunk/mp-b.js",
                                           "https://x.test/chunk/mp-c.js", "https://x.test/chunk/mp-d.js" };
@@ -23202,11 +23214,11 @@ TF_UNIT void probes_modpreload(const char *js, Probe *tab, int *n) {
     fold_row(&d_tt, &d_why, param_value_is(js, "/api/mpdyn", "w", "mpD"),
              "the `import()` of the chunk only a preload had fetched did not settle with its namespace");
     for (size_t i = 0; i < COUNTOF(chunks) && o_tt; i++) {
-        snprintf(one_buf, sizeof one_buf, "`%s` was preloaded and also parked by an import: two fetches for one "
-                 "module map entry", chunks[i]);
-        fold_row(&o_tt, &o_why, emitted_record_has(js, chunks[i], "\"door\":\"link-element\""),
-                 "a preloaded chunk has no `link-element` record, so the import rows below it read nothing");
-        fold_row(&o_tt, &o_why, !emitted_record_has(js, chunks[i], "\"door\":\"module-import\""), one_buf);
+        int answered = tf_served_answers(chunks[i]);
+
+        snprintf(one_buf, sizeof one_buf, "this host answered `%s` %d time(s): a preload and an import of one "
+                 "(url, module type) are one fetch", chunks[i], answered);
+        fold_row(&o_tt, &o_why, answered == 1, one_buf);
     }
     const Probe rows[] = {
         { "mp-graph", g_tt, "/chunk/mp-main.js", SESS_EXPLORE, g_why },
