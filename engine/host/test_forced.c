@@ -1361,7 +1361,7 @@ static int tf_floor_place(void) {
     unsigned long pages = 0;
     FILE *statm = fopen("/proc/self/statm", "r");
     struct rlimit rl;
-    void *probe;
+    TfFloorBlock *probe;
 
     CHECK(statm != NULL && fscanf(statm, "%lu", &pages) == 1, "the native host could not read its mapped size");
     fclose(statm);
@@ -1375,9 +1375,12 @@ static int tf_floor_place(void) {
 
         while ((b = malloc(sz)) != NULL) { b->next = g_tf_floor.held; g_tf_floor.held = b; }
     }
+    /* Kept on the list where it succeeds: a block freed unread lets the compiler assume the allocation. */
     probe = malloc(1024);
-    free(probe);
-    return probe == NULL;
+    if (probe == NULL) return 1;
+    probe->next = g_tf_floor.held;
+    g_tf_floor.held = probe;
+    return 0;
 #endif
 }
 
