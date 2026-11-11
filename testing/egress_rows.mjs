@@ -8,7 +8,8 @@
 // decided); the record (a refused request byte-identical to a send the document's unforced run made is answered
 // from that send's record); the address class (shown, deciding nothing by default; an address with no bytes
 // never leaves); the method (the page's own non-GET on its unforced run is sent as composed, no widening sends
-// one, a redirect rewrites it as Fetch §4.5 says); the body class (judged as the address class is).
+// one, a redirect rewrites it as Fetch §4.5 says); the request's bytes (one row states the weakest class over
+// the address, each header value and the body; a part with no bytes never leaves, whichever part it is).
 //
 //   node testing/egress_rows.mjs
 "use strict";
@@ -22,6 +23,9 @@ const count = (method, path) => hits.get(method + ' ' + path) || 0;
 /* The request bodies each "METHOD path" arrived with, in arrival order. */
 const bodies = new Map();
 const bodiesOf = (method, path) => (bodies.get(method + ' ' + path) || []).join('|');
+/* The `X-Probe` header each "METHOD path" arrived with, in arrival order; `-` for an arrival with none. */
+const probes = new Map();
+const probesOf = (method, path) => (probes.get(method + ' ' + path) || []).join('|');
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://x').pathname;
   const key = req.method + ' ' + path;
@@ -30,8 +34,10 @@ const server = createServer(async (req, res) => {
   for await (const c of req) chunks.push(c);
   bodies.set(key, (bodies.get(key) || []).concat(Buffer.concat(chunks).toString('utf8') + '<' +
                                                   (req.headers['content-type'] || '') + '>'));
-  if (path === '/post-303' || path === '/post-307') {
-    res.writeHead(Number(path.slice(-3)), { Location: path === '/post-303' ? '/post-landed' : '/post-kept',
+  probes.set(key, (probes.get(key) || []).concat(req.headers['x-probe'] === undefined ? '-' : req.headers['x-probe']));
+  if (path === '/post-303' || path === '/post-307' || path === '/hdr-303') {
+    res.writeHead(Number(path.slice(-3)), { Location: { '/post-303': '/post-landed', '/post-307': '/post-kept',
+                                                        '/hdr-303': '/hdr-landed' }[path],
                                             'Cache-Control': 'no-store' });
     res.end();
     return;
@@ -105,6 +111,18 @@ const only = (r) => !Array.isArray(r.egress) ? 'no-egress-list' : r.egress.lengt
 const names = (e) => e && e.vector ? Object.keys(e.vector).sort().join(',') : 'no-vector';
 const hows = (r) => Array.isArray(r.egress) ? r.egress.map((e) => e.how).join(',') : 'no-egress-list';
 const arm = (e) => !e || typeof e !== 'object' ? 'no-entry' : e.admittedBy === null ? 'none' : e.admittedBy.kind;
+/* An entry's statement of what each part's bytes are, as one text; `no-parts` where it states none. */
+const parts = (e) => !e || typeof e !== 'object' || !e.parts ? 'no-parts'
+  : `address=${e.parts.address} headers=${e.parts.headers.map((h) => h.join(':')).join(',')} body=${e.parts.body}`;
+/* The `bytes` row of the vector the chokepoint computes for a hypothetical request. */
+const bytesOf = (facts) => {
+  try {
+    return ZONE.safeFetchSignalVector(Object.assign(
+      { url: `${A}/x`, destination: '', provenance: 'derived', pinned: 'unpinned', actor: 'page', driven: 'undriven',
+        address: 'concrete', bodyClass: 'none', method: 'GET', doc: docOf(PAGE_A, 'observed'), credentialed: false,
+        headers: null }, facts)).bytes;
+  } catch (_) { return 'aborted'; }
+};
 
 const PAGE_A = `${A}/page`, PAGE_W = `${W}/page`;
 const FORM = [['Content-Type', 'application/x-www-form-urlencoded']];
@@ -213,8 +231,9 @@ const ROWS = [
       const r = await ask(PAGE_A, `${A}/ex-own`, 'engine:addr', { address: 'example' }).catch(() => null);
       const e = r === null ? null : only(r);
       return [['GET /ex-own', count('GET', '/ex-own'), 1], ['admitted by', arm(e), 'default'],
-              ['the class on the vector', e && e.vector && e.vector.address, 'example'],
-              ['the control\'s class', (only(await ask(PAGE_A, `${A}/own`, 'engine:own')).vector || {}).address, 'concrete']]; } },
+              ['the class on the vector', e && e.vector && e.vector.bytes, 'example'],
+              ['the part that holds it', parts(e), 'address=example headers= body=none'],
+              ['the control\'s class', (only(await ask(PAGE_A, `${A}/own`, 'engine:own')).vector || {}).bytes, 'concrete']]; } },
   { label: 'an address with no bytes never leaves, at an unwidened origin or a widened one', run: async () => {
       const refused = async (page, url) => refusalOf(await ask(page, url, 'engine:addr', { address: 'unknown' })
                                                      .catch(() => ({ refusal: { reason: 'aborted' } })));
@@ -226,9 +245,9 @@ const ROWS = [
         doc: docOf(PAGE_W, 'observed'), credentialed: false, headers: null, address: 'example', bodyClass: 'none',
         method: 'GET' });
       ZONE.safeFetchUnwiden(W);
-      return [['GET /no-bytes', count('GET', '/no-bytes'), 0], ['unwidened', own, 'blocked-signal:address=unknown'],
-              ['widened', wide, 'blocked-signal:address=unknown'],
-              ['no grant can name it', ZONE.safeFetchSignalUsable('address', 'unknown'), 'never-permitted'],
+      return [['GET /no-bytes', count('GET', '/no-bytes'), 0], ['unwidened', own, 'blocked-signal:bytes=unknown'],
+              ['widened', wide, 'blocked-signal:bytes=unknown'],
+              ['no grant can name it', ZONE.safeFetchSignalUsable('bytes', 'unknown'), 'never-permitted'],
               ['a widened origin admits a forced example address', exampleWide, null]]; } },
   { label: 'a request that states no address class is refused at the entry', run: async () => {
       const r = await ZONE.safeFetch(`${A}/unclassed`, {
@@ -293,9 +312,12 @@ const ROWS = [
       const own = await ask(PAGE_A, `${A}/post-own`, 'engine:post', { method: 'POST', body: 'a=1', headers: FORM,
                                                                       bodyClass: 'concrete' }).catch(() => null);
       return [['POST /post-ex', count('POST', '/post-ex'), 1], ['admitted by', arm(e), 'default'],
-              ['the class on the vector', e && e.vector && e.vector.body, 'example'],
-              ['a body the page computed', own && own.egress[0].vector.body, 'concrete'],
-              ['a request with no body', (only(await ask(PAGE_A, `${A}/own`, 'engine:own')).vector || {}).body, 'none']]; } },
+              ['the class on the vector', e && e.vector && e.vector.bytes, 'example'],
+              ['the part that holds it', parts(e), 'address=concrete headers=Content-Type:concrete body=example'],
+              ['a body the page computed', own && parts(own.egress[0]),
+               'address=concrete headers=Content-Type:concrete body=concrete'],
+              ['a request with no body', parts(only(await ask(PAGE_A, `${A}/own`, 'engine:own'))),
+               'address=concrete headers= body=none']]; } },
   { label: 'a body with no bytes never leaves, at an unwidened origin or a widened one', run: async () => {
       const refused = async (page, url) => refusalOf(await ask(page, url, 'engine:body', {
         method: 'POST', body: '{cfg.payload}', headers: FORM, bodyClass: 'unknown' })
@@ -304,11 +326,8 @@ const ROWS = [
       ZONE.safeFetchWiden(W);
       const wide = await refused(PAGE_W, `${W}/post-shape`);
       ZONE.safeFetchUnwiden(W);
-      return [['POST /post-shape', count('POST', '/post-shape'), 0], ['unwidened', own, 'blocked-signal:body=unknown'],
-              ['widened', wide, 'blocked-signal:body=unknown'],
-              ['no grant can name it', typeof ZONE.safeFetchSignalUsable === 'function' &&
-                                        ZONE.safeFetchSignals().some((s) => s.name === 'body')
-                                         ? ZONE.safeFetchSignalUsable('body', 'unknown') : 'no such row', 'never-permitted']]; } },
+      return [['POST /post-shape', count('POST', '/post-shape'), 0], ['unwidened', own, 'blocked-signal:bytes=unknown'],
+              ['widened', wide, 'blocked-signal:bytes=unknown']]; } },
   { label: 'a request with a body that states no class is refused at the entry', run: async () => {
       const r = await ZONE.safeFetch(`${A}/post-unclassed`, {
         pageOrigin: A, destination: '', mode: 'cors', provenance: 'derived', pinned: 'unpinned', driven: 'undriven',
@@ -318,6 +337,55 @@ const ROWS = [
                                                  'strict-origin-when-cross-origin', PAGE_A) })
         .then(() => 'answered', () => 'aborted');
       return [['POST /post-unclassed', count('POST', '/post-unclassed'), 0], ['the ask', r, 'aborted']]; } },
+  { label: 'a header value with no bytes never leaves, at an unwidened origin or a widened one', run: async () => {
+      const asked = (page, url) => ask(page, url, 'engine:hdr', { headers: [['X-Probe', '{cfg.token}', 'unknown']] })
+        .catch(() => ({ refusal: { reason: 'aborted' }, egress: [] }));
+      const own = await asked(PAGE_A, `${A}/hdr-shape`);
+      ZONE.safeFetchWiden(W);
+      const wide = await asked(PAGE_W, `${W}/hdr-shape`);
+      ZONE.safeFetchUnwiden(W);
+      return [['GET /hdr-shape', count('GET', '/hdr-shape'), 0], ['unwidened', refusalOf(own), 'blocked-signal:bytes=unknown'],
+              ['widened', refusalOf(wide), 'blocked-signal:bytes=unknown'],
+              ['the part that holds it', parts(only(own)), 'address=concrete headers=X-Probe:unknown body=none']]; } },
+  { label: 'a header value that is its unknown\'s example is sent as those bytes, and the entry states the class',
+    run: async () => {
+      const r = await ask(PAGE_A, `${A}/hdr-ex`, 'engine:hdr', {
+        headers: [['Accept', 'text/plain', 'concrete'], ['X-Probe', 'en-US', 'example']] }).catch(() => null);
+      const e = r === null ? null : only(r);
+      return [['GET /hdr-ex', count('GET', '/hdr-ex'), 1], ['what arrived', probesOf('GET', '/hdr-ex'), 'en-US'],
+              ['admitted by', arm(e), 'default'], ['the class on the vector', e && e.vector && e.vector.bytes, 'example'],
+              ['the part that holds it', parts(e), 'address=concrete headers=Accept:concrete,X-Probe:example body=none']]; } },
+  { label: 'the row states the weakest class over the address, each header value and the body', run: async () => {
+      const H = (...classes) => classes.map((c, i) => ['X-' + i, 'v', c]);
+      return [['every part computed', bytesOf({ headers: H('concrete'), bodyClass: 'concrete', method: 'POST' }), 'concrete'],
+              ['an example address', bytesOf({ address: 'example', bodyClass: 'concrete', method: 'POST' }), 'example'],
+              ['one example header among computed ones', bytesOf({ headers: H('concrete', 'example', 'concrete') }), 'example'],
+              ['an address of no stated class over an example body',
+               bytesOf({ address: 'unstated', bodyClass: 'example', method: 'POST' }), 'unstated'],
+              ['one header with no bytes over an unstated address',
+               bytesOf({ address: 'unstated', headers: H('example', 'unknown') }), 'unknown'],
+              ['a body with no bytes', bytesOf({ bodyClass: 'unknown', method: 'POST' }), 'unknown']]; } },
+  { label: 'the address and the body are parts of that row, and no rows of their own', run: async () => {
+      return [['the rows named address, body or bytes',
+               ZONE.safeFetchSignals().map((s) => s.name).filter((n) => ['address', 'body', 'bytes'].includes(n)).join(','), 'bytes'],
+              ['its values', (ZONE.safeFetchSignals().find((s) => s.name === 'bytes') || { values: [] }).values.join(','),
+               'concrete,example,unknown,unstated'],
+              ['a grant naming the address', ZONE.safeFetchSignalUsable('address', 'example'), 'not-a-signal'],
+              ['a grant naming the body', ZONE.safeFetchSignalUsable('body', 'example'), 'not-a-signal']]; } },
+  { label: 'a header value that states no class is refused at the entry', run: async () => {
+      const r = await ask(PAGE_A, `${A}/hdr-unclassed`, 'engine:hdr', { headers: [['X-Probe', 'v']] })
+        .then(() => 'answered', () => 'aborted');
+      return [['GET /hdr-unclassed', count('GET', '/hdr-unclassed'), 0], ['the ask', r, 'aborted']]; } },
+  { label: 'a redirect that drops a header drops its class with it', run: async () => {
+      const r = await ask(PAGE_A, `${A}/hdr-303`, 'engine:hdr', {
+        method: 'POST', body: 'a=3', headers: [['Content-Type', 'application/x-www-form-urlencoded', 'example'],
+                                                ['X-Probe', 'kept', 'concrete']] }).catch(() => null);
+      const es = r === null || !Array.isArray(r.egress) ? [] : r.egress;
+      return [['POST /hdr-303', count('POST', '/hdr-303'), 1], ['GET /hdr-landed', count('GET', '/hdr-landed'), 1],
+              ['what the target received', probesOf('GET', '/hdr-landed') + bodiesOf('GET', '/hdr-landed'), 'kept<>'],
+              ['the first send', parts(es[0]), 'address=concrete headers=Content-Type:example,X-Probe:concrete body=concrete'],
+              ['the hop', parts(es[1]), 'address=concrete headers=X-Probe:concrete body=none'],
+              ['the hop\'s class', es[1] && es[1].vector && es[1].vector.bytes, 'concrete']]; } },
   { label: 'the zone counts its sends by how each left and what admitted it', run: async () => {
       const c = typeof ZONE.safeFetchEgressCensus === 'function' ? ZONE.safeFetchEgressCensus() : null;
       const sum = c === null ? -1 : Object.values(c).reduce((a, n) => a + n, 0);
@@ -330,8 +398,9 @@ const ROWS = [
          hops), one sent widened, one answered locally, three asks not sent and one served from the record. */
       /* The sixth group adds post-ex sent by a default arm, post-own's repeat and the bodiless control each
          answered locally, and two asks not sent. */
-      return [['entries counted', sum, 48], ['sent by a default arm', c && c['sent default'], 20],
-              ['sent at a widened origin', c && c['sent widened'], 4], ['not sent', c && c['not-sent none'], 17],
+      /* The seventh group adds hdr-ex and the redirect's two hops sent by a default arm, and two asks not sent. */
+      return [['entries counted', sum, 53], ['sent by a default arm', c && c['sent default'], 23],
+              ['sent at a widened origin', c && c['sent widened'], 4], ['not sent', c && c['not-sent none'], 19],
               ['answered locally', c && c['answered-locally default'], 5],
               ['served from the record', c && c['answered-locally record'], 2]]; } },
 ];
