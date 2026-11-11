@@ -31,6 +31,7 @@
 #include <stdlib.h>
 
 #include "quickjs-gap.h"   /* the release form of DFAIL: the sites this instance crossed */
+#include "quickjs-unpriced.h"   /* the span a dev DCHECK evaluates its condition in */
 
 /* WHAT A COMPOSED REASON GETS INTACT, and the TAIL reserved BEYOND it so a cut can say it was cut. Sized here
    rather than at the call sites for the reason the host header gives: a per-site `char msg[400]` is a cap
@@ -116,6 +117,7 @@ static inline void apiclient_qjs_reason_mark(char *r, int n)
 /* A release DFAIL records its construct as reached and continues, as engine/host/check.h's does. */
 #define DFAIL(msg)         APICLIENT_GAP_REACH((msg))
 #define DCHECK(cond, msg)  ((void)0)
+#define DCHECK_PRICED(msg) ((void)0)
 #define DCHECKF(cond, ...) do { (void)sizeof(cond); APICLIENT_QJS_FMT_UNUSED(__VA_ARGS__); } while (0)
 #else
 /* THE HOST'S BUFFERED STDOUT IS FLUSHED FIRST, AND THAT IS THE WHOLE OF WHY THIS LINE IS NOT JUST AN
@@ -137,12 +139,15 @@ static inline void apiclient_qjs_reason_mark(char *r, int n)
 #define DFAIL(msg)         do { fflush(stdout); \
                                 fprintf(stderr, "@WHY %s (%s:%d)\n", (msg), __FILE__, __LINE__); \
                                 abort(); } while (0)
-#define DCHECK(cond, msg)  do { if (!(cond)) DFAIL(msg); } while (0)
+/* The condition is evaluated inside an unpriced span (quickjs-unpriced.h), as engine/host/check.h's is, and
+   DCHECK_PRICED asserts that none is open, reading the depth before any span of its own. */
+#define DCHECK(cond, msg)  do { if (!APICLIENT_UNPRICED(cond)) DFAIL(msg); } while (0)
+#define DCHECK_PRICED(msg) do { if (APICLIENT_UNPRICED_OPEN()) DFAIL(msg); } while (0)
 /* Composed into ONE buffer and emitted as ONE line, never as three fprintf calls: the harness reads
    `@WHY <reason> (<file>:<line>)` as a record, and a reason split across writes is a record another thread's
    output can land inside of. The format arguments are as side-effect-free as a DCHECK condition must be —
    they vanish with the assert in release. */
-#define DCHECKF(cond, ...) do { if (!(cond)) { \
+#define DCHECKF(cond, ...) do { if (!APICLIENT_UNPRICED(cond)) { \
         char apiclient_qjs_r_[APICLIENT_QJS_REASON_CAP + APICLIENT_QJS_REASON_TAIL]; \
         apiclient_qjs_reason_mark(apiclient_qjs_r_, \
             snprintf(apiclient_qjs_r_, APICLIENT_QJS_REASON_CAP, __VA_ARGS__)); \

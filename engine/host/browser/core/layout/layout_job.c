@@ -636,7 +636,7 @@ bool layout_job_line_items_left(void)
 {
     LayoutJob *job = lj_current();
 
-    if (thread_work_unpriced() || !(job->resting && job->drives == 1)) return true;
+    if (APICLIENT_UNPRICED_OPEN() || !(job->resting && job->drives == 1)) return true;
     return !lj_quota_spent(job);
 }
 
@@ -645,7 +645,7 @@ void layout_job_line_items_spend(size_t n)
     LayoutJob *job = lj_current();
 
     thread_work_charge(THREAD_WORK_LAYOUT_LINE, n);
-    if (thread_work_unpriced() || !(job->resting && job->drives == 1)) return;
+    if (APICLIENT_UNPRICED_OPEN() || !(job->resting && job->drives == 1)) return;
     job->line_items = n < job->line_items ? job->line_items - n : 0;
     METRIC_ADD(line_items, n);
 }
@@ -655,7 +655,7 @@ void layout_job_line_metrics_spend(size_t n)
     LayoutJob *job = lj_current();
 
     thread_work_charge(THREAD_WORK_LAYOUT_LINE, n * THREAD_WORK_LINE_ITEMS_PER_METRIC);
-    if (thread_work_unpriced() || !(job->resting && job->drives == 1)) return;
+    if (APICLIENT_UNPRICED_OPEN() || !(job->resting && job->drives == 1)) return;
     job->line_metrics = n < job->line_metrics ? job->line_metrics - n : 0;
 }
 
@@ -869,6 +869,9 @@ bool layout_job_ask(LayoutQuestion q, LayoutAnswer *out)
             return true;
         }
     }
+    DCHECK_PRICED("a stacked layout question was deferred inside an assert's condition or a dev build's second "
+                  "derivation — the entry it leaves on the job is one a release build does not have. Read what "
+                  "the job already holds (a peek), or ask under the drive before the check");
     (void)lj_push(job, q, LJ_SUSPENDED);
     METRIC_ADD(stacked_deferred, 1);
     if (bf) METRIC_ADD(bf_deferred, 1);

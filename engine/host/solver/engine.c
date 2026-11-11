@@ -8914,6 +8914,9 @@ static int preempt_hook(int kind) {
     DCHECK(quantum_slice_open(),
            "the preempt policy was consulted with no slice open — something reached the interpreter on the host's "
            "time between two steps");
+    DCHECK_PRICED("the preempt policy was consulted inside an assert's condition or a dev build's second "
+                  "derivation — a rest offered there is one a release build is never offered. The read it makes "
+                  "must not reach a rest point");
     /* This consultation, counted (`preemptAsksLifetime`), before the rescan below so the containment its quotient
        rests on is an order of statements. */
     g_preempt_asked++;
@@ -10043,6 +10046,8 @@ void engine_pick_fresh(long out[5][2]) {
 
 /* The programs are the flow's own rows (`f->dyn`), so this takes no inventory. */
 static int flow_step(JSContext *ctx, Flow *f) {
+    DCHECK_PRICED("a flow is being stepped inside an unpriced span — an APICLIENT_UNPRICED_BLOCK was left by "
+                  "break, return or goto and its span is still open, so no host charge after it retires work");
     /* A flow is about to run, so the flow stamp and the DOM capture must both be on. This is the one point a flow
        is driven (every JS_FlowNew / JS_FlowResume is below it). The generation stamps every object the flow
        creates and g_dom_capture is its twin over the Lexbor tree; with either off the flow's creations would be

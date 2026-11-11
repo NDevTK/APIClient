@@ -31,7 +31,6 @@
 #include "core/layout/scroll_container.h"
 #include "core/layout/text_run.h"
 #include "core/layout/used_value.h"
-#include "core/timing/thread_work.h"   /* the unpriced pair a dev build's second derivation runs under */
 #include "solver/metrics.h"   /* `_layoutFillRests` */
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 #include "solver/reclaim.h"
@@ -1664,9 +1663,7 @@ static bool lb_fill_lines_pull(LbFill *f)
         f->check = lexbor_malloc(sizeof *f->check);
         CHECK(f->check != NULL, "out of memory re-deriving one inline formatting context's line boxes");
         lb_fill_init(f->check, f->style, f->run, f->avail, false);
-        thread_work_unpriced_begin();
-        done = lb_fill_lines_pull(f->check);
-        thread_work_unpriced_end();
+        APICLIENT_UNPRICED_BLOCK { done = lb_fill_lines_pull(f->check); }
         DCHECK(done, "a fill's second derivation deferred a question its first derivation, over the same key in "
                       "the same job, had answered; a rest here is one a release build does not take");
         lb_fill_compare_lines(f, f->check);
@@ -1716,9 +1713,7 @@ static bool lb_fill_extents_pull(LbFill *f)
     if (f->check != NULL) {
         bool done;
 
-        thread_work_unpriced_begin();
-        done = lb_fill_extents_pull(f->check);
-        thread_work_unpriced_end();
+        APICLIENT_UNPRICED_BLOCK { done = lb_fill_extents_pull(f->check); }
         DCHECK(done, "a fill's second derivation of its extents deferred a question the first had answered; a "
                       "rest here is one a release build does not take");
         lb_fill_compare_facts(f, f->check);

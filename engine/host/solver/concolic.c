@@ -1103,15 +1103,6 @@ static int cons_index_find(const Cons *e, const int *hash, int cap, const char *
     }
     return -1;
 }
-/* The same probe asked by an assert, which prices nothing (thread_work.h's unpriced pair). */
-static int cons_index_find_unpriced(const Cons *e, const int *hash, int cap, const char *key) {
-    int r;
-
-    thread_work_unpriced_begin();
-    r = cons_index_find(e, hash, cap, key);
-    thread_work_unpriced_end();
-    return r;
-}
 static void cons_hash_put(int idx) {   /* insert head entry idx; caller guarantees room */
     uint32_t m = (uint32_t)g_pins_hash_cap - 1, h = cons_hash(g_pins[idx].key) & m;
     while (g_pins_hash[h]) h = (h + 1) & m;
@@ -1270,7 +1261,7 @@ static Cons *cons_entry(const char *key) {
     g_pins_n++;
     if (!g_pins_hash || g_pins_hash_cap < g_pins_n * 2) cons_hash_rebuild();
     else cons_hash_put(g_pins_n - 1);
-    DCHECK(cons_index_find_unpriced(g_pins, g_pins_hash, g_pins_hash_cap, key) == g_pins_n - 1,
+    DCHECK(cons_index_find(g_pins, g_pins_hash, g_pins_hash_cap, key) == g_pins_n - 1,
            "a constraint entry is not findable through the index that was just given it — a later read of the "
            "same fact would fork a branch this flow has already decided");
     return &g_pins[g_pins_n - 1];
@@ -2414,16 +2405,6 @@ int concolic_src_pinned(const char *src) {
     e = cons_lookup(src);
     return (e && e->val) ? 1 : 0;
 }
-/* The same question asked by an assert, which prices nothing (thread_work.h's unpriced pair). */
-static int src_pinned_unpriced(const char *src) {
-    int r;
-
-    thread_work_unpriced_begin();
-    r = concolic_src_pinned(src);
-    thread_work_unpriced_end();
-    return r;
-}
-
 /* One entry of an enumeration over the constraint (concolic.h's concolic_pins_each and
    concolic_assumed_decisions_each). `e` is entry `i` of the segment whose index is `hash`; the head is one such
    segment. The visible copy of a key is the one cons_lookup answers, so a shadowed entry is skipped and its
@@ -2434,7 +2415,7 @@ static void cons_each_entry(const Cons *seg, int i, const int *hash, int cap, Co
     const Cons *seen;
 
     DCHECK(e->key != NULL, "a constraint entry holds no key — cons_entry writes the key before anything else");
-    DCHECKF(cons_index_find_unpriced(seg, hash, cap, e->key) == i,
+    DCHECKF(cons_index_find(seg, hash, cap, e->key) == i,
             "the constraint key `%s` is not the entry its own segment's index answers — a key held twice in one "
             "segment is two facts about one value, and a lookup answers whichever the probe reaches first",
             e->key);
@@ -4778,7 +4759,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
        The candidate arm has already returned, so no substitution disjunct is needed here (concolic_new's copy
        needs one because its candidate path falls through). This goes when `pin_of` is routed through the
        predicate, making the divergence unspellable. */
-    DCHECK(!src_pinned_unpriced(shape),
+    DCHECK(!concolic_src_pinned(shape),
            "a source this flow had PINNED reached the ordinary member mint — `pin_of` answered NO PIN for a "
            "path `concolic_src_pinned` says is pinned, so the two spellings of one question over one chain "
            "have diverged. Every later read of this member composes a value this flow has already proved "
@@ -9184,7 +9165,7 @@ static JSValue source_mint(JSContext *ctx, const char *shape, const char *src, c
     }
     /* The tie `concolic_exotic_get`'s pin arm asserts. A candidate re-fire skips the arm deliberately, so a
        pinned source then reaches the mint and concolic_derived returns the attacker's bytes. */
-    DCHECK(src_delivered(src) || !src || !src_pinned_unpriced(src),
+    DCHECK(src_delivered(src) || !src || !concolic_src_pinned(src),
            "a source this flow had PINNED reached the ordinary source mint on a path no candidate is "
            "substituting — `pin_of` answered NO PIN for a path `concolic_src_pinned` says is pinned, so the "
            "two tests over one chain have diverged and this read is about to mint an unknown for a value the "
@@ -9234,7 +9215,7 @@ static JSValue source_mint(JSContext *ctx, const char *shape, const char *src, c
            the contract every consumer reads off the return; the two early returns are invisible in the
            signature, so a consumer must not assert that a source mint is always concolic. Stated over the whole
            function rather than this path, so it survives a reordering of the arms. */
-        DCHECK(concolic_is(r) || src_delivered(src) || src_pinned_unpriced(src),
+        DCHECK(concolic_is(r) || src_delivered(src) || concolic_src_pinned(src),
                "the source mint answered a value that is not concolic for a source this flow has NEITHER "
                "pinned NOR substituted a candidate at — the two early returns above are the only arms "
                "entitled to answer a plain value, so this is a derivation that lost the triple and every "

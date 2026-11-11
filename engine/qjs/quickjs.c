@@ -26371,7 +26371,13 @@ uint64_t JS_FlowDiscardRetiredWork(void)
 }
 uint64_t JS_FlowTakeRetiredWork(void) { return JS_FlowDiscardRetiredWork(); }
 uint64_t JS_FlowPeekRetiredWork(void) { return g_flow_work_retired; }
-void JS_FlowRetireWork(uint64_t units) { g_flow_work_retired += units; }
+/* A host charge inside an unpriced span (quickjs-unpriced.h) retires nothing: the probe an assert's condition
+   shares with priced code is work only where a release build makes it too. */
+void JS_FlowRetireWork(uint64_t units)
+{
+    if (APICLIENT_UNPRICED_OPEN()) return;
+    g_flow_work_retired += units;
+}
 
 /* Source bytes the tokenizers have consumed, over the process: a report for the host's thread-work census.
    Each byte is counted once however often a lookahead rescans it, because only forward progress past
@@ -27571,6 +27577,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 #define DEFAULT         case_default
 #define BREAK           DISPATCH()
 
+    DCHECK_PRICED("an assert's condition or a dev build's second derivation called into the interpreter — its "
+                  "opcodes are work and its writes are state a release build does not have. Read the fact through "
+                  "a C accessor that runs no code of the page");
     DCHECK(!g_compile_stint,
            "a call was made inside a compile stint — a compile runs no code of any world, so the parse production "
            "or code generation pass that reached a callable must do its work in the compiler");
@@ -52255,6 +52264,8 @@ static uint64_t js_parse_count_bytes(JSParseState *s)
     if (s->buf_ptr > s->counted_ptr) {
         uint64_t n = (uint64_t)(s->buf_ptr - s->counted_ptr);
 
+        DCHECK_PRICED("an assert's condition or a dev build's second derivation tokenized script — the bytes are "
+                      "work a release build does not retire. Check the compile's result, not a second compile");
         units = n * g_flow_control.parse_units_per_byte;
         g_flow_parse_bytes += n;
         g_flow_work_retired += units;
@@ -64201,6 +64212,8 @@ uint64_t JS_FlowCodegenRestsLife(void) { return g_codegen_rests; }
    processes an opcode. */
 static inline void js_codegen_charge(uint64_t units)
 {
+    DCHECK_PRICED("an assert's condition or a dev build's second derivation ran a codegen pass — its input is "
+                  "work a release build does not retire. Check the compile's result, not a second compile");
     g_codegen_input += units;
     g_flow_compile_work += units;
     g_flow_work_retired += units;

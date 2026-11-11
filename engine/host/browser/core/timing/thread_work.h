@@ -114,16 +114,11 @@ void thread_work_end(ThreadWorkSpan *s, ThreadWorkKind kind, uint64_t bytes);
    rate per 1024 (rounded down), through the
    interpreter's retired-work count (quickjs.h's JS_FlowRetireWork). Script parse is charged by quickjs's
    tokenizer itself and is not a kind this takes. With no flow running the charge is discarded at the next
-   switch-in, as the baseline's work is. */
+   switch-in, as the baseline's work is. Inside an unpriced span (quickjs-unpriced.h: an assert's condition, a
+   dev build's second derivation) it charges and counts nothing, and an allowance metering the same input
+   (core/layout/layout_job.c's line items) neither counts nor spends, so a dev build retires the work a release
+   build does. */
 void thread_work_charge(ThreadWorkKind kind, uint64_t bytes);
-
-/* A read or derivation a dev build makes only to check an invariant prices nothing, so a dev build retires the
-   work a release build does. Between the pair thread_work_charge charges nothing, and an allowance metering the
-   same input (core/layout/layout_job.c's line items) asks thread_work_unpriced and neither counts nor spends.
-   The pair nests. */
-void thread_work_unpriced_begin(void);
-void thread_work_unpriced_end(void);
-bool thread_work_unpriced(void);
 
 /* Retired work the scheduler discarded where it switched a flow in (solver/engine.c's flow_switch_in). */
 void thread_work_note_discarded(uint64_t units);

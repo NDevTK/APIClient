@@ -61,6 +61,8 @@
 #define APICLIENT_DEV 1   /* development is the default; a release build compiles with -DAPICLIENT_DEV=0 */
 #endif
 
+#include "quickjs-unpriced.h"   /* the span a dev DCHECK evaluates its condition in */
+
 /* THE ASSERTION LINE IS JSON, SO IT IS ESCAPED HERE AND NOT ASKED FOR BY A COMMENT. This emitter used to
  * interpolate `condstr` and `msg` with a bare `%s` under an instruction to "keep msg a plain literal" — a
  * comment standing where a mechanism belongs, and one that the two fields BOTH break in their ordinary use.
@@ -303,16 +305,24 @@ static inline int apiclient_assert_fmt_check(const char *fmt, ...) { (void) fmt;
 #define CHECKF(cond, ...) do { if (!(cond)) { APICLIENT_ASSERT_EMITF("@E", #cond, __VA_ARGS__); abort(); } } while (0)
 #define CHECK_FAILF(...)  do { APICLIENT_ASSERT_EMITF("@E", "unreachable", __VA_ARGS__); abort(); } while (0)
 
-/* DCHECK — dev-only fatal; compiled out in release (side-effect-free condition required). */
+/* DCHECK — dev-only fatal; compiled out in release (side-effect-free condition required). The condition is
+   evaluated inside an unpriced span (quickjs-unpriced.h), so what it reads is no engine work. */
 #if APICLIENT_DEV
-#define DCHECK(cond, msg) do { if (!(cond)) { APICLIENT_ASSERT_EMIT("@WHY", #cond, (msg)); abort(); } } while (0)
+#define DCHECK(cond, msg) \
+  do { if (!APICLIENT_UNPRICED(cond)) { APICLIENT_ASSERT_EMIT("@WHY", #cond, (msg)); abort(); } } while (0)
 #define DFAIL(msg)        do { APICLIENT_ASSERT_EMIT("@WHY", "unreachable", (msg)); abort(); } while (0)
 /* DCHECKF / DFAILF — the same, with the reason composed from runtime data. The format arguments are as
    side-effect-free as a DCHECK condition must be: they vanish with the assert in release. */
-#define DCHECKF(cond, ...) do { if (!(cond)) { APICLIENT_ASSERT_EMITF("@WHY", #cond, __VA_ARGS__); abort(); } } while (0)
+#define DCHECKF(cond, ...) \
+  do { if (!APICLIENT_UNPRICED(cond)) { APICLIENT_ASSERT_EMITF("@WHY", #cond, __VA_ARGS__); abort(); } } while (0)
 #define DFAILF(...)        do { APICLIENT_ASSERT_EMITF("@WHY", "unreachable", __VA_ARGS__); abort(); } while (0)
+/* DCHECK_PRICED — no unpriced span is open here: this code is engine work, a rest or a write no assert's
+   condition and no dev-only derivation may reach. It reads the depth before any span of its own. */
+#define DCHECK_PRICED(msg) \
+  do { if (APICLIENT_UNPRICED_OPEN()) { APICLIENT_ASSERT_EMIT("@WHY", "no unpriced span is open", (msg)); abort(); } } while (0)
 #else
 #define DCHECK(cond, msg) ((void)sizeof(cond))   /* type-checked, never evaluated */
+#define DCHECK_PRICED(msg) ((void)0)
 /* A release DFAIL records its construct as reached and continues. A DFAILF is recorded by its format, so its
    identity does not vary with the run, and its arguments stay unevaluated. */
 #define DFAIL(msg)        APICLIENT_GAP_REACH((msg))

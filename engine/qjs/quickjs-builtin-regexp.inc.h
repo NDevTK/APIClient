@@ -899,6 +899,8 @@ static JSValue js_regexp_tostring_fini(JSContext *ctx, void *st, bool take_resul
 int lre_want_yield(void *opaque)
 {
     (void)opaque;
+    DCHECK_PRICED("an assert's condition or a dev build's second derivation ran a regexp match — its back-edges "
+                  "are work and a rest a release build does not take. Compare the bytes in C");
     FLOW_WORK_RETIRE();
     return g_flow_control.preempt != NULL && g_flow_control.preempt(JS_PREEMPT_BACKEDGE);
 }
@@ -911,6 +913,8 @@ int lre_want_yield(void *opaque)
 int lre_compile_poll(void *opaque, size_t bytes, bool ask)
 {
     (void)opaque;
+    DCHECK_PRICED("an assert's condition or a dev build's second derivation compiled a regexp — its pattern bytes "
+                  "are work a release build does not retire. Check the compiled program, not a second compile");
     g_regexp_compile_bytes += bytes;
     g_flow_work_retired += (uint64_t)bytes * g_flow_control.parse_units_per_byte;
     return ask && g_flow_control.preempt != NULL && g_flow_control.preempt(JS_PREEMPT_BACKEDGE);
