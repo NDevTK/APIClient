@@ -27042,6 +27042,20 @@ TF_UNIT void probes_hdrclass(const char *js, Probe *tab, int *n) {
              "a Headers object's iterator handed the page the display shape of an unknown value as a string, so "
              "the request filled from it states the shape as bytes with the class `concrete`: the read members "
              "of Fetch §5.1 (get, the iterator, getSetCookie) owe the page the unknown itself");
+    /* A read answers the unknown: a comparison of it forks, and a combined read is derived from its parts. */
+    const char *gt_why = NULL; int gt_tt = 1;
+    fold_row(&gt_tt, &gt_why, !!strstr(js, "\"/api/hc-get-other\"") && !!strstr(js, "\"/api/hc-get-join\""),
+             "NOT REACHED: there is no /api/hc-get-other or no /api/hc-get-join record, so the script that reads "
+             "a Headers object back never ran");
+    fold_row(&gt_tt, &gt_why, !!strstr(js, "\"/api/hc-get-fr\""),
+             "there is no /api/hc-get-fr record: Fetch §5.1's get() of a value written from an unknown answered "
+             "bytes, so comparing it with a literal the unknown's domain admits pruned the arm instead of "
+             "forking");
+    fold_row(&gt_tt, &gt_why,
+             tf_seen_content("https://x.test/api/hc-get-join ", "[\"x-join\",\"en-US, q\",\"example\"]"),
+             "Fetch §2.2.2's get over an unknown and bytes of one name did not answer a value derived from "
+             "both, whose example is the two joined by `, `: the request written from it does not state "
+             "`en-US, q` with the class `example`");
     const char *xh_why = NULL; int xh_tt = 1;
     fold_row(&xh_tt, &xh_why, !!strstr(js, "/api/hc-xhr\"") && !!strstr(js, "/api/hc-xhr-unk\""),
              "NOT REACHED: there is no /api/hc-xhr or no /api/hc-xhr-unk record, so an XMLHttpRequest was never "
@@ -27060,6 +27074,7 @@ TF_UNIT void probes_hdrclass(const char *js, Probe *tab, int *n) {
         { "hdrclass-fill", fi_tt, "/api/hc-unk", SESS_EXPLORE, fi_why },
         { "hdrclass-members", me_tt, "/api/hc-members", SESS_EXPLORE, me_why },
         { "hdrclass-read", rd_tt, "/api/hc-read", SESS_EXPLORE, rd_why },
+        { "hdrclass-get", gt_tt, "/api/hc-get-other", SESS_EXPLORE, gt_why },
         { "hdrclass-xhr", xh_tt, "/api/hc-xhr", SESS_EXPLORE, xh_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));

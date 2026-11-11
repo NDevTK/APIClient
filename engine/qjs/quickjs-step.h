@@ -27,28 +27,14 @@ struct JSMapRecord;
 struct REExecContext;
 struct JSStepHdr;
 
-/* WHAT A HOST ALLOCATION ONLY THE HOST CAN COPY AND DESTROY ANSWERS. Declared by the HOST for the reason every
-   other operation below is declared by the ENGINE: this one names a structure the engine cannot walk, so both
-   halves of it are the host's and what the engine contributes is only the decision of WHICH consumer is
-   visiting — the one thing a machine must never learn for itself.
-   THIS BANNER READ "WHAT A FLOW-PRIVATE TREE ANSWERS, declared by the HOST because the engine owns no DOM",
-   AND THE REASON IT GAVE IS THE GENERAL ONE WEARING ITS FIRST INSTANCE'S NAME. It is kept in its own words
-   because a reader who re-derives the subject from the operation's NAME will narrow it again: the engine owns
-   no DOM, and it owns no header list either, and the sentence that was written is true of both. What makes a
-   structure belong here is stated negatively and that is what generalises — it is not a JSValue and not an
-   allocation with a size, so no other operation below can name it. A flow-private DOM tree is the first such
-   structure; §5.1's header list (an array of entries each owning two C-library strings) is the second, and its
-   `clone` and `destroy` are `header_list_*` exactly as the tree's are `dom_private_tree_*`.
-   AND THE OOM CONTRACT IS WHAT SEPARATES THIS OPERATION FROM ITS NEIGHBOURS RATHER THAN THE SUBJECT'S SHAPE.
-   `buf`, `array`, `props` and `slots` all COPY, and all four answer NULL on allocation failure — "the state a
-   machine that has not built it yet is in". `clone` below is FATAL instead, and the engine asserts it, so a
-   structure whose own allocation primitives are already fatal (a `CHECK` rather than a NULL return) meets this
-   contract by construction and meets no other copying operation's. That is a property of the primitives, not
-   of what the structure is called.
-   TWO OPERATIONS AND NOT THREE. The consumer that clones needs a third — the old-node-to-new map it re-points
-   its cursors through — and needs it only for the length of one `clone` call, because a map records a copy
-   that has just been made and nothing about it parks. So it lives inside that call and never crosses this
-   boundary, which is also why the cursors are an argument of `clone` rather than a slot kind of their own. */
+/* What a flow-private tree answers: a host allocation only the host can copy and destroy. It is declared by
+   the host because the engine cannot walk the structure (it owns no DOM); the engine contributes only which
+   consumer is visiting, which a machine must never learn for itself. A structure belongs here when it is not a
+   JSValue and not an allocation with a size, so no other operation below can name it.
+   `clone` is fatal on allocation failure where `buf`, `array`, `props` and `slots` answer NULL, and the
+   engine asserts it; a structure whose own allocation primitives are fatal meets that by construction.
+   Two operations and not three: the old-node-to-new map the clone re-points its cursors through lives inside
+   one `clone` call, which is why the cursors are an argument of `clone` and not a slot kind of their own. */
 typedef struct JSStepTreeOps {
     /* Deep-copy the structure at `root` into one with the same owner, and re-point each of the `ncursors`
        cursor slots — every one of which names something INSIDE that structure — at the copy of what it named.
@@ -122,21 +108,9 @@ struct JSStepVisit {
        others can name it. A byte copy of the state leaves every one of those pointers aimed at the ORIGINAL
        arm's structure, so a sibling that took one would hold what the first arm owns and both teardowns would
        destroy it — which is exactly the corruption a fork abort exists to prevent.
-       THE NAME IS `tree` BECAUSE THE FIRST SUCH STRUCTURE WAS ONE, AND IT IS THE ONLY DOM-SPECIFIC THING LEFT
-       HERE. NOT COVERED: the field, the two engine consumers' identifiers and `JSStepTreeOps`'s own name still
-       say `tree`, so a reader meeting a header list routed through it has to read this banner to learn that
-       the operation is general. WHAT THE NEXT DIFF BUILDS: the rename, which is one edit here and one at each
-       consumer in quickjs.c and one at each caller — and a caller's file is why it is not this diff, since a
-       field rename that leaves a caller naming the old field does not compile and the DOM callers are not this
-       lane's to touch. HOW ITS ABSENCE SHOWS: a reader grepping the operation's name finds only DOM callers and
-       concludes the operation is for DOM trees, which is the narrowing the banner above records being made
-       once already.
-       NONE OF THE THREE CONSUMERS DEREFERENCES THE STRUCTURE, which is the fact that decides what may be
-       declared here and is checkable without trusting this sentence: the clone consumer calls `ops->clone` and
+       None of the three consumers dereferences the structure: the clone consumer calls `ops->clone` and
        asserts its answer, the teardown calls `ops->destroy` and clears the cursors, and the fingerprint walk
-       folds the pointers and CALLS NO OPERATION AT ALL. A host allocation with no interior pointers declares
-       `ncursors` 0 and all three handle it; the cursor machinery below is about interior pointers and not about
-       nodes.
+       folds the pointers and calls no operation.
        THE CURSORS TRAVEL WITH THE ROOT and are not slots of their own, because a cursor is only meaningful
        against the copy the clone has just made: the clone re-points each one through its map, the teardown
        clears it (the root owned what the cursor named, so a cursor is BORROWED and is never freed here), and

@@ -12,7 +12,10 @@
    `Set-Cookie` is the reason the spec keeps them separate, and `getSetCookie` is the member that reads them
    back. It is public because two things need to build one without a JS object in sight: the Headers interface
    itself, and `fetch`'s conversion of an `init.headers` bag into the set an endpoint requires. */
-/* What a header value is where it is the display shape of an unknown and not bytes. `root` is that unknown's
+/* A header list in C states bytes: a response's list, and the statement of a page-written list a host is shown
+   (header_pairs_state). A list a page writes is not this one: it is the pairs below, which hold an unknown
+   value as itself.
+   What a stated value is where it is the display shape of an unknown and not bytes. `root` is that unknown's
    delivery root (solver/concolic.h's concolic_root_c), the provenance the @H surface marks a request by, NULL
    for an unknown with none. `example` is the value on the unknown's example, normalized and valid as a header
    value, NULL where the run holds no such bytes. Both are borrowed by the appends, which copy them. */
@@ -52,7 +55,7 @@ bool  header_forbidden_request(const char *lower_name, const char *value);
 void  header_list_free(HeaderList *l);
 /* §5.1 append: lowercase the name, keep the pair. Both strings are COPIED. */
 void  header_list_append(HeaderList *l, const char *name, const char *value);
-/* …the same for a value that may be an unknown's display shape: `unk` states its facts, NULL for bytes. */
+/* …the same for a value that states an unknown's display shape: `unk` states its facts, NULL for bytes. */
 void  header_list_append_unknown(HeaderList *l, const char *name, const char *value, const HeaderUnknown *unk);
 /* An entry's facts in the form the appends take, for a copy of it: NULL for bytes, else `tmp` filled. */
 const HeaderUnknown *header_entry_unknown(const HeaderEntry *e, HeaderUnknown *tmp);
@@ -70,33 +73,23 @@ const char *header_value_class_token(const HeaderEntry *e);
 /* The bytes a host sends for an entry that has them: the value, or the example of a shape. For a shape with no
    example it is the shape, which is shown and never sent. BORROWED from the entry. */
 const char *header_entry_wire_value(const HeaderEntry *e);
-/* A HEADER LIST A STEP MACHINE OWNS, AND THE PAIR THAT COPIES AND DESTROYS IT — quickjs-step.h's `tree`
-   operation, which delegates BOTH halves of a deep fork's copy to the host and is therefore the one visit
-   operation this list can be declared through. Every operation that copies for itself (`v->buf`, `v->array`,
-   `v->props`, `v->slots`) uses the ENGINE's allocator and this list's array and strings are the C library's,
-   in functions that take no context and are called from dozens of callers that have none; delegating the copy
-   is what makes those two facts stop being in tension, and it changes NO allocator.
-   IT IS A HEAP ROOT AND NOT THE INLINE STRUCT, which is the one thing a holder has to change: `clone` ANSWERS
-   a new pointer that the operation writes back into the slot, so the slot has to be a pointer. The three §5
-   machines that hold one across a parking stage therefore hold a `HeaderList *`, and `n`/`cap` travel inside
-   the structure rather than beside it in the state block.
-   THE CLONE IS FATAL ON ALLOCATION FAILURE, which that operation requires and no other copying operation does
-   — and this list meets it BY CONSTRUCTION rather than by a new policy, because `header_list_append`,
-   `header_lower` and `header_dup` are already `CHECK` and not a NULL return. */
-HeaderList *header_list_step_new(JSContext *ctx);
-extern const JSStepTreeOps header_list_step_ops;
-/* §5.1's "append a header (name, value) to a Headers object" over a LIST AND A GUARD — everything that
-   algorithm reads — for a caller that carries a header list forward and has no Headers object yet. Fetch §5.4
-   new Request(input, init) step 34 is the one: a Request input contributes a copy of its header list, and a
-   non-empty init re-appends every entry of it under the NEW request's guard, which is where a `no-cors` mode
-   drops what it drops. `value` must already be normalized (it is, coming off a list §5.1 built). Returns 0 for
-   written OR silently refused — two outcomes the spec does not let a caller distinguish — and -1 with a
+/* The header list a page writes: a JS Array of [name, value] pairs, each value the normalized value's String
+   or the unknown it was written from (headers.c says why it is a JS value). A step machine that builds one
+   holds it as a declared value slot. Owned. */
+JSValue header_pairs_new(JSContext *ctx);
+/* Fetch §2.2.2 get over the pairs as bytes for a C reader: the values of every header named `name`, joined by
+   0x2C 0x20, an unknown value spelled as its display shape. malloc'd; NULL when the list has none. */
+char   *header_pairs_get(JSContext *ctx, JSValueConst pairs, const char *name);
+/* §2.2.2 append of bytes this engine computed (a body's extracted Content-Type), under no guard. Copied. */
+void    header_pairs_append(JSContext *ctx, JSValueConst pairs, const char *name, const char *value);
+/* §5.1 "append a header" for each pair of the list `from`, in order, to `pairs` under `guard`: Fetch §5.4
+   Request class, new Request(input, init) step 33.4's "for each header of its header list, append header to
+   this's headers", which is where a `no-cors` mode drops what it drops. 0 for written or silently refused, and -1 with a
    TypeError live, which only the "immutable" guard produces. */
-int   header_list_append_guarded(JSContext *ctx, HeaderList *l, HeadersGuard guard,
-                                 const char *name, const char *value, const HeaderUnknown *unk);
-/* §5.1 set: replace every entry with this name by one. */
-void  header_list_set(HeaderList *l, const char *name, const char *value);
-void  header_list_delete(HeaderList *l, const char *name);
+int     header_pairs_append_guarded(JSContext *ctx, JSValueConst pairs, HeadersGuard guard, JSValueConst from);
+/* The pairs as a host is shown them, appended to `out`: bytes as bytes, and an unknown as its display shape
+   with its root and the example it has now (header_value_example). */
+void    header_pairs_state(JSContext *ctx, JSValueConst pairs, HeaderList *out);
 /* Fetch §2.2.2 "get a header name name from a header list list": the values of EVERY header with this
    name, joined by 0x2C 0x20 in order (malloc'd; NULL when the list has none, which is what `get` returns
    null for). The join is not a convenience — it is what makes two
@@ -163,7 +156,7 @@ typedef struct {
 } HeadersFill;
 void headers_fill_init(HeadersFill *f);
 void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v);
-int  headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst init, HeaderList *out,
+int  headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst init, JSValueConst out,
                       HeadersGuard guard, JSValue in, JSValue **out_cb, int *out_argc);
 
 void    headers_init(JSContext *ctx);                       /* register the class + its machines (install time) */
@@ -175,13 +168,13 @@ void    headers_install_proto(JSContext *ctx);
    reads none: the prototype and the interface object are the REALMS' and go with their contexts. See the
    entry's own comment for what a host-teardown line cost this component. */
 void    headers_free(void);
-/* A Headers over an existing list; the object takes a COPY, because a header list a component owns outlives
-   nothing the page can reach and a page must not be able to mutate a reply's headers through the copy it was
-   handed. */
+/* A Headers over a list of bytes this engine built (a response's); the object takes a copy. */
 JSValue headers_new(JSContext *ctx, const HeaderList *src, HeadersGuard guard);
-/* The list behind a Headers object, or NULL when `v` is not one — how `fetch` reads a `new Headers(...)` it was
-   handed without going back through the page's own accessors. */
-const HeaderList *headers_list_of(JSValueConst v);
+/* A Headers over a copy of `pairs`, so the page's writes to the object reach nothing else. */
+JSValue headers_new_pairs(JSContext *ctx, JSValueConst pairs, HeadersGuard guard);
+/* The pairs behind a Headers object, which is the header list of whatever holds the object: a Request's
+   headers object's list is the request's header list (Fetch §5.4). Borrowed; asserts `v` is a Headers. */
+JSValueConst headers_pairs_of(JSValueConst v);
 /* The GUARD of a Headers object — what a clone of the thing holding it must give its own copy. It is the
    object's state, so it cannot be recovered from the list. */
 HeadersGuard headers_guard_of(JSValueConst v);

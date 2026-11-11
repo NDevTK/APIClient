@@ -131,8 +131,7 @@ static ResponseData *response_of(JSValueConst v) { return JS_GetOpaque(v, g_resp
 static char *response_body_mime(JSContext *ctx, JSValueConst v)
 {
     ResponseData *d = JS_GetOpaque(v, g_response_class);
-    (void)ctx;
-    return d ? header_list_get(headers_list_of(d->headers), "content-type") : NULL;
+    return d ? header_pairs_get(ctx, headers_pairs_of(d->headers), "content-type") : NULL;
 }
 
 static BodyState *response_body_of(JSValueConst v)
@@ -362,8 +361,11 @@ static int js_response_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
            same list, because [SameObject] is per response and `r.clone().headers === r.headers` is false. The
            BODY is not among them: it is the tee below, not a copy. */
         if (response_set(ctx, c, d->url_list, d->status, d->status_text, d->type, NULL, 0,
-                         headers_list_of(d->headers), headers_guard_of(d->headers)) < 0)
+                         NULL, headers_guard_of(d->headers)) < 0)
             return -1;
+        JS_FreeValue(ctx, c->headers);
+        c->headers = headers_new_pairs(ctx, headers_pairs_of(d->headers), headers_guard_of(d->headers));
+        if (JS_IsException(c->headers)) { c->headers = JS_UNDEFINED; return -1; }
         STEP_GOTO(hdr->stage, CL_BODY, &s->phase, NULL);
     }
 
@@ -546,7 +548,7 @@ static const char *const RESP_CTOR_STEPS[] = { RESP_CTOR_STAGES(JS_STEP_STAGE_LA
 typedef struct {
     uint8_t     cphase;    /* json(): the JSON.stringify call's own phase, held across the stage */
     HeadersFill fill;
-    HeaderList  list;
+    JSValue     list;      /* §5.5 initialize a response step 5's header list: core/fetch/headers.h's pairs */
     JSValue     result;
     JSValue     json;      /* json(): what the serialization produced (owned) */
     JSValue     cb[3];     /* json(): the call request buffer — [this, JSON.stringify, data] */
@@ -557,16 +559,10 @@ static void js_response_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSResponseCtorState *s = st;
     int k;
     headers_fill_visit(ctx, &s->fill, v);
+    v->val(ctx, &s->list);
     v->val(ctx, &s->result);
     v->val(ctx, &s->json);
     for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
-}
-
-/* The header list alone — see js_headers_ctor_release. The rest is js_response_ctor_visit's declaration. */
-static void js_response_ctor_release(JSContext *ctx, void *st)
-{
-    (void)ctx;
-    header_list_free(&((JSResponseCtorState *)st)->list);
 }
 
 /* §5.5's `reason-phrase` production: HTAB, SP, VCHAR and obs-text — and nothing else, which is what makes
@@ -683,6 +679,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             if (r < 0) { JS_FreeValue(ctx, cb_result); return -1; }
         }
         headers_fill_init(&s->fill);
+        s->list = header_pairs_new(ctx);
         STEP_GOTO(hdr->stage, RESP_HEADERS, &s->cphase, NULL);
     }
 
@@ -691,7 +688,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
            a page that puts Set-Cookie on a Response it built silently gets nothing, which is the header wpt
            asserts by name. */
         v_headers = idl_dict_get(ctx, init, "headers");
-        r = headers_fill_run(ctx, hdr, &s->fill, v_headers, &s->list, HEADERS_GUARD_RESPONSE,
+        r = headers_fill_run(ctx, hdr, &s->fill, v_headers, s->list, HEADERS_GUARD_RESPONSE,
                              cb_result, out_cb, out_argc);
         JS_FreeValue(ctx, v_headers);
         if (r > 0) return r;
@@ -700,7 +697,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
         d = response_of(s->result);
         DCHECK(d != NULL, "the Response the constructor allocated stopped being one mid-construction");
         JS_FreeValue(ctx, d->headers);
-        d->headers = headers_new(ctx, &s->list, HEADERS_GUARD_RESPONSE);
+        d->headers = headers_new_pairs(ctx, s->list, HEADERS_GUARD_RESPONSE);
         if (JS_IsException(d->headers)) return -1;
         STEP_GOTO(hdr->stage, RESP_BODY, &s->cphase, NULL);
     }
@@ -751,10 +748,10 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
         /* §5.5's initialize a response step 6.3: the extracted body's type is set ONLY when the header list
            does not already carry one — an init that named a Content-Type wins over the arm's default. */
         if (mime) {
-            const HeaderList *hl = headers_list_of(d->headers);
-            char *existing = header_list_get(hl, "content-type");
+            JSValueConst hl = headers_pairs_of(d->headers);
+            char *existing = header_pairs_get(ctx, hl, "content-type");
             if (!existing)
-                header_list_append((HeaderList *)hl, "content-type", mime);
+                header_pairs_append(ctx, hl, "content-type", mime);
             free(existing);
             free(mime);
         }
@@ -841,7 +838,7 @@ static const JSCFunctionListEntry js_response_static_funcs[] = {
 };
 
 static const IdlStepDecl js_response_ctor_decl = {
-    js_response_ctor_step, sizeof(JSResponseCtorState), js_response_ctor_visit, js_response_ctor_release,
+    js_response_ctor_step, sizeof(JSResponseCtorState), js_response_ctor_visit, NULL,
     "Fetch §5.5 new Response(body, init) / Response.json(data, init), through §5.5 initialize a response",
     RESP_CTOR_STEPS
 };

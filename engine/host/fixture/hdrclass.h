@@ -3,7 +3,8 @@
    unknown with none (`navigator.language` on the arm that contradicts its example). They are written through a
    fetch() init record, through a Request's Headers object, through a Headers object given as an init (which
    Fetch §5.1's fill reads back through the object's iterator), and through XMLHttpRequest's setRequestHeader,
-   where two values of one name combine. A host is shown each value as the bytes it would send with the class
+   where two values of one name combine. A Headers object's get() of an unknown value is compared with a
+   literal, and its get() of two combined values is written to a request. A host is shown each value as the bytes it would send with the class
    of those bytes: the example for an unknown that has one, the display shape for one that has none.
    Witness addresses are constants. One of test_forced.c's exploring documents (its TF_DOCS table). It ends
    with TF_CANVAS_INK, which test_forced.c defines before including it. */
@@ -31,6 +32,12 @@ static const char HTML_HDRCLASS[] =
     "var hcH = new Headers();"
     "hcH.set('X-Lang', navigator.language);"
     "fetch('/api/hc-read', { headers: hcH });"
+    "</script>"
+    "<script>"
+    "var hcG = new Headers({ 'X-Lang': navigator.language });"
+    "if (hcG.get('x-lang') === 'fr-FR') fetch('/api/hc-get-fr'); else fetch('/api/hc-get-other');"
+    "hcG.append('X-Lang', 'q');"
+    "fetch('/api/hc-get-join', { headers: { 'X-Join': hcG.get('X-Lang') } });"
     "</script>"
     "<script>"
     "var hcX = new XMLHttpRequest();"

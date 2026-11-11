@@ -231,8 +231,7 @@ const RequestRecord *request_record_of(JSValueConst v)
 static char *request_body_mime(JSContext *ctx, JSValueConst v)
 {
     RequestData *d = JS_GetOpaque(v, g_request_class);
-    (void)ctx;
-    return d ? header_list_get(headers_list_of(d->headers), "content-type") : NULL;
+    return d ? header_pairs_get(ctx, headers_pairs_of(d->headers), "content-type") : NULL;
 }
 
 static BodyState *request_body_of(JSValueConst v)
@@ -488,7 +487,7 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
         JS_FreeValue(ctx, obj);
         return JS_EXCEPTION;
     }
-    c->headers = headers_new(ctx, headers_list_of(d->headers), headers_guard_of(d->headers));
+    c->headers = headers_new_pairs(ctx, headers_pairs_of(d->headers), headers_guard_of(d->headers));
     if (JS_IsException(c->headers)) { c->headers = JS_UNDEFINED; JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
     /* §5.4 clone() steps 3 and 4: "Assert: this's signal is non-null", then "Let clonedSignal be the result of
        creating a dependent abort signal from « this's signal », using AbortSignal and this's relevant realm".
@@ -550,9 +549,7 @@ static const char *const REQ_CTOR_STEPS[] = { REQ_CTOR_STAGES(JS_STEP_STAGE_LABE
 
 typedef struct {
     HeadersFill fill;
-    /* A POINTER, because quickjs-step.h's `tree` operation ANSWERS a new root and writes it into the slot — an
-       inline struct could not be declared through it. headers.h's header_list_step_ops is the pair. */
-    HeaderList *list;
+    JSValue     list;     /* steps 12 and 33's header list: the pairs core/fetch/headers.h declares */
     JSValue     result;
     /* §5.4 STEP 29'S « signal » LIST AND STEP 30'S THREE SLOTS, which are this machine's because the driver
        clones THIS state at step 2's ask — see core/dom/abort.h at abort_signal_dependent_step. `sig_result` is
@@ -578,14 +575,9 @@ static void js_request_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->signals);
     v->val(ctx, &s->sig_result);
     v->val(ctx, &s->sig_flag);
-    /* STEP 33'S LIST. This is the line that deleted this machine's ONE fork refusal and its `release` with it:
-       the operation's clone gives the sibling its own list and its destroy frees it, so a teardown beside the
-       declaration has nothing left to do. No cursor stands inside it — the fill takes the list as an argument
-       rather than holding it — so the count is zero and the array is NULL with it. */
-    v->tree(ctx, (void **)&s->list, NULL, 0, &header_list_step_ops);
+    v->val(ctx, &s->list);
 }
 
-/* The header list alone — see js_headers_ctor_release. The rest is js_request_ctor_visit's declaration. */
 /* `dictionary RequestInit`, IN ONE PLACE, because it has TWO readers and they must not drift: the declaration
    below hands it to the argument machine, and req_init_is_empty walks the same names to answer §5.4 step 13's
    "If init is not empty". A second hand-written list of member names is how that question starts answering for
@@ -1219,11 +1211,9 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             JS_ThrowTypeError(ctx, "constructor Request requires 'new'");
             return -1;
         }
-        /* STEP 12'S LIST, BUILT BEFORE THE STEP THAT COPIES INTO IT. Idempotent because this stage PARKS on the
-           page's code (step 6's read of the input Request's `url`, every member of the converted RequestInit)
-           and a parked stage is re-entered at its first line, so an unguarded allocation would leak one list
-           per re-entry. A POINTER is a legitimate "is it built" question where a zeroed JSValue slot is not. */
-        if (!s->list) s->list = header_list_step_new(ctx);
+        /* Step 12's list, built before the step that copies into it. Nothing in this stage parks, so it runs
+           once per state. */
+        s->list = header_pairs_new(ctx);
         {
             JSValue rproto = JS_GetClassProto(ctx, g_request_class);
             DCHECK(!JS_IsNull(rproto), "a Request was minted in a realm that never ran its install");
@@ -1363,20 +1353,14 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
            When init["headers"] EXISTS the copy is discarded rather than seeded: step 33's own sub-steps set
            `headers` to the init member and then empty this's header list, leaving nothing of the copy. */
         if (from && !init_has(ctx, init, "headers")) {
-            const HeaderList *src = headers_list_of(from->headers);
             HeadersGuard guard = request_str_is(ctx, d->rec.mode, "no-cors") ? HEADERS_GUARD_REQUEST_NO_CORS
                                                                             : HEADERS_GUARD_REQUEST;
-            int i;
 
-            DCHECK(src != NULL, "a Request used as `input` carried no Headers object — §5.4 gives every "
-                                "Request one at step 31, so a source without one was built by a path that "
-                                "skipped it");
-            for (i = 0; i < src->n; i++) {
-                HeaderUnknown unk;
-                if (header_list_append_guarded(ctx, s->list, guard, src->e[i].name, src->e[i].value,
-                                               header_entry_unknown(&src->e[i], &unk)) < 0)
-                    return -1;
-            }
+            DCHECK(JS_IsObject(from->headers), "a Request used as `input` carried no Headers object — §5.4 "
+                                               "gives every Request one at step 31, so a source without one "
+                                               "was built by a path that skipped it");
+            if (header_pairs_append_guarded(ctx, s->list, guard, headers_pairs_of(from->headers)) < 0)
+                return -1;
         }
         headers_fill_init(&s->fill);
         hdr->stage = REQ_CTOR_SIGNAL;
@@ -1475,7 +1459,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
         JS_FreeValue(ctx, d->headers);
-        d->headers = headers_new(ctx, s->list, guard);
+        d->headers = headers_new_pairs(ctx, s->list, guard);
         if (JS_IsException(d->headers)) return -1;
         hdr->stage = REQ_CTOR_BODY;
     }
@@ -1518,10 +1502,10 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                 return -1;
             }
             if (mime) {
-                const HeaderList *hl = headers_list_of(d->headers);
-                char *existing = header_list_get(hl, "content-type");
+                JSValueConst hl = headers_pairs_of(d->headers);
+                char *existing = header_pairs_get(ctx, hl, "content-type");
                 if (!existing)
-                    header_list_append((HeaderList *)hl, "content-type", mime);
+                    header_pairs_append(ctx, hl, "content-type", mime);
                 free(existing);
                 free(mime);
             }
@@ -1596,43 +1580,8 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     return 0;
 }
 
-/* WHY THIS MACHINE MAY NOW BE FORKED WHILE IT HOLDS STEP 33'S HEADER LIST — the refusal
- * `js_request_ctor_unforkable` is DELETED, the list is declared through `visit`, and this records what retired
- * it because a reader who re-derives the constraint will re-add the refusal.
- *
- * ITS ONE TERM WAS A CONSTRAINT ON THE LIST'S STORAGE AND NEVER ON §5.4. §2.2.5's request record stopped being
- * a term when its nine fields became JSValues `request_record_visit` names; §5.2's extracted body stopped being
- * one when `body_state_visit` named its stream, its unknown `object`, its bytes and its §10.4.5.18 span record.
- * What was left was the header list, whose array and whose per-entry name and value are the C library's in
- * `header_list_append`/`header_list_free` — functions that take no context and are called from dozens of callers
- * that have none — while every JSStepVisit operation that copies FOR ITSELF uses the ENGINE's allocator.
- *
- * `v->tree` IS THE OPERATION THAT RECONCILES THEM, by delegating BOTH the copy and the destroy to the host, and
- * the question that had to be settled first was whether its subject is a TREE. It is not: none of its three
- * consumers in quickjs.c dereferences the structure, and the reason its banner gives for the operation existing
- * is allocation-shaped rather than DOM-shaped. quickjs-step.h carries that and carries why the field is still
- * spelled `tree`. The cost was one thing: the list is a HEAP ROOT and not an inline struct, because the clone
- * ANSWERS a pointer the operation writes back. No allocator moved; no file outside core/fetch/ was touched.
- *
- * WHAT IT BUYS AND WHAT IT DOES NOT. A refusal answered "unforkable" and the PRIMARY ARM STILL RAN, so what
- * this returns is BREADTH rather than any request that was being lost: `new Request(u, {headers: h})` whose
- * conversion of `h` branches on unknown external input now explores both arms. The list exists from step 12's
- * copy onward and step 33's fill is where this constructor runs the page's code, so that is the ordinary shape
- * and not a corner.
- *
- * AND THE THIRD MACHINE'S HOLE WAS A DOUBLE FREE RATHER THAN A REFUSAL: core/fetch/headers.c's §5.1 constructor
- * held the same list, freed it in its own `release`, and declared nothing, so the fork was TAKEN. All three
- * retired in one diff because all three needed exactly this and nothing else.
- *
- * HOW THE ROUTING'S ABSENCE WOULD SHOW, there being no abort left to watch: core/idl_args.c's fingerprint
- * bracket folds the slots a member's `visit` names across its `release` and asserts they are unmoved, and
- * `js_step_visit_fp_tree` folds this root — so a `release` re-added here that freed the list would move the
- * fold and fire that DCHECK naming this member. That is why this machine has no `release` rather than an
- * emptied one. */
 static const IdlStepDecl js_request_ctor_decl = {
-    /* NO `release`. Step 33's list is declared through `visit`, so idl_args.c's one teardown discharges it;
-       the slot held `js_request_ctor_release`, which freed exactly the list the declaration now names, and the
-       two cannot both stand — core/idl_args.c's fingerprint bracket is what would say so. */
+    /* No `release`: everything this state owns is declared through `visit`. */
     js_request_ctor_step, sizeof(JSRequestCtorState), js_request_ctor_visit, NULL,
     "Fetch §5.4 new Request(input, init)", REQ_CTOR_STEPS,
     /* `catches_abrupt` = 0: this constructor PROPAGATES — a throwing header value or body `toString` is the

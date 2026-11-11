@@ -19,6 +19,8 @@
  * page's `ownKeys` and `get` traps, and from C that is the drive-to-completion this engine aborts on. It is
  * written as a sub-sequence rather than inside the constructor because `fetch(u, {headers: ...})` performs the
  * SAME conversion, and the spec states it once. */
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -131,33 +133,6 @@ const char *header_value_class_token(const HeaderEntry *e)
 const char *header_entry_wire_value(const HeaderEntry *e)
 {
     return e->shape && e->example ? e->example : e->value;
-}
-
-void header_list_delete(HeaderList *l, const char *name)
-{
-    char *lo = header_lower(name);
-    int i, w = 0;
-    for (i = 0; i < l->n; i++) {
-        if (!strcmp(l->e[i].name, lo)) {
-            free(l->e[i].name); free(l->e[i].value); free(l->e[i].root); free(l->e[i].example);
-            continue;
-        }
-        l->e[w++] = l->e[i];
-    }
-    l->n = w;
-    free(lo);
-}
-
-/* §5.1 set over a value that may be an unknown's display shape (see HeaderUnknown). */
-static void header_list_set_unknown(HeaderList *l, const char *name, const char *value, const HeaderUnknown *unk)
-{
-    header_list_delete(l, name);
-    header_list_append_unknown(l, name, value, unk);
-}
-
-void header_list_set(HeaderList *l, const char *name, const char *value)
-{
-    header_list_set_unknown(l, name, value, NULL);
 }
 
 char *header_list_field_lines(const HeaderList *l)
@@ -388,76 +363,6 @@ bool header_list_determine_nosniff(const HeaderList *l)
     }
     free(v);
     return yes;
-}
-
-/* ---- the interface ------------------------------------------------------------------------------------ */
-
-/* §5.1: "A Headers object has an associated GUARD." It is the object's, not the list's — the same header list
-   is reachable through a Response's immutable Headers and through the fetch machinery that built it, and only
-   the first refuses writes. So the class opaque is the pair. */
-typedef struct { HeaderList list; uint8_t guard; } HeadersObj;
-
-/* THE COLLECTOR RUNS AFTER THE RELEASE COLUMN, so this may not reach the record through an id its own
-   release has already given back — core/agent_state.h's closing paragraph, and the reason every one of
-   §5.1's slots below is declared. The class is a fact the collector ALREADY HAS: it dispatched to this
-   function through it, so `JS_GetOpaque(val, g_headers_class)` asks a question whose answer is `0` by the
-   time it is asked, and `JS_GetOpaque` against class 0 answers NULL for every live Headers — the whole list
-   leaked, silently, on any page that built one. */
-static void headers_finalizer(JSRuntime *rt, JSValue val)
-{
-    JSClassID id;
-    HeadersObj *h = JS_GetAnyOpaque(val, &id);
-    (void)rt;
-    if (h) { header_list_free(&h->list); free(h); }
-}
-
-const HeaderList *headers_list_of(JSValueConst v)
-{
-    HeadersObj *h = JS_GetOpaque(v, g_headers_class);
-    return h ? &h->list : NULL;
-}
-
-HeadersGuard headers_guard_of(JSValueConst v)
-{
-    HeadersObj *h = JS_GetOpaque(v, g_headers_class);
-    DCHECK(h != NULL, "the guard of something that is not a Headers was asked for");
-    return (HeadersGuard)h->guard;
-}
-
-static HeadersObj *headers_of(JSContext *ctx, JSValueConst v)
-{
-    HeadersObj *h = JS_GetOpaque(v, g_headers_class);
-    if (!h) JS_ThrowTypeError(ctx, "not a Headers");
-    return h;
-}
-
-JSValue headers_new(JSContext *ctx, const HeaderList *src, HeadersGuard guard)
-{
-    HeadersObj *h;
-    JSValue obj;
-    int i;
-
-    DCHECK(g_headers_class != 0, "a Headers was built before the class existed — headers_init runs at install");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_headers_class);
-        DCHECK(!JS_IsNull(proto), "a Headers was minted in a realm that never ran its install");
-        obj = JS_NewObjectProtoClass(ctx, proto, g_headers_class);
-        JS_FreeValue(ctx, proto);
-    }
-    if (JS_IsException(obj))
-        return obj;
-    h = lexbor_calloc(1, sizeof *h);
-    CHECK(h, "headers: OOM building a Headers");
-    h->guard = (uint8_t)guard;
-    /* The list is copied ALREADY VALIDATED — it is a header list this engine built, never a page's. The guard
-       governs what the PAGE may then do to it, which is why "immutable" does not block this loop. */
-    for (i = 0; src && i < src->n; i++) {
-        HeaderUnknown unk;
-        header_list_append_unknown(&h->list, src->e[i].name, src->e[i].value,
-                                   header_entry_unknown(&src->e[i], &unk));
-    }
-    JS_SetOpaque(obj, h);
-    return obj;
 }
 
 /* §5.1's members DECLARE `ByteString` — `append(ByteString name, ByteString value)` and the four beside it —
@@ -813,17 +718,6 @@ static int header_is_privileged_no_cors(const char *lower_name)
     return 0;
 }
 
-/* §5.1 "remove privileged no-CORS request-headers": every append, set and delete under the "request-no-cors"
-   guard ends with it — "This is called when headers are modified by unprivileged code", and §2.2.2 Headers'
-   own note beside the privileged list says such headers "will be preserved if their associated request object
-   is copied, but will be removed if the request is modified by unprivileged APIs". */
-static void header_remove_privileged_no_cors(HeaderList *l)
-{
-    size_t i;
-    for (i = 0; i < sizeof(HEADER_PRIVILEGED_NO_CORS) / sizeof(HEADER_PRIVILEGED_NO_CORS[0]); i++)
-        header_list_delete(l, HEADER_PRIVILEGED_NO_CORS[i]);
-}
-
 /* §5.1 "validating (name, value) for headers", AFTER header_check has done step 1's name/value syntax half.
    Returns 1 to write, 0 to silently do nothing, -1 with a TypeError live.
    STEP 3 IS "request" AND NOT "request-no-cors". The spec says so twice — the step names one guard, and the
@@ -864,47 +758,275 @@ char *header_value_example(JSContext *ctx, JSValueConst unknown)
     return norm;
 }
 
-/* An unknown header value's facts, read while the value is still the unknown: `unk` filled and returned, or
-   NULL for a value that is bytes. `*ex` owns the example and is the caller's to free() either way. */
-static const HeaderUnknown *header_unknown_of(JSContext *ctx, JSValueConst value, HeaderUnknown *unk, char **ex)
+/* ---- the list a page writes ------------------------------------------------------------------------------ */
+
+/* A Headers object's header list, and the list §5.1's fill builds for one: a JS Array of pairs [name, value].
+   `name` is the lowercased name's String. `value` is the normalized value's String, or the unknown the value
+   was written from, so a read answers the unknown and never its display shape. It is a JS value because a
+   flow's writes to it are the flow's own: an append is a property write the running flow's COW delta captures,
+   and a step machine holds the list as a declared slot. A pair is never edited once it is appended. */
+JSValue header_pairs_new(JSContext *ctx)
 {
-    *ex = NULL;
-    if (!concolic_is(value)) return NULL;
-    *ex = header_value_example(ctx, value);
-    unk->root = concolic_root_c(value);
-    unk->example = *ex;
-    return unk;
+    JSValue pairs = JS_NewArray(ctx);
+
+    CHECK(!JS_IsException(pairs), "headers: OOM allocating a header list");
+    return pairs;
 }
 
-/* §5.1 "APPEND A HEADER (name, value) TO A HEADERS OBJECT", steps 2-5, over the LIST and the GUARD — which is
-   all the algorithm reads. ONE function because the standard states it once and TWO callers run it: the
-   `append` member, and the FILL, which the standard defines as "append (key, value) to headers" for every
-   entry of the init and NOT as a list write of its own. The fill ran step 2 and then wrote the list itself,
-   so it skipped step 3 — `new Request(u, {mode:"no-cors", headers:{"X-Custom":"1"}})` kept a header every
-   browser drops — and its record arm REPLACED a same-named entry, so `new Headers({a:"1", A:"2"}).get("a")`
-   answered "2" where appending twice and combining gives "1, 2".
-   `norm` is the already-normalized value (step 1). Returns 0 for written OR silently refused — two outcomes
-   the spec does not let a caller distinguish — and -1 with a TypeError live. */
-static int headers_append_one(JSContext *ctx, HeaderList *l, uint8_t guard, const char *name, const char *norm,
-                              const HeaderUnknown *unk)
+static uint32_t pairs_len(JSContext *ctx, JSValueConst pairs)
+{
+    int64_t n = -1;
+
+    CHECK(JS_GetLength(ctx, pairs, &n) >= 0 && n >= 0 && n <= INT32_MAX, "a header list has no length");
+    return (uint32_t)n;
+}
+
+/* Pair `i`: its name's bytes (JS_FreeCString) and, where `value` is asked, its value (owned). */
+static const char *pairs_at(JSContext *ctx, JSValueConst pairs, uint32_t i, JSValue *value)
+{
+    JSValue pair = JS_GetPropertyUint32(ctx, pairs, i);
+    JSValue nv = JS_GetPropertyUint32(ctx, pair, 0);
+    const char *name;
+
+    DCHECK(JS_IsString(nv), "a header list entry holds no name — only pairs_push writes one");
+    name = JS_ToCString(ctx, nv);
+    CHECK(name != NULL, "headers: OOM reading a header's name");
+    if (value) *value = JS_GetPropertyUint32(ctx, pair, 1);
+    JS_FreeValue(ctx, nv);
+    JS_FreeValue(ctx, pair);
+    return name;
+}
+
+/* §2.2.2 append over a name already lowercased. `value` is borrowed. */
+static void pairs_push(JSContext *ctx, JSValueConst pairs, const char *lower_name, JSValueConst value)
+{
+    JSValue pair = JS_NewArray(ctx), name = JS_NewString(ctx, lower_name);
+
+    DCHECK(JS_IsString(value) || concolic_is(value),
+           "a header value was stored that is neither bytes nor an unknown");
+    CHECK(!JS_IsException(pair) && !JS_IsException(name), "headers: OOM building a header");
+    CHECK(JS_DefinePropertyValueUint32(ctx, pair, 0, name, JS_PROP_C_W_E) >= 0 &&
+          JS_DefinePropertyValueUint32(ctx, pair, 1, JS_DupValue(ctx, value), JS_PROP_C_W_E) >= 0 &&
+          JS_DefinePropertyValueUint32(ctx, pairs, pairs_len(ctx, pairs), pair, JS_PROP_C_W_E) >= 0,
+          "headers: a header list refused an entry");
+}
+
+/* §2.2.2 delete: every pair named `lower_name` leaves and the rest keep their order. */
+static void pairs_delete(JSContext *ctx, JSValueConst pairs, const char *lower_name)
+{
+    uint32_t n = pairs_len(ctx, pairs), i, w = 0;
+
+    for (i = 0; i < n; i++) {
+        JSValue pair = JS_GetPropertyUint32(ctx, pairs, i);
+        const char *name = pairs_at(ctx, pairs, i, NULL);
+        bool hit = !strcmp(name, lower_name);
+
+        JS_FreeCString(ctx, name);
+        if (hit || w == i)
+            JS_FreeValue(ctx, pair);
+        else
+            CHECK(JS_DefinePropertyValueUint32(ctx, pairs, w, pair, JS_PROP_C_W_E) >= 0,
+                  "headers: a header list refused an entry it already held");
+        if (!hit) w++;
+    }
+    if (w != n)
+        CHECK(JS_SetLength(ctx, pairs, w) >= 0, "headers: a header list refused its new length");
+}
+
+static bool pairs_contains(JSContext *ctx, JSValueConst pairs, const char *lower_name)
+{
+    uint32_t n = pairs_len(ctx, pairs), i;
+    bool yes = false;
+
+    for (i = 0; i < n && !yes; i++) {
+        const char *name = pairs_at(ctx, pairs, i, NULL);
+
+        yes = !strcmp(name, lower_name);
+        JS_FreeCString(ctx, name);
+    }
+    return yes;
+}
+
+/* The bytes a C reader takes for a value: a String's own, or an unknown's display shape, which is shown and
+   never handed to the page. JS_FreeCString. */
+static const char *pair_value_bytes(JSContext *ctx, JSValueConst value)
+{
+    const char *b = concolic_name_cstr(ctx, value);
+
+    CHECK(b != NULL, "headers: OOM reading a header value's bytes");
+    return b;
+}
+
+/* Fetch §2.2.2 "get a header name name from a header list list" as a value: JS_UNINITIALIZED where the list
+   has none, the value where it has one, and otherwise the values joined by 0x2C 0x20 through §22.1.3.5's
+   concatenation, so a join holding an unknown is derived from its parts. Owned. */
+static JSValue pairs_get_value(JSContext *ctx, JSValueConst pairs, const char *lower_name)
+{
+    JSValue out = JS_UNINITIALIZED;
+    uint32_t n = pairs_len(ctx, pairs), i;
+
+    for (i = 0; i < n; i++) {
+        JSValue v;
+        const char *name = pairs_at(ctx, pairs, i, &v);
+        bool hit = !strcmp(name, lower_name);
+
+        JS_FreeCString(ctx, name);
+        if (!hit) { JS_FreeValue(ctx, v); continue; }
+        if (JS_IsUninitialized(out)) { out = v; continue; }
+        out = concolic_string_concat(ctx, concolic_string_concat(ctx, out, JS_NewString(ctx, ", ")), v);
+    }
+    return out;
+}
+
+char *header_pairs_get(JSContext *ctx, JSValueConst pairs, const char *name)
+{
+    char *lo = header_lower(name), *out = NULL;
+    uint32_t n = pairs_len(ctx, pairs), i;
+    size_t len = 0;
+
+    for (i = 0; i < n; i++) {
+        JSValue v;
+        const char *nm = pairs_at(ctx, pairs, i, &v);
+
+        if (!strcmp(nm, lo)) {
+            const char *b = pair_value_bytes(ctx, v);
+            size_t add = strlen(b), sep = out ? 2 : 0;
+
+            out = lexbor_realloc(out, len + sep + add + 1);
+            CHECK(out, "headers: OOM joining a header's values");
+            if (sep) memcpy(out + len, ", ", 2);
+            memcpy(out + len + sep, b, add + 1);
+            len += sep + add;
+            JS_FreeCString(ctx, b);
+        }
+        JS_FreeCString(ctx, nm);
+        JS_FreeValue(ctx, v);
+    }
+    free(lo);
+    return out;
+}
+
+void header_pairs_append(JSContext *ctx, JSValueConst pairs, const char *name, const char *value)
+{
+    char *lo = header_lower(name);
+    JSValue v = JS_NewString(ctx, value);
+
+    CHECK(!JS_IsException(v), "headers: OOM holding a header value");
+    pairs_push(ctx, pairs, lo, v);
+    JS_FreeValue(ctx, v);
+    free(lo);
+}
+
+void header_pairs_state(JSContext *ctx, JSValueConst pairs, HeaderList *out)
+{
+    uint32_t n = pairs_len(ctx, pairs), i;
+
+    for (i = 0; i < n; i++) {
+        JSValue v;
+        const char *name = pairs_at(ctx, pairs, i, &v);
+        const char *bytes = pair_value_bytes(ctx, v);
+
+        if (concolic_is(v)) {
+            char *ex = header_value_example(ctx, v);
+            HeaderUnknown unk = { concolic_root_c(v), ex };
+
+            header_list_append_unknown(out, name, bytes, &unk);
+            free(ex);
+        } else {
+            header_list_append(out, name, bytes);
+        }
+        JS_FreeCString(ctx, bytes);
+        JS_FreeCString(ctx, name);
+        JS_FreeValue(ctx, v);
+    }
+}
+
+/* The value an unknown header value is stored as: itself, or, where §2.2.2's normalize changes the bytes of
+   its example, the derivation that normalizes it, holding the normalized bytes for its example. Owned. */
+static JSValue header_unknown_stored(JSContext *ctx, JSValueConst unknown)
+{
+    JSValue ex = concolic_example_string(ctx, unknown), out;
+    size_t len = 0, n = 0;
+    const char *b;
+    char *norm;
+
+    if (!JS_IsString(ex)) { JS_FreeValue(ctx, ex); return JS_DupValue(ctx, unknown); }
+    b = JS_ToCStringLen(ctx, &len, ex);
+    CHECK(b != NULL, "headers: OOM reading an unknown header value's example");
+    norm = header_normalize_value(b, len, &n);
+    out = n == len ? JS_DupValue(ctx, unknown)
+                   : concolic_new_derived(ctx, "Headers.normalize", &unknown, 1, JS_NewStringLen(ctx, norm, n));
+    free(norm);
+    JS_FreeCString(ctx, b);
+    JS_FreeValue(ctx, ex);
+    return out;
+}
+
+/* A written value as the list stores it (owned): for bytes, Web IDL §3.2.11 ByteString step 2, §5.1 validate
+   step 1 over (name, value) and §2.2.2's normalize; for an unknown, step 1's name half and the value itself,
+   whose own validity is header_value_example's residual. `name_decided` says a fork already decided the name
+   half. JS_EXCEPTION with the TypeError live. */
+static JSValue header_stored_value(JSContext *ctx, const char *name, size_t name_len, JSValueConst value,
+                                   bool name_decided)
+{
+    const char *bytes;
+    char *norm = NULL;
+    size_t len = 0;
+    JSValue out;
+    int bad;
+
+    if (concolic_is(value)) {
+        if (!name_decided && header_check(ctx, name, name_len, NULL, 0, NULL) < 0) return JS_EXCEPTION;
+        return header_unknown_stored(ctx, value);
+    }
+    bytes = JS_ToCStringLen(ctx, &len, value);
+    if (!bytes) return JS_EXCEPTION;
+    bad = headers_bytestring(ctx, bytes, len, "value") < 0 ||
+          (name_decided ? header_value_check(ctx, bytes, len, &norm)
+                        : header_check(ctx, name, name_len, bytes, len, &norm)) < 0;
+    JS_FreeCString(ctx, bytes);
+    if (bad) return JS_EXCEPTION;
+    out = JS_NewString(ctx, norm);
+    free(norm);
+    return out;
+}
+
+/* §5.1 "remove privileged no-CORS request-headers": every append, set and delete under the "request-no-cors"
+   guard ends with it, because the write was made by unprivileged code. */
+static void pairs_remove_privileged_no_cors(JSContext *ctx, JSValueConst pairs)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(HEADER_PRIVILEGED_NO_CORS) / sizeof(HEADER_PRIVILEGED_NO_CORS[0]); i++)
+        pairs_delete(ctx, pairs, HEADER_PRIVILEGED_NO_CORS[i]);
+}
+
+/* §5.1 "append a header (name, value) to a Headers object", steps 2-5, over the list and the guard, which is
+   all the algorithm reads; the `append` member, the fill and §5.4's carried list are its callers. `value` is
+   as the list stores it (header_stored_value). The guard reads a value's bytes, and an unknown's are its
+   display shape. 0 for written or silently refused, which the spec does not let a caller distinguish, and -1
+   with a TypeError live. */
+static int headers_append_one(JSContext *ctx, JSValueConst pairs, uint8_t guard, const char *name,
+                              JSValueConst value)
 {
     char *lower = header_lower(name);
-    int allow = headers_guard_allows(ctx, guard, name, norm);   /* step 2 */
+    const char *bytes = pair_value_bytes(ctx, value);
+    int allow = headers_guard_allows(ctx, guard, name, bytes);   /* step 2 */
 
-    /* step 3: under "request-no-cors" the header must be no-CORS-safelisted with the value it would END UP
-       with — appending a second 127-byte `accept` makes 255 bytes, which is not safelisted, so the append
-       does nothing. That is why this joins and `set` below does not. */
+    /* Step 3: under "request-no-cors" the header must be no-CORS-safelisted with the value it would end up
+       with, so the test joins where `set`'s does not. */
     if (allow > 0 && guard == HEADERS_GUARD_REQUEST_NO_CORS) {
-        char *existing = header_list_get(l, lower), *combined = NULL;
-        const char *test = norm;
+        char *existing = header_pairs_get(ctx, pairs, lower), *combined = NULL;
+        const char *test = bytes;
+
         if (existing) {
-            size_t a = strlen(existing), b = strlen(norm);
+            size_t a = strlen(existing), b = strlen(bytes);
+
             combined = lexbor_malloc(a + b + 3);
             CHECK(combined, "headers: OOM joining a no-cors value");
             memcpy(combined, existing, a);
             combined[a] = ','; combined[a + 1] = ' ';
-            memcpy(combined + a + 2, norm, b);
-            combined[a + b + 2] = 0;
+            memcpy(combined + a + 2, bytes, b + 1);
             test = combined;
         }
         free(existing);
@@ -912,459 +1034,323 @@ static int headers_append_one(JSContext *ctx, HeaderList *l, uint8_t guard, cons
         free(combined);
     }
     if (allow > 0) {
-        header_list_append_unknown(l, name, norm, unk);                             /* step 4 */
-        if (guard == HEADERS_GUARD_REQUEST_NO_CORS) header_remove_privileged_no_cors(l);   /* step 5 */
+        pairs_push(ctx, pairs, lower, value);                                                    /* step 4 */
+        if (guard == HEADERS_GUARD_REQUEST_NO_CORS) pairs_remove_privileged_no_cors(ctx, pairs);   /* step 5 */
     }
+    JS_FreeCString(ctx, bytes);
     free(lower);
     return allow < 0 ? -1 : 0;
 }
 
-/* …AND THE SAME ALGORITHM FOR A CALLER THAT HOLDS A LIST AND A GUARD RATHER THAN A `Headers` OBJECT — Fetch
-   §5.4 Request class' new Request(input, init) step 33's "If headers is a Headers object, then for each header
-   of its header list, APPEND header to this's headers" (step 34 stood here; 34 is "Let inputBody be input's
-   request's body …", and 33 is the one that holds this sub-step). That arm is a §5.1 append per entry, under
-   the NEW request's guard, and it is a different algorithm from headers_fill_run: fill resolves §3.2.25's
-   union through the value's own @@iterator, which step 33 must not do for a header list the constructor is
-   carrying forward. Exported rather than re-derived at the caller, because a second copy of "which headers
-   this guard drops" is a second thing to keep in step with §2.2.2 Headers' two forbidden lists. */
-int header_list_append_guarded(JSContext *ctx, HeaderList *l, HeadersGuard guard,
-                               const char *name, const char *value, const HeaderUnknown *unk)
+int header_pairs_append_guarded(JSContext *ctx, JSValueConst pairs, HeadersGuard guard, JSValueConst from)
 {
-    return headers_append_one(ctx, l, (uint8_t)guard, name, value, unk);
-}
+    uint32_t n = pairs_len(ctx, from), i;
 
-/* ---- a header list a STEP MACHINE owns ------------------------------------------------------------------- */
+    for (i = 0; i < n; i++) {
+        JSValue v;
+        const char *name = pairs_at(ctx, from, i, &v);
+        int r = headers_append_one(ctx, pairs, (uint8_t)guard, name, v);
 
-/* THE ROOT. `ctx` is taken and unused on purpose: it is the allocator argument every other visit operation's
-   copy carries, and taking it here says that this one does NOT use it — the entries stay on the C library's
-   allocator, which is the whole reason the copy is delegated rather than performed by the engine. */
-HeaderList *header_list_step_new(JSContext *ctx)
-{
-    HeaderList *l = lexbor_calloc(1, sizeof(*l));
-    (void)ctx;
-    CHECK(l, "headers: OOM allocating the header list a step machine owns");
-    return l;
-}
-
-/* THE COPY. Deep, through §5.1's own append, so the copy is built by the one function that builds every header
-   list in this engine — a second spelling of "copy a pair" is the shape that drifts from the append that made
-   it. Append LOWERCASES the name, which is idempotent over a list whose names arrived through append, so the
-   copy is byte-for-byte the same list and not a re-normalised one.
-   FATAL ON ALLOCATION FAILURE and nothing here decides that: `calloc`'s CHECK below, and append's own
-   `CHECK(l->e, …)`, `header_lower`'s and `header_dup`'s, are each fatal in dev AND release. That is the clause
-   JSStepTreeOps::clone states as the one a host has to MEET, and this list met it before it was asked. */
-static void *header_list_step_clone(JSContext *ctx, void *root, void **cursors[], int ncursors)
-{
-    const HeaderList *src = root;
-    HeaderList *cp;
-    int i;
-
-    (void)ctx; (void)cursors;
-    /* NO CURSOR STANDS IN A HEADER LIST, and that is a fact about the holders rather than an assumption: the
-       §5.1 fill cursor every one of them embeds (HeadersFill) takes the list as an ARGUMENT of
-       headers_fill_run per call and stores no pointer to it, so there is nothing inside this structure for an
-       arm to be left naming. A holder that grows one declares it and this stops compiling. */
-    DCHECK(ncursors == 0,
-           "a header list was cloned for a fork with cursors declared standing inside it — nothing holds a "
-           "pointer INTO a header list, so a count above zero is a holder whose interior pointers this copy "
-           "does not re-point and would leave aimed at the original arm's entries");
-    cp = lexbor_calloc(1, sizeof(*cp));
-    CHECK(cp, "headers: OOM copying the header list a forked step machine owns");
-    for (i = 0; i < src->n; i++) {
-        HeaderUnknown unk;
-        header_list_append_unknown(cp, src->e[i].name, src->e[i].value, header_entry_unknown(&src->e[i], &unk));
+        JS_FreeCString(ctx, name);
+        JS_FreeValue(ctx, v);
+        if (r < 0) return -1;
     }
-    /* BOTH OPERANDS NAMED, and it can fail: append does not dedupe and must not start, because §5.1 keeps
-       `Set-Cookie` pairs separate and `get` is what combines them. A copy shorter than its source is a list
-       whose entries two arms would disagree about. */
-    DCHECKF(cp->n == src->n,
-            "a header list's fork copy holds %d entries where the original holds %d — §5.1's append keeps "
-            "every pair, so a copy that lost one was built by something that combines or drops names",
-            cp->n, src->n);
-    return cp;
+    return 0;
 }
 
-/* THE DESTROY. The entries and then the root, because the root IS the owned thing — JSStepTreeOps::destroy
-   says "everything it owns, including `root` itself", and a destroy that freed only the entries would leak one
-   `HeaderList` per forked arm with nothing able to name it. */
-static void header_list_step_destroy(JSContext *ctx, void *root)
+/* ---- the interface ------------------------------------------------------------------------------------ */
+
+/* §5.1: "A Headers object has an associated guard." The guard is the object's and the header list is the
+   pairs above; the runtime releases, marks and writes the record by its layout. */
+typedef struct { JSValue pairs; uint8_t guard; } HeadersObj;
+static const uint16_t HEADERS_VALS[] = { offsetof(HeadersObj, pairs) };
+static const JSRecordLayout HEADERS_LAYOUT = { sizeof(HeadersObj), HEADERS_VALS, 1, NULL, 0, NULL };
+
+JSValueConst headers_pairs_of(JSValueConst v)
 {
-    (void)ctx;
-    header_list_free(root);
-    free(root);
+    HeadersObj *h = JS_GetOpaque(v, g_headers_class);
+
+    DCHECK(h != NULL, "the header list of something that is not a Headers was asked for");
+    return h->pairs;
 }
 
-const JSStepTreeOps header_list_step_ops = { header_list_step_clone, header_list_step_destroy };
-
-/* Whether a header named `name` (any case) holds an unknown's display shape where a read wants its value. */
-static bool header_list_names_shape(const HeaderList *l, const char *name)
+HeadersGuard headers_guard_of(JSValueConst v)
 {
-    char *lo = header_lower(name);
-    bool yes = false;
+    HeadersObj *h = JS_GetOpaque(v, g_headers_class);
+    DCHECK(h != NULL, "the guard of something that is not a Headers was asked for");
+    return (HeadersGuard)h->guard;
+}
+
+static HeadersObj *headers_of(JSContext *ctx, JSValueConst v)
+{
+    HeadersObj *h = JS_GetOpaque(v, g_headers_class);
+    if (!h) JS_ThrowTypeError(ctx, "not a Headers");
+    return h;
+}
+
+/* A Headers with an empty list and `guard`; `*ph` is its record. */
+static JSValue headers_alloc(JSContext *ctx, HeadersGuard guard, HeadersObj **ph)
+{
+    HeadersObj *h;
+    JSValue obj, proto;
+
+    DCHECK(g_headers_class != 0, "a Headers was built before the class existed — headers_init runs at install");
+    proto = JS_GetClassProto(ctx, g_headers_class);
+    DCHECK(!JS_IsNull(proto), "a Headers was minted in a realm that never ran its install");
+    obj = JS_NewObjectProtoClass(ctx, proto, g_headers_class);
+    JS_FreeValue(ctx, proto);
+    if (JS_IsException(obj))
+        return obj;
+    h = lexbor_calloc(1, sizeof *h);
+    CHECK(h, "headers: OOM building a Headers");
+    h->guard = (uint8_t)guard;
+    h->pairs = header_pairs_new(ctx);
+    JS_SetOpaque(obj, h);
+    *ph = h;
+    return obj;
+}
+
+JSValue headers_new(JSContext *ctx, const HeaderList *src, HeadersGuard guard)
+{
+    HeadersObj *h;
+    JSValue obj = headers_alloc(ctx, guard, &h);
     int i;
 
-    for (i = 0; i < l->n; i++)
-        if (l->e[i].shape && !strcmp(l->e[i].name, lo)) yes = true;
-    free(lo);
-    return yes;
+    if (JS_IsException(obj))
+        return obj;
+    /* The list is one this engine built, already validated; the guard governs what the page may then do. */
+    for (i = 0; src && i < src->n; i++) {
+        DCHECK(!src->e[i].shape, "a Headers was built over a statement of an unknown's display shape — a list "
+                                 "that holds unknowns is built as pairs (headers_new_pairs)");
+        header_pairs_append(ctx, h->pairs, src->e[i].name, src->e[i].value);
+    }
+    return obj;
+}
+
+JSValue headers_new_pairs(JSContext *ctx, JSValueConst pairs, HeadersGuard guard)
+{
+    HeadersObj *h;
+    JSValue obj = headers_alloc(ctx, guard, &h);
+    uint32_t n, i;
+
+    if (JS_IsException(obj))
+        return obj;
+    n = pairs_len(ctx, pairs);
+    for (i = 0; i < n; i++) {
+        JSValue v;
+        const char *name = pairs_at(ctx, pairs, i, &v);
+
+        pairs_push(ctx, h->pairs, name, v);
+        JS_FreeCString(ctx, name);
+        JS_FreeValue(ctx, v);
+    }
+    return obj;
 }
 
 enum { HDR_APPEND = 0, HDR_SET, HDR_DELETE, HDR_GET, HDR_HAS, HDR_GETSETCOOKIE, HDR_MEMBER_N };
 /* THE AGENT'S POOL ENTRIES, one per §5.1 Headers class operation — the OBJECTS they are installed as are each realm's. */
 static int g_id[HDR_MEMBER_N];
 
+/* §5.1's two reads over an unknown name. Web IDL places an unknown ByteString argument as itself
+   (core/idl_args.h's idl_concolic_rule), and a name has no bytes to look up, so the member answers a value
+   derived from the name, whose example is the one lookup run on the name's own example: absent where the name
+   has no example or its example is no header name (step 1 throws there, which is not a value). Where the
+   lookup finds an unknown value the answer is derived from it too.
+   Named residual. Not covered: the world in which the unknown name is not a token, where §5.1 step 1 throws a
+   TypeError into the page's own `try`. Next diff builds: a declared predicate position in core/idl_args.h
+   whose rule forks over header_name_is_valid at the branch seam. Absence shows as a flow whose `h.get(n)`
+   sits inside a `try` reaching its `catch` in no world. */
+static JSValue headers_read_unknown_name(JSContext *ctx, JSValueConst pairs, JSValueConst name, int magic)
+{
+    JSValue ex = concolic_example(ctx, name);
+    JSValue real = JS_UNDEFINED, held = JS_UNDEFINED, out;
+    JSValueConst operands[2];
+    int nop = 0;
+
+    if (JS_IsString(ex)) {
+        const char *exn = JS_ToCString(ctx, ex);
+
+        CHECK(exn != NULL, "headers: OOM reading the String an unknown header name's example holds");
+        if (header_name_is_valid(exn, strlen(exn))) {
+            char *lo = header_lower(exn);
+
+            if (magic == HDR_HAS) {
+                real = JS_NewBool(ctx, pairs_contains(ctx, pairs, lo));
+            } else {
+                JSValue v = pairs_get_value(ctx, pairs, lo);
+
+                if (JS_IsUninitialized(v)) real = JS_NULL;
+                else if (concolic_is(v)) { held = v; real = concolic_example(ctx, v); }
+                else real = v;
+            }
+            free(lo);
+        }
+        JS_FreeCString(ctx, exn);
+    }
+    JS_FreeValue(ctx, ex);
+    operands[nop++] = name;
+    if (!JS_IsUndefined(held)) operands[nop++] = held;
+    out = concolic_new_derived(ctx, magic == HDR_HAS ? "Headers.has" : "Headers.get", operands, nop, real);
+    JS_FreeValue(ctx, held);
+    return out;
+}
+
 static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     HeadersObj *h = headers_of(ctx, this_val);
-    HeaderList *l = h ? &h->list : NULL;
-    const char *name = NULL, *value = NULL;
-    size_t name_len = 0, value_len = 0;
-    char *norm = NULL;
-    JSValue r = JS_UNDEFINED;
+    JSValue value = JS_UNDEFINED, r = JS_UNDEFINED;
+    const char *name;
+    size_t name_len = 0;
+    char *lower;
+    int allow = 1;
 
     if (!h)
         return JS_EXCEPTION;
     if (magic == HDR_GETSETCOOKIE) {
-        /* §5.1 getSetCookie(): every `set-cookie` value, each on its own — the one member for which the list's
-           repeats are the answer rather than something `get` folds away. */
+        /* §5.1 getSetCookie(): every `set-cookie` value on its own, the one member for which the list's
+           repeats are the answer. */
         JSValue arr = JS_NewArray(ctx);
-        uint32_t k = 0;
-        int i;
+        uint32_t n, i, k = 0;
+
         if (JS_IsException(arr)) return arr;
-        for (i = 0; i < l->n; i++)
-            if (!strcmp(l->e[i].name, "set-cookie")) {
-                if (l->e[i].shape)
-                    DFAIL("Fetch §5.1 getSetCookie() would answer an unknown value's display shape as a "
-                          "String: the entry holds the shape and not the unknown, so build the entry that "
-                          "holds the value and answer it here");
-                JS_SetPropertyUint32(ctx, arr, k++, JS_NewString(ctx, l->e[i].value));
-            }
+        n = pairs_len(ctx, h->pairs);
+        for (i = 0; i < n; i++) {
+            JSValue v;
+            const char *nm = pairs_at(ctx, h->pairs, i, &v);
+
+            if (!strcmp(nm, "set-cookie"))
+                CHECK(JS_DefinePropertyValueUint32(ctx, arr, k++, v, JS_PROP_C_W_E) >= 0,
+                      "headers: getSetCookie()'s list refused a value");
+            else
+                JS_FreeValue(ctx, v);
+            JS_FreeCString(ctx, nm);
+        }
         return arr;
     }
     DCHECK(argc >= 1, "a Headers member was declared with fewer arguments than its IDL lists");
-    /* §5.1's TWO READ MEMBERS OVER AN UNKNOWN NAME, WHICH IS WHERE THE FLOW USED TO END. Both are two steps
-       in the fetched standard's own words — `get`: "If name is not a header name, then throw a TypeError",
-       then "Return the result of getting name from this's header list"; `has`: the same step 1, then "Return
-       true if this's header list contains name; otherwise false" — and core/idl_args.h's
-       `idl_concolic_rule` answers IDL_CONCOLIC_CROSSES for the IDL_BYTESTRING at position 0, so the
-       declaration hands an unknown to this body AS ITSELF and the coercion below ABORTS at the C boundary.
-       `h.get(computedName)` therefore ended the document, which is an ordinary thing for a bundle to write.
-       A DERIVATION AND NOT A PROJECTION, WHICH IS THE WHOLE REASON THIS IS NOT THE `value` POSITION'S FIX ONE
-       ARGUMENT OVER. The residual below states it and it is provable rather than preferred: solver/concolic.c
-       composes every shape out of `{`, `}` and a derivation's brackets, and §2.2.2 Headers' name is RFC 9110
-       §5.1 Field Names' `field-name = token`, whose tchar set (`header_name_is_valid` above: alnum plus
-       the sixteen punctuation marks it lists) admits NONE of those bytes — so a projected name fails step 1
-       for EVERY unknown and the TypeError would be decided by the SOLVER's value class rather than by the
-       page's value, which is the collapse the pass-through in idl_args.c exists to prevent.
-       THE PRECEDENT IS core/url/url.c's `URL.parse`/`URL.canParse` AND IT IS THE SAME SHAPE FOR THE SAME
-       REASON: a validity gate a page branches on must FORK rather than die, so the member answers a value
-       that is opaque for control flow and carries the REAL verdict as its example. `if (h.has(n))` then forks
-       both arms — which is what reaches the gated code — and the arm the real name took keeps the answer
-       this engine actually computed.
-       THE EXAMPLE IS COMPUTED BY THE ONE LOOKUP AND IS NEVER INVENTED, which is §@H's rule:
-       `header_list_get` is the same door both concrete arms below take, run here over the name's OWN
-       example, so a member answering a known name and a member answering an unknown one's example cannot
-       disagree. Where there is no example the derivation carries JS_UNDEFINED, because @H reports an absence
-       rather than fabricating a miss — and a `false` from `has` or a `null` from `get` would be exactly
-       such a fabrication, since those are real answers a page branches on.
-       AN EXAMPLE THAT IS NOT A HEADER NAME HAS NO VALUE EITHER, and that is step 1 rather than a gap: for
-       such a name §5.1 THROWS, and a throw is not a value this member returns, so there is nothing to carry
-       as the example. The derivation is still the answer — the name is unknown, so whether THIS flow's name
-       is a token is open — and the example is simply absent.
-       NAMED RESIDUAL — THE THROW ARM IS NOT EXPLORED. NOT COVERED: the world in which the unknown name is
-       not a token, where §5.1 step 1 throws a TypeError into the page's own `try`. WHAT THE NEXT DIFF
-       BUILDS: that fork belongs to the BOUNDARY and not to this body, for the reason
-       core/dom/dom_token_list.c's `toggle` residual gives about its own boolean — an ask performed here
-       would fork a value forty-odd members share the seam for, and §C-stack forbids a builtin forking on
-       its own operand — so what is owed is a declared PREDICATE position in core/idl_args.h whose rule is
-       IDL_CONCOLIC_FORKS over `header_name_is_valid`, asked once at the branch seam and filed under that
-       predicate's own identity. HOW ITS ABSENCE WOULD SHOW: a flow whose `h.get(n)` sits inside a `try`
-       reaches the `catch` in no world, so a bundle that recovers from a bad header name has its recovery
-       path unexplored, while the same flow's success path now runs to completion. */
-    if (concolic_is(argv[0]) && (magic == HDR_GET || magic == HDR_HAS)) {
-        JSValue ex = concolic_example(ctx, argv[0]);
-        JSValue real = JS_UNDEFINED;
-
-        if (JS_IsString(ex)) {
-            const char *exn = JS_ToCString(ctx, ex);
-
-            CHECK(exn != NULL,
-                  "§5.1's read could not read the String its own example holds — the example is a concrete "
-                  "value this engine minted, and a String it cannot read back is a heap it has already lost, "
-                  "which is why this is fatal in release too");
-            if (header_name_is_valid(exn, strlen(exn))) {
-                char *v = header_list_get(l, exn);
-
-                real = (magic == HDR_HAS) ? JS_NewBool(ctx, v != NULL)
-                                          : (v ? JS_NewString(ctx, v) : JS_NULL);
-                free(v);
-            }
-            JS_FreeCString(ctx, exn);
-        }
-        JS_FreeValue(ctx, ex);
-        /* ONE OPERAND, WHICH IS THE DECLARATION'S NUMBER: §5.1 declares `get(ByteString name)` and
-           `has(ByteString name)`, so a shape naming a second would render an expression this member's steps
-           never performed — url.c's `url_operand_count` makes the same point about its own two. */
-        return concolic_new_derived(ctx, magic == HDR_HAS ? "Headers.has" : "Headers.get", argv, 1, real);
-    }
-    /* NAMED RESIDUAL — THE `name` POSITION OF THE THREE *WRITE* MEMBERS IS NOT COVERED, and the coercion below
-       ends the flow for one, AND ITS READ HALF IS BUILT — THE RETIRED WORDING IS KEPT BELOW THE VERDICT
-       BECAUSE A READER WHO RE-DERIVES THE SPLIT FROM "§5.1 DECLARES ONE `name` TYPE AT POSITION 0 OF ALL FIVE
-       MEMBERS" WILL WRITE IT AGAIN, which is exactly the inference that made this ONE residual for a while.
-       It read: "THE `name` POSITION OVER UNKNOWN EXTERNAL INPUT IS NOT COVERED … WHAT THE NEXT DIFF BUILDS:
-       the two READ members answer a DERIVED unknown over the name operand — solver/concolic.h's
-       `concolic_new_derived` with the real lookup over the name's own example as the example, which is what
-       core/url/url.c already does for `URL.canParse` and for the same reason (a validity gate the page
-       branches on must fork rather than die); the three WRITE members need a header list key space that
-       admits an unknown name". THE READ CLAUSE IS MET by the arm above this comment — and it was met
-       EXACTLY as written, which is the one thing worth recording about it, because §AND-THE-"WHAT-THE-NEXT-
-       DIFF-BUILDS"-CLAUSE rates such a clause a HYPOTHESIS rather than evidence and this file has already
-       had one of its own refuted. What made it hold was that it named a MECHANISM THAT WAS GREPPED (`url.c`'s
-       answer, confirmed present) rather than one its author pictured.
-       WHAT IS STILL NOT COVERED IS THE THREE WRITES — `append`, `set` and `delete` — whose `name` position
-       reaches the coercion below and ends the flow. §5.1 declares `ByteString name` at position 0 of all
-       five members and core/idl_args.h's `idl_concolic_rule` answers IDL_CONCOLIC_CROSSES for
-       IDL_BYTESTRING, so an unknown is placed as itself and this JS_ToCStringLen aborts at the C boundary —
-       js_force_tostring's own DFAIL says why, "a `const char *` cannot carry a concolic".
-       PROJECTING THE SHAPE IS STILL THE WRONG ANSWER AND IS STILL PROVABLY SO, which is why the writes did
-       not come with the reads. solver/concolic.c composes every shape out of `{`, `}` and the bracketing of a
-       derivation (`{location.hash}`, `{x}[{y}]`, `String({x})`), and §2.2.2 Headers' header name is RFC 9110
-       §5.1 Field Names' `field-name = token`, whose tchar set admits none of those characters — so a
-       projected name fails header_name_is_valid for EVERY unknown, and the TypeError that follows would be
-       decided by the SOLVER's own value class rather than by the page's value, which is the collapse the
-       pass-through in idl_args.c exists to prevent.
-       WHY THE READS COULD BE ANSWERED AND THE WRITES CANNOT, WHICH IS THE WHOLE OF THE SPLIT AND IS NOT A
-       MATTER OF EFFORT: a read ANSWERS a question and touches nothing, so a value that is opaque for control
-       flow and carries the real verdict is a complete answer to it. A write MUTATES A KEYED STORE, and
-       `header_list_set` and `header_list_delete` key on BYTES — a name that is not a token has none to key
-       on, and a name that is unknown has no bytes this engine may choose for it without deciding the very
-       thing the page left open.
-       WHAT THE NEXT DIFF BUILDS: a header list key space that admits an unknown name — an entry whose name
-       is a VALUE rather than a `char *`, so `set` replaces and `delete` removes the entry that names THIS
-       source rather than the entry whose bytes happen to match, with the concrete path keying on bytes
-       exactly as it does now. The read arm above then reads it through the same door, since a lookup over an
-       unknown name must be able to find an entry an unknown name wrote.
-       HOW ITS ABSENCE WOULD SHOW: a flow that WRITES a header whose name it computed ends at the line below
-       with js_force_tostring's `@WHY` naming this file and this coercion, while the same flow READING one
-       now runs to completion and the same flow setting a computed VALUE under a literal name always did. */
+    if (concolic_is(argv[0]) && (magic == HDR_GET || magic == HDR_HAS))
+        return headers_read_unknown_name(ctx, h->pairs, argv[0], magic);
+    /* Named residual. Not covered: an unknown `name` at append, set and delete, where the coercion below ends
+       the flow (a `const char *` cannot carry an unknown, and its display shape is no token, so projecting it
+       would let the solver's spelling decide step 1's TypeError). Next diff builds: a pair whose name is the
+       unknown, with set and delete matching the entry that names that source. Absence shows as a flow that
+       writes a header whose name it computed ending at this coercion. */
     name = JS_ToCStringLen(ctx, &name_len, argv[0]);
     if (!name) return JS_EXCEPTION;
+    /* §5.1 validate step 1 runs for every member: `headers.get({})` reads a name of "[object Object]", which
+       is no token, and the spec makes that a TypeError rather than a miss. */
     if (magic == HDR_APPEND || magic == HDR_SET) {
-        /* THE `value` POSITION OVER UNKNOWN EXTERNAL INPUT, WHICH IS THE ONE A REAL BUNDLE PASSES. §5.1
-           declares `ByteString value` and idl_concolic_rule answers IDL_CONCOLIC_CROSSES for it, so the
-           declaration hands an unknown to this body AS ITSELF and a raw JS_ToCStringLen on one ABORTS — which
-           ended the document at `headers.set('Authorization', 'Bearer ' + token)`, the single commonest way a
-           bundle puts external input into a request, and at every `h.append(n, v)` beside it.
-           THE ANSWER IS THE ONE THIS FILE ALREADY GIVES, AND THAT IS WHY IT IS A PROJECTION RATHER THAN A
-           DERIVATION: the fill's record arm — `new Headers({'Authorization': 'Bearer ' + token})` and every
-           `fetch(u, {headers: {…}})` through it — projects the value's SHAPE and says in its own words that
-           coercing it "would either abort at the ToString boundary or, worse, quietly de-taint it into some
-           concrete-looking string". A member answering differently would make `h.set(n, v)` and
-           `new Headers({n: v})` store different bytes for one program, which is the two-answers-to-one-question
-           shape; concolic_name_cstr composes the same bytes the record arm's JS_NewString(concolic_shape_c)
-           does, so no header list content moves.
-           THE LENGTH IS strlen AND THAT IS NOT AN ASSUMPTION: the shape is a C string this engine composed,
-           so it holds no U+0000 — which is the one thing a header value may not contain and the reason every
-           other read here is length-delimited. core/dom/dom_token_list.c's token_bytes answers the identical
-           question the identical way one component over.
-           §3.2.11's RANGE IS OWED HERE BECAUSE NOTHING ELSE RAN IT: the pass-through placed the value before
-           any conversion, so the declared ByteString's step 2 never happened, and header_check below ASSERTS
-           that it did. The fill's concolic arm takes the same refusal for the same stated reason — a header
-           the engine cannot state as bytes is not one it may report. OWNED either way: JS_FreeCString, which
-           is what every exit below already does with it. */
-        if (concolic_is(argv[1])) {
-            value = concolic_name_cstr(ctx, argv[1]);
-            if (!value) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
-            value_len = strlen(value);
-            if (headers_bytestring(ctx, value, value_len, "value") < 0) {
-                JS_FreeCString(ctx, name);
-                JS_FreeCString(ctx, value);
-                return JS_EXCEPTION;
-            }
-        } else {
-            value = JS_ToCStringLen(ctx, &value_len, argv[1]);
-            if (!value) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
-        }
-    }
-    /* §5.1's guard, on EVERY member and not just the two that write. `headers.get({})` reads a name of
-       "[object Object]", which is not a token, and the spec makes that a TypeError rather than a miss — wpt
-       asserts it by name for get, has, delete and set alike. */
-    if (header_check(ctx, name, name_len, value, value_len, value ? &norm : NULL) < 0) {
+        value = header_stored_value(ctx, name, name_len, argv[1], false);
+        if (JS_IsException(value)) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
+    } else if (header_check(ctx, name, name_len, NULL, 0, NULL) < 0) {
         JS_FreeCString(ctx, name);
-        if (value) JS_FreeCString(ctx, value);
         return JS_EXCEPTION;
     }
-    /* §5.1's three WRITES each run their own steps; a read is not guarded at all, because the page can
-       already see every one of these headers and refusing to answer would hide state rather than protect it. */
+    lower = header_lower(name);
     switch (magic) {
-    case HDR_APPEND: {
-        HeaderUnknown us;
-        char *ex;
-        const HeaderUnknown *unk = header_unknown_of(ctx, argv[1], &us, &ex);
-        int wrote = headers_append_one(ctx, l, h->guard, name, norm, unk);
-
-        free(ex);
-        if (wrote < 0) {
-            JS_FreeCString(ctx, name);
-            JS_FreeCString(ctx, value);
-            free(norm);
-            return JS_EXCEPTION;
-        }
+    case HDR_APPEND:
+        allow = headers_append_one(ctx, h->pairs, h->guard, name, value) < 0 ? -1 : 1;
         break;
-    }
     case HDR_SET: {
-        /* §5.1 set steps 2-5. Step 3 tests the value ON ITS OWN, because set REPLACES rather than joins. */
-        char *lower = header_lower(name);
-        int allow = headers_guard_allows(ctx, h->guard, name, norm);
-        if (allow > 0 && h->guard == HEADERS_GUARD_REQUEST_NO_CORS &&
-            !header_is_no_cors_safelisted(lower, norm))
-            allow = 0;
-        if (allow > 0) {
-            HeaderUnknown us;
-            char *ex;
+        /* §5.1 set steps 2-5. Step 3 tests the value on its own, because set replaces rather than joins. */
+        const char *bytes = pair_value_bytes(ctx, value);
 
-            header_list_set_unknown(l, name, norm, header_unknown_of(ctx, argv[1], &us, &ex));
-            free(ex);
-            if (h->guard == HEADERS_GUARD_REQUEST_NO_CORS) header_remove_privileged_no_cors(l);
-        }
-        free(lower);
-        if (allow < 0) {
-            JS_FreeCString(ctx, name);
-            JS_FreeCString(ctx, value);
-            free(norm);
-            return JS_EXCEPTION;
+        allow = headers_guard_allows(ctx, h->guard, name, bytes);
+        if (allow > 0 && h->guard == HEADERS_GUARD_REQUEST_NO_CORS && !header_is_no_cors_safelisted(lower, bytes))
+            allow = 0;
+        JS_FreeCString(ctx, bytes);
+        if (allow > 0) {
+            pairs_delete(ctx, h->pairs, lower);
+            pairs_push(ctx, h->pairs, lower, value);
+            if (h->guard == HEADERS_GUARD_REQUEST_NO_CORS) pairs_remove_privileged_no_cors(ctx, h->pairs);
         }
         break;
     }
-    case HDR_DELETE: {
-        /* §5.1 delete steps 1-5, and step 2 IS NOT WHAT STOOD HERE. It reads: "If this's guard is
-           'request-no-cors', name is not a no-CORS-safelisted request-header name, AND name is not a
-           privileged no-CORS request-header name, then return." A privileged name is one of the two that get
-           THROUGH — §2.2.2 Headers' note beside the privileged list says such headers "will be removed if
-           the request is modified by unprivileged APIs", so `delete("Range")` is exactly the call that must
-           succeed. This refused that one call and let every OTHER unsafelisted name through, which is both
-           halves inverted.
-           Step 1 validates with the DUMMY value ``, which is why the method-override names are deletable. */
-        char *lower = header_lower(name);
-        int allow = headers_guard_allows(ctx, h->guard, name, "");
+    case HDR_DELETE:
+        /* §5.1 delete steps 1-5. Step 1 validates with the dummy value ``, which is why the method-override
+           names are deletable; step 2 lets a privileged no-CORS name through, since §2.2.2's note says such
+           headers "will be removed if the request is modified by unprivileged APIs". */
+        allow = headers_guard_allows(ctx, h->guard, name, "");
         if (allow > 0 && h->guard == HEADERS_GUARD_REQUEST_NO_CORS &&
             !header_is_no_cors_safelisted_name(lower) && !header_is_privileged_no_cors(lower))
             allow = 0;
         if (allow > 0) {
-            header_list_delete(l, name);
-            if (h->guard == HEADERS_GUARD_REQUEST_NO_CORS) header_remove_privileged_no_cors(l);
-        }
-        free(lower);
-        if (allow < 0) {
-            JS_FreeCString(ctx, name);
-            JS_FreeCString(ctx, value);
-            free(norm);
-            return JS_EXCEPTION;
+            pairs_delete(ctx, h->pairs, lower);
+            if (h->guard == HEADERS_GUARD_REQUEST_NO_CORS) pairs_remove_privileged_no_cors(ctx, h->pairs);
         }
         break;
-    }
-    case HDR_HAS: {
-        char *v = header_list_get(l, name);
-        r = JS_NewBool(ctx, v != NULL);
-        free(v);
+    case HDR_HAS:
+        r = JS_NewBool(ctx, pairs_contains(ctx, h->pairs, lower));
         break;
-    }
-    default: {
-        char *v;
+    default:
         DCHECK(magic == HDR_GET, "a Headers member was declared with a magic this component does not answer");
-        if (header_list_names_shape(l, name))
-            DFAIL("Fetch §5.1 get() would answer an unknown value's display shape as a String: the entry "
-                  "holds the shape and not the unknown, so build the entry that holds the value and answer "
-                  "it, or the derivation that combines it with its neighbours (§2.2.2 get), here");
-        v = header_list_get(l, name);
-        r = v ? JS_NewString(ctx, v) : JS_NULL;   /* §5.1: absent is null, not "" */
-        free(v);
+        r = pairs_get_value(ctx, h->pairs, lower);
+        if (JS_IsUninitialized(r)) r = JS_NULL;   /* §5.1: absent is null, not "" */
     }
-    }
+    free(lower);
     JS_FreeCString(ctx, name);
-    if (value) JS_FreeCString(ctx, value);
-    free(norm);
-    return r;
+    JS_FreeValue(ctx, value);
+    return allow < 0 ? JS_EXCEPTION : r;
 }
 
 /* ---- iteration: §5.1's `iterable<ByteString, ByteString>` ------------------------------------------------ */
 
-/* §2.2.2 Headers' "sort and combine": iteration does NOT walk the raw list. It yields each name ONCE, lowercased and in
-   byte order, with that name's values joined by ", " — so `for (const [k, v] of h)` over an append-append pair
-   sees one entry, not two. `Set-Cookie` is the exception the spec spells out: each of its values is yielded on
-   its own, which is the same reason the list keeps pairs at all.
-   Computed per call rather than cached, because the list is live: a callback that appends during forEach must
-   be seen by the steps after it, which is what the spec's "value pairs to iterate over" means. */
-static void header_sort_and_combine(const HeaderList *l, HeaderList *out)
+/* §2.2.2 "sort and combine" over `pairs`: the count of pairs iteration yields and, for 0 <= at < count, the
+   at-th one, its name in `*key` and its value in `*value` (owned). Each name is yielded once, lowercased and
+   in byte order, with its values combined as §2.2.2's get combines them; `set-cookie` yields each of its
+   values on its own. Computed per call, because the list is live under the page's callback. */
+static int pairs_sort_combine(JSContext *ctx, JSValueConst pairs, int at, JSValue *key, JSValue *value)
 {
-    int i, j;
-    for (i = 0; i < l->n; i++) {
-        const char *name = l->e[i].name;
-        int seen = 0, first = 1;
-        char *joined = NULL;
-        size_t total = 0;
-        for (j = 0; j < i; j++) if (!strcmp(l->e[j].name, name)) { seen = 1; break; }
-        if (seen) continue;
-        if (!strcmp(name, "set-cookie")) {            /* each value on its own, per §2.2.2's sort and combine */
-            for (j = 0; j < l->n; j++)
-                if (!strcmp(l->e[j].name, name)) header_list_append(out, name, l->e[j].value);
-            continue;
+    typedef struct { char *name; uint32_t at; } Row;   /* `at`: the first pair of the name, or the cookie's */
+    uint32_t n = pairs_len(ctx, pairs), i;
+    Row *rows = n ? lexbor_malloc(n * sizeof *rows) : NULL;
+    int nr = 0, j;
+
+    CHECK(!n || rows, "headers: OOM combining a header list for iteration");
+    for (i = 0; i < n; i++) {
+        const char *name = pairs_at(ctx, pairs, i, NULL);
+        bool seen = false;
+
+        if (strcmp(name, "set-cookie"))
+            for (j = 0; j < nr && !seen; j++) seen = !strcmp(rows[j].name, name);
+        if (!seen) {
+            /* After its equals, so the values of `set-cookie` keep the list's order. */
+            for (j = nr; j > 0 && strcmp(rows[j - 1].name, name) > 0; j--) rows[j] = rows[j - 1];
+            rows[j].name = header_dup(name);
+            rows[j].at = i;
+            nr++;
         }
-        for (j = 0; j < l->n; j++)
-            if (!strcmp(l->e[j].name, name)) total += strlen(l->e[j].value) + 2;
-        joined = lexbor_malloc(total + 1);
-        CHECK(joined, "headers: OOM combining a header's values for iteration");
-        joined[0] = 0;
-        for (j = 0; j < l->n; j++) {
-            if (strcmp(l->e[j].name, name)) continue;
-            if (!first) strcat(joined, ", ");
-            strcat(joined, l->e[j].value);
-            first = 0;
-        }
-        header_list_append(out, name, joined);
-        free(joined);
+        JS_FreeCString(ctx, name);
     }
-    /* byte order over the names, which is what "sort" means for a header list */
-    for (i = 1; i < out->n; i++) {
-        HeaderEntry tmp = out->e[i];
-        for (j = i - 1; j >= 0 && strcmp(out->e[j].name, tmp.name) > 0; j--)
-            out->e[j + 1] = out->e[j];
-        out->e[j + 1] = tmp;
+    if (at >= 0) {
+        DCHECK(at < nr, "a Headers pair was asked for past the end of the combined list");
+        *key = JS_NewString(ctx, rows[at].name);
+        if (!strcmp(rows[at].name, "set-cookie"))
+            JS_FreeCString(ctx, pairs_at(ctx, pairs, rows[at].at, value));
+        else
+            *value = pairs_get_value(ctx, pairs, rows[at].name);
     }
+    for (j = 0; j < nr; j++) free(rows[j].name);
+    free(rows);
+    return nr;
 }
 
-/* §3.7.9.1 Default iterator objects' DEFAULT ITERATOR OBJECT is the shared one. Headers' own copy of it — the iterator class, the
-   prototype, `next`, `keys`/`values`/`entries`, `@@iterator` and the forEach machine — is deleted rather than
-   kept beside it: the six things are identical for every `iterable<K, V>` interface, and what is actually
-   Headers' is the two operations below. */
+/* Web IDL §3.7.9.1 "Default iterator objects" is the shared one (core/idl_iter.h); what is Headers' own is
+   the two operations below. */
 static int headers_pair_count(JSContext *ctx, JSValueConst target)
 {
-    const HeaderList *src = headers_list_of(target);
-    HeaderList combined = { 0 };
-    int n;
-    (void)ctx;
-    if (!src) return -1;
-    header_sort_and_combine(src, &combined);
-    n = combined.n;
-    header_list_free(&combined);
-    return n;
+    HeadersObj *h = JS_GetOpaque(target, g_headers_class);
+
+    return h ? pairs_sort_combine(ctx, h->pairs, -1, NULL, NULL) : -1;
 }
 
 static void headers_pair_at(JSContext *ctx, JSValueConst target, int i, JSValue *key, JSValue *value)
 {
-    const HeaderList *src = headers_list_of(target);
-    HeaderList combined = { 0 };
-    DCHECK(src != NULL, "a Headers iterator outlived the Headers it holds a reference to");
-    header_sort_and_combine(src, &combined);
-    DCHECK(i < combined.n, "a Headers pair was asked for past the end of the combined list");
-    if (header_list_names_shape(src, combined.e[i].name))
-        DFAIL("Fetch §5.1's iteration would yield an unknown value's display shape as a String, which a fill "
-              "over the pairs then states as a request's bytes: the entry holds the shape and not the "
-              "unknown, so build the entry that holds the value and have §2.2.2's sort and combine yield it "
-              "or the derivation that combines it");
-    *key = JS_NewString(ctx, combined.e[i].name);
-    *value = JS_NewString(ctx, combined.e[i].value);
-    header_list_free(&combined);
+    HeadersObj *h = JS_GetOpaque(target, g_headers_class);
+
+    DCHECK(h != NULL, "a Headers iterator outlived the Headers it holds a reference to");
+    DCHECK(i >= 0, "a Headers pair was asked for at a negative index");
+    pairs_sort_combine(ctx, h->pairs, i, key, value);
 }
 
 static const IdlPairIterOps HEADERS_PAIR_OPS = { headers_pair_count, headers_pair_at, "Headers" };
@@ -1461,7 +1447,7 @@ static int headers_record_key_ok(JSContext *ctx, JSStepHdr *h, JSValueConst key,
     return r;
 }
 
-int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst init, HeaderList *out,
+int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst init, JSValueConst out,
                      HeadersGuard guard, JSValue in, JSValue **out_cb, int *out_argc)
 {
     int r;
@@ -1564,49 +1550,35 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
             return -1;
         }
         {
-            size_t kn_len = 0, kv_len = 0;
-            const char *kn, *kv;
-            char *norm = NULL;
+            size_t kn_len = 0;
+            const char *kn;
+            JSValue stored;
             int bad;
-            /* THE ELEMENT CONVERSION THIS ARM DOES NOT ISSUE. Web IDL §3.2.21.1 Creating a sequence from an
-               iterable converts every element to T, and T here is ByteString: for an OBJECT that is ToString,
-               which is the PAGE'S code and therefore a request (step_tostring_run), exactly as the record arm
-               below issues it for a value. Coercing it from C instead drives the page to completion inside a
-               step machine, which is what the preempt hook aborts on — so the shape crashes here, at the item
-               that carries it, rather than deep in a driver. A CONCOLIC item is the same missing half from the
-               other side: the record arm projects its shape (an external value must not be de-tainted into a
-               concrete-looking header) and this arm has no such projection. */
-            DCHECK(!JS_IsObject(f->item[0]) && !JS_IsObject(f->item[1]),
-                   "a Headers init pair carried an OBJECT item — Web IDL §3.2.21.1's element conversion to "
+            /* Web IDL §3.2.21.1 "Creating a sequence from an iterable" converts each element to ByteString.
+               For an object that is ToString, the page's code, which this arm has no step_tostring_run for;
+               an unknown name has no fork here as the record arm's has. An unknown value is stored as
+               itself, which is what a Headers object's own iterator yields for one. */
+            DCHECK(!concolic_is(f->item[0]),
+                   "a Headers init pair carried an unknown name — this arm has no fork over §5.1 validate "
+                   "step 1 for one; build the record arm's here");
+            DCHECK(!JS_IsObject(f->item[0]) && (concolic_is(f->item[1]) || !JS_IsObject(f->item[1])),
+                   "a Headers init pair carried an object item — Web IDL §3.2.21.1's element conversion to "
                    "ByteString is a ToString, and this arm has no step_tostring_run for it");
-            DCHECK(!concolic_is(f->item[0]) && !concolic_is(f->item[1]),
-                   "a Headers init pair carried a CONCOLIC item — this arm has no shape projection, so the "
-                   "coercion below would de-taint external input into a header the report states as observed");
             kn = JS_ToCStringLen(ctx, &kn_len, f->item[0]);
-            kv = JS_ToCStringLen(ctx, &kv_len, f->item[1]);
-            if (!kn || !kv) {
-                if (kn) JS_FreeCString(ctx, kn);
-                if (kv) JS_FreeCString(ctx, kv);
-                return -1;
-            }
-            /* THE OTHER HALF OF §3.2.21.1's ELEMENT CONVERSION. Its "converting next to an IDL value of type
-               T" is ToString — the two ToCStringLens above, which the DCHECKs make run nothing — followed by
-               §3.2.11 step 2, and the element the standard converts FIRST is the one it refuses first. */
-            if (headers_bytestring(ctx, kn, kn_len, "name") < 0 ||
-                headers_bytestring(ctx, kv, kv_len, "value") < 0) {
+            if (!kn) return -1;
+            /* §3.2.11 step 2 for the element the standard converts first, before the value's own. */
+            if (headers_bytestring(ctx, kn, kn_len, "name") < 0) {
                 JS_FreeCString(ctx, kn);
-                JS_FreeCString(ctx, kv);
                 return -1;
             }
-            bad = header_check(ctx, kn, kn_len, kv, kv_len, &norm) < 0;
-            /* §5.1 fill appends THROUGH the append algorithm — every step of it, not just the guard: a
-               Request built with {headers:{Host:"x"}} silently drops it, and a no-cors one drops every
-               header that is not no-CORS-safelisted. */
-            if (!bad) bad = headers_append_one(ctx, out, guard, kn, norm, NULL) < 0;
-            free(norm);
+            stored = header_stored_value(ctx, kn, kn_len, f->item[1], false);
+            /* §5.1 fill appends through the append algorithm, every step of it: a Request built with
+               {headers:{Host:"x"}} silently drops it, and a no-cors one drops every header that is not
+               no-CORS-safelisted. */
+            bad = JS_IsException(stored) || headers_append_one(ctx, out, guard, kn, stored) < 0;
+            JS_FreeValue(ctx, stored);
             JS_FreeCString(ctx, kn);
-            JS_FreeCString(ctx, kv);
-            if (bad) return -1;   /* §5.1's guard already threw */
+            if (bad) return -1;   /* the TypeError is live */
         }
         f->phase = FILL_SEQ_PAIR;
     }
@@ -1615,9 +1587,11 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
        not this component's; what stays here is the per-pair half, which is where the ByteString key check, the
        §5.1 guard and the concolic shape live. */
     for (;;) {
-        const char *kname, *kval;
-        size_t kname_len = 0, kval_len = 0;
+        const char *kname;
+        size_t kname_len = 0;
         bool name_decided = false;
+        JSValue stored;
+        int bad;
 
         if (f->phase == FILL_KEY_PAIR) {
             r = record_cursor_run(ctx, h, &f->rec, init, in, headers_record_key_ok, NULL, out_cb, out_argc);
@@ -1629,13 +1603,8 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
             JS_FreeValue(ctx, f->value); f->value = JS_DupValue(ctx, f->rec.value);
             f->phase = FILL_VALUE_STR;
         }
-        /* AN UNKNOWN VALUE KEEPS ITS SHAPE. A header built out of external input — `{'Authorization': 'Bearer '
-           + token}` where the token is server-injected — is a CONCOLIC, and coercing it would either abort at
-           the ToString boundary or, worse, quietly de-taint it into some concrete-looking string. Its shape is
-           the display form the @H surface reports, and the `{hole}` in it is exactly what marks the header as a
-           runtime value the reviewer has to supply. This is the same explicit projection fetch_park asks for on
-           the URL, for the same reason. The value stays the unknown itself until the entry is written, so its
-           root is carried onto the entry beside the shape. */
+        /* An unknown value is not converted: it stays the unknown and is stored as itself, so the entry and
+           every read of it carry its provenance. */
         DCHECK(f->phase == FILL_VALUE_STR || f->phase == FILL_NAME_VALID,
                "the headers fill was re-entered at a phase it never parks in");
         if (f->phase == FILL_NAME_VALID) {
@@ -1658,7 +1627,7 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
         in = JS_UNDEFINED;
         /* §5.1 Headers class's validate a header, step 1's name half, over an unknown name (one the key's ByteString fork passed)
            has both completions, so it forks, the real one being the header-name test on the name's example.
-           The arm that passes stores the name's shape, which is the projection the value takes above.
+           The arm that passes stores the name's display shape.
            Named residual. Not covered: the guard (validate steps 3-4, and append step 3 under
            "request-no-cors") over an unknown name, which reads the shape's bytes, so such a header is never
            forbidden and never no-CORS-safelisted. Next diff: a fork over the guard's verdict, real on the
@@ -1681,56 +1650,16 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
         } else {
             kname = JS_ToCStringLen(ctx, &kname_len, f->name);
         }
-        if (concolic_is(f->value)) {
-            kval = concolic_name_cstr(ctx, f->value);
-            kval_len = kval ? strlen(kval) : 0;
-        } else {
-            kval = JS_ToCStringLen(ctx, &kval_len, f->value);
-        }
-        if (!kname || !kval) {
-            if (kname) JS_FreeCString(ctx, kname);
-            if (kval) JS_FreeCString(ctx, kval);
-            return -1;
-        }
-        /* §3.2.23 step 4.2.3's `typedValue = value converted to V`, and V is ByteString: the ToString is the
-           request above, and this is the range that completes it. It is asked HERE, at the conversion, and
-           not inside §5.1's syntax check, because it is the TYPE's refusal — the key's own already ran one
-           step earlier, in the cursor, which is what makes `{"Ā": "v"}` refuse before the [[Get]].
-           THE CONCOLIC ARM TAKES IT TOO: the projected shape is the bytes this header would carry, and a
-           header the engine cannot state as bytes is not one it may report. */
-        if (headers_bytestring(ctx, kval, kval_len, "value") < 0) {
-            JS_FreeCString(ctx, kname);
-            JS_FreeCString(ctx, kval);
-            return -1;
-        }
-        {
-            char *knorm = NULL;
-            if ((name_decided ? header_value_check(ctx, kval, kval_len, &knorm)
-                              : header_check(ctx, kname, kname_len, kval, kval_len, &knorm)) < 0) {
-                JS_FreeCString(ctx, kname); JS_FreeCString(ctx, kval);
-                return -1;   /* §5.1's guard already threw */
-            }
-            /* §5.1: "Otherwise, object is a record, then for each key → value of object, APPEND (key, value)
-               to headers." Web IDL §3.2.23's map semantics have ALREADY deduped the record — by its ByteString KEY,
-               which is case-SENSITIVE — so the two entries of `{a:"1", A:"2"}` both arrive and both append,
-               and `get("a")` combines them into "1, 2". A replace loop stood here matching on the LOWERCASED
-               header name, which is a different equivalence than the record's and belongs to no step: it
-               answered "2", and it is deleted rather than kept for the one shape it looked right on. */
-            HeaderUnknown us;
-            char *ex;
-            const HeaderUnknown *unk = header_unknown_of(ctx, f->value, &us, &ex);
-            int wrote = headers_append_one(ctx, out, guard, kname, knorm, unk);
-
-            free(ex);
-            if (wrote < 0) {
-                free(knorm);
-                JS_FreeCString(ctx, kname); JS_FreeCString(ctx, kval);
-                return -1;
-            }
-            free(knorm);
-        }
+        if (!kname) return -1;
+        /* §3.2.23 step 4.2.3's `typedValue = value converted to V`: the ToString is the request above and
+           header_stored_value runs the range that completes it. Then §5.1: "for each key → value of object,
+           append (key, value) to headers". Web IDL's record is keyed case-sensitively, so both entries of
+           `{a:"1", A:"2"}` arrive and both append, and `get("a")` combines them into "1, 2". */
+        stored = header_stored_value(ctx, kname, kname_len, f->value, name_decided);
+        bad = JS_IsException(stored) || headers_append_one(ctx, out, guard, kname, stored) < 0;
+        JS_FreeValue(ctx, stored);
         JS_FreeCString(ctx, kname);
-        JS_FreeCString(ctx, kval);
+        if (bad) return -1;   /* the TypeError is live */
         f->phase = FILL_KEY_PAIR;
     }
 }
@@ -1750,26 +1679,18 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
 enum { HDR_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const HDR_CTOR_STEPS[] = { HDR_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* `list` IS A POINTER and that is what makes this machine forkable: quickjs-step.h's `tree` operation ANSWERS
-   a new root and writes it into the slot, so an inline struct could not be declared through it. See headers.h's
-   header_list_step_ops. */
-typedef struct { HeadersFill fill; HeaderList *list; JSValue result; } JSHeadersCtorState;
+/* `list` is step 2's header list, the pairs the fill appends to: a declared value, so a deep fork's two arms
+   hold the one list and each arm's appends are its own flow's writes. */
+typedef struct { HeadersFill fill; JSValue list; JSValue result; } JSHeadersCtorState;
 
 static void js_headers_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSHeadersCtorState *s = st;
     headers_fill_visit(ctx, &s->fill, v);
     v->val(ctx, &s->result);
-    /* STEP 2'S LIST. This is the line that deleted this machine's fork refusal AND its `release`: the
-       operation's own clone makes the sibling its own list and its own destroy frees it, so there is nothing
-       left for a teardown beside the declaration to do. No cursor stands inside it — the fill holds the list
-       as an argument and not as a field — so the count is zero and the array is NULL with it. */
-    v->tree(ctx, (void **)&s->list, NULL, 0, &header_list_step_ops);
+    v->val(ctx, &s->list);
 }
 
-/* THE HEADER LIST ALONE — a malloc'd array of malloc'd name/value pairs, which is not a reference and which no
-   declaration names. Everything else this state holds is named by js_headers_ctor_visit and released through
-   that one list. */
 static int js_headers_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -1786,79 +1707,28 @@ static int js_headers_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         }
         headers_fill_init(&s->fill);
         s->result = JS_UNDEFINED;
-        /* STEP 2'S LIST, BUILT BEFORE THE FILL THAT APPENDS TO IT. The test is idempotent because this stage
-           can PARK — `new Headers()` with a Proxy `init` runs the page's code at the own-keys read — and a
-           parked stage is re-entered at its first line, so an unguarded allocation here would leak one list
-           per re-entry. A POINTER is a legitimate "is it built" question where a zeroed JSValue slot is not:
-           js_mallocz leaves this NULL and nothing but this line writes it. */
-        if (!s->list) s->list = header_list_step_new(ctx);
+        /* Step 2's list, built before the fill that appends to it. This stage hands over to the fill before
+           anything can park, so it runs once per state. */
+        s->list = header_pairs_new(ctx);
         hdr->stage = HDR_CTOR_FILL;
     }
     DCHECK(hdr->stage == HDR_CTOR_FILL,
            "the Headers constructor was re-entered at a stage §5.1 does not have");
     /* §5.1: `new Headers(init)` sets the guard to "none" and then fills — a page's own Headers refuses
        nothing, which is why the forbidden lists are unobservable until a Request or a Response owns one. */
-    DCHECK(s->list != NULL,
-           "the Headers constructor reached §5.1 step 2's fill with no header list — step 1 is the one line "
-           "that builds it, so a fill without one is a stage reached without its predecessor");
     r = headers_fill_run(ctx, hdr, &s->fill, argc > 0 ? argv[0] : JS_UNDEFINED, s->list,
                          HEADERS_GUARD_NONE, cb_result, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return -1;
-    *presult = headers_new(ctx, s->list, HEADERS_GUARD_NONE);
+    *presult = headers_new_pairs(ctx, s->list, HEADERS_GUARD_NONE);
     return JS_IsException(*presult) ? -1 : 0;
 }
 
-/* WHY THIS MACHINE MAY NOW BE FORKED WHILE IT HOLDS STEP 2'S HEADER LIST, which is the whole of what this
- * paragraph is: the refusal `js_headers_ctor_unforkable` is DELETED and the list is declared.
- *
- * ITS REASON WAS TRUE AND IT WAS A CONSTRAINT ON THE LIST'S STORAGE AND NOT ON THIS ALGORITHM. A step state is
- * BYTE-COPIED at a deep fork and only what `visit` names is re-taken, this list's array and its name/value
- * strings are the C library's in `header_list_append`/`header_list_free`, and every JSStepVisit operation that
- * copies FOR ITSELF (`v->buf`, `v->array`, `v->props`, `v->slots`, `v->strbuf`) allocates with the ENGINE's —
- * so the two could not be reconciled by naming the list through any of them. That stated the choice as §5.1's
- * entries becoming engine-allocated slots (a change to `HeaderList`'s storage and therefore to all 31 files
- * that hold one, several of which — a class finalizer, main.c, the WPT runner, structured_fields.c — have no
- * JSContext to allocate with) or `v->tree`, which delegates BOTH the copy and the destroy to the host.
- *
- * IT IS `v->tree`, AND THE QUESTION THAT HAD TO BE SETTLED FIRST WAS WHETHER THAT OPERATION'S SUBJECT IS A
- * TREE. It is not: its three consumers in quickjs.c dereference nothing — the clone calls `ops->clone` and
- * asserts the answer, the teardown calls `ops->destroy` and clears the cursors, and the fingerprint walk folds
- * the pointers and CALLS NEITHER OPERATION — and the reason its own banner gives for it needing to exist is
- * negative and allocation-shaped ("not a JSValue and not an allocation with a size, so no other operation can
- * name one"), which is exactly true of a header list. quickjs-step.h now says so, and says why the FIELD is
- * still spelled `tree`.
- *
- * WHAT IT COST, AND IT IS ONE THING: the list is a HEAP ROOT rather than an inline struct, because the clone
- * ANSWERS a new pointer the operation writes back. No allocator moved and no file outside core/fetch/ was
- * touched.
- *
- * WHAT IT BUYS, STATED HONESTLY: a refusal answered "unforkable" and the primary arm still ran, so what was
- * lost was BREADTH and never the Headers object — `new Headers([["a","1"],["b",v]])` whose second read forks
- * now explores both arms where it used to explore one. It needs TWO pairs and not one, because both fill arms
- * APPEND and then loop back to a parking phase, so a one-key init runs its getter before any append.
- *
- * AND BEFORE THE REFUSAL EXISTED AT ALL THIS WAS A DOUBLE FREE — the fork was taken, two arms carried one
- * `HeaderList::e`, and the second teardown freed it again. The refusal was the capability's existing
- * declaration made at the machine that was missing it; this is the capability.
- *
- * HOW THE ROUTING'S ABSENCE WOULD SHOW, now that there is no abort to watch for: idl_args.c's fingerprint
- * bracket around every member's `release` folds the slots the `visit` names and asserts the `release` left
- * them alone, and `js_step_visit_fp_tree` folds this root — so a `release` re-added here that freed the list
- * would move the fold and fire that DCHECK by name. That is why this machine has no `release` at all rather
- * than an emptied one. */
 static const IdlStepDecl js_headers_ctor_decl = {
-    /* NO `release`. Step 2's list is declared through `visit`, so idl_args.c's one teardown discharges it and
-       there is nothing a second list beside the declaration could be for. The slot was `js_headers_ctor_release`
-       and that function freed the list the declaration now names; both went in the diff that routed it. */
+    /* No `release`: everything this state owns is declared through `visit`. */
     js_headers_ctor_step, sizeof(JSHeadersCtorState), js_headers_ctor_visit, NULL,
     "Fetch §5.1 new Headers(init)", HDR_CTOR_STEPS,
-    /* `catches_abrupt` = 0: this constructor PROPAGATES — a throwing header key or value is the page's to see
-       at the `new Headers` it wrote, and the epilogue re-raises it. THE REASON FOR SPELLING IT RATHER THAN
-       LEAVING IT TO THE ZERO-FILL IS RETIRED — it was "a field AFTER it is declared", and that field was
-       `unforkable`, which this machine no longer declares. It is kept spelled because the next field added
-       after it would need it spelled again, and a reader who re-derives "nothing follows it, so drop it" has
-       to re-add it then. */
+    /* `catches_abrupt` = 0: a throwing header key or value is the page's to see at its `new Headers`. */
     0
 };
 
@@ -1866,7 +1736,7 @@ static const IdlStepDecl js_headers_ctor_decl = {
 
 void headers_init(JSContext *ctx)
 {
-    JSClassDef def = { "Headers", .finalizer = headers_finalizer };
+    JSClassDef def = { "Headers", .record = &HEADERS_LAYOUT };
     JSRuntime *rt = JS_GetRuntime(ctx);
     /* Fetch §5.1 Headers class writes `ByteString` at every one of these positions, and the type is the whole
        of where §3.2.11's range refusal happens — see the note above header_normalize_value. It was
