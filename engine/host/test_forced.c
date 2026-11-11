@@ -8792,6 +8792,105 @@ TF_UNIT void adopt_walk_selftest(JSContext *ctx)
                (unsigned long long)charged[m][1], (unsigned long long)FLOOR[m]);
 }
 
+/* WebAssembly JS API §5.1's compile across a fork (core/wasm/module_record.h): a flow parked at each rest point
+   of an instantiation is cloned by JS_FlowClone, the frame snapshot every fork site takes, and the original and
+   the clone each finish over the one module record, once with the original first and once with the clone first.
+   Each arm answers what the unforked flow answers. The first module names a type it does not define, so the
+   instantiation's every rest point is one of the compile's. The bytes and the store are made by a program of
+   their own: this fixture's arms share one heap, so the forked program builds nothing an arm could write. */
+static const char *TF_WASM_FORK_SETUP_SRC =
+    "(function(){ self.__tfWasmBad = new Uint8Array([0,97,115,109,1,0,0,0,1,4,1,96,0,0,3,2,1,5,10,4,1,2,0,11]);"
+    " self.__tfWasmGood = new Uint8Array([0,97,115,109,1,0,0,0,1,4,1,96,0,0,3,2,1,0,10,4,1,2,0,11]);"
+    " self.__tfWasmInst = wasmInstantiator(wasmStoreNew()); return 1; })()";
+static const char *TF_WASM_FORK_INVALID_SRC =
+    "(function(){ try { self.__tfWasmInst(self.__tfWasmBad); return -1; }"
+    " catch (e) { return e.name === 'CompileError' ? 7 : -2; } })()";
+static const char *TF_WASM_FORK_VALID_SRC =
+    "(function(){ return typeof self.__tfWasmInst(self.__tfWasmGood) === 'number' ? 7 : -1; })()";
+static const char *TF_WASM_FORK_TEARDOWN_SRC =
+    "(function(){ delete self.__tfWasmBad; delete self.__tfWasmGood; delete self.__tfWasmInst; return 1; })()";
+
+/* Resume `flow` to completion and release it, answering its value. */
+static int32_t tf_wasm_fork_finish(JSContext *ctx, JSValue *flow)
+{
+    JSValue res = JS_UNDEFINED;
+    int32_t got = -3;
+    int r;
+
+    while ((r = JS_FlowResume(ctx, flow, &res)) != 0)
+        CHECK(r != JS_FLOW_DETACHED, "the WebAssembly fork fixture's flow detached; it holds no top-level await");
+    CHECK(!JS_IsException(res), "the WebAssembly fork fixture's program threw");
+    JS_ToInt32(ctx, &got, res);
+    JS_FreeValue(ctx, res);
+    JS_FlowFree(ctx, flow);
+    return got;
+}
+
+/* Fork `src`'s flow at its rest `at` and finish both arms, the clone first when `clone_first`. */
+static void tf_wasm_fork_at(JSContext *ctx, const char *src, int at, bool clone_first)
+{
+    JSValue *flow = JS_FlowNew(ctx, src, strlen(src), "wasm-fork", 0), *arm;
+    JSValue res = JS_UNDEFINED;
+    int32_t got[2];
+    int k;
+
+    CHECK(flow != NULL, "the WebAssembly fork fixture could not create a flow");
+    for (k = 0; k < at; k++) {
+        int r = JS_FlowResume(ctx, flow, &res);
+
+        CHECKF(r != 0 && r != JS_FLOW_DETACHED, "the WebAssembly fork fixture's flow ended at rest %d, before the "
+               "rest %d its unforked run reaches", k, at);
+    }
+    arm = JS_FlowClone(ctx, flow);
+    CHECK(arm != NULL, "a flow parked inside a WebAssembly instantiation could not be cloned");
+    got[0] = tf_wasm_fork_finish(ctx, clone_first ? arm : flow);
+    got[1] = tf_wasm_fork_finish(ctx, clone_first ? flow : arm);
+    CHECKF(got[0] == 7 && got[1] == 7, "a WebAssembly instantiation forked at rest %d answered %d in the arm that "
+           "ran first (the %s) and %d in the other; the unforked flow answers 7", at, (int)got[0],
+           clone_first ? "clone" : "original", (int)got[1]);
+}
+
+/* The first rest of `src`'s flow that stands inside a step machine, counted from 1. */
+static int tf_wasm_fork_first_machine_rest(JSContext *ctx, const char *src)
+{
+    JSValue *flow = JS_FlowNew(ctx, src, strlen(src), "wasm-fork", 0);
+    JSValue res = JS_UNDEFINED;
+    int n = 0;
+
+    CHECK(flow != NULL, "the WebAssembly fork fixture could not create a flow");
+    do {
+        CHECK(JS_FlowResume(ctx, flow, &res) != 0, "the WebAssembly fork fixture's flow ended without resting "
+                                                   "inside its instantiation");
+        n++;
+    } while (JS_StepMachineCount(JS_GetRuntime(ctx)) == 0);
+    CHECK(tf_wasm_fork_finish(ctx, flow) == 7, "the WebAssembly fork fixture's probe flow did not answer");
+    return n;
+}
+
+TF_UNIT void wasm_compile_fork_selftest(JSContext *ctx)
+{
+    int total = 0, mach = 0, at, first;
+
+    CHECK(tf_step_diff_run(ctx, TF_WASM_FORK_SETUP_SRC, "wasm-fork-setup", &TF_DIFF_DECLINE, &total, &mach) == 1,
+          "the WebAssembly fork fixture's bytes and store could not be made");
+    CHECK(tf_step_diff_run(ctx, TF_WASM_FORK_INVALID_SRC, "wasm-fork", &TF_DIFF_FORCE, &total, &mach) == 7,
+          "a WebAssembly module naming a type it does not define was not refused with a CompileError");
+    CHECKF(mach > 0 && total > 30, "the WebAssembly compile rested %d times, %d of them inside a step machine; its "
+           "copy, decode and validation each rest a step", total, mach);
+    for (at = 1; at < total; at++) {
+        tf_wasm_fork_at(ctx, TF_WASM_FORK_INVALID_SRC, at, false);
+        tf_wasm_fork_at(ctx, TF_WASM_FORK_INVALID_SRC, at, true);
+    }
+    /* The valid module's arms go on to instantiate into the one store, so it is forked inside its decode alone:
+       the copy is one step, the stage change another, and the decode of these sections takes more than ten. */
+    first = tf_wasm_fork_first_machine_rest(ctx, TF_WASM_FORK_VALID_SRC);
+    tf_wasm_fork_at(ctx, TF_WASM_FORK_VALID_SRC, first + 3, false);
+    tf_wasm_fork_at(ctx, TF_WASM_FORK_VALID_SRC, first + 10, true);
+    CHECK(tf_step_diff_run(ctx, TF_WASM_FORK_TEARDOWN_SRC, "wasm-fork-teardown", &TF_DIFF_DECLINE, &total, &mach)
+              == 1, "the WebAssembly fork fixture's globals could not be removed");
+    JS_SetFlowControlHooks(&TF_DIFF_NONE);
+}
+
 /* DOM §4.2.10's live collections rest per node: the same reads of 300 detached elements answer the same under a
    schedule declining every offer and one taking every offer, and the walks are charged the same nodes under both,
    so a resume continues a parked walk rather than re-running it. `k3` is a `<b>`, so namedItem over the `<i>`
@@ -45936,6 +46035,8 @@ int main(int argc, char **argv) {
     insert_walk_selftest(ctx);
     /* DOM §4.5 adopt's step 3 walk is charged per node; needs the document. */
     adopt_walk_selftest(ctx);
+    /* JS API §5.1's compile is shared by a fork's two arms; needs the fixture's WebAssembly natives. */
+    wasm_compile_fork_selftest(ctx);
     /* HTML §4.12.5.1.16's ROUND TRIP, immediately after the union arms and for the same two reasons: it needs
        a REALM and the DOCUMENT, which the block above establishes, and it must stand BEFORE the time-travel
        hooks below so its canvas and its bitmap belong to the pre-boot baseline rather than to whichever flow

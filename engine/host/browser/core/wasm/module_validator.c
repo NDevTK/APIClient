@@ -608,7 +608,9 @@ WasmValidateStatus wasm_module_validator_step(WasmModuleValidator *v)
 {
     WasmValidateStatus st;
 
-    DCHECK(v != NULL && v->phase != PH_FINISHED, "a WebAssembly validation was stepped after it answered");
+    DCHECK(v != NULL, "a WebAssembly validation was stepped with no validator");
+    /* Checked in every build: a finished validation has no phase for the dispatch below to take. */
+    CHECK(v->phase != PH_FINISHED, "a WebAssembly validation was stepped after it answered");
     switch (v->phase) {
     case PH_ALLOC:
         st = allocate(v);

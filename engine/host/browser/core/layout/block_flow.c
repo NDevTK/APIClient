@@ -1106,10 +1106,14 @@ bool block_flow_establishes_inline_context(lxb_dom_element_t *el)
 
 #if APICLIENT_DEV
     if (layout_job_rests_innermost()) {
+        /* The peek answers into its own scratch: the value returned is the one the ask below writes. */
+        bool peeked = false;
+        bool answered = !block_flow_display_is_block_container(css_computed_display(el)) ||
+                        flow_placement_inline_context_peek(el, &peeked);
         char nbuf[160];
 
-        DCHECKF(!block_flow_display_is_block_container(css_computed_display(el)) ||
-                    flow_placement_inline_context_peek(el, &establishes),
+        (void)peeked;
+        DCHECKF(answered,
                 "%s: its inline formatting context condition was read under a resting drive with no answered ask "
                 "before it, so this read would scan its content inside one activation; the body whose read "
                 "reaches here asks `block_flow_establishes_inline_context_ask` first, as "

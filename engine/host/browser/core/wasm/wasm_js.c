@@ -33,6 +33,7 @@ typedef struct {
     JSStepHdr hdr;
     bool begun;                  /* the JSValues below hold values (a step state arrives zeroed) */
     JSValue record;              /* owned: the module record, compiled from INST_IMPORTS */
+    size_t at;                   /* this machine's cursor over the record's compile (module_record.h) */
     JSValue over;                /* owned: INST_CHOOSE's outcome, an environment unknown */
     JSValue result;              /* owned: the instance's store address */
     WasmInstantiation run;       /* from INST_INSTANTIATE */
@@ -143,10 +144,10 @@ static int instantiate_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         JS_FreeValue(ctx, cb_result);
         b = JS_GetUint8Array(ctx, &n, step_arg(&s->hdr, 0));
         if (b == NULL && JS_HasException(ctx)) return JS_STEP_ABRUPT;
-        if (JS_IsUndefined(s->record)) s->record = wasm_module_record_new(ctx, n, store->registry, s);
+        if (JS_IsUndefined(s->record)) s->record = wasm_module_record_new(ctx, n, store->registry);
         r = wasm_module_record_of(s->record);
-        if (!wasm_module_record_copied(r)) {
-            wasm_module_record_step(r, s, b, n);
+        if (!wasm_module_record_copied(r, s->at)) {
+            wasm_module_record_step(r, &s->at, b, n);
             return JS_STEP_YIELD;
         }
         s->hdr.stage = INST_DECODE;
@@ -156,9 +157,9 @@ static int instantiate_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     case INST_VALIDATE:
         JS_FreeValue(ctx, cb_result);
         r = wasm_module_record_of(s->record);
-        c = wasm_module_record_step(r, s, NULL, r->n);
+        c = wasm_module_record_step(r, &s->at, NULL, r->n);
         if (c == WASM_COMPILE_MORE) {
-            s->hdr.stage = r->decoded == WASM_DECODE_DONE ? INST_VALIDATE : INST_DECODE;
+            s->hdr.stage = wasm_module_record_decoded(r, s->at) ? INST_VALIDATE : INST_DECODE;
             return JS_STEP_YIELD;
         }
         if (c != WASM_COMPILE_DONE) {
