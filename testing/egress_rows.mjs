@@ -11,6 +11,8 @@
 // from that send's record, and the server's count does not move.
 // Fourth group, the address class: the engine's word for whether the address is bytes the page computed or its
 // unknown's example is shown on the vector and decides nothing by default; an address with no bytes never leaves.
+// Fifth group, the method: the page's own non-GET request on its unforced run is sent with the method, header
+// list and body the page composed; no widening sends one, and a redirect rewrites it as Fetch §4.5 says.
 //
 //   node testing/egress_rows.mjs
 "use strict";
@@ -21,10 +23,23 @@ import { NAVIGABLE_NOTICE } from '../engine/noticegen.mjs';
 
 const hits = new Map();
 const count = (method, path) => hits.get(method + ' ' + path) || 0;
-const server = createServer((req, res) => {
+/* The request bodies each "METHOD path" arrived with, in arrival order. */
+const bodies = new Map();
+const bodiesOf = (method, path) => (bodies.get(method + ' ' + path) || []).join('|');
+const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://x').pathname;
   const key = req.method + ' ' + path;
   hits.set(key, (hits.get(key) || 0) + 1);
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  bodies.set(key, (bodies.get(key) || []).concat(Buffer.concat(chunks).toString('utf8') + '<' +
+                                                  (req.headers['content-type'] || '') + '>'));
+  if (path === '/post-303' || path === '/post-307') {
+    res.writeHead(Number(path.slice(-3)), { Location: path === '/post-303' ? '/post-landed' : '/post-kept',
+                                            'Cache-Control': 'no-store' });
+    res.end();
+    return;
+  }
   if (path === '/hop') {
     res.writeHead(302, { Location: '/landed', 'Cache-Control': 'no-store' });
     res.end();
@@ -58,10 +73,11 @@ const docOf = (page, reach, driven = 'undriven', pinned = 'unpinned') =>
 /* A page request as engine/trusted.mjs's workFetch states it, from the document `docKey` at `page`. */
 async function ask(page, url, docKey, { destination = '', mode = 'cors', provenance = 'derived', pinned = 'unpinned',
                                         driven = 'undriven', reach = 'observed', headers,
-                                        address = 'concrete' } = {}) {
+                                        address = 'concrete', method, body } = {}) {
   const origin = new URL(page).origin;
   return ZONE.safeFetch(url, {
     pageOrigin: origin, destination, mode, provenance, pinned, driven, address,
+    ...(method === undefined ? {} : { method, body }),
     actor: 'page', credentialed: false, credentials: 'same-origin', useCorsPreflight: false, headers,
     doc: docOf(page, reach),
     identity: await ZONE.pageRequestIdentity(origin, page, docKey, url, 'same-origin', mode,
@@ -93,6 +109,7 @@ const hows = (r) => Array.isArray(r.egress) ? r.egress.map((e) => e.how).join(',
 const arm = (e) => !e || typeof e !== 'object' ? 'no-entry' : e.admittedBy === null ? 'none' : e.admittedBy.kind;
 
 const PAGE_A = `${A}/page`, PAGE_W = `${W}/page`;
+const FORM = [['Content-Type', 'application/x-www-form-urlencoded']];
 const ROWS = [
   { label: 'CONTROL: an unforced page request is sent, and its send records the vector and the admitting arm',
     run: async () => {
@@ -223,6 +240,52 @@ const ROWS = [
                                                  'strict-origin-when-cross-origin', PAGE_A) })
         .then(() => 'answered', () => 'aborted');
       return [['GET /unclassed', count('GET', '/unclassed'), 0], ['the ask', r, 'aborted']]; } },
+  { label: 'an unforced POST is sent once with the method, content type and body the page composed', run: async () => {
+      const r = await ask(PAGE_A, `${A}/post-own`, 'engine:post', { method: 'POST', body: 'a=1', headers: FORM })
+        .catch(() => null);
+      const e = r === null ? null : only(r);
+      return [['POST /post-own', count('POST', '/post-own'), 1], ['GET /post-own', count('GET', '/post-own'), 0],
+              ['what arrived', bodiesOf('POST', '/post-own'), 'a=1<application/x-www-form-urlencoded>'],
+              ['admitted by', arm(e), 'default'], ['the method on the vector', e && e.vector && e.vector.method, 'POST'],
+              ['the reply', r && text(r), 'POST /post-own #1']]; } },
+  { label: 'two POSTs to one address with different bodies are two sends; an identical third is answered from the record',
+    run: async () => {
+      const post = (body) => ask(PAGE_A, `${A}/post-two`, 'engine:post', { method: 'POST', body, headers: FORM })
+        .then(hows, () => 'aborted');
+      const made = [await post('a=1'), await post('a=2'), await post('a=1')].join(' ');
+      return [['POST /post-two', count('POST', '/post-two'), 2],
+              ['what arrived', bodiesOf('POST', '/post-two'),
+               'a=1<application/x-www-form-urlencoded>|a=2<application/x-www-form-urlencoded>'],
+              ['how each ask was answered', made, 'sent sent answered-locally']]; } },
+  { label: 'no widening sends a non-GET: a forced POST is refused at an unwidened origin and at a widened one',
+    run: async () => {
+      const refused = (page, url, over) => ask(page, url, 'engine:post', Object.assign(
+        { method: 'POST', body: 'a=1', headers: FORM, provenance: 'forced' }, over)).then(refusalOf, () => 'aborted');
+      const own = await refused(PAGE_A, `${A}/post-forced`);
+      ZONE.safeFetchWiden(W);
+      const wide = await refused(PAGE_W, `${W}/post-forced`);
+      const wideGet = refusalOf(await ask(PAGE_W, `${W}/get-forced`, 'engine:post', { provenance: 'forced' }));
+      ZONE.safeFetchUnwiden(W);
+      return [['POST /post-forced', count('POST', '/post-forced'), 0],
+              ['unwidened', own, 'blocked-signal:provenance=forced'], ['widened', wide, 'blocked-signal:method=POST'],
+              ['the control, a forced GET at the widened origin', wideGet, 'sent'],
+              ['no grant can name it', ZONE.safeFetchSignalUsable('method', 'POST'), 'default-only']]; } },
+  { label: 'a forced POST identical to one the unforced run sent is answered from that send\'s record', run: async () => {
+      const r = await ask(PAGE_A, `${A}/post-own`, 'engine:post', { method: 'POST', body: 'a=1', headers: FORM,
+                                                                     provenance: 'forced' }).catch(() => null);
+      const other = await ask(PAGE_A, `${A}/post-own`, 'engine:post', { method: 'POST', body: 'a=9', headers: FORM,
+                                                                         provenance: 'forced' }).then(refusalOf, () => 'aborted');
+      return [['POST /post-own', count('POST', '/post-own'), 1], ['how', r === null ? 'aborted' : hows(r), 'answered-locally'],
+              ['the reply', r && text(r), 'POST /post-own #1'],
+              ['another body is another request', other, 'blocked-signal:provenance=forced']]; } },
+  { label: 'a redirect rewrites the method as Fetch §4.5 says: 303 to a GET with no body, 307 unchanged', run: async () => {
+      const a = await ask(PAGE_A, `${A}/post-303`, 'engine:post', { method: 'POST', body: 'a=3', headers: FORM })
+        .then(text, () => 'aborted');
+      const b = await ask(PAGE_A, `${A}/post-307`, 'engine:post', { method: 'POST', body: 'a=7', headers: FORM })
+        .then(text, () => 'aborted');
+      return [['after the 303', a, 'GET /post-landed #1'], ['what the 303\'s target received', bodiesOf('GET', '/post-landed'), '<>'],
+              ['after the 307', b, 'POST /post-kept #1'],
+              ['what the 307\'s target received', bodiesOf('POST', '/post-kept'), 'a=7<application/x-www-form-urlencoded>']]; } },
   { label: 'the zone counts its sends by how each left and what admitted it', run: async () => {
       const c = typeof ZONE.safeFetchEgressCensus === 'function' ? ZONE.safeFetchEgressCensus() : null;
       const sum = c === null ? -1 : Object.values(c).reduce((a, n) => a + n, 0);
@@ -231,10 +294,12 @@ const ROWS = [
          driven.js. Twice's second ask was answered locally. The third group adds served and served-h sent by
          a default arm, tool-made sent widened, three asks not sent and one served from the record. The fourth
          adds ex-own sent by a default arm and the control's second ask answered locally, and two asks not sent. */
-      return [['entries counted', sum, 30], ['sent by a default arm', c && c['sent default'], 12],
-              ['sent at a widened origin', c && c['sent widened'], 3], ['not sent', c && c['not-sent none'], 12],
-              ['answered locally', c && c['answered-locally default'], 2],
-              ['served from the record', c && c['answered-locally record'], 1]]; } },
+      /* The fifth group adds seven sent by a default arm (post-own, post-two twice, and each redirect's two
+         hops), one sent widened, one answered locally, three asks not sent and one served from the record. */
+      return [['entries counted', sum, 43], ['sent by a default arm', c && c['sent default'], 19],
+              ['sent at a widened origin', c && c['sent widened'], 4], ['not sent', c && c['not-sent none'], 15],
+              ['answered locally', c && c['answered-locally default'], 3],
+              ['served from the record', c && c['answered-locally record'], 2]]; } },
 ];
 
 let bad = 0;
