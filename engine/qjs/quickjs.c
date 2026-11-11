@@ -65311,7 +65311,8 @@ typedef struct JSCodegen {
     struct list_head *pre;     /* the next definition whose prologue runs, &order once all have */
     bool root_pre_done;
     JSFunctionDef *pre_fd;     /* the definition whose prologue is in flight, NULL between two */
-    int pre_k;                 /* ...and its unit cursor (js_create_function_pre) */
+    int pre_k;                 /* ...and its unit cursor over the scope walks (js_create_function_pre) */
+    int pre_m;                 /* ...and over the module walks, -1 until the scope walks and the eval closure ran */
     bool bodies;               /* every prologue has run */
     bool failed;
     JSFunctionDef *cur;        /* the definition whose passes are in flight, NULL between two */
@@ -66072,7 +66073,7 @@ static __exception int resolve_variables(JSContext *ctx, JSFunctionDef *s, JSCod
                     if (ud->scope_level != scope)
                         continue;
                     if (ud->value_is_global) {
-                        /* the module binding add_module_variables made for this global var: its var_idx IS the
+                        /* the module binding the prologue's module walk made for this global var: its var_idx IS the
                            global-var index, which is how the export table and every read of the name reach it */
                         int cv_i;
                         value_op = OP_get_var_ref;
@@ -66085,7 +66086,7 @@ static __exception int resolve_variables(JSContext *ctx, JSFunctionDef *s, JSCod
                             }
                         }
                         DCHECK(value_idx >= 0,
-                               "a program-level `using` binding has no module closure var — add_module_variables did not run");
+                               "a program-level `using` binding has no module closure var — the prologue's module walk did not run");
                     }
                     /* ONE shape for sync and `await using`; the await is the only difference. The sync form used to
                        have its own: OP_using_dispose caught the dispose method's throw INSIDE the opcode and merged
@@ -67813,40 +67814,6 @@ static __exception int compute_stack_size(JSContext *ctx, JSFunctionDef *fd, JSC
     return -1;
 }
 
-static int add_module_variables(JSContext *ctx, JSFunctionDef *fd)
-{
-    int i, idx;
-    JSModuleDef *m = fd->module;
-    JSExportEntry *me;
-    JSGlobalVar *hf;
-
-    /* The imported global variables were added as closure variables
-       in js_parse_import(). We add here the module global
-       variables. */
-
-    for(i = 0; i < fd->global_var_count; i++) {
-        hf = &fd->global_vars[i];
-        if (add_closure_var(ctx, fd, JS_CLOSURE_MODULE_DECL, i, hf->var_name, hf->is_const,
-                            hf->is_lexical, JS_VAR_NORMAL) < 0)
-            return -1;
-    }
-
-    /* resolve the variable names of the local exports */
-    for(i = 0; i < m->export_entries_count; i++) {
-        me = &m->export_entries[i];
-        if (me->export_type == JS_EXPORT_TYPE_LOCAL) {
-            idx = find_closure_var(ctx, fd, me->local_name);
-            if (idx < 0) {
-                // XXX: add_module_variables() should take JSParseState *s and use js_parse_error_atom
-                JS_ThrowSyntaxErrorAtom(ctx, "exported variable '%s' does not exist",
-                                        me->local_name);
-                return -1;
-            }
-            me->u.local.var_idx = idx;
-        }
-    }
-    return 0;
-}
 
 /* create a function object from a function definition. The function
    definition is freed. All the child functions are also created. It
@@ -67858,20 +67825,30 @@ static int add_module_variables(JSContext *ctx, JSFunctionDef *fd)
 /* The prologue of `fd`: its scope linkage, one unit per scope and variable on the cursor cg->pre_k across four
    walks (clear each scope's first variable, the argument scope's end marker as one unit, link each variable
    into its scope, let an empty scope inherit its parent's chain, link each block variable to the enclosing
-   scope's), charged and resting between units as a pass does; 0 done, -1 failed, CG_RESTED parked at the
-   cursor. Named residual. Not covered: add_eval_variables and add_module_variables run whole after the walks
-   and charge nothing. Next diff builds: each as a fifth and sixth walk on the cursor, charged per closure or
-   module variable. Absence shows as: a module with many top-level bindings whose compile stint's host CPU is
-   large against the work it charged. */
+   scope's); then a direct eval's closure as one unit; then, for a module, one unit per module global (its
+   closure variable) and per export entry (resolving a local export's variable) on cg->pre_m. Each unit is
+   charged and the prologue rests between units as a pass does; 0 done, -1 failed, CG_RESTED parked at the
+   cursor. Named residual. Not covered: add_eval_variables runs whole as one unit, charged one. Next diff
+   builds: its capture and enclosing-scope walks on the cursor, charged per variable. Absence shows as: a
+   compile stint whose host CPU is large against the work it charged, at a function with a direct eval inside
+   many enclosing variables. */
 static int js_create_function_pre(JSContext *ctx, JSFunctionDef *fd, JSCodegen *cg)
 {
     const int n1 = fd->scope_count, n2 = n1 + 1 + fd->var_count;
     const int n3 = n2 + (fd->scope_count > 2 ? fd->scope_count - 2 : 0), n4 = n3 + fd->var_count;
-    int k, scope;
+    JSModuleDef *m = fd->module;
+    const int ng = m ? fd->global_var_count : 0, nm = ng + (m ? m->export_entries_count : 0);
+    int k, scope, idx;
     JSVarDef *vd;
+    JSExportEntry *me;
 
-    DCHECK(cg->pre_fd == fd && cg->pre_k >= 0 && cg->pre_k <= n4,
+    /* The eval unit adds variables, so n2 and n4 move once it has run and the scope walks are not re-entered. */
+    DCHECK(cg->pre_fd == fd && cg->pre_k >= 0 && (cg->pre_m >= 0 || cg->pre_k <= n4) && cg->pre_m <= nm,
            "a prologue was stepped for a definition that is not the one in flight, or past its last unit");
+    if (cg->pre_m >= 0) {
+        cg->from = cg->pre_m;
+        goto module_walks;
+    }
     cg->from = cg->pre_k;
     for (k = cg->pre_k; k < n4; k++) {
         if (js_codegen_rest(cg, k)) {
@@ -67909,15 +67886,45 @@ static int js_create_function_pre(JSContext *ctx, JSFunctionDef *fd, JSCodegen *
        so it is necessary to create the closure variables before any
        other variable lookup is done. */
 #ifndef QJS_DISABLE_PARSER
-    if (fd->has_eval_call)
+    if (fd->has_eval_call) {
         add_eval_variables(ctx, fd);
-#endif // QJS_DISABLE_PARSER
-
-    /* add the module global variables in the closure */
-    if (fd->module) {
-        if (add_module_variables(ctx, fd))
-            return -1;
+        js_codegen_charge(1);
     }
+#endif // QJS_DISABLE_PARSER
+    cg->pre_m = 0;
+    /* This stint has run a unit, so the module walks may rest before their first. */
+    cg->from = -1;
+
+ module_walks:
+    /* The module's global variables become its closure variables (the imported ones were added by
+       js_parse_import), then each local export resolves its variable among them. */
+    for (k = cg->pre_m; k < nm; k++) {
+        if (js_codegen_rest(cg, k)) {
+            cg->pre_m = k;
+            return CG_RESTED;
+        }
+        if (k < ng) {
+            js_codegen_charge(1);
+            if (add_closure_var(ctx, fd, JS_CLOSURE_MODULE_DECL, k, fd->global_vars[k].var_name,
+                                fd->global_vars[k].is_const, fd->global_vars[k].is_lexical, JS_VAR_NORMAL) < 0)
+                return -1;
+            continue;
+        }
+        me = &m->export_entries[k - ng];
+        if (me->export_type != JS_EXPORT_TYPE_LOCAL) {
+            js_codegen_charge(1);
+            continue;
+        }
+        idx = find_closure_var(ctx, fd, me->local_name);
+        /* The lookup scans the closure variables up to its answer. */
+        js_codegen_charge(1 + (idx < 0 ? fd->closure_var_count : idx));
+        if (idx < 0) {
+            JS_ThrowSyntaxErrorAtom(ctx, "exported variable '%s' does not exist", me->local_name);
+            return -1;
+        }
+        me->u.local.var_idx = idx;
+    }
+    cg->pre_m = nm;
     return 0;
 }
 
@@ -68317,6 +68324,7 @@ static int js_create_function_step(JSContext *ctx, JSCodegen *cg)
             }
             cg->pre_fd = cur;
             cg->pre_k = 0;
+            cg->pre_m = -1;
         }
         /* A failed walk runs no prologue, and one a drop abandoned mid-way owns nothing to release. */
         r = cg->failed ? 0 : js_create_function_pre(ctx, cg->pre_fd, cg);
