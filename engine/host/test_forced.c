@@ -27269,29 +27269,29 @@ TF_UNIT void probes_evsrc(const char *js, Probe *tab, int *n) {
    own fields, its two TypeErrors, and unknown input compressed to an image of it. */
 TF_UNIT void probes_compress(const char *js, Probe *tab, int *n) {
     const char *f_why = NULL; int f_tt = 1;
-    fold_row(&f_tt, &f_why, param_value_is(js, "/api/cs-gzip", "w", "csGZ"),
-             "no /api/cs-gzip?w=csGZ record: a \"gzip\" CompressionStream did not answer RFC 1952's ID1, ID2 and CM "
+    fold_row(&f_tt, &f_why, param_value_is(js, "/api/cmz-gzip", "w", "cmzGZ"),
+             "no /api/cmz-gzip?w=cmzGZ record: a \"gzip\" CompressionStream did not answer RFC 1952's ID1, ID2 and CM "
              "and the input's CRC32 and ISIZE");
-    fold_row(&f_tt, &f_why, param_value_is(js, "/api/cs-deflate", "w", "csZL"),
-             "no /api/cs-deflate?w=csZL record: a \"deflate\" CompressionStream did not answer RFC 1950's CMF/FLG "
+    fold_row(&f_tt, &f_why, param_value_is(js, "/api/cmz-deflate", "w", "cmzZL"),
+             "no /api/cmz-deflate?w=cmzZL record: a \"deflate\" CompressionStream did not answer RFC 1950's CMF/FLG "
              "check and the input's ADLER32");
-    fold_row(&f_tt, &f_why, !param_value_is(js, "/api/cs-gzip", "w", "csREF"),
-             "a /api/cs-gzip?w=csREF record: CompressionStream is not defined on some flow");
+    fold_row(&f_tt, &f_why, !param_value_is(js, "/api/cmz-gzip", "w", "cmzREF"),
+             "a /api/cmz-gzip?w=cmzREF record: CompressionStream is not defined on some flow");
     const char *e_why = NULL; int e_tt = 1;
-    fold_row(&e_tt, &e_why, param_value_is(js, "/api/cs-format", "w", "csTE"),
-             "no /api/cs-format?w=csTE record: a format §4's CompressionFormat does not list was not Web IDL's "
+    fold_row(&e_tt, &e_why, param_value_is(js, "/api/cmz-format", "w", "cmzTE"),
+             "no /api/cmz-format?w=cmzTE record: a format §4's CompressionFormat does not list was not Web IDL's "
              "TypeError");
-    fold_row(&e_tt, &e_why, param_value_is(js, "/api/cs-chunk", "w", "csTE"),
-             "no /api/cs-chunk?w=csTE record: a chunk that is not a BufferSource did not reject the write with "
+    fold_row(&e_tt, &e_why, param_value_is(js, "/api/cmz-chunk", "w", "cmzTE"),
+             "no /api/cmz-chunk?w=cmzTE record: a chunk that is not a BufferSource did not reject the write with "
              "§4 compress and enqueue a chunk step 1's TypeError");
     const char *u_why = NULL; int u_tt = 1;
-    fold_row(&u_tt, &u_why, param_value_is(js, "/api/cs-unk", "w", "csUNK"),
-             "no /api/cs-unk?w=csUNK record: unknown input bytes did not compress to an image whose example holds "
+    fold_row(&u_tt, &u_why, param_value_is(js, "/api/cmz-unk", "w", "cmzUNK"),
+             "no /api/cmz-unk?w=cmzUNK record: unknown input bytes did not compress to an image whose example holds "
              "RFC 1952's header");
     const Probe rows[] = {
-        { "cs-formats", f_tt, "/api/cs-gzip", SESS_EXPLORE, f_why },
-        { "cs-errors", e_tt, "/api/cs-format", SESS_EXPLORE, e_why },
-        { "cs-unknown", u_tt, "/api/cs-unk", SESS_EXPLORE, u_why },
+        { "cmz-formats", f_tt, "/api/cmz-gzip", SESS_EXPLORE, f_why },
+        { "cmz-errors", e_tt, "/api/cmz-format", SESS_EXPLORE, e_why },
+        { "cmz-unknown", u_tt, "/api/cmz-unk", SESS_EXPLORE, u_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
