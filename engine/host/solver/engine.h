@@ -1233,6 +1233,11 @@ void engine_step_unit_runs(EngineStepUnitRuns *out);
    unwritten record is one whose flow side equals its baseline. */
 #define ENGINE_FLOOR_REC_JSON_MAX 8192
 void engine_floor_rec_json(char *buf, size_t cap);
+/* The same split now, over every frozen chain a member stands on (a segment once); returns their KiB. */
+long engine_chain_rec_json(char *buf, size_t cap);
+/* The record entries freezes dropped as reads (cow.h's cow_rec_unwritten_dropped), by owner class; returns the
+   entries and sets `kib` to their blocks' KiB. */
+long engine_rec_dropped_json(char *buf, size_t cap, long *kib);
 
 /* Which arm took the step of a member that had a runnable task on its own queue: the two arms above the task
  * arm that can be reached with one, and the task arm's three reasons. Read them against the `jobsReadyTask` gauge

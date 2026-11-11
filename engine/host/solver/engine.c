@@ -13058,31 +13058,54 @@ static void engine_floor_census(void) {
     }
 }
 
-/* The component records under written stubs' chains at the last floor, by owner class, as
-   `"Class":[records,KiB,unwrittenRecords,unwrittenKiB]` (cow.h's CowRecClass; `other` past its class rows). */
-void engine_floor_rec_json(char *buf, size_t cap) {
+/* `acc`'s component records by owner class, as `"Class":[records,KiB,unwrittenRecords,unwrittenKiB]` (cow.h's
+   CowRecClass; `other` past its class rows); returns the records counted. */
+static long engine_rec_classes_json(const CowChainBytes *acc, char *buf, size_t cap) {
     JSRuntime *rt = JS_GetRuntime(g_sess_ctx);
     size_t hi = 0;
+    long n = 0;
 
-    DCHECK(buf != NULL && cap > 2, "the floor's record census was composed into nothing");
+    DCHECK(buf != NULL && cap > 2, "a record census was composed into nothing");
     buf[hi++] = '{';
-    for (int k = 0; k <= g_floor.stub.n_cls; k++) {
-        const CowRecClass *c = k < g_floor.stub.n_cls ? &g_floor.stub.cls[k] : &g_floor.stub.rec_other;
-        JSAtom a = k < g_floor.stub.n_cls ? JS_GetClassName(rt, c->cls) : JS_ATOM_NULL;
+    for (int k = 0; k <= acc->n_cls; k++) {
+        const CowRecClass *c = k < acc->n_cls ? &acc->cls[k] : &acc->rec_other;
+        JSAtom a = k < acc->n_cls ? JS_GetClassName(rt, c->cls) : JS_ATOM_NULL;
         const char *name = a != JS_ATOM_NULL ? JS_AtomToCString(g_sess_ctx, a) : NULL;
         int w;
 
-        if (k == g_floor.stub.n_cls && c->n == 0) break;
+        if (k == acc->n_cls && c->n == 0) break;
         w = snprintf(buf + hi, cap - hi, "%s\"%s\":[%ld,%ld,%ld,%ld]", hi > 1 ? "," : "",
-                     name ? name : (k < g_floor.stub.n_cls ? "(unnamed)" : "other"),
+                     name ? name : (k < acc->n_cls ? "(unnamed)" : "other"),
                      c->n, c->bytes / 1024, c->same_n, c->same_bytes / 1024);
         if (name) JS_FreeCString(g_sess_ctx, name);
         if (a != JS_ATOM_NULL) JS_FreeAtomRT(rt, a);
-        DCHECKF(w > 0 && (size_t)w < cap - hi, "the floor's record census overran its %zu bytes at row %d", cap, k);
+        DCHECKF(w > 0 && (size_t)w < cap - hi, "a record census overran its %zu bytes at row %d", cap, k);
         hi += (size_t)w;
+        n += c->n;
     }
     buf[hi++] = '}';
     buf[hi] = 0;
+    return n;
+}
+
+void engine_floor_rec_json(char *buf, size_t cap) { engine_rec_classes_json(&g_floor.stub, buf, cap); }
+
+long engine_rec_dropped_json(char *buf, size_t cap, long *kib) {
+    const CowChainBytes *d = cow_rec_unwritten_dropped();
+
+    *kib = d->rec / 1024;
+    return engine_rec_classes_json(d, buf, cap);
+}
+
+long engine_chain_rec_json(char *buf, size_t cap) {
+    static CowChainBytes acc;
+
+    memset(&acc, 0, sizeof acc);
+    cow_chain_split_begin();
+    for (int m = 0; m < flow_count(); m++)
+        if (flow_at(m)->delta) cow_chain_split_resident(flow_at(m)->delta, &acc);
+    engine_rec_classes_json(&acc, buf, cap);
+    return acc.rec / 1024;
 }
 
 /* The pager's two disk-tier moves pick a written stub by what it still holds here: its write's bytes, or a frozen

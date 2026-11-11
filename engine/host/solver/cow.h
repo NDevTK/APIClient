@@ -544,6 +544,10 @@ typedef struct {
     int n_cls;
     CowRecClass cls[COW_SPLIT_REC_CLASSES], rec_other;
 } CowChainBytes;
+/* The component record entries freezes dropped because their flow side equals their baseline, a read a frozen
+   segment does not keep (cow_delta_fork): their blocks' bytes in `rec`, and by owner class each class's entries
+   and bytes. Lifetime counts. */
+const CowChainBytes *cow_rec_unwritten_dropped(void);
 void cow_chain_split_begin(void);
 void cow_chain_split_resident(const CowDelta *d, CowChainBytes *acc);
 void cow_chain_split_stub(const CowDelta *d, CowChainBytes *acc);

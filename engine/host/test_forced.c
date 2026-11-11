@@ -2340,6 +2340,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/recordless.h"
 #include "fixture/agenfork.h"
 #include "fixture/agendefer.h"
+#include "fixture/recread.h"
 #include "fixture/msgchain.h"
 #include "fixture/msgorigin.h"
 #include "fixture/libstate.h"
@@ -3206,6 +3207,7 @@ TF_DOCS[] = {
     { "recordless", HTML_RECORDLESS },
     { "agenfork", HTML_AGENFORK },
     { "agendefer", HTML_AGENDEFER },
+    { "recread", HTML_RECREAD },
     { "msgchain", HTML_MSGCHAIN },
     { "msgorigin", HTML_MSGORIGIN },
     { "libstate", HTML_LIBSTATE },
@@ -29099,6 +29101,26 @@ TF_UNIT void probes_agendefer(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `recread` document (fixture/recread.h): a freeze dropped the component records an arm only read
+   (`recUnwrittenDropped`), and each world still reads its own `q.x`, so the written record kept its entry. */
+static long tf_census_row(const char *js, const char *census, const char *key);
+TF_UNIT void probes_recread(const char *js, Probe *tab, int *n) {
+    const char *rr_why = NULL; int rr_tt = 1;
+
+    fold_row(&rr_tt, &rr_why, tf_census_row(js, "_cold", "recUnwrittenDropped") > 0,
+             "NOT ARMED: no freeze dropped a component record an arm only read (`recUnwrittenDropped`)");
+    fold_row(&rr_tt, &rr_why, param_value_is(js, "/api/rr/w", "x", "9"),
+             "NOT REACHED: the writing arm reported no /api/rr/w?x=9, so its record lost its write at a freeze");
+    fold_row(&rr_tt, &rr_why, param_value_is(js, "/api/rr/r", "x", "5") && !param_value_is(js, "/api/rr/r", "x", "9"),
+             "the reading arm did not report x=5 alone: the sibling's write reached a world that only read the record");
+    fold_row(&rr_tt, &rr_why, param_value_is(js, "/api/rr/r", "y", "4") && param_value_is(js, "/api/rr/w", "y", "4"),
+             "a world reported another `p.y` than 4: a record every arm only read came back changed");
+    const Probe rows[] = {
+        { "rec-read-dropped", rr_tt, "__tfRecReadRole", SESS_EXPLORE, rr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `recordless` document (fixture/recordless.h). */
 TF_UNIT void probes_recordless(const char *js, Probe *tab, int *n) {
     /* Both arms of a branch on an unknown inside four recordless callees: each pair is reached only if the
@@ -34197,6 +34219,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_recordless(js, probes, &np);
     probes_agenfork(js, probes, &np);
     probes_agendefer(js, probes, &np);
+    probes_recread(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_swapfn(js, probes, &np);
     probes_closureflag(js, probes, &np);

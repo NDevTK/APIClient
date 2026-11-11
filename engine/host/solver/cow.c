@@ -375,8 +375,7 @@ void cow_chain_stats(long *segs, long *entries) {
     if (entries) *entries = g_seg_entries_live;
 }
 /* The same two numbers in the unit the cold tier pages in — see cow.h. A frozen segment's entry array is
-   allocated at exactly its entry count (the head's array is handed over whole at the freeze), so the entries
-   are the array and there is no capacity slack to account for. */
+   at its entry count (the freeze shrinks the head's array to it), so the entries are the array. */
 long cow_chain_bytes(void) {
     return g_seg_live * (long)sizeof(CowSeg) + (g_seg_entries_live - g_seg_out_entries) * (long)sizeof(CowEntry);
 }
@@ -2148,6 +2147,7 @@ void cow_apply(JSContext *ctx, CowDelta *d) {
    of it on every switch. Freezing gives the same semantics for nothing: the head is unapplied first, which is
    what stashes each entry's branch-point value into `cur`, and THAT is the sibling's restore point — the same
    state the copy went and fetched, already sitting in the entries being handed over. */
+static int cow_entries_drop_unwritten(JSContext *ctx, CowEntry *e, int n);
 CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     CowDelta *d = cow_delta_new();
     CowSeg *seg;
@@ -2224,6 +2224,21 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
        parked delta's entries hold it already, and running this on one would read the heap of whatever flow IS
        applied and record another timeline's values as this delta's. */
     if (applied) cow_unapply_entries(ctx, src->e, src->n);
+    src->n = cow_entries_drop_unwritten(ctx, src->e, src->n);
+    if (src->n == 0) {                  /* every entry was a read: nothing is frozen */
+        free(src->e); src->e = NULL; src->cap = 0;
+        free(src->hash); src->hash = NULL; src->hash_cap = 0;
+        free(seg);
+        if (d->base) d->base->refcount++;
+        cow_swap_end();
+        return d;
+    }
+    /* At its entry count, so the array is its entries: the head grew by doubling. A shrink the allocator
+       refuses leaves the array as it was. */
+    if (src->n < src->cap) {
+        CowEntry *fit = realloc(src->e, (size_t)src->n * sizeof(CowEntry));
+        if (fit) { src->e = fit; src->cap = src->n; }
+    }
     seg->e = src->e; seg->n = src->n; seg->base = src->base; seg->refcount = 2;   /* running flow + sibling */
     seg->split = 0;
     seg->out = 0;
@@ -2249,6 +2264,41 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
 bool cow_delta_empty(const CowDelta *d) { return d == NULL || (d->n == 0 && d->base == NULL); }
 
 static void cow_entries_free(JSContext *ctx, CowEntry *e, int n);
+
+/* A component record is captured in its accessor, before the component knows whether it will write, so an entry
+   whose flow side equals its baseline byte for byte (owned values compared by identity) records a read: applying
+   or unapplying it puts back what the record already holds. A frozen segment keeps no such entry; the rest keep
+   their order. Asked once every entry's flow side is read back. Returns the entries kept. */
+static CowChainBytes g_rec_dropped;   /* lifetime: `rec` and each class's `n`, `bytes` */
+static CowRecClass *cow_split_rec_class(CowChainBytes *acc, uint32_t cls);
+static int cow_entries_drop_unwritten(JSContext *ctx, CowEntry *e, int n) {
+    int k = 0;
+
+    for (int i = 0; i < n; i++) {
+        if (e[i].is_state && e[i].state_kind == COW_STATE_HOST_REC) {
+            DCHECKF(e[i].a_base != NULL && e[i].a_cur != NULL,
+                    "a component record's entry reached a freeze without both halves (base %p, flow side %p) — "
+                    "the flow side is read back by the unapply before the freeze",
+                    e[i].a_base, e[i].a_cur);
+            if (!memcmp(e[i].a_base, e[i].a_cur, e[i].rec->size)) {
+                CowRecClass *c = cow_split_rec_class(&g_rec_dropped, JS_GetClassID(e[i].obj));
+                long b = (long)malloc_usable_size(e[i].a_base) + (long)malloc_usable_size(e[i].a_cur);
+
+                c->n++;
+                c->bytes += b;
+                c->same_n++;
+                c->same_bytes += b;
+                g_rec_dropped.rec += b;
+                cow_entries_free(ctx, &e[i], 1);
+                continue;
+            }
+        }
+        if (k != i) e[k] = e[i];
+        k++;
+    }
+    return k;
+}
+const CowChainBytes *cow_rec_unwritten_dropped(void) { return &g_rec_dropped; }
 
 /* What a segment on the disk tier gives back at its last unref: its entries' references, read a chunk at a time. */
 typedef struct { JSContext *ctx; } CowRelease;

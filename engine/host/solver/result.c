@@ -1268,6 +1268,8 @@ char *result_cold_json(void) {
     char runs[STEP_UNITS_JSON_MAX];
     /* …`recs`: the floor's component records by owner class (engine_floor_rec_json). */
     char recs[ENGINE_FLOOR_REC_JSON_MAX];
+    /* …`dropped`, `chain_recs`: the record entries freezes dropped as reads, and the frozen chains' records now. */
+    char dropped[ENGINE_FLOOR_REC_JSON_MAX], chain_recs[ENGINE_FLOOR_REC_JSON_MAX];
     /* …`ladder`: the same list restricted to members at the orphan ladder (solver/cold.h). */
     char ladder[STEP_UNITS_JSON_MAX];
     /* …`over`: restricted to the turns that overran the cooperative slice. */
@@ -1659,6 +1661,15 @@ char *result_cold_json(void) {
     METRIC_SET(chain_filled, e.chain_filled);
     METRIC_SET(chain_out_segs, e.chain_out_segs);
     METRIC_SET(chain_out_kib, e.chain_out_bytes / 1024);
+    {
+        long kib;
+
+        METRIC_SET(rec_unwritten_dropped, engine_rec_dropped_json(dropped, sizeof dropped, &kib));
+        METRIC_SET(rec_unwritten_dropped_kib, kib);
+        METRIC_SET_OBJECT(rec_unwritten_dropped_by_class, dropped);
+        METRIC_SET(chain_rec_kib, engine_chain_rec_json(chain_recs, sizeof chain_recs));
+        METRIC_SET_OBJECT(chain_rec_by_class, chain_recs);
+    }
     METRIC_SET(sold_named, e.sold_named);
     METRIC_SET(sale_over_reserve, e.sale_over_reserve);
     METRIC_SET(sale_reserve_kib, e.sale_reserve_kib);

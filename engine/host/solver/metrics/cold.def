@@ -120,6 +120,14 @@ METRIC(chain_spilled, "chainSpilled", LIFETIME, "segment", PROCESS, "solver/cow.
 METRIC(chain_filled, "chainFilled", LIFETIME, "segment", PROCESS, "solver/cow.c", INT)
 METRIC(chain_out_segs, "chainOutSegs", GAUGE, "segment", PROCESS, "solver/cow.c", INT)
 METRIC(chain_out_kib, "chainOutKiB", GAUGE, "KiB", PROCESS, "solver/cow.c", INT)
+/* …and the component record entries freezes dropped as reads, their flow side equal to their baseline: entries,
+   their blocks' KiB, and by owner class `[entries, KiB, entries, KiB]` (engine_rec_dropped_json). Then the records
+   the frozen chains hold now, a segment once: KiB, and by owner class `[records, KiB, unwritten records, KiB]`. */
+METRIC(rec_unwritten_dropped, "recUnwrittenDropped", LIFETIME, "entry", PROCESS, "solver/cow.c", INT)
+METRIC(rec_unwritten_dropped_kib, "recUnwrittenDroppedKiB", LIFETIME, "KiB", PROCESS, "solver/cow.c", INT)
+METRIC(rec_unwritten_dropped_by_class, "recUnwrittenDroppedByClass", LIFETIME, "entry", PROCESS, "solver/cow.c", OBJECT)
+METRIC(chain_rec_kib, "chainRecKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
+METRIC(chain_rec_by_class, "chainRecByClass", GAUGE, "KiB", PROCESS, "solver/engine.c", OBJECT)
 /* …and what written stubs' bytes name by reference because something outside them still named it at the sale
    (JS_FlowGraphSettle): objects and closure cells, summed over sales. */
 METRIC(sold_named, "soldNamed", LIFETIME, "object", PROCESS, "solver/engine.c", INT)
