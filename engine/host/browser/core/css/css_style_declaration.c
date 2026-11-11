@@ -1595,7 +1595,7 @@ static bool cssd_match_result_run(CssMatchResult *m, bool rests)
     uint64_t tested = 0, own = at->begun ? 0 : THREAD_WORK_SELECTOR_TESTS_PER_ELEMENT;
     bool closed = false, parked;
     ThreadWorkSpan tw;
-    CssdSheetParse own = { 0 };   /* a residency span's parse of a sheet the table does not hold (cssd_sheet_parsed) */
+    CssdSheetParse scratch = { 0 };   /* a residency span's parse of a sheet the table does not hold (cssd_sheet_parsed) */
 
     thread_work_begin(&tw);
     at->begun = true;
@@ -1608,7 +1608,7 @@ static bool cssd_match_result_run(CssMatchResult *m, bool rests)
            position's emission has changed since the last build (the parse table above). The table's arena owns
            the stylesheet, and nothing kept here points into it: every value taken from a matched rule is
            copied, and a parked build keeps only indices. */
-        p = cssd_sheet_parsed(sheet->si, view->text, strlen(view->text), rests, &parked, &own);
+        p = cssd_sheet_parsed(sheet->si, view->text, strlen(view->text), rests, &parked, &scratch);
         if (parked) goto out;
         if (p != NULL && p->rules != NULL) {
             /* The round trip is asserted per rule: each emitted rule parses back as exactly one rule at the
@@ -1665,12 +1665,12 @@ static bool cssd_match_result_run(CssMatchResult *m, bool rests)
         /* css-cascade-5 §6.1's Order of Appearance across sheets: "declarations from style sheets independently
            linked by the originating document are treated as if they were concatenated in linking order". */
         at->seq += view->n;
-        cssd_sheet_parse_drop(&own);
+        cssd_sheet_parse_drop(&scratch);
     }
     css_match_result_finish(m, at->seq);
     closed = true;
 out:
-    cssd_sheet_parse_drop(&own);
+    cssd_sheet_parse_drop(&scratch);
     /* Charged by the match's input, the rules this run tested and the element once; a sheet re-parsed for it
        charges its bytes inside. */
     thread_work_end(&tw, THREAD_WORK_SELECTOR_MATCH, tested);
