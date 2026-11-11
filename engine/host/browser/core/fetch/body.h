@@ -135,7 +135,7 @@ int  body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
    BORROWED. Returns -1 on OOM with an exception live. */
 int  body_state_set_unknown(JSContext *ctx, BodyState *b, JSValueConst v);
 /* §5.2's string arm run over the example of the unknown a BODY_SHAPE body holds: the UTF-8 encoding of Web IDL
-   §3.2.11 USVString's conversion of §7.1.19 ToString of that example, where this flow holds an example
+   §3.2.12 USVString's conversion of §7.1.19 ToString of that example, where this flow holds an example
    (concolic_example_present) that takes the union's string arm. An `undefined` or `null` example answers NULL:
    it takes §5.2's null arm, a different request. Returns js_malloc'd bytes the caller frees with `*len` set, or
    NULL with `*len` 0. The body keeps the unknown; this is the bytes a request built from it sends in the world
