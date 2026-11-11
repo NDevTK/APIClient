@@ -115,9 +115,9 @@ METRIC(br_held_work_life, "brHeldWorkLife", GAUGE, "unit", AGENT, "solver/flow.c
 METRIC(br_empty_work_life, "brEmptyWorkLife", GAUGE, "unit", AGENT, "solver/flow.c", INT)
 METRIC(br_retired_work_life, "brRetiredWorkLife", LIFETIME, "unit", PROCESS, "solver/flow.c", INT)
 METRIC(charged_work_life, "chargedWorkLife", LIFETIME, "unit", PROCESS, "solver/flow.c", INT)
-/* …and the part of it that was a compile's (the script tokenizer's bytes and the codegen passes' input), the part
-   the page's own event loop ran with no page frame standing, the frameless part of the engine's forced acts (inside
-   the site work), and the work charged to code sites, the optimism term's service. */
+/* …and three shares of it, a compile's (the script tokenizer's bytes and the codegen passes' input), the part that
+   ran with no page frame standing, and the part of that banked mid-step to act sites, and the work charged to code
+   sites, the optimism term's service, which is all of it. */
 METRIC(compile_work_life, "compileWorkLife", LIFETIME, "unit", PROCESS, "solver/flow.c", INT)
 METRIC(frameless_work_life, "framelessWorkLife", LIFETIME, "unit", PROCESS, "solver/flow.c", INT)
 METRIC(act_work_life, "actWorkLife", LIFETIME, "unit", PROCESS, "solver/flow.c", INT)

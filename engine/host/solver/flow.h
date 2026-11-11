@@ -1413,9 +1413,9 @@ typedef struct {
     int64_t br_empty_work; /* lifetime work: received by buckets still taken and holding none */
     int64_t br_retired_work; /* lifetime work received by buckets whose subtree has wholly departed */
     int64_t charged_work; /* lifetime work the scheduler has charged at all — the identity's total */
-    /* Lifetime: the part of `charged_work` that was a compile's (the script tokenizer and codegen), the part that ran
-       with no page frame standing in a unit of the page's own loop, the frameless part of the engine's forced acts
-       (inside `site_work`), and the work charged to code sites. */
+    /* Lifetime: three shares of `charged_work`, a compile's (the script tokenizer and codegen), the part that ran
+       with no page frame standing, and the part of that banked mid-step to act sites, and the work charged to code
+       sites, which is all of it. */
     int64_t compile_work, frameless_work, act_work, site_work;
     /* Gauge: how deep in the fork tree the deepest live member sits (0 at a root). It ranks nothing; it says
        whether the fork tree is a star (a root walk is O(1) amortised) or a chain (quadratic). Real bundles read
@@ -2090,23 +2090,21 @@ int   flow_attacker_acts_only(const Flow *f);
 int   flow_path_victim_act(const Flow *f);
 /* Charge the running flow for the work a step just burned, in units of work (the reward's currency), after
    the step and by the scheduler alone, which holds both ends of the interval. Never a step count (see `work`).
-   `compile` is the part of `us` that was a compile's (JS_FlowCompileWorkLife's rise over the step, asserted
-   within `us`): it ages the family and is charged to no code site and no member's turn. `frameless` is the part
-   that ran with no page frame standing (JS_FlowFramelessWorkLife's rise, disjoint from `compile`), what the step
-   banked to act sites included. `act` says whose work the step was: nonzero for an act the engine forced, whose
-   frameless rest is service at the site the member stands at; zero for a unit the page's own event loop runs,
-   whose frameless rest ages the member and its family and is charged to no code site. */
-void  flow_age_running(int64_t us, int64_t compile, int64_t frameless, int act);
-/* Lifetime: the work charged to code sites, the compile work charged, the frameless work of the page's own loop
-   charged to no site, the frameless work of forced acts charged to sites, and all work charged
-   (flow_age_running). */
+   All of `us` is service: to the member's turn, its family's work, and the site it stands at, less what the step
+   banked mid-step to sites it moved off and to act sites. `compile` is the part of `us` that was a compile's
+   (JS_FlowCompileWorkLife's rise over the step, asserted within `us`), left out of the path's coordinate.
+   `frameless` is the part that ran with no page frame standing (JS_FlowFramelessWorkLife's rise, disjoint from
+   `compile`), what the step banked to act sites included, left out of the stand's clock. */
+void  flow_age_running(int64_t us, int64_t compile, int64_t frameless);
+/* Lifetime: the work charged to code sites, which is all work charged, and its compile, frameless and act-banked
+   shares (flow_age_running). */
 int64_t flow_site_work_lifetime(void);
 int64_t flow_compile_work_lifetime(void);
 int64_t flow_frameless_work_lifetime(void);
 int64_t flow_act_work_lifetime(void);
 int64_t flow_charged_work_lifetime(void);
-/* Charge the running flow's site, mid-step, for the `us` units its step ran from there under a page frame before
-   the member moves to another site (a fork stands it at the decision). flow_age_running charges the step's remainder to the site the
+/* Charge the running flow's site, mid-step, for the `us` units its step ran from there before the member moves to
+   another site (a fork stands it at the decision). flow_age_running charges the step's remainder to the site the
    member stands at when the step ends; the aging halves are charged there whole. */
 void  flow_site_bank_running(int64_t us);
 /* Charge the act site `act` (FLOW_SITE_ACT) of the running flow's family, mid-step, for `us` frameless units the

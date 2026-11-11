@@ -5618,30 +5618,31 @@ int64_t engine_reply_due(const Flow *f) {
     return engine_reply_clock(f) + ENGINE_REPLY_LATENCY_WORK;
 }
 
-/* Banks to the site the running member stands at what its open step has retired under a page frame and not yet
-   banked, before the member moves off it: the compile and the frameless work left out, as the step's closing charge
-   reads the same three counters (flow_age_running). The rest of the step is charged at its end to wherever the
-   member then stands. */
+/* What the open step has retired under a page frame, its compile and frameless work left out: the stand's clock,
+   which a fork's arm takes at the branch. */
 static int64_t engine_step_framed(void) {
     return g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
            - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile)
            - ((int64_t)JS_FlowFramelessWorkLife() - g_step_open_frameless);
 }
-static void engine_bank_step_framed(Flow *f) {
-    int64_t framed = engine_step_framed();
+/* Banks to the site the running member stands at all the work its open step has retired and not yet banked to a
+   site or an act site, before the member moves off it, as the step's closing charge reads it (flow_age_running).
+   The rest of the step is charged at its end to wherever the member then stands. */
+static void engine_bank_step(Flow *f) {
+    int64_t done = g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work;
 
-    DCHECKF(f == flow_running() && g_in_step > 0 && framed >= f->site_banked,
-            "a member was moved off its site mid-step while not running or outside a step, or the work the step has "
-            "retired under a page frame (%lld) fell below what it already banked (%lld) — both read the step's "
-            "three counters", (long long)framed, (long long)f->site_banked);
-    flow_site_bank_running(framed - f->site_banked);
+    DCHECKF(f == flow_running() && g_in_step > 0 && done >= f->site_banked + f->act_banked,
+            "a member was moved off its site mid-step while not running or outside a step, or the work its step has "
+            "retired (%lld) fell below what it already banked to sites (%lld) and act sites (%lld) — all three read "
+            "the step's work counter", (long long)done, (long long)f->site_banked, (long long)f->act_banked);
+    flow_site_bank_running(done - f->site_banked - f->act_banked);
 }
 
 /* The running member stands at the site of an act the engine forces (solver/flow.h's FLOW_SITE_ACT, keyed by the
    rung's step unit) or, for a drive building its own call, at its driven body: asked where the rung decides to act
    and before it forks, so every arm the act mints stands at the act and reads one count. */
 static void engine_stand_running(Flow *f, int kind, uint64_t key) {
-    engine_bank_step_framed(f);
+    engine_bank_step(f);
     flow_stand_at(f, kind, key, f->framed_work + engine_step_framed());
 }
 
@@ -5667,54 +5668,6 @@ static void engine_stand_rest(JSContext *ctx) {
         left += ENGINE_QUANTUM_WORK;
     } while (left <= 0);
     JS_FlowStandArm(left);
-}
-
-/* Whose work a step unit's frameless part is, asked at the step's charge for every step that retired any. 1: an act
- * the engine forces because it chose to explore (a drive's seed, a modelled close request, scroll or second open, a
- * fork over a value no observation decided, a retirement), whose frameless work is exploration and is service at
- * the site the member stands at; each such rung stands its member at its act site (engine_stand_running) or keeps
- * the site whose decision its arms fork over. 0: a unit the page's own event loop runs (rendering, a parse, a
- * reply's delivery, a task's host steps, a park), which every world owes and which no site's optimism pays for.
- * Evidence. For 1: dom at 8265531e (dev, gdb per step unit at flow_age_running), where frameless work free of
- * charge took the orphan seed from 855 steps and 25.7M units to 4,593 steps and 497.6M, and the close request from
- * 15.6M to 46.0M, at 108k and 102k units a step, the orphan walk's cost. For 0: mdn's first paint (the evidence at
- * solver/flow.c's FlowCodeSite.served).
- * A unit named in neither list fails in dev; in release it is charged as an act, the side that keeps a new rung's
- * work on a site. */
-static int step_unit_forced_act(StepUnit u) {
-    switch (u) {
-    case STEP_UNIT_LEAVE_SOURCE_CUT: case STEP_UNIT_FORK_PEER_ANSWER: case STEP_UNIT_LEAVE_ANSWER_STANDBY:
-    case STEP_UNIT_RETIRE_EXHAUSTED_ASK: case STEP_UNIT_RETIRE_CONTRADICTED_DELIVERY:
-    case STEP_UNIT_FORK_DECLINED_REQ: case STEP_UNIT_FORK_REPLY_SUCCESS:
-    case STEP_UNIT_ORPHAN_SEED: case STEP_UNIT_ORPHAN_ROUTE: case STEP_UNIT_ORPHAN_RETIRE:
-    case STEP_UNIT_ORPHAN_RESUME: case STEP_UNIT_USER_SCROLL: case STEP_UNIT_CLOSE_REQUEST:
-    case STEP_UNIT_OPEN_AGAIN:
-        return 1;
-    case STEP_UNIT_RESUME_PARKED: case STEP_UNIT_LINK_CONNECTED: case STEP_UNIT_PARSE_END:
-    case STEP_UNIT_PARSE_SPIN: case STEP_UNIT_PARSE_SPIN_RENDERING: case STEP_UNIT_ROUTED_DELIVERY:
-    case STEP_UNIT_ROUTED_NOT_MINE: case STEP_UNIT_ROUTED_PARENT_TOOK: case STEP_UNIT_ROUTED_ARM_OWED:
-    case STEP_UNIT_ROUTED_TARGET_DESTROYED: case STEP_UNIT_CROSS_AGENT_OP: case STEP_UNIT_CROSS_AGENT_OP_NOT_MINE:
-    case STEP_UNIT_MICROTASK: case STEP_UNIT_DELIVER_REPLY: case STEP_UNIT_AWAIT_DUE_REPLY:
-    case STEP_UNIT_REPLY_CLOCK_MOVE: case STEP_UNIT_RUN_TASK: case STEP_UNIT_LIFECYCLE:
-    case STEP_UNIT_RENDERING: case STEP_UNIT_TIMER: case STEP_UNIT_TIMER_ARRIVED: case STEP_UNIT_TIMER_RACED:
-    case STEP_UNIT_RENDERING_RACED: case STEP_UNIT_IDLE_PERIOD: case STEP_UNIT_START_PROGRAM:
-    case STEP_UNIT_EVALUATE_MODULE: case STEP_UNIT_NO_COMPILE: case STEP_UNIT_COMPILE_YIELDED:
-    case STEP_UNIT_MODULE_COMPILE_YIELDED: case STEP_UNIT_COMPILE_PAID_RESTED: case STEP_UNIT_SCRIPT_LOAD_FAILED:
-    case STEP_UNIT_REGISTER_IMPORT_MAP:
-    case STEP_UNIT_RESUME_PROGRAM: case STEP_UNIT_AGENT_RESUME_PARKED: case STEP_UNIT_AGENT_RESUME_PROGRAM:
-    case STEP_UNIT_AGENT_EVAL_MODULE: case STEP_UNIT_AGENT_COMPILE_PROGRAM: case STEP_UNIT_AGENT_RUN_JOB:
-    case STEP_UNIT_END_FRAME: case STEP_UNIT_REPORT_EXCEPTION: case STEP_UNIT_DETACH_PROGRAM:
-    case STEP_UNIT_START_ENDED_FRAME: case STEP_UNIT_START_REPORTED: case STEP_UNIT_START_DETACHED:
-    case STEP_UNIT_RESUME_BLOCKED: case STEP_UNIT_START_BLOCKED: case STEP_UNIT_AWAIT_FETCH_RECORD:
-    case STEP_UNIT_HOST_BLOCKED: case STEP_UNIT_AWAIT_OWED_REPLY: case STEP_UNIT_AWAIT_DECLINED:
-    case STEP_UNIT_HELD_DELIVERY: case STEP_UNIT_HELD_ARRIVAL: case STEP_UNIT_AWAIT_PEER: case STEP_UNIT_FINISHED:
-        return 0;
-    default:
-        break;
-    }
-    DFAILF("a step closing as `%s` retired frameless work and is classed neither as an act the engine forces nor "
-           "as a unit of the page's own loop — add it to one list of step_unit_forced_act", step_unit_name(u));
-    return 1;
 }
 
 /* Which account an assembled arm takes: its parent's (a fork, flow_fork_inherit), or a new one at the frontier's
@@ -10219,8 +10172,8 @@ typedef struct {
    digest, a job's by JS_JobSiteHash over its callee; flow_step stands the member there as the unit begins
    (engine_stand_unit). Where a step ended names no site, since whether a step ends between two units is the
    slice's decision; page code a unit runs moves the member at its rests (engine_stand_rest), on its own path.
-   A host rung or a step-machine job names no entry: its own work runs with no page frame, which serves no site in a
-   unit of the page's own loop and serves the act's site in an act the engine forces (step_unit_forced_act).
+   A host rung or a step-machine job names no entry: its own work runs with no page frame and is service at the site
+   the member stands at (flow_age_running).
    Named residual. Not covered: the agent choice of a flow with more than one agent, and the rungs below
    run-a-task, answer HOOK_UNDECIDED. Next diff builds: those hooks as due reads beside their performs. Absence
    shows as: a step that dispatches one of those rungs with `next_arm1` naming HOOK_UNDECIDED's rung. */
@@ -14840,8 +14793,7 @@ static int engine_sched_slice(void) {
             {
                 const int64_t frameless = (int64_t)JS_FlowFramelessWorkLife() - step_frameless0;
 
-                flow_age_running(step_work, (int64_t)JS_FlowCompileWorkLife() - step_compile0, frameless,
-                                 frameless > 0 && step_unit_forced_act(g_step_unit));
+                flow_age_running(step_work, (int64_t)JS_FlowCompileWorkLife() - step_compile0, frameless);
             }
             /* The stand's count and the coordinate are one quantity read two ways: quickjs counts down what the
                path retired under a page frame and the charge above added it. */

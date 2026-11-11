@@ -24004,9 +24004,9 @@ static int64_t ms_body_bytes(const char *html) {
 }
 
 /* The rows of the `modshare` documents (fixture/modshare.h). In each, both worlds run every module. `modshare`:
-   no code site's service holds a compile's work, so the work charged to sites and the compile work charged
-   partition within all the work charged; and the two worlds, reaching the one module one after the other, parse
-   its body once. `modshare2`, the control: two bodies of equal length are two parses. `modsharebig`: both worlds
+   every unit charged, the module's compile and the frameless work included, is service at the site its member
+   stood at, so a member's rank moves with all it received; and the two worlds, reaching the one module one after
+   the other, parse its body once. `modshare2`, the control: two bodies of equal length are two parses. `modsharebig`: both worlds
    complete a module whose parse outlasts several quanta. */
 TF_UNIT void probes_modshare(const char *js, Probe *tab, int *n) {
     const char *r_why = NULL, *c_why = NULL, *p_why = NULL, *r2_why = NULL, *p2_why = NULL, *rb_why = NULL;
@@ -24015,15 +24015,15 @@ TF_UNIT void probes_modshare(const char *js, Probe *tab, int *n) {
     int64_t parsed = engine_module_compile_bytes();
     int64_t one = ms_body_bytes(HTML_MODSHARE), two = 2 * ms_body_bytes(HTML_MODSHARE2);
     int64_t site = flow_site_work_lifetime(), compile = flow_compile_work_lifetime();
-    int64_t charged = flow_charged_work_lifetime();
+    int64_t frameless = flow_frameless_work_lifetime(), charged = flow_charged_work_lifetime();
 
     fold_row(&r_tt, &r_why,
              param_value_is(js, "/api/ms-mod", "w", "A") && param_value_is(js, "/api/ms-mod", "w", "P"),
              "no /api/ms-mod record for one of the two arms, so a world did not run the module");
-    snprintf(c_buf, sizeof c_buf, "the sites were charged %lld and compiles %lld of %lld charged in all: a code "
-             "site's service holds compile work, or no compile was charged", (long long)site, (long long)compile,
-             (long long)charged);
-    fold_row(&c_tt, &c_why, compile > 0 && site + compile <= charged, c_buf);
+    snprintf(c_buf, sizeof c_buf, "the sites were charged %lld of %lld charged in all (compile %lld, frameless "
+             "%lld): a share of a member's work reached no site, or no compile was charged", (long long)site,
+             (long long)charged, (long long)compile, (long long)frameless);
+    fold_row(&c_tt, &c_why, compile > 0 && site == charged, c_buf);
     snprintf(p_buf, sizeof p_buf, "root module parses finished over %lld source byte(s) where the one body is %lld: "
              "the second world parsed the body the first had parsed", (long long)parsed, (long long)one);
     fold_row(&p_tt, &p_why, parsed == one, p_buf);
@@ -24040,7 +24040,7 @@ TF_UNIT void probes_modshare(const char *js, Probe *tab, int *n) {
              "no /api/mb-mod record for one of the two arms, so a world did not complete the long module");
     const Probe rows[] = {
         { "ms-ran", r_tt, "/api/ms-mod", SESS_EXPLORE, r_why },
-        { "ms-site-excludes-compile", c_tt, "/api/ms-mod", SESS_EXPLORE, c_why, .gate = "ms-ran" },
+        { "ms-site-holds-all-work", c_tt, "/api/ms-mod", SESS_EXPLORE, c_why, .gate = "ms-ran" },
         { "ms-one-parse", p_tt, "/api/ms-mod", SESS_EXPLORE, p_why, .gate = "ms-ran" },
         { "m2-ran", r2_tt, "/api/m2-two", SESS_EXPLORE, r2_why },
         { "m2-two-parses", p2_tt, "/api/m2-two", SESS_EXPLORE, p2_why, .gate = "m2-ran" },
