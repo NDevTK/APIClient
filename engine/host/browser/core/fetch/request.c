@@ -402,7 +402,7 @@ char *request_method_check(JSContext *ctx, const char *m)
     return method_normalize(ctx, m);
 }
 
-/* §5.4 STEP 25.2 OVER AN UNKNOWN METHOD: its completions are the ones a page observes, `new Request` returning
+/* §5.4 step 25.2 over an unknown method: its completions are the ones a page observes, `new Request` returning
    or throwing a TypeError. Fetch §2.2.1 Methods makes a forbidden method a method, so "is not a method or is a
    forbidden method" splits the domain into usable methods and the rest, and the TypeError is one for both
    (XHR §3.5.1 names its two refusals apart, which is why its fork has three arms). Outcome 0 is the ordinary
@@ -620,7 +620,7 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
 
 /* ---- the constructor ------------------------------------------------------------------------------------- */
 
-/* WHERE THIS MACHINE RESTS, AS §5.4 NUMBERS IT. A stage is re-entered at its top when it parks or forks, so
+/* Where this machine rests, as §5.4 numbers it. A stage is re-entered at its top when it parks or forks, so
    the stages are the spans between the points that do: step 25.2's method fork, step 30's abort-signal ask,
    step 32.1's method fork, the header fill at step 33 and step 35's method fork. Each label says its span. */
 #define REQ_CTOR_STAGES(X) \
@@ -1156,7 +1156,7 @@ int request_init_apply(JSContext *ctx, JSStepHdr *hdr, JSValueConst init, const 
                STRING input, reached only where the member is absent — not a field this reader defaulted. */
             rec->method = from ? JS_DupValue(ctx, from->method) : JS_NewString(ctx, "GET");
         } else if (concolic_is(mv)) {
-            /* STEP 25.2 OVER AN UNKNOWN, ASKED AS A FORK (REQ_METHOD_OP). `mv` is borrowed by the ask from the
+            /* Step 25.2 over an unknown, asked as a fork (REQ_METHOD_OP). `mv` is borrowed by the ask from the
                converted dictionary, which the caller's machine carries. Nothing this call placed survives the
                ask: the stage is re-entered at its top and runs this again, so the record goes back to
                request_record_init's state first. */
@@ -1259,7 +1259,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         }
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        /* THE RECORD IS BUILT BEFORE THE REQUEST OBJECT IS MINTED, because step 25.2 may fork and a fork
+        /* The record is built before the Request object is minted, because step 25.2 may fork and a fork
            re-enters this stage at its top: everything up to request_init_apply's answer is re-run, so it lives
            in `d`, which a fork or a throw frees, and nothing reaches this machine's state until the record is
            complete. */
@@ -1313,7 +1313,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             url_record_free(&rec);
         }
 
-        /* §5.4 STEPS 10-27, THROUGH THE ONE IMPLEMENTATION OF THEM (request.h), which `fetch(input, init)` —
+        /* §5.4 steps 10-27, through the one implementation of them (request.h), which `fetch(input, init)` —
            §5.6 "Fetch methods" step 2 defines it as an invocation of this constructor — shares. A positive
            answer is step 25.2's fork, returned for the driver after `d` is freed. */
         r = request_init_apply(ctx, hdr, init, from ? &from->rec : NULL, &d->rec);

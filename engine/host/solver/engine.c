@@ -491,7 +491,7 @@ static void pending_park_request(JSContext *ctx, Flow *f, JSValue e, const Fetch
         free(up_url);
         return;
     }
-    /* A METHOD WITH NO BYTES IS NOT FETCHABLE EITHER, for the address's reason: its field is the display shape
+    /* A method with no bytes is not fetchable either, for the address's reason: its field is the display shape
        of an unknown, which names the request and is no Fetch §2.2.1 method. Declined here with no same-origin
        question, since the address is bytes; flow_decline_fork's arms are the network error and the success
        over an unknown reply, and a later session whose run has an example sends it. */

@@ -141,8 +141,7 @@ void request_record_copy(JSContext *ctx, RequestRecord *dst, const RequestRecord
  * `GET`/`HEAD` and step 39.2's "same-origin"/"cors". Those were `strcmp` over a `char *` and the comparison is
  * the same comparison; what is new is that the operand can now BE unknown external input, and a byte test over
  * an unknown is the one answer §@H forbids — it would decide a gate by running a predicate over a string no
- * run ever computed. So this operation ASSERTS its operand is a real string and names the fork that is owed,
- * so this operation ASSERTS its operand is a real string. The method's tests over an operand that may be
+ * run ever computed. So this operation asserts its operand is a real string. The method's tests over an operand that may be
  * unknown are request_method_in_step's.
  * NOT a general-purpose helper and not in a shared header: it is the record's question, over the record's
  * fields, and the assert is only sound because those nine are the ones whose provenance this file states. */
@@ -151,42 +150,18 @@ bool request_str_is(JSContext *ctx, JSValueConst v, const char *lit);
    request", as the read its two callers make on a `RequestInfo` that took the interface arm. Borrowed. */
 const RequestRecord *request_record_of(JSValueConst v);
 
-/* FETCH §5.4 new Request(input, init) STEPS 10-27, over the CONVERTED `RequestInit` — the ONE application of
- * that dictionary's members, reached by §5.4's constructor and by §5.6's `fetch(input, init)`.
- *
- * `init` is the dictionary the ARGUMENT MACHINE built (Web IDL §3.2.17 Dictionary types), never the object the
- * page passed, so this function runs none of the page's code: every member has already been read in
- * lexicographical order, coerced to its declared type and refused if §3.2.18 says so. That is the whole reason
- * a caller may run all eighteen steps in one stage.
- *
- * `from` is step 12's carry-forward — the input Request's record, or NULL for a string input, which is what
- * decides every default: §5.4 spells each of these "If init[member] exists, then set request's <field> to it"
- * over a request that already holds the input's value, so a constant in the default position is a statement
- * that the page asked for it and for a Request input that statement is false.
- *
- * Returns 0, or -1 with the TypeError §5.4 states live: step 10's `window`, step 17's "navigate" mode, step
- * 21's "only-if-cached", and step 25's method. `rec` is left safe to free either way.
- * Or a positive step code, which the caller returns from its step: step 25.2 over an unknown method is a fork
- * asked of `hdr` (step_fork_run), and `rec` is then back in request_record_init's state, because the asking
- * stage is re-entered at its top and this runs again. `hdr`'s stage must therefore re-run idempotently up to
- * this call, and nothing the caller holds across it may be written before it.
- *
- * IT ALSO RETURNS -1 FOR A MEMBER THIS ENGINE CANNOT YET APPLY, which is a different thing from a step's own
- * refusal and is stated here because a caller cannot tell them apart and must not try: a member whose value is
- * UNKNOWN EXTERNAL INPUT aborts in a dev build at the step that reads it, naming what to build, and throws a
- * TypeError in release. §5.4's ORDER decides which member reports, exactly as it decides which TypeError a
- * page sees when two members are bad at once.
- *
- * NAMED RESIDUAL: the request's URL is not on this record, so §5.6 step 2's literal [[Construct]] — which
- * would delete `fetch()`'s remaining copy of steps 5-6 as this deletes its copy of 10-27 — cannot be built
- * yet. §5.4 step 5 parses the input STRING, and a `fetch('/api/u?uid=' + state.id)` URL is UNKNOWN EXTERNAL
- * INPUT: `JS_ToCStringLen` on one aborts in `js_force_tostring` by design, because that boundary owes C real
- * bytes and a concolic cannot ride a `const char *`. So `new Request(concolicUrl)` takes the whole flow down
- * today, and routing `fetch()` through the constructor would take the tool's headline surface with it. WHAT
- * THE NEXT DIFF BUILDS: §2.2.5's URL on this record as a JSValue rather than a `char *`, so it can BE the
- * concolic — with `Request.url`'s getter answering it (opaque-infectious, as `location.href` is) and the
- * serialized form derived at the one C consumer that needs bytes. ITS ABSENCE SHOWS as
- * `new Request(location.hash)` aborting the agent where `fetch(location.hash)` records an endpoint. */
+/* Fetch §5.4 new Request(input, init) steps 10-27 over the converted RequestInit (Web IDL §3.2.17): the one
+ * application of its members, for the constructor and §5.6 fetch(input, init); it runs no page code. `from` is
+ * step 12's carry-forward (the input Request's record, or NULL for a string input), which decides every default.
+ * Returns 0; -1 with the TypeError of step 10, 17, 21 or 25 (`rec` safe to free); or a positive step code when
+ * step 25.2 over an unknown method forks `hdr`: `rec` is then back in request_record_init's state and the stage
+ * re-runs this from its top, so nothing the caller holds may be written before the call. -1 also covers a member
+ * whose unknown value this engine cannot yet apply (a dev abort naming what to build, a TypeError in release),
+ * reported in §5.4's order.
+ * Named residual. Not covered: the request's URL is not on this record, so new Request(unknownUrl) aborts in
+ * js_force_tostring and fetch() keeps its own copy of steps 5-6. Next diff: §2.2.5's URL held as a JSValue that
+ * can be the unknown, with Request.url answering it. Its absence shows as new Request(location.hash) aborting the
+ * agent where fetch(location.hash) records an endpoint. */
 int  request_init_apply(JSContext *ctx, JSStepHdr *hdr, JSValueConst init, const RequestRecord *from,
                         RequestRecord *rec);
 
