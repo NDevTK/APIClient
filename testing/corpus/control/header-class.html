@@ -1,0 +1,32 @@
+<!doctype html><html><head><title>instrument control — header value class</title></head><body>
+<script>
+  // Instrument control, the header-value axis: what a request states, and a host sends, for a header value the
+  // page wrote through a Headers object (Fetch §5.1). Every address is a string literal.
+  //
+  // Rung 1, the positive control: a literal header through an init record.
+  fetch('/api/hdr-literal', { headers: { 'x-own': 'literal' } });
+  // Rung 2, a Headers object given as an init: §5.1's fill reads it back through the object's iterator, so the
+  // value reaches the request as the iterator yields it. `navigator.language` is an environment unknown whose
+  // example is this run's value; the request states the example's bytes with the class `example`.
+  var hcH = new Headers();
+  hcH.set('x-lang', navigator.language);
+  fetch('/api/hdr-headers-obj', { headers: hcH });
+  // Rung 3, a header appended to a Request's Headers object after construction: that object's header list is
+  // the request's (§5.4 step 31), so fetch(request) carries it.
+  var hcR = new Request('/api/hdr-request');
+  hcR.headers.append('x-own', 'appended');
+  fetch(hcR);
+  // Rung 4, an arm against the unknown's example (an environment unknown taken as another value is an
+  // assumption, so the path is forced): recorded and not sent. Its header is read back through get().
+  if (hcH.get('x-lang') === 'zz-ZZ')
+    fetch('/api/hdr-forced', { headers: { 'x-lang': hcH.get('x-lang') } });
+
+  // What a run must produce (floors), read from the shipped path and from the server's arrivals:
+  //   egressSends: /api/hdr-literal, /api/hdr-headers-obj and /api/hdr-request `sent`; /api/hdr-forced
+  //   `not-sent`. The entry for /api/hdr-headers-obj states `x-lang` with the class `example`.
+  //   Arrivals from the zone: /api/hdr-headers-obj with `x-lang` equal to the example's bytes (never a
+  //   spelling with `{`), and /api/hdr-request with `x-own: appended`. None for /api/hdr-forced.
+  // How a regression shows: an `x-lang` arrival spelling `{navigator.language}` (an unknown's display shape
+  // sent as bytes), or /api/hdr-request arriving without `x-own`.
+</script>
+</body></html>
