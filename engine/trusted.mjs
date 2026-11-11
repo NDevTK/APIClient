@@ -243,7 +243,7 @@ export function trustedZone() {
                    'docRecordNavigableIdentity', 'docRecordOpenerOf', 'docRecordOpenerClaim',
                    'docRecordAddressSpace', 'docRecordWithAddressSpace', 'safeFetchSchemeData',
                    'safeFetchDocumentAddressSpace', 'noveltyAbsorb', 'noveltyOwed', 'sendCoalesceCensus',
-                   'sendCoalesceDocumentEnded'])
+                   'sendCoalesceDocumentEnded', 'safeFetchEgressCensus'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js did not install \`${n}\` — the firing decision and its ` +
                       'per-origin widening are that file\'s, read by this host and by the offscreen from the ' +
@@ -266,6 +266,15 @@ const observedDoc = (url) => ZONE.docRecord('observed', 'undriven', 'unpinned', 
    private target, CORB, a refused credentialed read); the engine's delivery turns the JSON `null` into Fetch
    §5.6's TypeError, which is what a request that failed IS — a status-0 record would instead resolve the
    page's promise with a status no server returns. */
+/* The fired-send record of one request (safe-fetch.js's `egress` list), one stderr line per entry as the
+   request settles, so a run a backstop cuts still has every send it made: the address judged, the signal vector,
+   what admitted it and whether the wire was reached. `who` names the instance or the zone's own act. */
+function sayEgress(who, method, r) {
+  if (!r || !Array.isArray(r.egress))
+    throw new Error(`safeFetch answered ${method} for ${who} with no egress list — it states one on every record`);
+  for (const s of r.egress) console.error(`[trusted] [${who}] @EGRESS ` + JSON.stringify({ method, ...s }));
+}
+
 function replyRecord(r, where) {
   if (!r || typeof r !== 'object' || typeof r.status !== 'number' || !ArrayBuffer.isView(r.body))
     throw new Error(`safeFetch answered ${where} with something other than its reply record — Fetch §2.2.4 ` +
@@ -591,6 +600,7 @@ async function main() {
                                               provenance: 'observed', pinned: 'unpinned',
                                               actor: 'tool', driven: 'unstated',
                                               doc: observedDoc(target), credentialed: false });
+  sayEgress('seed', 'GET', seed);
   const seeded = replyRecord(seed, 'the seed document');
   if (!seeded)
     throw new Error(`the chokepoint refused the seed: ${seed.statusText} — the document a session is rooted ` +
@@ -1247,6 +1257,7 @@ async function main() {
     const raw = await ZONE.safeFetch(abs, { destination: 'document', mode: 'navigate',
                                             provenance, pinned, doc: fromDoc, actor: 'page', driven,
                                             credentialed: false, onBodyRead });
+    sayEgress(what, 'GET', raw);
     /* A decline after the policy above (the wire went silent, `wire-idle`) loads nothing either. */
     if (raw.refusal && raw.refusal.kind === 'decline') return { declined: `${what} ${abs} — ${raw.refusal.reason}` };
     const rec = replyRecord(raw, `${what} ${abs}`);
@@ -1306,6 +1317,7 @@ async function main() {
       if (send.cancelled) return;
       throw err;
     }
+    sayEgress(e.tag, q.method, raw);
     if (raw.refusal && raw.refusal.kind === 'decline') {
       settle(declineAnswer(id, `${q.method} ${abs} — ${raw.refusal.reason}`));
       return;
@@ -1456,6 +1468,7 @@ async function main() {
       if (send.cancelled) return;
       throw err;
     }
+    sayEgress(e.tag, method, raw);
     /* A REFUSAL THIS ZONE'S OWN POLICY MADE IS A DECLINE AND NOT A NETWORK ERROR, and the difference is what
        the flow does next. A `provide` of `null` is Fetch §5.6's network error: the page's request RESUMES down
        its failure path having been told the server could not be reached, which for a request nobody sent is a
@@ -2240,6 +2253,13 @@ async function main() {
   /* How instance `e`'s answers were delivered: reads, answers written, the work skipped at stalls, and the
      wall time polls spent waiting for a due answer or for a peer's clock. Said beside each @RESULT and at the
      end, as the coalescing census is. */
+  /* The zone's census of every fired-send entry so far (safe-fetch.js's safeFetchEgressCensus), all documents
+     together, said where the coalescing census is. */
+  const sayEgressCensus = (e) => {
+    const c = ZONE.safeFetchEgressCensus();
+    console.error(`[trusted] [${e.tag}] egress entries: ` +
+                  (Object.keys(c).sort().map((k) => `${k.replace(' ', '/')}=${c[k]}`).join(' ') || 'none'));
+  };
   const sayDelivery = (e) => {
     const d = e.delivery;
     console.error(`[trusted] [${e.tag}] reply delivery at work ${e.clock.work} (+${e.clock.skip} skipped): polls=${d.polls} ` +
@@ -2264,6 +2284,7 @@ async function main() {
         console.error(`[trusted] [${e.tag}] a novelty line was refused (${x.reason}): ${x.line}`);
       console.error(`[trusted] [${e.tag}] @RESULT#${e.results} ${line}`);
       sayCoalesced(e);
+      sayEgressCensus(e);
       sayDelivery(e);
       return;
     }
@@ -2644,6 +2665,7 @@ async function main() {
     clockMoved();
     /* The instance's document ended, and its recorded sends with it (lib/send-coalesce.js), read first. */
     sayCoalesced(e);
+    sayEgressCensus(e);
     sayDelivery(e);
     ZONE.sendCoalesceDocumentEnded('engine:' + e.docId);
     ({ code: e.exit, signal: e.signal } = await e.closed);

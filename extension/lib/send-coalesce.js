@@ -139,6 +139,13 @@ function sendCoalesceDocumentEnded(docKey) {
   }
 }
 
+/* Whether the document `docKey` has made the send `key`, so an ask of it now is answered from the record and
+   reaches no other party. */
+function sendCoalesceHolds(docKey, key) {
+  var doc = _sendCoalesceDocs.get(docKey);
+  return doc !== undefined && doc.replies.has(key);
+}
+
 /* The census of the document `docKey`'s table: `sends` made, `answers` given from a record (counted at the
    ask), and `identities`, the distinct keys recorded; or null for a document that coalesced nothing. */
 function sendCoalesceCensus(docKey) {
@@ -154,4 +161,5 @@ if (typeof self !== "undefined") {
   self.sendCoalesce = sendCoalesce;
   self.sendCoalesceDocumentEnded = sendCoalesceDocumentEnded;
   self.sendCoalesceCensus = sendCoalesceCensus;
+  self.sendCoalesceHolds = sendCoalesceHolds;
 }

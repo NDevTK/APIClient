@@ -190,12 +190,13 @@ function _wireSendKey(href, init, facts) {
    (lib/send-coalesce.js): one act of one document is sent once however many forced worlds make it. Its reply
    is a Response of this asker's own, whose Set-Cookie fields ride beside it as the wire's do, so every check,
    cookie store and grade after this runs on it as on a fresh reply. `facts` is {credentials, partition} of the
-   send's identity, or null for a send that speaks as no document.
+   send's identity, or null for a send that speaks as no document. `reached` is told, before the wire is asked,
+   whether this ask makes the send (true) or is answered from the document's record (false).
    Named residual. Not covered: a send that speaks as no document (no `opts.identity`, as engine/trusted.mjs's
    navigation load) is never coalesced, since no document key scopes it. Next diff: that load states its
    issuing document's identity. Its absence shows as a server log counting one navigation of one document
    once per world that makes it. */
-async function _wireSend(href, init, facts) {
+async function _wireSend(href, init, facts, reached) {
   var speak = init.speakAs === undefined ? null : init.speakAs;
   CHECK((speak === null) === (facts === null) &&
         (facts === null || (!!facts && typeof facts.credentials === "string" && "partition" in facts)),
@@ -203,11 +204,14 @@ async function _wireSend(href, init, facts) {
         (facts === null ? "no" : facts === undefined ? "an absent" : "its") + " identity's credentials mode and " +
         "partition — the two are one identity");
   if (speak === null) {
+    reached(true);
     var requestTime = Date.now();
     var bare = await _wire(href, init);
     return { resp: bare, requestTime: requestTime, responseTime: Date.now() };
   }
-  var answer = await sendCoalesce(speak.docKey, _wireSendKey(href, init, facts), init.signal, async function (signal) {
+  var key = _wireSendKey(href, init, facts);
+  reached(!sendCoalesceHolds(speak.docKey, key));
+  var answer = await sendCoalesce(speak.docKey, key, init.signal, async function (signal) {
     var resp = await _wire(href, Object.assign({}, init, { signal: signal }));
     var headers = [];
     resp.headers.forEach(function (v, k) { headers.push([k, v]); });
@@ -1391,24 +1395,27 @@ function safeFetchPermitted(origin) {
    makes. Wherever this refuses, the address is still derived in full and reported. */
 /* Whether a default arm admits the vector `v`: the page loading itself, as a browser would, and so the page's
    act rather than this tool's. */
-function _defaultArmAdmits(v) {
-  return _DEFAULT_ARMS.some(function (a) { return a.when.every(function (c) { return v[c.signal] === c.value; }); });
-}
-/* Whose act a request is, by the one rule the firing walk decides with: true when a default arm admits it.
-   A request that fires only because a person widened its origin is this tool's act (a forked value, a probe,
-   a tool-composed request). */
-function _isPageAct(facts) {
-  return _defaultArmAdmits(_signalVector(facts));
+function _defaultArmAdmitting(v) {
+  return _DEFAULT_ARMS.findIndex(function (a) { return a.when.every(function (c) { return v[c.signal] === c.value; }); });
 }
 function _firingRefusal(facts) {
-  var v, i, s;
+  return _firingDecision(facts).refusal;
+}
+/* One firing question's whole answer: the vector it was judged on, what admitted it, and the refusal.
+   `admittedBy` is {kind: "default", arm, why} for a default arm (the page's own act), {kind: "widened", origin}
+   for a request that fires only because a person widened its origin (this tool's act: a forked value, a probe,
+   a tool-composed request), and null beside a refusal. */
+function _firingDecision(facts) {
+  var v, i, s, arm;
   v = _signalVector(facts);
   /* No pairing of `provenance` with `doc-reach` is asserted. `observed` with a `forced` reach is the tempting
      one to forbid, and it is exactly a page this tool chose to open making its own `fetch()`, which the
      engine correctly grades `observed`. All nine pairs are reachable and distinct: the request's grade is the
      engine's, the reach grade is this zone's, and neither bounds the other. */
   /* Defaults first: they are permissions and the table only widens, so the order changes no answer. */
-  if (_defaultArmAdmits(v)) return null;
+  arm = _defaultArmAdmitting(v);
+  if (arm >= 0)
+    return { vector: v, admittedBy: { kind: "default", arm: arm, why: _DEFAULT_ARMS[arm].why }, refusal: null };
   /* An unstated table is empty, so the walk would refuse a permitted origin in the policy's own voice. That
      is conservative, hence a DCHECK, and unreadable, hence asserted at all. `safeFetch` awaits
      `_EXPLORED_STATING` first, so this checks that construction; a host that neither states nor promises
@@ -1427,9 +1434,15 @@ function _firingRefusal(facts) {
     if (!s.gates) continue;
     if (_EXPLORED[facts.url.origin] && _EXPLORED[facts.url.origin][s.name] &&
         _EXPLORED[facts.url.origin][s.name][v[s.name]] === true) continue;
-    return s.name + "=" + v[s.name];
+    return { vector: v, admittedBy: null, refusal: s.name + "=" + v[s.name] };
   }
-  return null;
+  return { vector: v, admittedBy: { kind: "widened", origin: facts.url.origin }, refusal: null };
+}
+/* The zone's count of the entries its reply records carried, keyed "<how> <what admitted it>": `default` or
+   `widened` for a judged request, `none` for a refused one, `cache` for a hop the HTTP cache answered. */
+var _EGRESS_CENSUS = Object.create(null);
+function safeFetchEgressCensus() {
+  return Object.assign({}, _EGRESS_CENSUS);
 }
 /* The same answer for a caller whose act is not a fetch: `bridge.js`'s route-declaration arm, which records a
    work item loaded rounds later, and `engine/trusted.mjs`'s `navigate`, which must decline rather than
@@ -2042,6 +2055,25 @@ async function _readBody(resp, sink, gated, onRead) {
    `navigationCarriesSession` holds; `fetched` and `fetchedXhr` are not. Every caller states `destination`,
    `mode`, `provenance`, `pinned`, `doc`, `actor`, `credentialed` and `credentials`, asserted at the entry. */
 async function safeFetch(url, opts) {
+  /* The fired-send record: one entry per URL of this request the zone judged or answered, in order, as
+     {url, vector, admittedBy, how, refusal}. `vector` is every signal's value (`_signalVector`), `admittedBy`
+     the firing decision's, and `how` says whether the wire was reached: `sent` (a send whose reply later failed
+     included), `answered-locally` (the document's record of a byte-identical send, or the HTTP cache, whose
+     entry has a null vector because a hit is no act to judge), `not-sent`. It rides every reply record,
+     refusals included; a request refused before the firing question has no entry. */
+  var egress = [], r;
+  try {
+    r = await _safeFetchJudged(url, opts, egress);
+    r.egress = egress;
+    return r;
+  } finally {
+    egress.forEach(function (e) {
+      var k = e.how + " " + (e.vector === null ? "cache" : e.admittedBy === null ? "none" : e.admittedBy.kind);
+      _EGRESS_CENSUS[k] = (_EGRESS_CENSUS[k] || 0) + 1;
+    });
+  }
+}
+async function _safeFetchJudged(url, opts, egress) {
   opts = opts || {};
   /* The option set this file reads is closed, so a caller's statement it will not read is refused at the
      entry rather than dropped after the bytes are back. */
@@ -2226,6 +2258,7 @@ async function safeFetch(url, opts) {
       /* The record carries no grade: the host attaches the asking flow's provenance where it delivers the
          reply, so a forced arm answered here stays forced and is never merged into observed data. */
       _sent = { resp: httpCacheResponse(_stored), setCookies: [] };
+      egress.push({ url: _current.href, vector: null, admittedBy: null, how: "answered-locally", refusal: null });
     } else {
       /* The firing decision, before this URL is requested (see `_firingRefusal`). Decline: no browser
          refuses this; this tool declines to spend the act. The flow parks rather than running its failure
@@ -2235,7 +2268,15 @@ async function safeFetch(url, opts) {
       var _signalFacts = { url: _current, destination: destination, provenance: provenance,
                            pinned: pinnedMark, doc: doc, actor: actor, driven: driven,
                            credentialed: credentialed, headers: _headerList };
-      var _ptok = _firingRefusal(_signalFacts);
+      var _decision = _firingDecision(_signalFacts);
+      var _entry = { url: _current.href, vector: _decision.vector, admittedBy: _decision.admittedBy,
+                     how: "not-sent", refusal: _decision.refusal };
+      egress.push(_entry);
+      var _reached = function (made) {
+        if (made) _entry.how = "sent";
+        else if (_entry.how === "not-sent") _entry.how = "answered-locally";
+      };
+      var _ptok = _decision.refusal;
       if (_ptok)
         return _refused("decline", "blocked-signal" + (_hop ? "-redirect:" : ":") + _ptok,
                         _exposedUrlList(_urlList), {});
@@ -2247,9 +2288,11 @@ async function safeFetch(url, opts) {
          will not send it with the person's session, and a hop is sent with it, so a hop is asked too. */
       if (credentialed && provenance !== "observed") {
         var _dtok = _destructiveToken(_current);
-        if (_dtok)
+        if (_dtok) {
+          _entry.refusal = "blocked-destructive:" + _dtok;
           return _refused("decline", "blocked-destructive" + (_hop ? "-redirect:" : ":") + _dtok,
                           _exposedUrlList(_urlList), {});
+        }
       }
       var init = { method: _method, credentials: "omit", redirect: "manual" };
       /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the
@@ -2267,7 +2310,8 @@ async function safeFetch(url, opts) {
       /* Fetch §4.1 "Main fetch": the preflight (§4.8) and then the request, as one send. A request with an
          identity speaks as it (`_speakAs`); a preflight failure is a network error and the request is never
          sent. */
-      _sent = await _speakAs(_identity, _urlList, _method, mode, destination, _cookies, _isPageAct(_signalFacts),
+      _sent = await _speakAs(_identity, _urlList, _method, mode, destination, _cookies,
+                             _decision.admittedBy.kind === "default",
                              _preflight ? _unsafeNames : null, null, init, async function (speak) {
         /* A wire that rejects is Fetch §5.6's network error ("reject p with a TypeError"), answered as this
            chokepoint's network refusal like every other one; an aborted send rejects to its asker, which
@@ -2286,14 +2330,14 @@ async function safeFetch(url, opts) {
           var _pf = await _corsPreflight(_current.href, _method, _headerList || [], opts.credentials,
                                          opts.useCorsPreflight, _serializedOrigin, opts.signal, speak.preflight,
                                          function (i) {
-            return _wireSend(_current.href, i, _sendFacts).then(function (w) { return w.resp; });
+            return _wireSend(_current.href, i, _sendFacts, _reached).then(function (w) { return w.resp; });
           });
           if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + _current.origin,
                                               [parsed.href], {}) };
         }
         if (_answered) return { resp: httpCacheResponse(_stored) };
         init.speakAs = speak === null ? null : speak.request;
-        return await _wireSend(_current.href, init, _sendFacts);
+        return await _wireSend(_current.href, init, _sendFacts, _reached);
       }
       if (_sent.refusal) return _sent.refusal;
       if (_cache !== null && !_answered) {
@@ -2766,4 +2810,5 @@ if (typeof self !== "undefined") {
   self.safeFetchSiteSetting = safeFetchSiteSetting;
   self.safeFetchSetSiteSetting = safeFetchSetSiteSetting;
   self.safeFetchEgressReady = safeFetchEgressReady;
+  self.safeFetchEgressCensus = safeFetchEgressCensus;
 }
