@@ -10248,10 +10248,10 @@ static void free_var_ref0(JSRuntime *rt, JSVarRef *var_ref)
         JSStackFrame *sf = var_ref->stack_frame;
         DCHECK(sf->var_refs[var_ref->var_ref_idx] == var_ref, "sf->var_refs[var_ref->var_ref_idx] == var_ref");
         sf->var_refs[var_ref->var_ref_idx] = NULL;
-        /* AN OPEN CELL THAT ROOTED ITS FRAME'S OWNER DIES HERE WITHOUT EVER DETACHING, so its GC-list
-           membership and its root both come off here — the mirror of the mint, which took both. The
-           owner is read off the FRAME, which the slot above being cleared does not affect, and the
-           release is last because it can free that frame and nothing below reads it again. */
+        /* An open cell that rooted its frame's owner dies here without detaching, so its GC-list membership
+           and its root both come off, the mirror of the mint, which took both. The owner is read off the
+           frame, which clearing the slot above does not affect, and the release is last because it can free
+           that frame. */
         if (var_ref->is_coro) {
             remove_gc_object(rt, &var_ref->header);
             js_release_coro(rt, sf->cur_gc_obj);
