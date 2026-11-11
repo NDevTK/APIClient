@@ -2126,6 +2126,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/dateslot.h"
 #include "fixture/splitarr.h"
 #include "fixture/slotunk.h"
+#include "fixture/evsrc.h"
 #include "fixture/rxcompile.h"
 #include "fixture/codegenrest.h"
 #include "fixture/b64coerce.h"
@@ -2968,6 +2969,7 @@ TF_DOCS[] = {
     { "dateslot", HTML_DATESLOT },
     { "splitarr", HTML_SPLITARR },
     { "slotunk", HTML_SLOTUNK },
+    { "evsrc", HTML_EVSRC },
     { "rxcompile", HTML_RXCOMPILE },
     { "codegenrest", HTML_CODEGENREST },
     { "b64coerce", HTML_B64COERCE },
@@ -27118,6 +27120,34 @@ TF_UNIT void probes_slotunk(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `evsrc` document (fixture/evsrc.h): HTML §9.2.2's interface exists to be extended, and a
+   `data:` event stream is announced, dispatches its event and is reestablished at its body's end. */
+TF_UNIT void probes_evsrc(const char *js, Probe *tab, int *n) {
+    const char *cl_why = NULL; int cl_tt = 1;
+    fold_row(&cl_tt, &cl_why, param_value_is(js, "/api/es-class", "w", "esCLASS"),
+             "no /api/es-class?w=esCLASS record: `class X extends EventSource` did not evaluate to a subclass of an "
+             "interface object with HTML §9.2.2's constants");
+    fold_row(&cl_tt, &cl_why, !param_value_is(js, "/api/es-class", "w", "esREF"),
+             "a /api/es-class?w=esREF record: EventSource is not defined on some flow");
+    const char *st_why = NULL; int st_tt = 1;
+    fold_row(&st_tt, &st_why, param_value_is(js, "/api/es-ctor", "w", "0") &&
+                              param_value_is(js, "/api/es-ctor", "u", "data:"),
+             "no /api/es-ctor?w=0&u=data: record: a new EventSource is not CONNECTING with its url serialized");
+    fold_row(&st_tt, &st_why, param_value_is(js, "/api/es-open", "w", "1"),
+             "no /api/es-open?w=1 record: HTML §9.2.3's announce the connection did not fire open at OPEN");
+    fold_row(&st_tt, &st_why, param_value_is(js, "/api/es-msg", "w", "esHI") &&
+                              param_value_is(js, "/api/es-msg", "o", "null"),
+             "no /api/es-msg?w=esHI&o=null record: HTML §9.2.6's dispatch did not deliver the stream's data with "
+             "the final URL's opaque origin");
+    fold_row(&st_tt, &st_why, param_value_is(js, "/api/es-err", "w", "0"),
+             "no /api/es-err?w=0 record: the body's end did not reestablish the connection (error at CONNECTING)");
+    const Probe rows[] = {
+        { "es-class", cl_tt, "/api/es-class", SESS_EXPLORE, cl_why },
+        { "es-stream", st_tt, "/api/es-open", SESS_EXPLORE, st_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `datenum` document (fixture/datenum.h): both arms of the gate after each coercion. */
 TF_UNIT void probes_datenum(const char *js, Probe *tab, int *n) {
     const char *pl_why = NULL; int pl_tt = 1;
@@ -33596,6 +33626,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_dateslot(js, probes, &np);
     probes_splitarr(js, probes, &np);
     probes_slotunk(js, probes, &np);
+    probes_evsrc(js, probes, &np);
     probes_rxcompile(js, probes, &np);
     probes_codegenrest(js, probes, &np);
     probes_b64coerce(js, probes, &np);
