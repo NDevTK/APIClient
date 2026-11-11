@@ -48632,7 +48632,7 @@ static void fg_rchain_calls(FGReader *r, JSAsyncFunctionState *s, JSFunctionByte
         pc = fg_r32(r);
         live = fg_r32(r);
         CHECK(JS_IsObject(sf->cur_func) && js_class_has_bytecode(JS_VALUE_GET_OBJ(sf->cur_func)->class_id)
-                  && al <= UINT16_MAX && pc < (uint32_t)b->byte_code_len
+                  && al <= UINT16_MAX && pc <= (uint32_t)b->byte_code_len
                   && (t->cont_kind == CONT_NONE || t->cont_kind == CONT_STEP || cont_kind_declared(t->cont_kind)
                       || cont_kind_recordless(t->cont_kind))
                   && (amode == 'o' ? al != 0 : al == 0 && (amode == 'n' || amode == 'b'))
