@@ -1486,12 +1486,14 @@ static void cssd_sheet_parse_free(void)
    An unfinished parse stays in the slot with its run, keyed by the text it parses, so whichever build asks for
    those bytes next continues it; a slot replaced in between aborts it. With `rests`, each step is asked of the
    resting drive (layout_job_parse_take) and `*parked` answers NULL for a parse the drive stopped.
+   Inside a residency span the table is read and never written: a slot not holding these bytes parsed is passed
+   over for `own`, the caller's private entry, which it drops after the sheet.
    Named residual. Not covered: without `rests` the parse runs to its end for a reader that cannot rest. Next
    diff: that reader answers "not yet" under a resting drive and the parse rests between steps. Its absence
    shows as a single sheet's parse charging several rest units of bytes inside one REST_UNIT_LAYOUT_DESCENDANTS
    bracket. */
 static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, size_t len, bool rests,
-                                               bool *parked)
+                                               bool *parked, CssdSheetParse *own)
 {
     CssdSheetParse *e;
     lxb_css_rule_t *r;
@@ -1514,6 +1516,13 @@ static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, si
         g_sheet_parse_n = want;
     }
     e = &g_sheet_parse[si];
+    /* What a slot holds decides whether a later charged build parses, so a residency span that replaced, began or
+       continued one would move work the job's no-pressure twin did not do. */
+    if (thread_work_residency_open() && !(e->parsed && e->len == len && memcmp(e->text, text, len) == 0)) {
+        DCHECK(!rests && own != NULL && own->text == NULL,
+               "a residency span's sheet parse was asked to rest, or with no private entry or one still held");
+        e = own;
+    }
     if (e->text == NULL || e->len != len || memcmp(e->text, text, len) != 0) {
         cssd_sheet_parse_drop(e);
         /* THE KEY IS THIS TABLE'S OWN COPY AND NEVER THE CALLER'S POINTER: the caller frees its emission at
@@ -1586,6 +1595,7 @@ static bool cssd_match_result_run(CssMatchResult *m, bool rests)
     uint64_t tested = 0, own = at->begun ? 0 : THREAD_WORK_SELECTOR_TESTS_PER_ELEMENT;
     bool closed = false, parked;
     ThreadWorkSpan tw;
+    CssdSheetParse own = { 0 };   /* a residency span's parse of a sheet the table does not hold (cssd_sheet_parsed) */
 
     thread_work_begin(&tw);
     at->begun = true;
@@ -1598,7 +1608,7 @@ static bool cssd_match_result_run(CssMatchResult *m, bool rests)
            position's emission has changed since the last build (the parse table above). The table's arena owns
            the stylesheet, and nothing kept here points into it: every value taken from a matched rule is
            copied, and a parked build keeps only indices. */
-        p = cssd_sheet_parsed(sheet->si, view->text, strlen(view->text), rests, &parked);
+        p = cssd_sheet_parsed(sheet->si, view->text, strlen(view->text), rests, &parked, &own);
         if (parked) goto out;
         if (p != NULL && p->rules != NULL) {
             /* The round trip is asserted per rule: each emitted rule parses back as exactly one rule at the
@@ -1655,10 +1665,12 @@ static bool cssd_match_result_run(CssMatchResult *m, bool rests)
         /* css-cascade-5 §6.1's Order of Appearance across sheets: "declarations from style sheets independently
            linked by the originating document are treated as if they were concatenated in linking order". */
         at->seq += view->n;
+        cssd_sheet_parse_drop(&own);
     }
     css_match_result_finish(m, at->seq);
     closed = true;
 out:
+    cssd_sheet_parse_drop(&own);
     /* Charged by the match's input, the rules this run tested and the element once; a sheet re-parsed for it
        charges its bytes inside. */
     thread_work_end(&tw, THREAD_WORK_SELECTOR_MATCH, tested);
