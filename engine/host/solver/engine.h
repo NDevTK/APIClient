@@ -1351,6 +1351,14 @@ typedef struct {
     long sale_over_reserve;   /* funded sales whose allocations asked for more than the block they gave back */
     long sale_reserve_kib;    /* the sale reserve held now, 0 when the allocator refused it */
     long sale_need_max_kib;   /* the most one sale's allocations asked for (c_alloc.h's span) */
+    /* What held memory at the RAM floor's last answer (engine.c's engine_floor_census), all 0 before the first:
+       the C heap's live bytes and footprint, the runtime's share, the sale reserve held, the written stubs
+       standing and those on the disk tier, their writes' bytes still resident, the frozen heap chain's bytes a
+       resident member stands on, and those written stubs alone stand on: its entries, and the component bytes
+       and records they own (cow.h's CowChainBytes). */
+    long floor_live_kib, floor_footprint_kib, floor_js_kib, floor_reserve_kib;
+    long floor_stubs, floor_stubs_spilled, floor_sold_kib;
+    long floor_chain_resident_kib, floor_chain_stub_kib, floor_chain_stub_pod_kib, floor_chain_stub_rec_kib;
     /* Whether a reply ever became a program, per door. The `fetch()` reply (FLOW_PENDING_RESOLVE delivery) and
      * core/xhr/xml_http_request.c's `xhr_take_reply` both end in engine_queue_fetched_script, so without these
      * a network chunk is indistinguishable from the page's own bundle in `progStartsOther`. Each `…_asks` is

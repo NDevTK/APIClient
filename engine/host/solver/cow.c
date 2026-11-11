@@ -2,6 +2,7 @@
 #include "solver/cow.h"
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"
+#include <malloc.h>   /* malloc_usable_size: the split census's component-block bytes */
 #include <stdlib.h>
 #include <string.h>
 
@@ -340,7 +341,7 @@ static void *cow_delta_alloc(void *p, size_t n) {
    the whole history and every switch between them replayed all of it. A frozen segment is never written again,
    so two flows that reach the same segment agree about everything from there down and neither the fork nor the
    swap has to look at it. */
-typedef struct CowSeg { CowEntry *e; int n; struct CowSeg *base; int refcount; } CowSeg;
+typedef struct CowSeg { CowEntry *e; int n; struct CowSeg *base; int refcount; uint32_t split; } CowSeg;
 /* head_applied: IS THIS DELTA'S HEAD ON THE LIVE HEAP RIGHT NOW. `g_cow_installed` states that for the frozen
    CHAIN and nothing stated it for the HEAD, so two functions here asked `g_current` instead — and `g_current`
    is a ROUTE ("where do captures go"), not an applied-state. The two are one fact only while the scheduler is
@@ -2184,6 +2185,7 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
        applied and record another timeline's values as this delta's. */
     if (applied) cow_unapply_entries(ctx, src->e, src->n);
     seg->e = src->e; seg->n = src->n; seg->base = src->base; seg->refcount = 2;   /* running flow + sibling */
+    seg->split = 0;
     g_seg_live++; g_seg_entries_live += seg->n;
     src->e = NULL; src->n = 0; src->cap = 0;   /* fresh empty head for the running flow */
     free(src->hash); src->hash = NULL; src->hash_cap = 0;
@@ -2521,6 +2523,46 @@ void cow_delta_head_gaps(const CowDelta *d, void (*gap)(const char *kind, void *
     for (int i = 0; i < d->n; i++) {
         const char *k = cow_entry_unwritten(&d->e[i]);
         if (k) gap(k, arg);
+    }
+}
+
+/* The split census (cow.h). A walk stamps each segment with this census's generation, resident walks with the
+   even one and stub walks with the odd one, and stops at a stamped segment, since every segment below one was
+   walked with it. */
+static uint32_t g_split_gen;
+
+void cow_chain_split_begin(void) { g_split_gen += 2; }
+
+/* A segment's bytes into `acc`. The component bytes and records are the C library's blocks (cow_state_free frees
+   them with free), so their size is the allocator's. */
+static void cow_seg_split_bytes(const CowSeg *s, CowChainBytes *acc) {
+    acc->entries += (long)sizeof *s + (long)s->n * (long)sizeof(CowEntry);
+    for (int i = 0; i < s->n; i++) {
+        const CowEntry *e = &s->e[i];
+        long b = 0;
+
+        if (!e->is_state || (e->state_kind != COW_STATE_HOST && e->state_kind != COW_STATE_BODY &&
+                             e->state_kind != COW_STATE_HOST_REC))
+            continue;
+        if (e->a_base) b += (long)malloc_usable_size(e->a_base);
+        if (e->a_cur) b += (long)malloc_usable_size(e->a_cur);
+        if (e->state_kind == COW_STATE_HOST_REC) acc->rec += b; else acc->pod += b;
+    }
+}
+
+void cow_chain_split_resident(const CowDelta *d, CowChainBytes *acc) {
+    DCHECK(g_split_gen != 0, "a chain split was walked before its census began");
+    for (CowSeg *s = d->base; s != NULL && s->split != g_split_gen; s = s->base) {
+        s->split = g_split_gen;
+        cow_seg_split_bytes(s, acc);
+    }
+}
+
+void cow_chain_split_stub(const CowDelta *d, CowChainBytes *acc) {
+    DCHECK(g_split_gen != 0, "a chain split was walked before its census began");
+    for (CowSeg *s = d->base; s != NULL && s->split != g_split_gen && s->split != g_split_gen + 1; s = s->base) {
+        s->split = g_split_gen + 1;
+        cow_seg_split_bytes(s, acc);
     }
 }
 

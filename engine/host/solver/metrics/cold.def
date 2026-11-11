@@ -119,6 +119,21 @@ METRIC(sold_named, "soldNamed", LIFETIME, "object", PROCESS, "solver/engine.c", 
 METRIC(sale_over_reserve, "saleOverReserve", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 METRIC(sale_reserve_kib, "saleReserveKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
 METRIC(sale_need_max_kib, "saleNeedMaxKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
+/* …and what held memory at the RAM floor's last answer (engine_floor_census), 0 before the first: the C heap's
+   live bytes and footprint, the runtime's share, the sale reserve held, the written stubs standing and those on
+   the disk tier, their writes' bytes still resident, the frozen heap chain a resident member stands on, and the
+   chain written stubs alone stand on: its entries, and the component bytes and records they own. */
+METRIC(floor_live_kib, "floorLiveKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
+METRIC(floor_footprint_kib, "floorFootprintKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
+METRIC(floor_js_kib, "floorJsKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
+METRIC(floor_reserve_kib, "floorReserveKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
+METRIC(floor_stubs, "floorStubs", GAUGE, "member", PROCESS, "solver/engine.c", INT)
+METRIC(floor_stubs_spilled, "floorStubsSpilled", GAUGE, "member", PROCESS, "solver/engine.c", INT)
+METRIC(floor_sold_kib, "floorSoldKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
+METRIC(floor_chain_resident_kib, "floorChainResidentKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
+METRIC(floor_chain_stub_kib, "floorChainStubKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
+METRIC(floor_chain_stub_pod_kib, "floorChainStubPodKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
+METRIC(floor_chain_stub_rec_kib, "floorChainStubRecKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
 METRIC(forks, "forks", LIFETIME, "fork", AGENT, "solver/engine.c", INT)
 /* `resumed` is the positive statement that a rebuild ran, always present: `resumed: 0` says
    no residue was handed over, so zeroes beside it are not a verdict. `resumedSegs`/`Flows`/

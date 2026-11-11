@@ -1657,6 +1657,17 @@ char *result_cold_json(void) {
     METRIC_SET(sale_over_reserve, e.sale_over_reserve);
     METRIC_SET(sale_reserve_kib, e.sale_reserve_kib);
     METRIC_SET(sale_need_max_kib, e.sale_need_max_kib);
+    METRIC_SET(floor_live_kib, e.floor_live_kib);
+    METRIC_SET(floor_footprint_kib, e.floor_footprint_kib);
+    METRIC_SET(floor_js_kib, e.floor_js_kib);
+    METRIC_SET(floor_reserve_kib, e.floor_reserve_kib);
+    METRIC_SET(floor_stubs, e.floor_stubs);
+    METRIC_SET(floor_stubs_spilled, e.floor_stubs_spilled);
+    METRIC_SET(floor_sold_kib, e.floor_sold_kib);
+    METRIC_SET(floor_chain_resident_kib, e.floor_chain_resident_kib);
+    METRIC_SET(floor_chain_stub_kib, e.floor_chain_stub_kib);
+    METRIC_SET(floor_chain_stub_pod_kib, e.floor_chain_stub_pod_kib);
+    METRIC_SET(floor_chain_stub_rec_kib, e.floor_chain_stub_rec_kib);
     METRIC_SET(forks, e.forks);
     METRIC_SET(resumed, ran);
     METRIC_SET(resumed_segs, resumed.segs);

@@ -531,6 +531,14 @@ void cow_chain_stats(long *segs, long *entries);
    rather than multiplied out by the caller: `sizeof(CowEntry)` is private, and a caller that guessed it would
    report a number that drifts the next time an entry kind is added. */
 long cow_chain_bytes(void);
+/* The chain's bytes by who stands on it, for a census at the RAM floor (engine.c's engine_floor_census): begin,
+   add each resident delta's chain, then each stub's. A segment counts once, as resident when a resident chain
+   reaches it, else under the first stub reaching it, its bytes split into its entries, the component bytes
+   (HOST, BODY) and the component records (HOST_REC) they own. Allocates nothing. */
+typedef struct { long entries, pod, rec; } CowChainBytes;
+void cow_chain_split_begin(void);
+void cow_chain_split_resident(const CowDelta *d, CowChainBytes *acc);
+void cow_chain_split_stub(const CowDelta *d, CowChainBytes *acc);
 
 /* THE OBJECTS ONE DELTA HOLDS — every object value its head and its frozen chain own a counted reference to: a
    captured slot's owner and its base and current descriptors, a strong map record's operands, a component

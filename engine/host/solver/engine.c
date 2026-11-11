@@ -12987,6 +12987,42 @@ static int engine_sale_spill(Flow *f) {
     return 1;
 }
 
+/* What held memory at the RAM floor's last answer, in bytes (engine.h's `floor_*` rows): the C heap's live bytes
+   and footprint, the runtime's share, the sale reserve held, the written stubs standing and those on the disk
+   tier, their writes' bytes still resident, and the frozen heap chain split by who stands on it. A walk of the
+   registry and the chains that allocates nothing, since it runs where the allocator has refused. */
+static struct {
+    long live, footprint, js, reserve, stubs, spilled, sold;
+    CowChainBytes resident, stub;
+} g_floor;
+
+static void engine_floor_census(void) {
+    JSLiveCounts lc;
+
+    memset(&g_floor, 0, sizeof g_floor);
+    g_floor.live = (long)c_alloc_live();
+    g_floor.footprint = (long)c_alloc_footprint();
+    JS_GetLiveCounts(JS_GetRuntime(g_sess_ctx), &lc);
+    g_floor.js = (long)lc.malloc_size;
+    g_floor.reserve = g_sale_reserve ? (long)g_sale_reserve_bytes : 0;
+    cow_chain_split_begin();
+    for (int m = 0; m < flow_count(); m++) {
+        const Flow *f = flow_at(m);
+        if (!flow_cold(f) && f->delta) cow_chain_split_resident(f->delta, &g_floor.resident);
+    }
+    for (int m = 0; m < flow_count(); m++) {
+        const Flow *f = flow_at(m);
+        const uint8_t *gb;
+
+        if (!flow_cold(f) || f->sold == NULL) continue;
+        DCHECK(f->delta != NULL, "a written stub stands on no delta — its restore reads its chain");
+        g_floor.stubs++;
+        if (f->sold->spill_key) g_floor.spilled++;
+        else g_floor.sold += (long)(JS_FlowGraphBytes(f->sold->g, &gb) + f->sold->head_n + (size_t)f->sold->track_n);
+        cow_chain_split_stub(f->delta, &g_floor.stub);
+    }
+}
+
 /* A spilled stub's bytes, read back from the disk tier before its restore reads them. */
 static void engine_sale_fill(FlowSold *s) {
     uint8_t *bufs[3];
@@ -13330,6 +13366,7 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
            two take opposite work: here the pager was consulted and had nothing, there it was consulted where it
            may not act. */
         g_reclaim_floor++;
+        engine_floor_census();
         return 0;
     }
     /* The sharper statement: flow_worst is constructed to exclude the flow the scheduler is switched into, and
@@ -15321,6 +15358,17 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->restored_spilled = g_restored_spilled;
     out->sale_over_reserve = g_sale_over_reserve;
     out->sale_reserve_kib = g_sale_reserve ? (long)(g_sale_reserve_bytes / 1024) : 0;
+    out->floor_live_kib = g_floor.live / 1024;
+    out->floor_footprint_kib = g_floor.footprint / 1024;
+    out->floor_js_kib = g_floor.js / 1024;
+    out->floor_reserve_kib = g_floor.reserve / 1024;
+    out->floor_stubs = g_floor.stubs;
+    out->floor_stubs_spilled = g_floor.spilled;
+    out->floor_sold_kib = g_floor.sold / 1024;
+    out->floor_chain_resident_kib = (g_floor.resident.entries + g_floor.resident.pod + g_floor.resident.rec) / 1024;
+    out->floor_chain_stub_kib = g_floor.stub.entries / 1024;
+    out->floor_chain_stub_pod_kib = g_floor.stub.pod / 1024;
+    out->floor_chain_stub_rec_kib = g_floor.stub.rec / 1024;
     out->sale_need_max_kib = (long)(g_sale_need_max / 1024);
     out->pressure_sold      = g_pressure_sold;
     out->pressure_collects  = g_pressure_collects;
