@@ -1270,7 +1270,7 @@ static Cons *cons_entry(const char *key) {
     g_pins_n++;
     if (!g_pins_hash || g_pins_hash_cap < g_pins_n * 2) cons_hash_rebuild();
     else cons_hash_put(g_pins_n - 1);
-    DCHECK(cons_index_find(g_pins, g_pins_hash, g_pins_hash_cap, key) == g_pins_n - 1,
+    DCHECK(cons_index_find_unpriced(g_pins, g_pins_hash, g_pins_hash_cap, key) == g_pins_n - 1,
            "a constraint entry is not findable through the index that was just given it — a later read of the "
            "same fact would fork a branch this flow has already decided");
     return &g_pins[g_pins_n - 1];

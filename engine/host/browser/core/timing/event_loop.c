@@ -7,6 +7,7 @@
 #include "core/agent.h"
 #include "core/agent_state.h"
 #include "core/timing/event_loop.h"
+#include "core/timing/thread_work.h"   /* the unpriced pair the decided read runs under */
 #include "solver/concolic.h"   /* a moment can be unknown external input, and its ordering is a predicate */
 #include "solver/decide.h"     /* …asked as a restartable branch, and read back by this file's invariants */
 #include "solver/flow.h"       /* the clock's second mover writes into the RUNNING flow's delta, and asserts it */
@@ -375,7 +376,13 @@ int event_loop_before(JSContext *ctx, JSValueConst a, JSValueConst b)
 
 int event_loop_before_decided(JSContext *ctx, JSValueConst a, JSValueConst b)
 {
-    return el_rel(ctx, a, b, EL_BEFORE, 0);
+    int r;
+
+    /* An assert's read, so it prices nothing: its probe of the constraint is one a release build does not make. */
+    thread_work_unpriced_begin();
+    r = el_rel(ctx, a, b, EL_BEFORE, 0);
+    thread_work_unpriced_end();
+    return r;
 }
 
 int event_loop_coincident(JSContext *ctx, JSValueConst a, JSValueConst b)
