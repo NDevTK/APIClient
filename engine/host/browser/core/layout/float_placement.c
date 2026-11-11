@@ -11,7 +11,6 @@
 #include "core/layout/float_placement.h"
 #include "core/layout/flow_placement.h"
 #include "core/layout/flow_position.h"
-#include "core/layout/intrinsic_size.h"
 #include "core/layout/used_value.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
@@ -63,10 +62,13 @@ bool float_placement_band(const FlowFloatBox *placed, size_t n, CssPx y, CssPx h
 
 bool float_placement_margin_width_ask(lxb_dom_element_t *f, CssPx *out)
 {
-    /* §10.3.5's shrink-to-fit width reads the float's content, measured first so a resting drive can stop. */
-    if (css_computed_length_is(f, "width", CSS_KEYWORD_AUTO) && !intrinsic_inline_sizes_ask(f)) return false;
-    *out = css_px_add(used_value_border_edge_px(f, false),
-                      css_px_add(used_value_px(f, "margin-left"), used_value_px(f, "margin-right")));
+    CssPx border;
+
+    /* §10.3.5's shrink-to-fit width reads the float's content, and §10.1's chain of containing-block widths
+       (which `get_place` reads for the float's band) can itself be a shrink-to-fit width that reads its
+       content; both are asked first so a resting drive can stop. */
+    if (!used_value_border_edge_ask(f, false, &border)) return false;
+    *out = css_px_add(border, css_px_add(used_value_px(f, "margin-left"), used_value_px(f, "margin-right")));
     return true;
 }
 

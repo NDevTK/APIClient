@@ -25,7 +25,8 @@ bool float_placement_ask(lxb_dom_element_t *f, FlowFloatBox *out);
    which defers to the fill for such a float. */
 bool float_placement_place_at(lxb_dom_element_t *f, CssPx top, FlowFloatBox *out);
 
-/* The width of float `f`'s margin box. False ("not yet") when its shrink-to-fit measurement was deferred. */
+/* The width of float `f`'s margin box. False ("not yet") when its shrink-to-fit measurement, or one on §10.1's
+   chain of its containing blocks' widths, was deferred; once true, that chain's widths read without a drive. */
 bool float_placement_margin_width_ask(lxb_dom_element_t *f, CssPx *out);
 
 /* The left content edge of block container `cb` in the content-box frame of its context root `root`. */
