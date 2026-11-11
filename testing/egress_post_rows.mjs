@@ -2,9 +2,9 @@
 // a page from a loopback server that records every request, so each row reads what reached the server beside the
 // zone's `@EGRESS` lines. The page's unforced boot POSTs JSON and reads the reply; it POSTs two bodies to one
 // address; and on an arm that assumes absent state it POSTs to a new address and repeats a POST its unforced run
-// already made. It also sends a header whose value is an unknown with an example (`navigator.language`) and one
-// whose value is an unknown with none (`location.hash`), by fetch() and by XMLHttpRequest. The control is the
-// seed load: the server served the page, or nothing below is a reading.
+// already made. It also sends a header whose value is an unknown with an example (`navigator.language`) and, on
+// the arm that contradicts that example, the same unknown with no bytes, by fetch() and by XMLHttpRequest. The
+// control is the seed load: the server served the page, or nothing below is a reading.
 //
 //   node testing/egress_post_rows.mjs [path-to-native-binary]      (after `node engine/build.mjs native`)
 "use strict";
@@ -35,9 +35,11 @@ fetch('/api/same', { method: 'POST', body: 's=1' }).then(function () {
   }
 });
 fetch('/api/hdr-ex', { headers: { 'X-Probe': navigator.language } });
-fetch('/api/hdr-unk', { headers: { 'X-Probe': location.hash } });
 var xe = new XMLHttpRequest(); xe.open('GET', '/api/xhr-ex'); xe.setRequestHeader('X-Probe', navigator.language); xe.send();
-var xu = new XMLHttpRequest(); xu.open('GET', '/api/xhr-unk'); xu.setRequestHeader('X-Probe', location.hash); xu.send();
+if (navigator.language !== 'en-US') {
+  fetch('/api/hdr-unk', { headers: { 'X-Probe': navigator.language } });
+  var xu = new XMLHttpRequest(); xu.open('GET', '/api/xhr-unk'); xu.setRequestHeader('X-Probe', navigator.language); xu.send();
+}
 </script>`;
 
 /* Every request that arrived, as "METHOD path?query <body> <content-type> <x-page>". */
@@ -116,7 +118,7 @@ const ROWS = [
     ['what the entry states', bytes(sends('GET', '/api/hdr-ex')), 'example x-probe:example']]],
   ['a fetch() header value with no example is listed, judged and not sent',
    [['GET /api/hdr-unk', got('GET', '/api/hdr-unk').length, 0],
-    ['how the zone answered it', said(sends('GET', '/api/hdr-unk')), 'not-sent/none bytes=unknown'],
+    ['what refused it', refusals(sends('GET', '/api/hdr-unk')), 'bytes=unknown'],
     ['what the entry states', bytes(sends('GET', '/api/hdr-unk')), 'unknown x-probe:unknown']]],
   ['an XMLHttpRequest header value is judged the same way: the example leaves, the value with no bytes does not',
    [['GET /api/xhr-ex', got('GET', '/api/xhr-ex').length, 1],

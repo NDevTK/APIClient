@@ -26783,35 +26783,47 @@ TF_UNIT void probes_hdrclass(const char *js, Probe *tab, int *n) {
     fold_row(&fi_tt, &fi_why, tf_seen_content("https://x.test/api/hc-ex ", "[\"x-lang\",\"en-US\",\"example\"]"),
              "a header value that is an unknown with an example was not shown as the example's bytes with the "
              "class `example`: Fetch §5.1's fill wrote the display shape and stated no class");
-    fold_row(&fi_tt, &fi_why, tf_seen_content("https://x.test/api/hc-unk ", "\"x-frag\",\"") &&
-                              tf_seen_content("https://x.test/api/hc-unk ", ",\"unknown\"]"),
-             "a header value that is an unknown with no example was not shown with the class `unknown`: the "
-             "display shape was stated as bytes a host may send");
+    fold_row(&fi_tt, &fi_why, tf_seen_content("https://x.test/api/hc-hash ", "[\"x-frag\",\"\",\"example\"]"),
+             "a header value that is the document's fragment was not shown as the empty fragment this document "
+             "has, with the class `example`");
+    fold_row(&fi_tt, &fi_why,
+             tf_seen_content("https://x.test/api/hc-unk ", "[\"x-lang\",\"{navigator.language}\",\"unknown\"]"),
+             "a header value whose unknown has no example on its path was not shown as the display shape with "
+             "the class `unknown`: a value with no bytes was stated as bytes a host may send");
     const char *me_why = NULL; int me_tt = 1;
     fold_row(&me_tt, &me_why, !!strstr(js, "\"/api/hc-members\""),
-             "NOT REACHED: there is no /api/hc-members record, so the Headers object's request never ran");
+             "NOT REACHED: there is no /api/hc-members record, so the Request with a written Headers never ran");
     fold_row(&me_tt, &me_why, tf_seen_content("https://x.test/api/hc-members ", "[\"x-lang\",\"en-US\",\"example\"]"),
              "Fetch §5.1's set over an unknown with an example did not carry the example's bytes and the class "
-             "`example` to the request the Headers object was given to");
-    fold_row(&me_tt, &me_why, tf_seen_content("https://x.test/api/hc-members ", ",\"unknown\"]"),
-             "Fetch §5.1's append over an unknown with no example did not carry the class `unknown` to the "
-             "request the Headers object was given to");
+             "`example` to the request whose Headers object it wrote");
+    fold_row(&me_tt, &me_why, tf_seen_content("https://x.test/api/hc-members ", "[\"x-own\",\"bytes\",\"concrete\"]"),
+             "Fetch §5.1's append of bytes beside an unknown value was not shown with the class `concrete`");
+    /* A Headers object given as an init is read back through its iterator (Fetch §5.1's fill over a sequence). */
+    const char *rd_why = NULL; int rd_tt = 1;
+    fold_row(&rd_tt, &rd_why, !!strstr(js, "\"/api/hc-read\""),
+             "NOT REACHED: there is no /api/hc-read record, so the Headers object's request never ran");
+    fold_row(&rd_tt, &rd_why, tf_seen_content("https://x.test/api/hc-read ", "[\"x-lang\",\"en-US\",\"example\"]"),
+             "a Headers object's iterator handed the page the display shape of an unknown value as a string, so "
+             "the request filled from it states the shape as bytes with the class `concrete`: the read members "
+             "of Fetch §5.1 (get, the iterator, getSetCookie) owe the page the unknown itself");
     const char *xh_why = NULL; int xh_tt = 1;
-    fold_row(&xh_tt, &xh_why, !!strstr(js, "/api/hc-xhr\""),
-             "NOT REACHED: there is no /api/hc-xhr record, so the XMLHttpRequest was never sent");
+    fold_row(&xh_tt, &xh_why, !!strstr(js, "/api/hc-xhr\"") && !!strstr(js, "/api/hc-xhr-unk\""),
+             "NOT REACHED: there is no /api/hc-xhr or no /api/hc-xhr-unk record, so an XMLHttpRequest was never "
+             "sent");
     fold_row(&xh_tt, &xh_why, tf_seen_content("/api/hc-xhr\"", "[\"X-Lang\",\"en-US\",\"example\"]"),
              "XHR §3.5.2's setRequestHeader over an unknown with an example did not state the example's bytes "
              "and the class `example` on the xhr.send record");
     fold_row(&xh_tt, &xh_why, tf_seen_content("/api/hc-xhr\"", "[\"X-Both\",\"a, en-US\",\"example\"]"),
              "Fetch §5.1's combine of bytes with an unknown that has an example did not state the combined "
              "example `a, en-US` with the class `example`");
-    fold_row(&xh_tt, &xh_why, tf_seen_content("/api/hc-xhr\"", "[\"X-Frag\",\"b, ") &&
-                              tf_seen_content("/api/hc-xhr\"", ",\"unknown\"]"),
+    fold_row(&xh_tt, &xh_why,
+             tf_seen_content("/api/hc-xhr-unk\"", "[\"X-Both\",\"a, {navigator.language}\",\"unknown\"]"),
              "Fetch §5.1's combine of bytes with an unknown that has no example did not state the class "
              "`unknown`: a value half of which has no bytes was shown as bytes");
     const Probe rows[] = {
         { "hdrclass-fill", fi_tt, "/api/hc-unk", SESS_EXPLORE, fi_why },
         { "hdrclass-members", me_tt, "/api/hc-members", SESS_EXPLORE, me_why },
+        { "hdrclass-read", rd_tt, "/api/hc-read", SESS_EXPLORE, rd_why },
         { "hdrclass-xhr", xh_tt, "/api/hc-xhr", SESS_EXPLORE, xh_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));

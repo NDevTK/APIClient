@@ -1,8 +1,10 @@
 /* The header-value-class document: requests whose header values are bytes the page wrote, an unknown with an
-   example (`navigator.language`), and an unknown with none (`location.hash`), set through a fetch() init
-   record, through a Headers object's set and append, and through XMLHttpRequest's setRequestHeader, where two
-   values of one name combine. A host is shown each value as the bytes it would send with the class of those
-   bytes: the example for an unknown that has one, the display shape for one that has none.
+   example (`navigator.language`; `location.hash`, whose example is the document's own empty fragment), and an
+   unknown with none (`navigator.language` on the arm that contradicts its example). They are written through a
+   fetch() init record, through a Request's Headers object, through a Headers object given as an init (which
+   Fetch §5.1's fill reads back through the object's iterator), and through XMLHttpRequest's setRequestHeader,
+   where two values of one name combine. A host is shown each value as the bytes it would send with the class
+   of those bytes: the example for an unknown that has one, the display shape for one that has none.
    Witness addresses are constants. One of test_forced.c's exploring documents (its TF_DOCS table). It ends
    with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_HDRCLASS_H
@@ -16,13 +18,19 @@ static const char HTML_HDRCLASS[] =
     "<script>"
     "fetch('/api/hc-own', { headers: { 'X-Own': 'literal' } });"
     "fetch('/api/hc-ex', { headers: { 'X-Lang': navigator.language } });"
-    "fetch('/api/hc-unk', { headers: { 'X-Frag': location.hash } });"
+    "fetch('/api/hc-hash', { headers: { 'X-Frag': location.hash } });"
+    "if (navigator.language !== 'en-US') fetch('/api/hc-unk', { headers: { 'X-Lang': navigator.language } });"
+    "</script>"
+    "<script>"
+    "var hcR = new Request('/api/hc-members');"
+    "hcR.headers.set('X-Lang', navigator.language);"
+    "hcR.headers.append('X-Own', 'bytes');"
+    "fetch(hcR);"
     "</script>"
     "<script>"
     "var hcH = new Headers();"
     "hcH.set('X-Lang', navigator.language);"
-    "hcH.append('X-Frag', location.hash);"
-    "fetch('/api/hc-members', { headers: hcH });"
+    "fetch('/api/hc-read', { headers: hcH });"
     "</script>"
     "<script>"
     "var hcX = new XMLHttpRequest();"
@@ -30,9 +38,14 @@ static const char HTML_HDRCLASS[] =
     "hcX.setRequestHeader('X-Lang', navigator.language);"
     "hcX.setRequestHeader('X-Both', 'a');"
     "hcX.setRequestHeader('X-Both', navigator.language);"
-    "hcX.setRequestHeader('X-Frag', 'b');"
-    "hcX.setRequestHeader('X-Frag', location.hash);"
     "hcX.send();"
+    "if (navigator.language !== 'en-US') {"
+    "  var hcY = new XMLHttpRequest();"
+    "  hcY.open('GET', '/api/hc-xhr-unk');"
+    "  hcY.setRequestHeader('X-Both', 'a');"
+    "  hcY.setRequestHeader('X-Both', navigator.language);"
+    "  hcY.send();"
+    "}"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
