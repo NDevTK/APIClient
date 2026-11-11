@@ -329,9 +329,9 @@ static void wpt_owe(JSContext *ctx, JSValueConst deliver, JSValueConst value, co
         DCHECK(g_owed[i].body_len == req->body_len &&
                (req->body_len == 0 || (g_owed[i].body && req->body &&
                                        !memcmp(g_owed[i].body, req->body, req->body_len))),
-               "two outstanding requests share one (method, url) and differ in BODY — the reply seam names the "
-               "pair and not the body, so whichever is answered first answers both and one flow resumes with "
-               "the reply to a question it never asked. Put the whole request's identity on the line");
+               "two outstanding requests share one (method, url) and differ in BODY — this runner's table of "
+               "owed requests is keyed on the pair, so it would send one body for both lines. Read each line's "
+               "header list and body with engine_pending_request and delete this table");
         /* Park the flow on its own register, as the extension does. */
         engine_pending_fetch_url(ctx, deliver, value, req);
         return;
@@ -447,8 +447,9 @@ typedef struct {
     int      cancelled;        /* a `fetch.cancel` notice named it: the bytes finish, the reply reaches nobody */
     char    *method, *url;     /* with `mode`, the key engine_provide delivers on; `url` is what an answer reports */
     char    *mode;             /* Fetch §2.2.5's request mode, the line's own word */
-    char    *referrer_policy;  /* …and the line's referrer policy and referrer, the rest of the key */
+    char    *referrer_policy;  /* …and the line's referrer policy, referrer and digest words, the rest of the key */
     char    *referrer;
+    char    *headers_key, *body_key;
     char    *authority;        /* which pool this request draws its connection from */
     uint64_t conn;             /* the connection carrying it; 0 before it has one */
     int      reused;           /* it was put on an already-open connection; see §9.3.1 Retrying Requests */
@@ -487,16 +488,19 @@ static WptConn *wpt_conn_find(uint64_t id)
 
 /* Whether this question is already asked. The pending registers list an entry until it is answered, so a host
    issuing from them at every slice boundary would send a page's one `fetch` once per slice. Two functions because
-   the delivery has two keys: a network park is its five-field identity (engine.h) and a host request is its id. */
-static bool wpt_request_asked(const char *method, const char *mode, const char *referrer_policy,
-                              const char *referrer, const char *url)
+   the delivery has two keys: a network park is its identity (solver/pending_index.h's PendRequestKey) and a host
+   request is its id. */
+static bool wpt_request_asked(const PendRequestKey *k)
 {
+    const char *method = k->method, *mode = k->mode, *referrer_policy = k->referrer_policy;
+    const char *referrer = k->referrer, *url = k->url;
     int i;
     for (i = 0; i < g_inflight_n; i++)
         if (g_inflight[i].deliver == WPT_DELIVER_FETCH && !g_inflight[i].cancelled &&
             !strcmp(g_inflight[i].method, method) && !strcmp(g_inflight[i].mode, mode) &&
             !strcmp(g_inflight[i].referrer_policy, referrer_policy) &&
-            !strcmp(g_inflight[i].referrer, referrer) && !strcmp(g_inflight[i].url, url)) return true;
+            !strcmp(g_inflight[i].referrer, referrer) && !strcmp(g_inflight[i].headers_key, k->headers) &&
+            !strcmp(g_inflight[i].body_key, k->body) && !strcmp(g_inflight[i].url, url)) return true;
     return false;
 }
 
@@ -608,7 +612,10 @@ static void wpt_request_attach(WptRequest *r, int force_new)
 
 /* Begin one request against the corpus server and return, whatever stage it reaches. The socket is non-blocking
    from before the connect, so no stage below can hold this thread. */
-static uint64_t wpt_request_begin(const FetchRequest *req, int deliver, uint32_t id)
+/* `headers_key` and `body_key` are a network park's digest words off its pending line, NULL for a request
+   answered by id. */
+static uint64_t wpt_request_begin(const FetchRequest *req, int deliver, uint32_t id, const char *headers_key,
+                                  const char *body_key)
 {
     UrlRecord base, rec;
     char *path = NULL, *authority = NULL;
@@ -629,7 +636,9 @@ static uint64_t wpt_request_begin(const FetchRequest *req, int deliver, uint32_t
     r->mode = strdup(req->mode != FETCH_MODE_UNPLACED ? fetch_mode_token(req->mode) : "");
     r->referrer_policy = strdup(req->referrer_policy ? req->referrer_policy : "");
     r->referrer = strdup(req->referrer ? req->referrer : "");
-    CHECK(r->method && r->url && r->mode && r->referrer_policy && r->referrer,
+    r->headers_key = strdup(headers_key ? headers_key : "");
+    r->body_key = strdup(body_key ? body_key : "");
+    CHECK(r->method && r->url && r->mode && r->referrer_policy && r->referrer && r->headers_key && r->body_key,
           "wpt: OOM recording a request in flight");
 
     url_record_init(&base);
@@ -1085,7 +1094,7 @@ static void wpt_request_release(int i)
     WptConn *c = r->conn ? wpt_conn_find(r->conn) : NULL;
 
     if (c) { c->owner = 0; wpt_conn_release(c); }
-    free(r->method); free(r->mode); free(r->referrer_policy); free(r->referrer); free(r->url); free(r->authority); free(r->out); free(r->body);
+    free(r->method); free(r->mode); free(r->referrer_policy); free(r->referrer); free(r->headers_key); free(r->body_key); free(r->url); free(r->authority); free(r->out); free(r->body);
     header_list_free(&r->hdrs);
     g_inflight[i] = g_inflight[--g_inflight_n];
 }
@@ -1203,8 +1212,10 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
             filled = 1;
         } else {
             /* This host is the server the request reaches, and its one document is the session's own. */
-            filled = engine_provide(ctx, r->method, r->mode, r->referrer_policy, r->referrer, r->url,
-                                    REPLY_HOW_TOKEN_SENT, PENDING_PROVENANCE_OBSERVED, reply);
+            PendRequestKey key = { r->method, r->mode, r->referrer_policy, r->referrer, r->headers_key,
+                                   r->body_key, r->url };
+
+            filled = engine_provide(ctx, &key, REPLY_HOW_TOKEN_SENT, PENDING_PROVENANCE_OBSERVED, reply);
             /* A reply for a pair no flow is parked on is asserted by engine_provide; a park dropped before its
                reply was withdrawn with `fetch.cancel`, which marks this request cancelled above. */
             /* The request record this answered, released only now: it holds the body and headers of the question,
@@ -1282,7 +1293,7 @@ static int wpt_net_pump(JSContext *ctx, int block)
    delivery turns into `fetch`'s TypeError, the answer a real network error gives. */
 static char *wpt_http(const FetchRequest *req, size_t *plen, int *pstatus, HeaderList *phdrs)
 {
-    uint64_t seq = wpt_request_begin(req, WPT_DELIVER_SYNC, 0);
+    uint64_t seq = wpt_request_begin(req, WPT_DELIVER_SYNC, 0, NULL, NULL);
     WptRequest *r;
     char *body;
     int i;
@@ -1327,7 +1338,7 @@ static int wpt_issue_pending(void)
     for (p = list; *p; ) {
         char *end = strchr(p, '\n');
         const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
-        const char *referrer_policy, *referrer, *address, *askers;
+        const char *referrer_policy, *referrer, *headers_key, *body_key, *address, *askers;
         FetchRequest req = {0};   /* §2.2.5 metadata stated as "nothing yet": these are the runner's own
                                      HTTP client requests and reach no park, so a zero is the named abort a
                                      future reader gets rather than a stack address it would compare bytes at */
@@ -1343,7 +1354,7 @@ static int wpt_issue_pending(void)
            is the vocabulary assert, since a runner reading a field it never checked would see the producer drift
            first. */
         engine_pending_split(p, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
-                             &mode, &referrer_policy, &referrer, &address, &askers, &url);
+                             &mode, &referrer_policy, &referrer, &headers_key, &body_key, &address, &askers, &url);
         DCHECK(!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO),
                "the pending join stated a drive mark that is neither token engine.h declares");
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
@@ -1360,7 +1371,11 @@ static int wpt_issue_pending(void)
         (void)fetch_credentials_of_token(credentials);
         /* An entry stays listed until it is answered and this host visits the list at every slice, so without
            this the page's one `fetch` would become one request per slice at the server. */
-        if (wpt_request_asked(method, mode, referrer_policy, referrer, url)) { p = end + 1; continue; }
+        {
+            PendRequestKey key = { method, mode, referrer_policy, referrer, headers_key, body_key, url };
+
+            if (wpt_request_asked(&key)) { p = end + 1; continue; }
+        }
         for (i = 0; i < g_owed_n; i++)
             if (!strcmp(g_owed[i].url, url) && !strcmp(g_owed[i].method, method)) { rec = i; break; }
         req.method = method;
@@ -1384,7 +1399,9 @@ static int wpt_issue_pending(void)
         req.headers = rec >= 0 ? &g_owed[rec].headers : &none;
         req.body = rec >= 0 ? g_owed[rec].body : NULL;
         req.body_len = rec >= 0 ? g_owed[rec].body_len : 0;
-        wpt_request_begin(&req, WPT_DELIVER_FETCH, 0);
+        /* this runner's own wire request reaches no park, so the class is only the record's shape */
+        req.body_class = req.body ? FETCH_BODY_CONCRETE : FETCH_BODY_NONE;
+        wpt_request_begin(&req, WPT_DELIVER_FETCH, 0, headers_key, body_key);
         issued++;
         p = end + 1;
     }
@@ -1849,12 +1866,12 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        so one outside a park is a park this host did not ask for. engine_notify_worlds_gone is also called by
        solver/flow.c's flow_release whenever a flow leaves the frontier, which is ordinary traffic. */
     /* `fetch.cancel <identity>`: no flow is owed this request any more. The identity is a park's
-       `<method> <mode> <referrer policy> <referrer> <url>` (engine_pending_withdrawn) or a rendezvous id
+       `<method> <mode> <referrer policy> <referrer> <headers> <body> <url>` (engine_pending_withdrawn) or a rendezvous id
        (engine_host_terminate), the key its reply would be delivered under. A send already on a connection
        finishes its bytes, since an HTTP/1.1 exchange ends only with its message or its connection, and is
        marked so its reply reaches nobody (wpt_request_finish releases a park's record). A park never sent has
        its record released here. */
-    if ((nf == 6 || nf == 2) && !strcmp(f[0], "fetch.cancel")) {
+    if ((nf == 8 || nf == 2) && !strcmp(f[0], "fetch.cancel")) {
         int i, sent = 0;
         uint32_t id = 0;
 
@@ -1871,11 +1888,12 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
             int named = nf == 2
                 ? r->deliver != WPT_DELIVER_FETCH && r->deliver != WPT_DELIVER_SYNC && r->id == id
                 : r->deliver == WPT_DELIVER_FETCH && !strcmp(r->method, f[1]) && !strcmp(r->mode, f[2]) &&
-                  !strcmp(r->referrer_policy, f[3]) && !strcmp(r->referrer, f[4]) && !strcmp(r->url, f[5]);
+                  !strcmp(r->referrer_policy, f[3]) && !strcmp(r->referrer, f[4]) &&
+                  !strcmp(r->headers_key, f[5]) && !strcmp(r->body_key, f[6]) && !strcmp(r->url, f[7]);
             if (named && !r->cancelled) { r->cancelled = 1; sent = 1; }
         }
-        for (i = 0; nf == 6 && !sent && i < g_owed_n; i++)
-            if (!strcmp(g_owed[i].url, f[5]) && !strcmp(g_owed[i].method, f[1])) { wpt_owed_forget(i); break; }
+        for (i = 0; nf == 8 && !sent && i < g_owed_n; i++)
+            if (!strcmp(g_owed[i].url, f[7]) && !strcmp(g_owed[i].method, f[1])) { wpt_owed_forget(i); break; }
         free(whole);
         return;
     }
@@ -2123,7 +2141,7 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                 req.headers = &none;
                 req.body = NULL;
                 req.body_len = 0;
-                wpt_request_begin(&req, WPT_DELIVER_DOCUMENT, id);
+                wpt_request_begin(&req, WPT_DELIVER_DOCUMENT, id, NULL, NULL);
                 answered = true;
             }
         }
@@ -2184,11 +2202,12 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             req.headers = &hdrs;
             req.body = bodys;
             req.body_len = blen;
+            req.body_class = bodys ? FETCH_BODY_CONCRETE : FETCH_BODY_NONE;
             /* Asked, not awaited. `xml_http_request.c` calls this park "the one rendezvous in this engine that
                BLOCKS a flow": the flow blocks, the thread it shares with every other flow of the document does
                not. The whole request is serialized into the record before this returns, so nothing borrowed here
                outlives the call. */
-            wpt_request_begin(&req, WPT_DELIVER_XHR, id);
+            wpt_request_begin(&req, WPT_DELIVER_XHR, id, NULL, NULL);
             answered = true;
             header_list_free(&hdrs);
             if (method) JS_FreeCString(ctx, method);

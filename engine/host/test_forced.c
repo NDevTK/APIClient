@@ -1163,18 +1163,18 @@ static struct {
     int due;          /* the payment that answered TF_REPLYTWICE_DUE, or -1 */
     int cancels;      /* `fetch.cancel` notices naming the pair when the answer became owed */
     int withdrawn;    /* owed answers a `fetch.cancel` took back */
-    char *pair[5];    /* the five-field identity the owed answer is written under */
+    char *pair[7];    /* the identity the owed answer is written under, in PendRequestKey's order */
 } g_tf_r2 = { 0, 0, -1, -1, 0, 0, { NULL } };
 static int g_tf_payments;
 
 /* Whether the bill's line for `abs` is held as an owed answer rather than answered now. */
-static int tf_replytwice_hold(const char *abs, const char *const pair[5]) {
+static int tf_replytwice_hold(const char *abs, const char *const pair[7]) {
     if (strcmp(abs, TF_REPLYTWICE_URL) || g_tf_r2.answered == 0) return 0;
     if (g_tf_r2.owed_at >= 0) return 1;
     g_tf_r2.owed_at = g_tf_payments;
     g_tf_r2.held++;
     g_tf_r2.cancels = tf_cancelled("/api/replytwice");
-    for (int k = 0; k < 5; k++) {
+    for (int k = 0; k < 7; k++) {
         g_tf_r2.pair[k] = strdup(pair[k]);
         CHECK(g_tf_r2.pair[k] != NULL, "the fixture could not record the request it owes an answer for");
     }
@@ -1184,16 +1184,17 @@ static int tf_replytwice_hold(const char *abs, const char *const pair[5]) {
 /* The provider's statement of what it holds (engine_set_provider): a bill line naming the owed pair. */
 static int tf_replytwice_holds(const char *line) {
     const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
-    const char *referrer_policy, *referrer, *address, *askers;
+    const char *referrer_policy, *referrer, *headers_key, *body_key, *address, *askers;
     char *one = strdup(line);
     int held;
 
     CHECK(one != NULL, "the fixture could not read a bill line it was asked about");
     engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
-                         &mode, &referrer_policy, &referrer, &address, &askers, &url);
+                         &mode, &referrer_policy, &referrer, &headers_key, &body_key, &address, &askers, &url);
     held = g_tf_r2.owed_at >= 0 && !strcmp(method, g_tf_r2.pair[0]) && !strcmp(mode, g_tf_r2.pair[1]) &&
            !strcmp(referrer_policy, g_tf_r2.pair[2]) && !strcmp(referrer, g_tf_r2.pair[3]) &&
-           !strcmp(url, g_tf_r2.pair[4]);
+           !strcmp(headers_key, g_tf_r2.pair[4]) && !strcmp(body_key, g_tf_r2.pair[5]) &&
+           !strcmp(url, g_tf_r2.pair[6]);
     free(one);
     return held;
 }
@@ -1223,14 +1224,18 @@ static int tf_replytwice_pay(JSContext *ctx) {
         header_list_append(&eh, "x-echo-method", g_tf_r2.pair[0]);
         reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody), list, 1, "application/json", "basic");
         header_list_free(&eh);
-        filled = engine_provide(ctx, g_tf_r2.pair[0], g_tf_r2.pair[1], g_tf_r2.pair[2], g_tf_r2.pair[3],
-                                g_tf_r2.pair[4], TF_REPLY_HOW, TF_REPLY_REACH, reply);
+        {
+            PendRequestKey key = { g_tf_r2.pair[0], g_tf_r2.pair[1], g_tf_r2.pair[2], g_tf_r2.pair[3],
+                                   g_tf_r2.pair[4], g_tf_r2.pair[5], g_tf_r2.pair[6] };
+
+            filled = engine_provide(ctx, &key, TF_REPLY_HOW, TF_REPLY_REACH, reply);
+        }
         JS_FreeValue(ctx, reply);
         g_tf_r2.answered++;
     } else {
         return 0;
     }
-    for (int k = 0; k < 5; k++) { free(g_tf_r2.pair[k]); g_tf_r2.pair[k] = NULL; }
+    for (int k = 0; k < 7; k++) { free(g_tf_r2.pair[k]); g_tf_r2.pair[k] = NULL; }
     g_tf_r2.owed_at = -1;
     return filled;
 }
@@ -1277,7 +1282,8 @@ static int fixture_provide(JSContext *ctx) {
         size_t len = nl ? (size_t)(nl - urls) : strlen(urls);
         char *one = malloc(len + 1);
         const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
-        const char *referrer_policy, *referrer, *address, *askers;
+        const char *referrer_policy, *referrer, *headers_key, *body_key, *address, *askers;
+        PendRequestKey key;
         UrlRecord rec;
         char *abs;
         JSValue reply;
@@ -1286,7 +1292,7 @@ static int fixture_provide(JSContext *ctx) {
         CHECK(one, "the fixture could not name the request it is answering");
         memcpy(one, urls, len); one[len] = 0;
         /* The line is `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>
-           MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL` and it is split by the
+           MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>HEADERS<TAB>BODY<TAB>ADDRESS<TAB>ASKERS<TAB>URL` and it is split by the
            engine's own splitter — the reply seam is keyed on the pair, so a fixture that answered the whole
            line as an address would match nothing. THIS FIXTURE ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT
            ITSELF, deliberately: what it exercises is the PATH (parked, delivered, resumed), and both a firing
@@ -1295,7 +1301,8 @@ static int fixture_provide(JSContext *ctx) {
            what a fixture is for; the DESTINATION's is asserted inside the splitter against Fetch §2.2.5's own
            enumeration, which is too long to restate at each host and is one table for that reason. */
         engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
-                             &mode, &referrer_policy, &referrer, &address, &askers, &url);
+                             &mode, &referrer_policy, &referrer, &headers_key, &body_key, &address, &askers, &url);
+        key = (PendRequestKey){ method, mode, referrer_policy, referrer, headers_key, body_key, url };
         DCHECK(!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO),
                "the pending join stated a drive mark that is neither token engine.h declares");
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
@@ -1354,21 +1361,22 @@ static int fixture_provide(JSContext *ctx) {
         if (!strcmp(abs, "https://x.test/api/xdmready")) g_xdm_ready = 1;
         if (!strcmp(abs, "https://x.test/api/chready")) g_ch_ready = 1;
         if (!strncmp(abs, "https://x.test/api/osdue", strlen("https://x.test/api/osdue"))) g_tf_held_due = 1;
-        if (tf_replytwice_hold(abs, (const char *const[5]){ method, mode, referrer_policy, referrer, url })) {
+        if (tf_replytwice_hold(abs, (const char *const[7]){ method, mode, referrer_policy, referrer, headers_key,
+                                                             body_key, url })) {
             /* Owed, and written by tf_replytwice_pay below once its lag has passed. */
         } else if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
             /* The zone's own token (extension/lib/safe-fetch.js): the signal and the value that refused. */
-            filled += engine_decline(ctx, method, mode, referrer_policy, referrer, url,
-                                     "blocked-signal:destination=program");
+            filled += engine_decline(ctx, &key, "blocked-signal:destination=program");
         } else if (!strncmp(abs, "https://x.test/api/decl", strlen("https://x.test/api/decl")) &&
                    (strcmp(method, "GET") || !strcmp(provenance, PENDING_PROVENANCE_FORCED) ||
                     !strcmp(driven, PENDING_DRIVEN_YES))) {
-            /* HTML_DECLINES's refusals, the unconfigured zone's: a method other than GET, and a request a fork
-               or a drive composed, for an origin nobody widened. */
+            /* HTML_DECLINES's refusals, in the zone's tokens: this fixture's rule refuses a method other than
+               GET under the `method` signal, and a request a fork or a drive composed, for an origin nobody
+               widened. */
             char by_method[64];
 
-            snprintf(by_method, sizeof by_method, "blocked-method:%.40s", method);
-            filled += engine_decline(ctx, method, mode, referrer_policy, referrer, url,
+            snprintf(by_method, sizeof by_method, "blocked-signal:method=%.40s", method);
+            filled += engine_decline(ctx, &key,
                                      strcmp(method, "GET") ? by_method
                                      : !strcmp(driven, PENDING_DRIVEN_YES) ? "blocked-signal:actor=tool"
                                                                            : "blocked-signal:provenance=forced");
@@ -1404,8 +1412,7 @@ static int fixture_provide(JSContext *ctx) {
             reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody),
                                     (const char *const *)&abs, 1, rtype, "basic");
             header_list_free(&eh);
-            filled += engine_provide(ctx, method, mode, referrer_policy, referrer, url, TF_REPLY_HOW,
-                                     TF_REPLY_REACH, reply);
+            filled += engine_provide(ctx, &key, TF_REPLY_HOW, TF_REPLY_REACH, reply);
             JS_FreeValue(ctx, reply);
             if (!strcmp(abs, TF_REPLYTWICE_URL)) g_tf_r2.answered++;
             if (!strncmp(abs, TF_REPLYTWICE_DUE, strlen(TF_REPLYTWICE_DUE))) g_tf_r2.due = g_tf_payments;
@@ -9375,9 +9382,10 @@ static void tf_cancel_record(const char *rec, size_t len)
 
     while (url > rec && url[-1] != '\t') url--;
     for (const char *q = rec; q < rec + len; q++) tabs += *q == '\t';
-    DCHECK((tabs == 5 || tabs == 1) && url < rec + len,
+    DCHECK((tabs == 7 || tabs == 1) && url < rec + len,
            "a fetch.cancel notice is neither `fetch.cancel<TAB>METHOD<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>"
-           "URL` nor `fetch.cancel<TAB><id>` — the engine names a request by the key its answer is delivered under");
+           "HEADERS<TAB>BODY<TAB>URL` nor `fetch.cancel<TAB><id>` — the engine names a request by the key its "
+           "answer is delivered under");
     g_tf_cancel = realloc(g_tf_cancel, (size_t)(g_tf_cancel_n + 1) * sizeof *g_tf_cancel);
     CHECK(g_tf_cancel != NULL, "the fixture could not record a fetch.cancel notice");
     g_tf_cancel[g_tf_cancel_n] = strndup(url, (size_t)(rec + len - url));
@@ -44015,6 +44023,41 @@ static void abi_say_lines(const char *s, const char *stop, const char *verb)
     }
 }
 
+/* One `fetch` record per pending line: the line, then the request's content (qjs_request's text) as base64,
+   or `-` for a line whose HEADERS and BODY are both `-`, which has none to read. */
+static void abi_say_fetches(const char *s, const char *stop)
+{
+    while (s < stop) {
+        const char *e = memchr(s, '\n', (size_t)(stop - s));
+        size_t l = e ? (size_t)(e - s) : (size_t)(stop - s);
+
+        if (l) {
+            const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
+            const char *referrer_policy, *referrer, *headers_key, *body_key, *address, *askers;
+            char *one = strndup(s, l), *b64 = NULL;
+
+            CHECK(one != NULL, "OOM reading a pending line for its request's content");
+            engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &driven,
+                                 &credentials, &mode, &referrer_policy, &referrer, &headers_key, &body_key,
+                                 &address, &askers, &url);
+            if (strcmp(headers_key, "-") || strcmp(body_key, "-")) {
+                const char *text = qjs_request(method, mode, referrer_policy, referrer, headers_key, body_key, url);
+                size_t tn = strlen(text), cap = JS_Base64EncodedSize(tn) + 1, wrote;
+
+                b64 = malloc(cap);
+                CHECK(b64 != NULL, "OOM encoding a request's content for the bill");
+                wrote = JS_Base64Encode(b64, cap, (const uint8_t *)text, tn);
+                b64[wrote] = 0;
+            }
+            abi_say("fetch\t%.*s\t%s", (int)l, s, b64 ? b64 : "-");
+            free(b64);
+            free(one);
+        }
+        if (!e) break;
+        s = e + 1;
+    }
+}
+
 /* WHAT THE FRONTIER IS OWED, WRITTEN AND NOT READ BACK. A YIELD round announces and steps straight on, so the
    zone can have a fetch in flight while siblings keep running — the alternative is this host standing in the
    read, which is exactly what `wpt_runner.c` calls out at its own park ("blocking the FLOW is the design;
@@ -44054,7 +44097,7 @@ static void abi_announce(void)
     if (g_abi_announced && !strcmp(g_abi_announced, bill)) { free(bill); return; }
     free(g_abi_announced);
     g_abi_announced = bill;
-    abi_say_lines(bill, bill + fn, "fetch");
+    abi_say_fetches(bill, bill + fn);
     abi_say_lines(bill + fn + 1, bill + fn + 1 + on, "request");
 }
 
@@ -44253,6 +44296,8 @@ static int abi_pay(void)
             const char *mode = abi_take(&p, "request mode");
             const char *referrer_policy = abi_take(&p, "request referrer policy");
             const char *referrer = abi_take(&p, "request referrer");
+            const char *headers_key = abi_take(&p, "request header list digest");
+            const char *body_key = abi_take(&p, "request body digest");
             const char *url = abi_take(&p, "request address");
             const char *how = abi_take(&p, "answer kind");
             const char *reach = abi_take(&p, "asking document reach");
@@ -44275,8 +44320,8 @@ static int abi_pay(void)
                        "a reply body is longer than the ABI's length parameter can name — the truncated value "
                        "would be accepted, so the flow would resume on a PREFIX of the response and every "
                        "value learned from it would be a fact about bytes the server did not send");
-                qjs_provide(method, mode, referrer_policy, referrer, url, how, reach, reply, body,
-                            (unsigned)body_n);
+                qjs_provide(method, mode, referrer_policy, referrer, headers_key, body_key, url, how, reach,
+                            reply, body, (unsigned)body_n);
                 free(reply);
                 free(body);
             }
@@ -44536,6 +44581,8 @@ static int abi_pay(void)
             const char *mode = abi_take(&p, "refused request mode");
             const char *referrer_policy = abi_take(&p, "refused request referrer policy");
             const char *referrer = abi_take(&p, "refused request referrer");
+            const char *headers_key = abi_take(&p, "refused request header list digest");
+            const char *body_key = abi_take(&p, "refused request body digest");
             const char *url = abi_take(&p, "refused request URL");
             char *reason;
             size_t rn = 0;
@@ -44547,7 +44594,7 @@ static int abi_pay(void)
                   "a refused request named no method or no address — the refusal is keyed on the PAIR exactly "
                   "as a reply is, so a half-named one refuses whichever request the engine's pairing assert "
                   "happens to fall on and leaves the flow that IS parked waiting for the session");
-            qjs_decline(method, mode, referrer_policy, referrer, url, reason);
+            qjs_decline(method, mode, referrer_policy, referrer, headers_key, body_key, url, reason);
             /* AND THE SENTENCE IS STILL READ ALOUD, WHICH THE ENGINE ALONE WOULD NOT DO. The refusal now rides
                the engine's own record, which is what lets the flow park and fork — but nothing in this process
                PRINTS a record, so a reason relayed only through the ABI would be stored, asserted, acted on,

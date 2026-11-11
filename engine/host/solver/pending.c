@@ -6,6 +6,7 @@
    is maintained from here and from nowhere else — a park site asked to remember a second call is the list
    beside a list that PENDING_FIELDS' default column exists to abolish. */
 #include "solver/pending_index.h"
+#include "core/crypto/secure_hash.h"   /* the digests of a request's header list and body in its key */
 #include "check.h"
 #include "core/loader/script_type.h"   /* PEND_SCRIPT_TYPE's "nothing yet": §4.12.1.1's null type */
 
@@ -891,6 +892,11 @@ static void pend_index_sync(JSValueConst e, int field)
 {
     JSValue uv, mv;
 
+    /* The header list and the body are in the key by their digests, read at the keying write below, so the
+       park writes both before the address and the method. */
+    DCHECK((field != PEND_HEADERS && field != PEND_BODY) || !pending_index_keyed(e),
+           "a request's header list or body was written after the outstanding set was keyed on it — the key "
+           "holds their digests, so the host would be shown one request and handed another's content");
     if (field != PEND_URL && field != PEND_METHOD && field != PEND_MODE && field != PEND_REFERRER_POLICY &&
         field != PEND_REFERRER && field != PEND_HAVE_VALUE && field != PEND_DECLINED) return;
     if (!pending_index_tracked(e)) return;   /* answered, refused, synchronous, or dropped by every register */
@@ -962,6 +968,7 @@ static void pend_index_sync(JSValueConst e, int field)
         JSValue dv = pending_get(e, PEND_MODE);
         JSValue pv = pending_get(e, PEND_REFERRER_POLICY), rv = pending_get(e, PEND_REFERRER);
         PendRequestKey k;
+        char hw[PEND_DIGEST_WORD], bw[PEND_DIGEST_WORD];
         DCHECK(JS_IsString(dv) && JS_IsString(pv) && JS_IsString(rv),
                "a request's METHOD and ADDRESS were written with no MODE, REFERRER POLICY or REFERRER on the "
                "record — the outstanding set is keyed on all five because two requests differing in any of "
@@ -973,6 +980,9 @@ static void pend_index_sync(JSValueConst e, int field)
         k.referrer = JS_IsString(rv) ? JS_ToCString(pend_ctx(), rv) : NULL;
         CHECK(k.url && k.method && k.mode && k.referrer_policy && k.referrer,
               "engine: OOM naming an outstanding request");
+        pending_request_digests(e, hw, bw);
+        k.headers = hw;
+        k.body = bw;
         pending_index_key(e, &k);
         JS_FreeCString(pend_ctx(), k.referrer);
         JS_FreeCString(pend_ctx(), k.referrer_policy);
@@ -1083,6 +1093,76 @@ void pending_set_bytes(JSValueConst e, int field, const void *p, size_t n)
     JSValue b = JS_NewArrayBufferCopy(pend_ctx(), (const uint8_t *)p, n);
     CHECK(!JS_IsException(b), "engine: OOM recording a pending request's body");
     pending_set(e, field, b);
+}
+
+/* Writes `digest` as lowercase hex into `word`. */
+static void pend_digest_word(const uint8_t digest[32], char word[PEND_DIGEST_WORD])
+{
+    static const char hex[] = "0123456789abcdef";
+
+    for (int i = 0; i < 32; i++) {
+        word[2 * i] = hex[digest[i] >> 4];
+        word[2 * i + 1] = hex[digest[i] & 15];
+    }
+    word[64] = 0;
+}
+
+void pending_request_digests(JSValueConst e, char headers[PEND_DIGEST_WORD], char body[PEND_DIGEST_WORD])
+{
+    JSContext *ctx = pend_ctx();
+    JSValue hl = pending_get(e, PEND_HEADERS), bv = pending_get(e, PEND_BODY);
+    int n = pend_len(hl);
+    uint8_t digest[32];
+    SecureHash h;
+
+    strcpy(headers, "-");
+    strcpy(body, "-");
+    if (n > 0) {
+        /* Fetch §2.2.2 "Headers": a name is a token and a value holds no newline, so `name:value\n` per header,
+           in list order, spells one list only. */
+        secure_hash_init(&h, SECURE_HASH_SHA256);
+        for (int i = 0; i < n; i++) {
+            JSValue pair = JS_GetPropertyUint32(ctx, hl, (uint32_t)i);
+            JSValue nv = JS_GetPropertyUint32(ctx, pair, 0), vv = JS_GetPropertyUint32(ctx, pair, 1);
+            size_t nl = 0, vl = 0;
+            const char *nm = JS_ToCStringLen(ctx, &nl, nv), *val = JS_ToCStringLen(ctx, &vl, vv);
+
+            CHECK(nm != NULL && val != NULL, "engine: OOM reading a parked request's header");
+            DCHECK(!memchr(nm, ':', nl) && !memchr(nm, '\n', nl) && !memchr(val, '\n', vl),
+                   "a parked request's header name holds a colon or a newline, or its value a newline — Fetch "
+                   "§2.2.2 Headers admits neither, and the key's spelling of the list relies on it");
+            secure_hash_update(&h, (const uint8_t *)nm, nl);
+            secure_hash_update(&h, (const uint8_t *)":", 1);
+            secure_hash_update(&h, (const uint8_t *)val, vl);
+            secure_hash_update(&h, (const uint8_t *)"\n", 1);
+            JS_FreeCString(ctx, nm);
+            JS_FreeCString(ctx, val);
+            JS_FreeValue(ctx, nv);
+            JS_FreeValue(ctx, vv);
+            JS_FreeValue(ctx, pair);
+        }
+        secure_hash_finish(&h, digest, sizeof digest);
+        pend_digest_word(digest, headers);
+    }
+    if (!JS_IsNull(bv)) {
+        size_t bn = 0;
+        const uint8_t *bp = JS_GetArrayBuffer(ctx, &bn, bv);
+
+        DCHECK(JS_IsObject(bv), "a parked request's body is neither null nor bytes — pending_set_bytes writes "
+                                "an ArrayBuffer");
+        /* An empty body is a body: its buffer may hold no storage, and the digest reads none. */
+        secure_hash_init(&h, SECURE_HASH_SHA256);
+        if (bp != NULL && bn > 0) secure_hash_update(&h, bp, bn);
+        secure_hash_finish(&h, digest, sizeof digest);
+        pend_digest_word(digest, body);
+    }
+    JS_FreeValue(ctx, bv);
+    JS_FreeValue(ctx, hl);
+}
+
+int pending_list_len(JSValueConst list)
+{
+    return pend_len(list);
 }
 
 JSValue pending_list_new(void)

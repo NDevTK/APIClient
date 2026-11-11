@@ -1540,14 +1540,9 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
            construction. The next diff carries the flag as a new key on that file's opts, added to
            `_SAFEFETCH_OPTIONS` and read by its body in the same diff, so a preflight is asked for by the
            request that requires one rather than inferred at the chokepoint.
-           ITS ABSENCE SHOWS IN THE DERIVED RECORD AND NOT ON THE WIRE, which is the correction this clause
-           needed: it used to say a streamed cross-origin POST "reaching the chokepoint" is indistinguishable
-           from a byte-bodied one. No POST reaches it. `safeFetchMethodRefusal` returns a decline for every
-           non-GET and is asked at the CALL SITE — `extension/bridge.js` on both the pending and the XHR
-           paths, and `engine/trusted.mjs` — so a request that could require a preflight is refused before the
-           chokepoint sees it, and the flow stays parked rather than being fired. What the flag's absence
-           actually costs is the REPORT: CLAUDE.md's §A-REQUEST-CARRIES-THE-PROVENANCE says a derived-and-
-           unfired request IS the report, and a Request built with a stream body and a cross-origin mode
+           Its absence shows in the derived record and not on the wire: a stream-bodied request never
+           reaches the park (core/fetch/fetch.c refuses a stream-backed body at the host edge), so no host
+           sends one without its preflight, and a Request built with a stream body and a cross-origin mode
            derives a record identical to the byte-bodied one, carrying nothing that says a browser would have
            preflighted it. */
         {

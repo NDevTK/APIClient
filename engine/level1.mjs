@@ -935,16 +935,17 @@ async function mintDrive(minted, slices) {
      before anything is sent. */
   const line = (o) => {
     const f = ['GET', '', 'script', 'derived', 'unpinned', 'undriven', 'same-origin', 'cors', '', 'https://a.test/',
-               'concrete', 'gap-doc', 'https://a.test/api'];
+               '-', '-', 'concrete', 'gap-doc', 'https://a.test/api'];
     for (const k of Object.keys(o)) f[k] = o[k];
     return f.join('\t');
   };
-  const lines = [['the valid line', line({}), null], ['twelve fields', line({}).split('\t').slice(1).join('\t'), 'fields'],
+  const lines = [['the valid line', line({}), null], ['fourteen fields', line({}).split('\t').slice(1).join('\t'), 'fields'],
                  ['initiator', line({ 2: 'worker' }), 'initiator'], ['provenance', line({ 3: 'guessed' }), 'provenance'],
                  ['witness mark', line({ 4: 'unstated' }), 'witness mark'], ['drive mark', line({ 5: 'maybe' }), 'drive mark'],
                  ['mode', line({ 7: 'navigate' }), 'mode'], ['referrer policy', line({ 8: 'always' }), 'referrer policy'],
-                 ['referrer', line({ 9: 'client' }), 'referrer'], ['address class', line({ 10: 'unknown' }), 'address class'],
-                 ['asker set', line({ 11: 'gap-doc,gap-doc' }), 'asker set']];
+                 ['referrer', line({ 9: 'client' }), 'referrer'], ['body digest word', line({ 11: 'abc' }), 'body digest word'],
+                 ['address class', line({ 12: 'unknown' }), 'address class'],
+                 ['asker set', line({ 13: 'gap-doc,gap-doc' }), 'asker set']];
   for (const [label, text, names] of lines) {
     let fired = 0;
     const e = inst({ docId: 'gap-doc', joinedDocIds: [], _inflight: new Map(), residentBytes: 131072,

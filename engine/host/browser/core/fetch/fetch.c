@@ -187,6 +187,18 @@ const char *fetch_address_token(FetchAddressClass a)
                "address");
 }
 
+const char *fetch_body_class_token(FetchBodyClass c)
+{
+    switch (c) {
+    case FETCH_BODY_NONE:     return "none";
+    case FETCH_BODY_CONCRETE: return "concrete";
+    case FETCH_BODY_EXAMPLE:  return "example";
+    case FETCH_BODY_UNKNOWN:  return "unknown";
+    }
+    CHECK_FAIL("fetch: a request body's class is outside FetchBodyClass — the trusted zone reads the word as "
+               "the request's `body` signal");
+}
+
 const char *fetch_mode_token(FetchMode m)
 {
     switch (m) {
@@ -1701,6 +1713,30 @@ static void fetch_settle_local(JSContext *ctx, JSValue *resolving, JSValue value
     JS_FreeValue(ctx, value);
 }
 
+
+/* What a request body's bytes are (core/fetch/fetch.h's FetchBodyClass), off the state §5.2 extracted.
+   Named residual. Not covered: a string body whose unknown has an example is `unknown`, because §5.2's string
+   arm keeps the unknown itself (core/fetch/body.h) where §5.4 step 5 grounds an address on its example. Next
+   diff: body_extract grounds the string arm's bytes on the example and states spans for them. Its absence shows
+   as a POST whose body is one computed value of a source with an example read `body=unknown` and never sent. */
+static FetchBodyClass fetch_body_class_of(const BodyState *b)
+{
+    const char *bytes;
+    size_t len;
+    int nspan = 0;
+    const BodySpan *span;
+
+    switch (body_state_content(b, &bytes, &len)) {
+    case BODY_NONE:   return FETCH_BODY_NONE;
+    case BODY_SHAPE:  return FETCH_BODY_UNKNOWN;
+    case BODY_STREAM: return FETCH_BODY_UNKNOWN;   /* refused before the park (js_fetch's stream DCHECK) */
+    case BODY_BYTES:  break;
+    }
+    span = body_state_spans(b, &nspan);
+    for (int i = 0; i < nspan; i++)
+        if (span[i].example == NULL) return FETCH_BODY_UNKNOWN;
+    return nspan > 0 ? FETCH_BODY_EXAMPLE : FETCH_BODY_CONCRETE;
+}
 /* FIVE FACTS OF THIS REQUEST COME OFF §2.2.5's RECORD, AND THIS IS WHERE BYTES ARE BORROWED OUT OF THEM. The
    record carries JSValues so a deep fork can re-take them (request.h); the host seam below carries
    `const char *`, because `FetchRequest` and `CspRequestMetadata` are read by the TRUSTED ZONE across a
@@ -1718,7 +1754,7 @@ static void fetch_settle_local(JSContext *ctx, JSValue *resolving, JSValue value
    reached this seam is one whose method the standard has already normalized and refused. */
 static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url, const RequestRecord *rec,
                           JSValueConst input, const HeaderList *hdrs, const char *body, size_t body_len,
-                          JSValueConst signal)
+                          FetchBodyClass body_class, JSValueConst signal)
 {
     JSValue promise, resolving[2], deliver, call;
     JSValueConst data[3];
@@ -2010,6 +2046,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
             req.headers = hdrs;
             req.body = body;
             req.body_len = body_len;
+            req.body_class = body_class;
             /* §4.3 SCHEME FETCH, ASKED HERE AND NOT ONLY AT THE SEAM BELOW, BECAUSE THIS CALLER HOLDS ONE INPUT
                NO OTHER CALLER HAS: §5.4's CAPTURED blob URL entry. A `Request` resolved its `blob:` URL when it
                was built, so a page that revoked the URL afterwards still fetches; a URL STRING has nothing to
@@ -2697,11 +2734,9 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                           body_kind == BODY_BYTES ? body_bytes : NULL,
                           body_kind == BODY_BYTES ? body_bytes_len : 0, prov, driven);
     /* Fetch §5.6 "Fetch methods" STEP 12's "fetch given request", and steps 1 and 13's promise: the endpoint the flow parks on. */
-    /* THE SHAPE GOES TO THE PARK TOO, exactly as fetch_park sends a concolic URL's shape in place of an
-       address it cannot know — one rule for both halves of a request built out of unknown external input, so
-       a derived POST is not half-spelled. Nothing fires it: `safeFetchMethodRefusal` declines every non-GET
-       at the call site, so what this reaches is the RECORD, which is what CLAUDE.md
-       §A-REQUEST-CARRIES-THE-PROVENANCE calls the report. */
+    /* The shape goes to the park too, as fetch_park sends a concolic URL's shape in place of an address it
+       cannot know, with the body's class beside it (fetch_body_class_of): the park lists the request and the
+       trusted zone, which reads the class as its `body` signal, never sends an unknown body. */
     /* §5.4 step 30's requestObject signal: a dependent signal over init["signal"], made in this's relevant
        realm, so the abort steps run after init["signal"]'s own `abort` listeners (DOM §3.2 "signal abort" runs a
        dependent's abort steps after its source's). Its flag test cannot fork here: step 4 above asked this same
@@ -2713,7 +2748,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         if (abort_signal_is(ctx, isig)) rsig = abort_signal_dependent_new(rctx, (JSValueConst *)&isig, 1);
         JS_FreeValue(ctx, isig);
         *presult = fetch_park(rctx, s->url, s->req_url, &s->rec, s->input, s->hdrs, body_bytes, body_bytes_len,
-                              rsig);
+                              fetch_body_class_of(&s->body), rsig);
         JS_FreeValue(ctx, rsig);
     }
     if (JS_IsException(*presult)) { *presult = JS_UNDEFINED; return -1; }

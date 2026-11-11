@@ -432,6 +432,8 @@ int pending_driven_compose(int kind, int path_driven);
     X(SAME_ORIGIN, "sameOrigin", PEND_SHARE, JS_UNDEFINED)                             \
     X(HEADERS,    "headers",   PEND_STRUCT, JS_NULL)                                   \
     X(BODY,       "body",      PEND_SHARE,  JS_NULL)                                   \
+    /* what the body's bytes are (core/fetch/fetch.h's FetchBodyClass); 0 is a null body */        \
+    X(BODY_CLASS, "bodyClass", PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))                \
     /* the asking document, which every park writes before it is listed; 0 names none */             \
     X(DOC,        "doc",       PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))                \
     X(SCRIPT_EL,  "scriptEl",  PEND_SHARE,  JS_UNDEFINED)                              \
@@ -863,7 +865,12 @@ int  pending_answer_world_seen(JSValueConst e, const char *world);
 /* A [name, value] LIST, for a request's headers: the same shape XMLHttpRequest's two header lists have. Built
    through these so this file needs no dependency on the browser half's HeaderList — the solver reaching into
    the browser for one struct is what made an earlier component's link drag the whole DOM in with it. */
+/* The key words of the park `e`'s header list and body (solver/pending_index.h's PendRequestKey): "-" for an
+   empty list or a null body, else the lowercase hex SHA-256. Each buffer holds PEND_DIGEST_WORD bytes. */
+void    pending_request_digests(JSValueConst e, char headers[65], char body[65]);
 JSValue pending_list_new(void);
+/* How many pairs `list` holds; 0 for the JS_NULL of a park with no header list. */
+int     pending_list_len(JSValueConst list);
 void    pending_list_add_pair(JSValueConst list, const char *name, const char *value);
 
 /* Remove entry `i` (swap-remove: the register is a set of outstanding requests, not an ordered queue). */

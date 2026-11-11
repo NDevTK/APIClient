@@ -172,6 +172,20 @@ typedef enum {
 } FetchAddressClass;
 /* The one spelling of the three placed words; fatal on `_UNPLACED`. */
 const char *fetch_address_token(FetchAddressClass a);
+/* What a request's body is (Fetch §2.2.5 "Requests": "null, a byte sequence, or a body"), stated by the
+   producer that extracted it. NONE: a null body, the zero, so a producer with a body that states nothing is
+   refused at the park. CONCRETE: bytes the page computed. EXAMPLE: a data block whose unknown elements hold
+   their unknowns' examples (core/fetch/body.h's spans, every span with one). UNKNOWN: the display shape of an
+   unknown the run holds no bytes for, or a block with a span that has no example; the request is listed and
+   judged, and the trusted zone never sends it. */
+typedef enum {
+    FETCH_BODY_NONE = 0,
+    FETCH_BODY_CONCRETE,
+    FETCH_BODY_EXAMPLE,
+    FETCH_BODY_UNKNOWN,
+} FetchBodyClass;
+/* The one spelling of the four words; fatal on a value outside them. */
+const char *fetch_body_class_token(FetchBodyClass c);
 
 typedef struct {
     const char   *method;
@@ -274,6 +288,9 @@ typedef struct {
        unknown URL record, or JS_UNDEFINED where the park parses the address itself; fetch() states it, and it is
        read only beside `address_value`. BORROWED. */
     JSValueConst address_url;
+    /* What `body`'s bytes are (FetchBodyClass above); FETCH_BODY_NONE exactly where `body` is NULL, which
+       pending_park_request asserts. After the positional initializers' fields, so a bodiless one states the zero. */
+    FetchBodyClass body_class;
 } FetchRequest;
 
 /* FETCH §4.1 "Main fetch" STEP 7, AS THE ONE COMPONENT IT IS A STEP OF — "If should request be blocked due to

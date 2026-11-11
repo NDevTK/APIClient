@@ -287,10 +287,10 @@ function _refused(kind, reason, urlList, headers) {
 }
 /* The method question for a host that holds no byte-exact body of the request it relays: it declines a
    non-GET before the fetch, since sending the verb without the page's body would change the request.
-   Named residual. Not covered: the page's own non-GET on its unforced run, which `safeFetch` sends when it is
-   handed the method and body, never reaches it from a host: the fetch pending line carries no body and the
-   XHR record's body is text. Next diff: the line and the record carry the body's bytes, both hosts pass
-   `method` and `body`, and this function is deleted. Its absence shows as every unforced non-GET declined
+   Named residual. Not covered: an XMLHttpRequest's own non-GET on its unforced run. A `fetch()`'s reaches
+   `safeFetch` with its method, header list and body; the XHR record's body is text, so both hosts still ask
+   this for an XHR. Next diff: the XHR record carries the extracted body's bytes and class, the hosts pass
+   them, and this function is deleted. Its absence shows as every unforced XHR non-GET declined
    `blocked-method:`. */
 function safeFetchMethodRefusal(method) {
   CHECK(typeof method === "string" && method !== "",
@@ -669,6 +669,24 @@ function _bodyOf(opts) {
         "safeFetch was handed a body on a " + opts.method + " request, which Fetch §5.4 refuses to create");
   return opts.body;
 }
+/* What the body's bytes are, the engine's word beside them (core/fetch/fetch.h's fetch_body_class_token):
+   `concrete` when the page computed them, `example` when they hold an unknown's example, `unknown` when they
+   are the display shape of an unknown the run has no bytes for, which is refused at every setting. A null
+   body is `none` by the caller's own `body: null`; a caller with a body states the class, `concrete` only for
+   bytes no engine path composed. A CHECK for the provenance reason. */
+var _BODY_CLASSES = ["none", "concrete", "example", "unknown"];
+function _bodyClassOf(opts) {
+  if (opts.body === null) {
+    CHECK(opts.bodyClass === undefined || opts.bodyClass === "none",
+          "safeFetch was called with no body and the body class " + JSON.stringify(opts.bodyClass));
+    return "none";
+  }
+  CHECK(opts.bodyClass === "concrete" || opts.bodyClass === "example" || opts.bodyClass === "unknown",
+        "safeFetch was called with a body whose class is none this file declares: " +
+        JSON.stringify(opts.bodyClass) + " — relay the engine's word for the bytes, or state `concrete` for " +
+        "a body this zone composed");
+  return opts.bodyClass;
+}
 /* The address class the engine states beside the witness mark (core/fetch/fetch.h's fetch_address_token, on
    the pending line and the XHR record): `concrete` when the page's code computed the bytes, `example` when the
    address holds an unknown and the bytes are what the page computes from that unknown's example. `unknown` is an
@@ -691,7 +709,7 @@ function _addressOf(opts) {
    its caller as carried; `as` is refused by it, since the CORB class is the request's destination. A closed
    set restates what the body reads, and an option added to the body and not here aborts on its author's
    first call. */
-var _SAFEFETCH_OPTIONS = ["method", "body", "pageOrigin", "destination", "mode", "provenance", "pinned", "driven", "address",
+var _SAFEFETCH_OPTIONS = ["method", "body", "bodyClass", "pageOrigin", "destination", "mode", "provenance", "pinned", "driven", "address",
                           "doc", "actor", "credentialed", "credentials", "headers", "useCorsPreflight",
                           "identity", "signal", "onChunk", "onBodyRead", "onHead"];
 /* Fetch §2.2.5 "Requests"' credentials mode — "which is `omit`, `same-origin`, or `include`" — the same three
@@ -912,6 +930,10 @@ var _SIGNALS = [
      setting permits: an address with no bytes names no request, so it is refused before any arm is asked. */
   { name: "address", gates: true, certainty: "stated", values: _ADDRESS_CLASSES, never: ["unknown"],
     of: function (f) { return f.address; } },
+  /* Whether the body is bytes the page computed or holds its unknown's example (see `_bodyClassOf`), judged
+     as the address is: no default arm reads it, and a body with no bytes is refused before any arm is asked. */
+  { name: "body", gates: true, certainty: "stated", values: _BODY_CLASSES, never: ["unknown"],
+    of: function (f) { return f.bodyClass; } },
   /* Authority in the address (see `_urlAuthorityMarker`). `partial`: `present` is a fact, and `unknown` is not
      the statement that there is none. */
   { name: "url-authority", gates: true, certainty: "partial", values: ["present", "unknown"],
@@ -1035,6 +1057,7 @@ function _requireFacts(facts) {
         docRecordIs(facts.doc) &&
         _PINNED_MARKS.indexOf(facts.pinned) >= 0 && _ACTOR_WORDS.indexOf(facts.actor) >= 0 &&
         _DRIVEN_MARKS.indexOf(facts.driven) >= 0 && _ADDRESS_CLASSES.indexOf(facts.address) >= 0 &&
+        _BODY_CLASSES.indexOf(facts.bodyClass) >= 0 &&
         typeof facts.method === "string" && facts.method !== "" &&
         typeof facts.credentialed === "boolean" &&
         facts.url !== null && typeof facts.url === "object" && typeof facts.url.origin === "string",
@@ -1515,6 +1538,7 @@ function safeFetchFiringRefusal(facts) {
   return _firingRefusal({ url: new URL(String(facts.url)), destination: facts.destination,
                           provenance: facts.provenance, pinned: facts.pinned, doc: facts.doc,
                           actor: facts.actor, driven: facts.driven, address: facts.address,
+                          bodyClass: facts.bodyClass,
                           method: facts.method, credentialed: facts.credentialed, headers: facts.headers });
 }
 /* A cross-document act reaches another document's state, so it is judged by `_firingRefusal` over the facts a
@@ -1544,8 +1568,8 @@ function safeFetchCrossDocumentRefusal(act) {
         "engine_record_head writes — the engine that routed it refuses any other (peer_marks_word_ok)");
   return _firingRefusal({ url: new URL(_isRealOrigin(act.targetOrigin) ? act.targetOrigin + "/" : "about:blank"),
                           destination: "", provenance: m[0], pinned: m[2], doc: act.doc, actor: "page",
-                          driven: m[1], address: "concrete", method: "GET", credentialed: false,
-                          headers: null });
+                          driven: m[1], address: "concrete", bodyClass: "none", method: "GET",
+                          credentialed: false, headers: null });
 }
 /* The vector for a hypothetical request, for a surface that shows a person what they are deciding about. It
    is the same derivation the firing walk reads, so the rows a person ticks are about the request the policy
@@ -1559,6 +1583,7 @@ function safeFetchSignalVector(facts) {
   return _signalVector({ url: new URL(String(facts.url)), destination: facts.destination,
                          provenance: facts.provenance, pinned: facts.pinned, doc: facts.doc,
                          actor: facts.actor, driven: facts.driven, address: facts.address,
+                         bodyClass: facts.bodyClass,
                          method: facts.method, credentialed: facts.credentialed, headers: facts.headers });
 }
 /* Fetch §4.10 "CORS check", over the reply's own headers: "Let origin be the result of getting
@@ -2150,7 +2175,7 @@ async function _safeFetchJudged(url, opts, egress) {
   var driven = _drivenOf(opts);
   var address = _addressOf(opts);
   /* Fetch §2.2.5 "Requests"' method and body, as §4.5 "HTTP-redirect fetch" changes them. */
-  var _method = _methodOf(opts), _body = _bodyOf(opts);
+  var _method = _methodOf(opts), _body = _bodyOf(opts), _bodyClass = _bodyClassOf(opts);
   /* Derived once, above every gate it scopes; `_credentialedOf` also refuses a header list on a
      cookie-bearing request. */
   var credentialed = _credentialedOf(opts);
@@ -2333,6 +2358,7 @@ async function _safeFetchJudged(url, opts, egress) {
          own address. */
       var _signalFacts = { url: _current, destination: destination, provenance: provenance,
                            pinned: pinnedMark, doc: doc, actor: actor, driven: driven, address: address,
+                           bodyClass: _body === null ? "none" : _bodyClass,
                            method: _method, credentialed: credentialed, headers: _headerList };
       var _decision = _firingDecision(_signalFacts);
       var _entry = { url: _current.href, vector: _decision.vector, admittedBy: _decision.admittedBy,

@@ -18,6 +18,7 @@
 #include "core/timing/task_source.h"   /* TaskSource: the HTML §8.1.7.1 task source, if any, that queued a row */
 #include "solver/step_unit.h"          /* the arms of flow_step; EngineStepUnitRuns counts per arm */
 #include "solver/reply_record.h"       /* the words a provide states its answer in */
+#include "solver/pending_index.h"      /* PendRequestKey: the identity a provide, a decline and a read name */
 #include "quickjs.h"
 
 /* Declared, not included: solver/flow.h owns the definition, and the entries here that name a flow only pass
@@ -523,14 +524,13 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
    resolve is `deliver` leaves its register, and once no live flow owes the request the host is told with a
    `fetch.cancel` notice keyed like engine_provide. A park already answered, or absent, is left as it is. */
 void engine_pending_fetch_cancel(JSContext *ctx, JSValueConst deliver);
-/* The last outstanding park on the request `(method, mode, referrer policy, referrer, url)` left the frontier
-   unanswered: an abort, or its flow released (sold at the RAM floor, retired, finished). Fetch §2
-   Infrastructure's terminate, told to the zone as `fetch.cancel<TAB>METHOD<TAB>MODE<TAB>REFERRER_POLICY<TAB>
-   REFERRER<TAB>URL`, so the answer it owes is taken back and never written for a request no flow awaits. Called
-   by the outstanding set (solver/pending_index.c) at the drop that empties the pair; nothing outside a live
-   session, whose teardown releases every flow. */
-void engine_pending_withdrawn(const char *method, const char *mode, const char *referrer_policy,
-                              const char *referrer, const char *url);
+/* The last outstanding park on the request `k` left the frontier unanswered: an abort, or its flow released
+   (sold at the RAM floor, retired, finished). Fetch §2 Infrastructure's terminate, told to the zone as
+   `fetch.cancel<TAB>METHOD<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>HEADERS<TAB>BODY<TAB>URL`, so the answer
+   it owes is taken back and never written for a request no flow awaits. Called by the outstanding set
+   (solver/pending_index.c) at the drop that empties the pair; nothing outside a live session, whose teardown
+   releases every flow. */
+void engine_pending_withdrawn(const PendRequestKey *k);
 /* The same park for a dynamic `import()`, which is owed source text: the drain settles `resolve` with the
    reply's body, not with the reply record `fetch()` builds a Response from. A failed load settles `reject`:
    HTML §8.1.6.7.3 "HostLoadImportedModule(referrer, moduleRequest, loadState, payload)" makes a null
@@ -926,11 +926,11 @@ char *engine_record_head(const char *op, const char *doc, const struct Flow *f);
    the same predicate in `extension/lib/safe-fetch.js` over the bytes it read. */
 
 /* What the host still owes the frontier's network parks: one `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>
- * PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL` line
- * per outstanding request, newline-terminated, "" for none, deduped by the request's identity (solver/pending_index.h's
- * PendRequestKey); engine_pending_split is the authority on the shape, and the buffer is valid until the next
- * call. The method, mode, referrer policy and referrer are in the identity: a GET and a POST, or a `no-cors`
- * and a `cors` request, to one address are two requests, and so are two referrers. The destination (Fetch
+ * PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>HEADERS<TAB>BODY<TAB>
+ * ADDRESS<TAB>ASKERS<TAB>URL` line per outstanding request, newline-terminated, "" for none, deduped by the
+ * request's identity (solver/pending_index.h's PendRequestKey, whose digest words HEADERS and BODY are and
+ * whose content engine_pending_request reads); engine_pending_split is the authority on the shape, and the
+ * buffer is valid until the next call. The destination (Fetch
  * §2.2.5) lets the chokepoint apply CORB to every park; the credentials mode (`fetch_credentials_token`) says
  * whose session pays, and `same-origin` is resolved by the trusted zone. The referrer policy is the request's
  * after Fetch §4.1 "Main fetch" gave an empty one the policy container's, and the referrer is "no-referrer" or
@@ -942,7 +942,7 @@ char *engine_record_head(const char *op, const char *doc, const struct Flow *f);
  * tabs, a method is an RFC 9110 §5.6.2 token, the vocabularies are lowercase ASCII); the join asserts them. */
 const char *engine_pending_fetches(void);
 /* Split one engine_pending_fetches line where it was joined, so hosts do not each re-derive the grammar. `line`
-   is the host's own mutable copy of one line without its newline; each TAB becomes a NUL and the thirteen fields
+   is the host's own mutable copy of one line without its newline; each TAB becomes a NUL and the fifteen fields
    are returned pointing into it. Every out-parameter is required (asserted): a host that skipped the
    destination would fetch a script as data, one that skipped the provenance would carry a forced reply as an
    observation, one that skipped the credentials mode would decide by silence whose session pays, and one that
@@ -950,19 +950,24 @@ const char *engine_pending_fetches(void);
 void engine_pending_split(char *line, const char **method, const char **destination,
                           const char **initiator, const char **provenance, const char **pinned,
                           const char **driven, const char **credentials, const char **mode,
-                          const char **referrer_policy, const char **referrer, const char **address,
-                          const char **askers, const char **url);
-/* Deliver a body for one request, keyed on the (method, mode, referrer policy, referrer, url) the flow parked
-   on. Returns how many entries it filled. A reply for a pair with no outstanding park is the zone writing an
+                          const char **referrer_policy, const char **referrer, const char **headers,
+                          const char **body, const char **address, const char **askers, const char **url);
+/* The header list and body of the outstanding request `key` names, as the JSON text
+   `{"headers":[[name,value],…],"body":<RFC 4648 §4 base64>|null,"bodyClass":<word>}`, for the host to send
+   what the page composed (Fetch §2.2.5 "Requests"' header list and body). `bodyClass` is fetch_body_class_token
+   of the member the line is judged as. Owned by the caller (free()); NULL for a key with no outstanding park,
+   which is a host reading a request it was not shown (asserted). */
+char *engine_pending_request(JSContext *ctx, const PendRequestKey *key);
+/* Deliver a body for one request, keyed on the identity the flow parked on (solver/pending_index.h's
+   PendRequestKey). Returns how many entries it filled. A reply for a pair with no outstanding park is the zone writing an
    answer it does not owe (answered, refused, withdrawn or never shown), asserted here. `how` and `reach` are
    the zone's two statements about its answer, required on every provide: how it was produced
    (solver/reply_record.h's REPLY_HOW_TOKEN_ words) and the asking document's reach (a PENDING_PROVENANCE_
    word). The answer is recorded under them (solver/reply_record.h). */
-int engine_provide(JSContext *ctx, const char *method, const char *mode, const char *referrer_policy,
-                   const char *referrer, const char *url, const char *how, const char *reach,
+int engine_provide(JSContext *ctx, const PendRequestKey *key, const char *how, const char *reach,
                    JSValueConst value);
 
-/* Refuse one request, keyed on the same five fields; returns how many records it newly refused (0 is a zone
+/* Refuse one request, keyed on the same identity; returns how many records it newly refused (0 is a zone
  * refusing what it does not owe, asserted as engine_provide asserts a reply). It is not a network error: a refusal a real browser
  * also makes (a blocked scheme, Fetch §4.3 "Scheme fetch"; a §4.10 "CORS check" failure; a CORB-blocked body)
  * arrives through engine_provide as Fetch §5.6 "Fetch methods"' network error. This is for a refusal only this
@@ -974,8 +979,7 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
  * forced (core/fetch/fetch.h's fetch_reply_unknown). flow_decline_fork builds the arms at a scheduler step, because an arm
  * minted between steps would clone whichever flow ran last; this only records the fact. `reason` is the zone's
  * own words and is copied. */
-int engine_decline(JSContext *ctx, const char *method, const char *mode, const char *referrer_policy,
-                   const char *referrer, const char *url, const char *reason);
+int engine_decline(JSContext *ctx, const PendRequestKey *key, const char *reason);
 
 /* The same refusal for a synchronous request, keyed on the rendezvous id from engine_host_requests: such a
  * request has no (method, mode, url), and pending_push keeps FLOW_PENDING_HOSTREQ out of the pair index, so

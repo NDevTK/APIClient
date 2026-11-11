@@ -218,11 +218,9 @@ export function trustedZone() {
      reading as though it had, and `navigate`/`workFetch` would take an `undefined` refusal as permission.
      That is the defaulted-read defect standing on a security decision, so it is a load-time abort rather than
      a TypeError three calls into a request. */
-  /* `safeFetchMethodRefusal` IS ON THIS LIST FOR THE SAME REASON AND WITH THE SAME FAILURE SHAPE. It is the
-     METHOD half of whether an act may be spent (RFC 9110 §9.2.1 "Safe Methods"), which the chokepoint enforces
-     by ABSENCE — so nothing downstream can OBSERVE it, and both hosts wrote their own copy and answered
-     differently. A zone that obtained the chokepoint without it would take an `undefined` refusal as permission
-     and fire every method it was parked on. */
+  /* `safeFetchMethodRefusal` is on this list for the same reason: workXhr asks it before sending an
+     XMLHttpRequest, and a zone that obtained the chokepoint without it would take an `undefined` refusal as
+     permission. */
   /* `safeFetchEgressStated` IS ON THIS LIST AND ITS ABSENCE IS THE SHARPEST OF THEM. Without it this
      host cannot SPEAK its (empty) table at all, so `_firingRefusal` would assert on the first request of
      every run the default arms do not admit — and in a release build, where that assert is compiled out, it
@@ -386,8 +384,36 @@ function decline(reason) { return `decline\t${b64(reason)}`; }
    `blocked-method:<verb>`, `blocked-asker:<role>-<reason>`): the engine counts refusals by the rule the token
    names (solver/pending_index.h's PEND_DECLINE_RULES) and aborts on a reason that names none. The method and
    address are the record's own key, so the reason repeats neither. It travels base64 as `provide`'s does. */
-function declineRequest(method, mode, referrerPolicy, referrer, url, reason) {
-  return `decline-request\t${method}\t${mode}\t${referrerPolicy}\t${referrer}\t${url}\t${b64(reason)}`;
+/* A fetch record's content field: base64 of the engine's `{headers, body, bodyClass}` text (qjs_request), or
+   `-` for a line whose header list and body digest words are both `-`. Answers `{headers: [[name, value], …],
+   body: Uint8Array | null, bodyClass}`; a record that contradicts its line throws, as every other field of the
+   bill does. */
+const DIGEST_WORD = /^(?:-|[0-9a-f]{64})$/;
+const BODY_CLASSES = ['none', 'concrete', 'example', 'unknown'];
+function fetchContent(headersKey, bodyKey, field, line) {
+  const bad = (why) => new Error(`the host announced a fetch whose ${why}: ${line}`);
+  if (!DIGEST_WORD.test(headersKey) || !DIGEST_WORD.test(bodyKey))
+    throw bad('header list or body digest word is neither - nor a SHA-256 in hex');
+  if (headersKey === '-' && bodyKey === '-') {
+    if (field !== '-') throw bad('content is stated though its digest words name none');
+    return { headers: [], body: null, bodyClass: 'none' };
+  }
+  let q;
+  try { q = JSON.parse(Buffer.from(field, 'base64').toString('utf8')); } catch (_) { q = undefined; }
+  if (!q || typeof q !== 'object' || !Array.isArray(q.headers) ||
+      !q.headers.every((h) => Array.isArray(h) && h.length === 2 && typeof h[0] === 'string' && typeof h[1] === 'string'))
+    throw bad('content holds no header list of [name, value] pairs');
+  if ((q.headers.length === 0) !== (headersKey === '-')) throw bad('header list contradicts its digest word');
+  if (!BODY_CLASSES.includes(q.bodyClass)) throw bad(`body class is \`${q.bodyClass}\``);
+  if ((q.body === null) !== (bodyKey === '-') || (q.body === null) !== (q.bodyClass === 'none'))
+    throw bad('body contradicts its digest word or its own class');
+  if (q.body !== null && typeof q.body !== 'string') throw bad('body is not base64 text');
+  return { headers: q.headers, body: q.body === null ? null : new Uint8Array(Buffer.from(q.body, 'base64')),
+           bodyClass: q.bodyClass };
+}
+
+function declineRequest(id, reason) {
+  return `decline-request\t${id.join('\t')}\t${b64(reason)}`;
 }
 
 /* …AND THE SAME ACT ADDRESSED BY REQUEST ID, WHICH IS A THIRD RECORD BECAUSE A THIRD INDEX ANSWERS IT. The pair
@@ -1134,8 +1160,9 @@ async function main() {
      apart by a TAB rather than by a convention that could drift: RFC 9110 §5.6.2 "Tokens" excludes it from a
      method and URL Standard §4.4 "URL parsing" removes every ASCII tab from an address, so a fetch key always
      holds exactly one and a request key can hold none. */
-  const fetchKey = (method, mode, referrerPolicy, referrer, url) =>
-    `${method}\t${mode}\t${referrerPolicy}\t${referrer}\t${url}`;
+  /* `id` is a park's identity in the order the engine's entries take it: method, mode, referrer policy,
+     referrer, header list digest word, body digest word, address. */
+  const fetchKey = (id) => id.join('\t');
   const isFetchKey = (key) => key.includes('\t');
 
   /* A DOCUMENT LOAD, WHICH IS A DIFFERENT DECISION FROM A FETCH AND IS MADE HERE FOR BOTH OF ITS CALLERS —
@@ -1230,7 +1257,7 @@ async function main() {
        fewer facts than the real request states is a question about a different request. */
     const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination: 'document', provenance,
                                                   pinned, doc: fromDoc, actor: 'page', address: 'unstated',
-                                                  method: 'GET', driven, credentialed: false, headers: null });
+                                                  bodyClass: 'none', method: 'GET', driven, credentialed: false, headers: null });
     if (refusal)
       return { declined: `${what} ${abs} — a DOCUMENT LOAD this origin's egress policy refuses on ` +
                          `\`${refusal}\`, which names the SIGNAL and the VALUE that held it rather than a ` +
@@ -1296,7 +1323,7 @@ async function main() {
       throw new Error(`the engine's xhr.send record states the mode \`${q.mode}\` — XHR §3.5.6 "The send() ` +
                       'method" builds every request in cors mode');
     const methodRefusal = ZONE.safeFetchMethodRefusal(q.method);
-    if (methodRefusal) { settle(declineAnswer(id, `${q.method} ${q.url} — ${methodRefusal.reason}`)); return; }
+    if (methodRefusal) { settle(declineAnswer(id, methodRefusal.reason)); return; }
     const abs = new URL(q.url, e.docUrl).href;
     /* A send the engine withdrew mid-body throws out of safeFetch's body read; nobody is owed that answer. */
     let raw;
@@ -1316,7 +1343,7 @@ async function main() {
     }
     sayEgress(e.tag, q.method, raw);
     if (raw.refusal && raw.refusal.kind === 'decline') {
-      settle(declineAnswer(id, `${q.method} ${abs} — ${raw.refusal.reason}`));
+      settle(declineAnswer(id, raw.refusal.reason));
       return;
     }
     const rec = replyRecord(raw, `the XMLHttpRequest ${abs}`);
@@ -1326,8 +1353,9 @@ async function main() {
     settle(['answer', String(id), b64(JSON.stringify(meta)), '0', rec ? b64(rec.bytes) : ABSENT].join('\t'));
   };
 
-  const workFetch = async (e, method, destination, initiator, provenance, pinned, driven, credentials, mode,
-                           referrerPolicy, referrer, address, askers, url, send) => {
+  const workFetch = async (e, id, destination, initiator, provenance, pinned, driven, credentials, address,
+                           askers, content, send) => {
+    const [method, mode, referrerPolicy, referrer, , , url] = id;
     const abs = new URL(url, e.docUrl).href;
     /* Every answer this function has leaves through one door into the send's owed entry: a method refusal,
        the two shapes of a firing refusal, and the reply. The key is released when a read writes the entry
@@ -1373,28 +1401,10 @@ async function main() {
        document that is not one of this instance's is declined, since no record of it exists here to judge by. */
     const asked = askerRecord(e, askers, 'asker');
     if (asked.refusal) {
-      settle(declineRequest(method, mode, referrerPolicy, referrer, url, asked.refusal.token));
+      settle(declineRequest(id, asked.refusal.token));
       return;
     }
     const doc = asked.doc;
-    const methodRefusal = ZONE.safeFetchMethodRefusal(method);
-    if (methodRefusal) {
-      /* §Attacker-sources: a state-mutating request is NEVER fired to learn. `safe-fetch.js` enforces this by
-         ABSENCE (it hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body`), so issuing one
-         here would fetch a POST's address as a GET and hand the bytes back under the POST's key — the reply
-         would match the request it names and still be a response the server never gave for it. */
-      /* THE GRADE IS THE CHOKEPOINT'S AND THE SENTENCE IS THIS HOST'S. `if (method !== 'GET')` stood here and
-         `bridge.js` held the same test — the same question in two hosts, answered differently: this one
-         declined and that one returned §5.6's network error for a request nobody sent. `safeFetchMethodRefusal`
-         is that answer given once, in the same refusal vocabulary the reply record carries. */
-      /* ADDRESSED TO THE PARK, because a flow IS waiting on this one. It used to be the unaddressed record,
-         which said the right sentence to a reader and nothing at all to the engine — so the wait was spent in
-         the only way a wait can be spent badly: not at all. The flow keeps its park AND gets the arm that runs
-         its failure path, which is the whole of what §Solver-half's both-arms means for an outcome nobody
-         observed. */
-      settle(declineRequest(method, mode, referrerPolicy, referrer, url, methodRefusal.reason));
-      return;
-    }
     /* THE CORB CLASS IS THE REQUEST'S OWN DESTINATION, PASSED THROUGH — never a keyword decided here. Fetch
        §2.2.5 "Requests" gives every request a destination and the engine states it at each park; the
        chokepoint asks §2.2.5's SCRIPT-LIKE predicate of it, so a body that becomes executable code must be
@@ -1429,7 +1439,9 @@ async function main() {
        INSTANCE (`e.origin`, the origin of the URL this zone loaded for it), never a word the engine states: the
        chokepoint decides from the pair what the page may read of the reply (Fetch §4.1 "Main fetch"). */
     /* `useCorsPreflight: false`: Fetch §5.4 "Request class" sets that flag only for a ReadableStream body,
-       which a GET cannot carry. */
+       which the engine refuses before the park (core/fetch/fetch.c). */
+    /* The method, header list and body are the page's own, read off the bill's record (`fetchContent`); a null
+       body states no class. */
     /* A `fetch()` (the empty destination; the engine's line states it only when every park on the pair is
        one) is streamed: its engine resolves at the head and reads the body as each of its records is due
        (`streamLines`). Every other destination's algorithm consumes the body whole. */
@@ -1437,14 +1449,16 @@ async function main() {
     if (destination === '') {
       entry.stream = String(++e.streams);
       entry.chunks = [];
-      entry.pair = [method, mode, referrerPolicy, referrer, url];
+      entry.pair = id;
       entry.reach = doc.reach;
     }
     const streamed = entry.stream !== null;
     /* A send the engine cancelled mid-body throws out of safeFetch's body read; nobody is owed that answer. */
     let raw;
     try {
-      raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, method, body: null, destination, mode,
+      raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, method, body: content.body, destination, mode,
+                                        headers: content.headers.length ? content.headers : null,
+                                        ...(content.body === null ? {} : { bodyClass: content.bodyClass }),
                                         provenance, pinned, driven, address, credentials, useCorsPreflight: false,
                                         actor: 'page', signal: send.controller.signal,
                                         onBodyRead: streamed ? undefined : bodyRead(e, entry),
@@ -1473,7 +1487,7 @@ async function main() {
        the policy or words a second sentence. */
     if (raw.refusal && raw.refusal.kind === 'decline') {
       if (streamed) entry.end = { state: 'decline', reason: raw.refusal.reason };
-      settle(declineRequest(method, mode, referrerPolicy, referrer, url, raw.refusal.reason));
+      settle(declineRequest(id, raw.refusal.reason));
       return;
     }
     const rec = replyRecord(raw, `the ${provenance} ${destination || 'data'} load ${abs}`);
@@ -1484,7 +1498,7 @@ async function main() {
        Named residual. Not covered: a network error states `unknown`, because safeFetch's `network` refusal does
        not say whether the request left. Next diff builds: that fact on the refusal, stated here as `sent` or
        `answered-locally`. Absence shows as: every network error's record stating `unknown`. */
-    settle(['provide', method, mode, referrerPolicy, referrer, url, rec ? 'sent' : 'unknown', doc.reach,
+    settle(['provide', ...id, rec ? 'sent' : 'unknown', doc.reach,
             b64(rec ? JSON.stringify(rec.meta) : 'null'),
             rec ? b64(rec.bytes) : ABSENT].join('\t'));
   };
@@ -2150,7 +2164,7 @@ async function main() {
       parkedWorlds.push(f[1]);
       return;
     }
-    /* `fetch.cancel <identity>` — no flow is owed this request any more: a park's five-field pair, sent when the
+    /* `fetch.cancel <identity>` — no flow is owed this request any more: a park's seven-field identity, sent when the
        pair's last outstanding park leaves unanswered (solver/engine.c's engine_pending_withdrawn), or a rendezvous id (engine_host_terminate), the two keys
        its answer would be written under. Fetch §2 Infrastructure makes an aborted and a terminated controller
        both canceled, so both are one act here. The send ends through its signal and its key is released, so its
@@ -2158,9 +2172,9 @@ async function main() {
        before this zone was shown it. A rendezvous may be withdrawn after its answer was written, which the
        engine refuses as naming no register; a park is cancelled only while no answer has reached it. */
     if (f[0] === 'fetch.cancel') {
-      if (f.length !== 6 && !(f.length === 2 && /^[1-9][0-9]*$/.test(f[1])))
-        throw new Error(`a fetch.cancel notice names neither a rendezvous id nor the five-field pair: ${record}`);
-      const key = f.length === 2 ? `req:${f[1]}` : fetchKey(f[1], f[2], f[3], f[4], f[5]);
+      if (f.length !== 8 && !(f.length === 2 && /^[1-9][0-9]*$/.test(f[1])))
+        throw new Error(`a fetch.cancel notice names neither a rendezvous id nor a park's seven fields: ${record}`);
+      const key = f.length === 2 ? `req:${f[1]}` : fetchKey(f.slice(1));
       const send = e.sends.get(key);
       if (send === undefined) return;
       if (e.owed.get(key) !== send.entry)
@@ -2404,15 +2418,18 @@ async function main() {
     }
     const f = line.split('\t');
     if (f[0] === 'fetch') {
-      if (f.length !== 14)
+      if (f.length !== 17)
         throw new Error('the host announced a fetch that is not ' +
                         '`fetch<TAB>METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>' +
-                        'MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL`: ' +
+                        'MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>HEADERS<TAB>BODY<TAB>ADDRESS<TAB>ASKERS<TAB>URL<TAB>CONTENT`: ' +
                         `${line} — the bill is ` +
                         'the pending line verbatim and this zone splits it where the engine joined it, so a ' +
                         'short record is the two grammars having parted');
       const [, method, destination, initiator, provenance, pinned, driven, credentials, mode, referrerPolicy,
-             referrer, address, askerSet, url] = f;
+             referrer, headersKey, bodyKey, address, askerSet, url, contentField] = f;
+      const id = [method, mode, referrerPolicy, referrer, headersKey, bodyKey, url];
+      /* The header list and body the two digest words name (test_forced.c's abi_say_fetches). */
+      const content = fetchContent(headersKey, bodyKey, contentField, line);
       /* The asking documents (solver/engine.h's ASKERS), each named once; workFetch judges the line by them. */
       const askers = askerSet.split(',');
       if (askers.some((a, i) => a === '' || askers.indexOf(a) !== i))
@@ -2432,7 +2449,7 @@ async function main() {
       if (mode !== 'same-origin' && mode !== 'cors' && mode !== 'no-cors')
         throw new Error(`the host announced a fetch in the mode \`${mode}\` — a reply on this channel returns ` +
                         'to the page that asked, so only `same-origin`, `cors` and `no-cors` may arrive here');
-      const key = fetchKey(method, mode, referrerPolicy, referrer, url);
+      const key = fetchKey(id);
       /* AN ANSWER IS ALREADY OWED FOR THIS PAIR — it is in flight, or it is queued for the next write. Either
          way this announcement names the SAME outstanding record, because the child has not been let go since
          the answer was composed, so working it a second time would fetch one address twice for one park. Once
@@ -2440,9 +2457,8 @@ async function main() {
       if (e.answered.has(key)) return;
       const send = { controller: new AbortController(), cancelled: false, entry: owe(e, key) };
       e.sends.set(key, send);
-      send.entry.done = track(e, key, workFetch(e, method, destination, initiator, provenance, pinned, driven,
-                                                credentials, mode, referrerPolicy, referrer, address, askers, url,
-                                                send));
+      send.entry.done = track(e, key, workFetch(e, id, destination, initiator, provenance, pinned, driven,
+                                                credentials, address, askers, content, send));
     } else if (f[0] === 'request') {
       /* `request<TAB>id<TAB>asker<TAB>op` (solver/engine.h's engine_host_requests). */
       if (f.length < 4 || !f[2])

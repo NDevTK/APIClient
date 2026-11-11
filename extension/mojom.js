@@ -493,7 +493,8 @@
           { name: "requests", type: "string",
             why: "the REQUESTS flows are parked on — one " +
                  "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>" +
-                 "REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL` line each (ASKERS the comma-joined " +
+                 "REFERRER_POLICY<TAB>REFERRER<TAB>HEADERS<TAB>BODY<TAB>ADDRESS<TAB>ASKERS<TAB>URL` line each (HEADERS " +
+                 "and BODY the digest words of the request's header list and body, ASKERS the comma-joined " +
                  "names of the documents whose parks it folds, which this zone judges it by), " +
                  "newline-joined, \"\" for none, deduped by the PAIR. The field was `urls` and the list was addresses alone, which is a " +
                  "request named by half of itself: a page that issues a GET and a POST to one address parks " +
@@ -531,6 +532,24 @@
          "Requests"' DESTINATION is that fact, it is a property of the REQUEST, and GetPending now carries it.
          An ordinal is a method's IDENTITY on the wire (mojo.js asserts uniqueness and never contiguity), so a
          deleted one leaves a hole rather than renumbering the methods after it. */
+      { ordinal: 36, name: "GetRequest",
+        params: [
+          { name: "method", type: "string", retained: false,
+            why: "the identity of one GetPending line, field by field as `Provide` takes it" },
+          { name: "mode", type: "string", retained: false, why: "the line's request mode" },
+          { name: "referrerPolicy", type: "string", retained: false, why: "the line's referrer policy" },
+          { name: "referrer", type: "string", retained: false, why: "the line's referrer" },
+          { name: "headers", type: "string", retained: false, why: "the line's header list digest word" },
+          { name: "requestBody", type: "string", retained: false, why: "the line's body digest word" },
+          { name: "url", type: "string", retained: false, why: "the line's address" }],
+        reply: [
+          { name: "request", type: "string",
+            why: "the header list and body the page composed for that request (Fetch §2.2.5 \"Requests\"), as " +
+                 "the JSON text `{headers: [[name, value], …], body: <base64>|null, bodyClass}`, or `null` for " +
+                 "an identity no flow is parked on. This zone sends what the page composed, and judges " +
+                 "`bodyClass` as the request's `body` signal" },
+          WORKING_SET] },
+
       { ordinal: 9, name: "Provide",
         params: [
           { name: "method", type: "string", retained: false,
@@ -550,6 +569,11 @@
           { name: "referrer", type: "string", retained: false,
             why: "the request's referrer as GetPending named it (\"no-referrer\" or a URL), part of the same " +
                  "key: two referrers are two `Referer` headers and so two requests" },
+          { name: "headers", type: "string", retained: false,
+            why: "the digest word of the request's header list as GetPending named it, part of the same key" },
+          { name: "requestBody", type: "string", retained: false,
+            why: "the digest word of the request's body as GetPending named it, part of the same key: two " +
+                 "bodies to one address are two requests" },
           { name: "url", type: "string", retained: false,
             why: "the TARGET half of the same request, matched with the method against what a flow parked on " +
                  "— the engine's own qjs_provide DFAILs on a pair nothing is parked on, which is what an " +
@@ -848,6 +872,10 @@
             why: "the request's referrer policy, keyed exactly as `Provide`'s is" },
           { name: "referrer", type: "string", retained: false,
             why: "the request's referrer, keyed exactly as `Provide`'s is" },
+          { name: "headers", type: "string", retained: false,
+            why: "the header list's digest word, keyed exactly as `Provide`'s is" },
+          { name: "requestBody", type: "string", retained: false,
+            why: "the body's digest word, keyed exactly as `Provide`'s is" },
           { name: "url", type: "string", retained: false,
             why: "the TARGET half of that same request, matched against what a flow parked on — " +
                  "`engine_decline` DFAILs on a pair no flow is parked on and no sale explains, for the reason " +

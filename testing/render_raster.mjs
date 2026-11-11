@@ -279,16 +279,16 @@ function readPaint(M, labels) {
    origin, the flow keeps its park, and the engine forks the arm that runs the page's failure path. */
 const PROGRAM_DESTINATIONS = new Set(['script', 'style', 'worker', 'sharedworker', 'serviceworker']);
 
-/* The twelve fields of solver/engine.h's pending line, in engine_pending_split's order. */
+/* The fields of solver/engine.h's pending line, in engine_pending_split's order. */
 const PENDING_FIELDS = ['method', 'destination', 'initiator', 'provenance', 'pinned', 'driven', 'credentials',
-                        'mode', 'referrerPolicy', 'referrer', 'address', 'askers', 'url'];
+                        'mode', 'referrerPolicy', 'referrer', 'headersKey', 'bodyKey', 'address', 'askers', 'url'];
 function splitPending(line) {
   /* Split where the engine joined it. No field can hold a TAB (URL Standard §4.4 URL parsing removes them and
      the rest are tokens), so a line with another field count is a grammar this host does not share, and
      guessing would attribute one request's address to another's method. The join asserts every field's
      content and pending_park_request refuses an empty address, so the count is the shape left to check here.
-     The method, mode, referrer policy, referrer and URL are the request's identity, which the reply is
-     delivered against. */
+     The method, mode, referrer policy, referrer, digest words and URL are the request's identity, which the
+     reply is delivered against. */
   const f = line.split('\t');
   if (f.length !== PENDING_FIELDS.length)
     fail('a pending line carries ' + f.length + ' field(s) where engine_pending_split names ' +
@@ -298,8 +298,9 @@ function splitPending(line) {
 
 async function serveOne(M, cs, req, docOrigin, log) {
   const decline = (why) => {
-    M.ccall('qjs_decline', 'void', ['number', 'number', 'number', 'number', 'number', 'number'],
-            [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.url), cs(why)]);
+    M.ccall('qjs_decline', 'void', ['number', 'number', 'number', 'number', 'number', 'number', 'number', 'number'],
+            [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.headersKey),
+             cs(req.bodyKey), cs(req.url), cs(why)]);
     log.push({ url: req.url, destination: req.destination, action: 'decline', why });
   };
   if (!PROGRAM_DESTINATIONS.has(req.destination))
@@ -331,9 +332,9 @@ async function serveOne(M, cs, req, docOrigin, log) {
   } catch (e) {
     /* Whether a failed request left is not known here; the page is the session's own document. */
     M.ccall('qjs_provide', 'void', ['number', 'number', 'number', 'number', 'number', 'number', 'number',
-                                    'number', 'number', 'number'],
-            [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.url), cs('unknown'),
-             cs('observed'), cs('null'), 0, 0]);
+                                    'number', 'number', 'number', 'number', 'number'],
+            [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.headersKey),
+             cs(req.bodyKey), cs(req.url), cs('unknown'), cs('observed'), cs('null'), 0, 0]);
     log.push({ url: req.url, destination: req.destination, action: 'network-error',
                why: (e && e.message) || String(e) });
     return;
@@ -359,9 +360,9 @@ async function serveOne(M, cs, req, docOrigin, log) {
   const bp = heapAlloc(M, body.length + 1, 'the body of ' + req.url);
   M.HEAPU8.set(body, bp); M.HEAPU8[bp + body.length] = 0;
   M.ccall('qjs_provide', 'void', ['number', 'number', 'number', 'number', 'number', 'number', 'number',
-                                  'number', 'number', 'number'],
-          [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.url), cs('sent'),
-           cs('observed'), cs(reply), bp, body.length]);
+                                  'number', 'number', 'number', 'number', 'number'],
+          [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.headersKey),
+           cs(req.bodyKey), cs(req.url), cs('sent'), cs('observed'), cs(reply), bp, body.length]);
   log.push({ url: req.url, destination: req.destination, action: 'provide',
              status: r.status, bytes: body.length });
 }

@@ -92,10 +92,10 @@ function run(tag, url, html, boot, late) {
            request at once, which a fixture with no wire may, since its answers exist before the read. */
         if (/^(poll|stalled)\t(0|[1-9][0-9]*)$/.test(line)) {
           if (rounds++ === 0 && late !== null) say(`novelty\t${b64(late)}`);
-          /* METHOD DESTINATION INITIATOR PROVENANCE PINNED DRIVEN CREDENTIALS MODE REFERRER_POLICY REFERRER
-             ADDRESS ASKERS URL (solver/engine.h's engine_pending_split); a network error is JSON `null` and no body. */
+          /* Each owed record is a pending line's fifteen fields (solver/engine.h's engine_pending_split) and
+             the bill's content field; a network error is JSON `null` and no body. */
           for (const f of owed.splice(0)) {
-            const abs = new URL(f[12], url).href;
+            const abs = new URL(f[14], url).href;
             /* The bundles are the only bodies this zone serves; every other request is a network error. */
             const path = new URL(abs).pathname;
             const js = path === '/bundle.js' || path === '/static/bundle.js' ? BUNDLE
@@ -106,7 +106,7 @@ function run(tag, url, html, boot, late) {
                  b64(js)]
               : [b64('null'), '-'];
             /* This zone mints every answer itself, for its one document, the session's own. */
-            say(['provide', f[0], f[7], f[8], f[9], f[12], 'answered-locally', 'observed', ...reply].join('\t'));
+            say(['provide', f[0], f[7], f[8], f[9], f[10], f[11], f[14], 'answered-locally', 'observed', ...reply].join('\t'));
           }
           say('go');
           continue;

@@ -32,6 +32,8 @@ struct PendIndexNode {
     char             *mode;    /* Fetch §2.2.5's request mode: two requests that differ only in it are two */
     char             *referrer_policy;
     char             *referrer;
+    char             *headers;   /* the header list's digest word, or "-" */
+    char             *body;      /* the body's digest word, or "-" */
     char             *url;
     uint32_t          hash;
     PendIndexMember **mem;
@@ -177,6 +179,10 @@ static uint32_t pend_hash_pair(const PendRequestKey *k)
     h = pend_hash_bytes("\t", h);
     h = pend_hash_bytes(k->referrer, h);
     h = pend_hash_bytes("\t", h);
+    h = pend_hash_bytes(k->headers, h);
+    h = pend_hash_bytes("\t", h);
+    h = pend_hash_bytes(k->body, h);
+    h = pend_hash_bytes("\t", h);
     return pend_hash_bytes(k->url, h);
 }
 
@@ -184,12 +190,12 @@ static int pend_node_is(const PendIndexNode *n, uint32_t h, const PendRequestKey
 {
     return n->hash == h && !strcmp(n->method, k->method) && !strcmp(n->mode, k->mode) &&
            !strcmp(n->referrer_policy, k->referrer_policy) && !strcmp(n->referrer, k->referrer) &&
-           !strcmp(n->url, k->url);
+           !strcmp(n->headers, k->headers) && !strcmp(n->body, k->body) && !strcmp(n->url, k->url);
 }
 
 static int pend_key_whole(const PendRequestKey *k)
 {
-    return k && k->method && k->mode && k->referrer_policy && k->referrer && k->url;
+    return k && k->method && k->mode && k->referrer_policy && k->referrer && k->headers && k->body && k->url;
 }
 
 static uint32_t pend_hash_ptr(JSValueConst rec)
@@ -352,8 +358,12 @@ void pending_index_unref(JSValueConst rec)
         pend_untrack(m);
         /* The pair's last outstanding park left unanswered, so no reply for it can be delivered: the zone is told
            to take back the answer it owes. A pair still holding a park goes on being owed for that park. */
-        if (n && n->n_mem == 0)
-            engine_pending_withdrawn(n->method, n->mode, n->referrer_policy, n->referrer, n->url);
+        if (n && n->n_mem == 0) {
+            PendRequestKey k;
+
+            pending_index_node_key(n, &k);
+            engine_pending_withdrawn(&k);
+        }
     }
 }
 
@@ -383,8 +393,10 @@ void pending_index_key(JSValueConst rec, const PendRequestKey *k)
         n->mode = reclaim_strdup(k->mode);
         n->referrer_policy = reclaim_strdup(k->referrer_policy);
         n->referrer = reclaim_strdup(k->referrer);
+        n->headers = reclaim_strdup(k->headers);
+        n->body = reclaim_strdup(k->body);
         n->url = reclaim_strdup(k->url);
-        CHECK(n->method && n->mode && n->referrer_policy && n->referrer && n->url,
+        CHECK(n->method && n->mode && n->referrer_policy && n->referrer && n->headers && n->body && n->url,
               "engine: OOM recording an outstanding request's identity");
         n->hash = h;
         b = h & (g_pair_buckets - 1);
@@ -524,6 +536,17 @@ const char *pending_index_node_referrer(const PendIndexNode *n)
     DCHECK(n != NULL, "an outstanding request's referrer was read off no node");
     return n->referrer;
 }
+void pending_index_node_key(const PendIndexNode *n, PendRequestKey *k)
+{
+    DCHECK(n != NULL && k != NULL, "an outstanding request's identity was read off no node, or into no key");
+    k->method = n->method;
+    k->mode = n->mode;
+    k->referrer_policy = n->referrer_policy;
+    k->referrer = n->referrer;
+    k->headers = n->headers;
+    k->body = n->body;
+    k->url = n->url;
+}
 const char *pending_index_node_url(const PendIndexNode *n)
 {
     DCHECK(n != NULL, "an outstanding request's address was read off no node");
@@ -604,6 +627,8 @@ void pending_index_reset(JSContext *ctx)
         free(n->mode);
         free(n->referrer_policy);
         free(n->referrer);
+        free(n->headers);
+        free(n->body);
         free(n->url);
         free(n->mem);
         free(n);

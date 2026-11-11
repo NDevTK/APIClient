@@ -82,17 +82,25 @@ QJS_EXPORT void qjs_teardown(void);
 
 /* WHAT THE TRUSTED ZONE OWES THE FRONTIER, and how it pays. */
 QJS_EXPORT const char *qjs_pending(void);
+/* The header list and body of one line of qjs_pending, named by the line's identity fields: the JSON text
+   `{"headers":[[name,value],…],"body":<RFC 4648 §4 base64>|null,"bodyClass":<word>}`, or `null` for an identity
+   with no outstanding park. Valid until the next call. */
+QJS_EXPORT const char *qjs_request(const char *method, const char *mode, const char *referrer_policy,
+                                   const char *referrer, const char *headers, const char *body,
+                                   const char *url);
 QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *referrer_policy,
-                            const char *referrer, const char *url, const char *how, const char *reach,
+                            const char *referrer, const char *headers, const char *request_body,
+                            const char *url, const char *how, const char *reach,
                             const char *reply, const char *body, unsigned body_len);
 /* …AND HOW IT REFUSES ONE, WHICH IS THE OTHER HALF OF PAYING AND NOT A KIND OF FAILURE. `qjs_provide` with the
    JSON `null` is Fetch §5.6 "Fetch methods"' NETWORK ERROR, and that is the honest answer wherever a real
    browser performing this same request would also produce one. Where none would — the firing policy declining
-   to spend an act, the destructive deny list, a method the chokepoint cannot issue — this entry is the answer:
+   to spend an act, the destructive deny list — this entry is the answer:
    nothing is fabricated about the origin, the flow keeps its park, and the engine forks the arm that runs the
    page's failure path so the `catch` is explored without the wait being spent. */
 QJS_EXPORT void qjs_decline(const char *method, const char *mode, const char *referrer_policy,
-                            const char *referrer, const char *url, const char *reason);
+                            const char *referrer, const char *headers, const char *request_body,
+                            const char *url, const char *reason);
 /* …AND A STREAMED REPLY'S LATER RECORDS. A `qjs_provide` reply carrying a `stream` token is a response's head
    (Fetch §5.6 resolves `fetch()` there) with the first read of its body; each further read arrives here, the
    last stating how the body ended. */
@@ -103,7 +111,7 @@ QJS_EXPORT const char *qjs_host_notices(void);
 QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned completion,
                                 const char *body, unsigned body_len);
 /* …AND THE REFUSAL OF ONE, WHICH IS `qjs_decline`'S SIBLING AND NOT A CASE OF IT. `qjs_decline` is keyed on the
-   request's five-field key, and `pending_push` deliberately keeps a HOSTREQ out of that index — a request this zone
+   request's identity, and `pending_push` deliberately keeps a HOSTREQ out of that index — a request this zone
    was ASKED for by id is answered by id, because the id is the only thing that names the one flow's register
    holding it. So a §7.4 navigation the firing policy declines has no spelling in the pair entry at all, and the
    arm that fired instead was a `DFAIL` naming this entry as the thing to build. Returns 1 if a parked flow's

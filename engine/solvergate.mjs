@@ -189,7 +189,7 @@ const SCRIPT_LIKE = scriptLikeDestinations();
    and not here trips the check LOUDLY, and a field added here and not to the join trips it too. Neither can
    quietly re-point the address. */
 const PENDING_LINE_FIELDS = ["method", "destination", "initiator", "provenance",
-                             "pinned", "driven", "credentials", "mode", "referrerPolicy", "referrer", "address",
+                             "pinned", "driven", "credentials", "mode", "referrerPolicy", "referrer", "headersKey", "bodyKey", "address",
                              "askers", "url"];
 
 /* THE SCHEDULES, AND EACH ONE IS A PAIR RATHER THAN A NAME. Every knob is one the production host already has
@@ -384,18 +384,19 @@ async function child(docPath, schedName) {
        written as source text here, so this is an ENCODE. */
     /* THE REQUEST THIS ANSWERS IS THE PAIR the engine listed — `qjs_pending` answers
        `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>
-       REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL` and the reply is delivered against its five-field identity, so a GET and a
-       POST to one address are two questions here. */
-    const provide = (method, mode, referrerPolicy, referrer, u, reply, body) => {
+       REFERRER<TAB>HEADERS<TAB>BODY<TAB>ADDRESS<TAB>ASKERS<TAB>URL` and the reply is delivered against its identity (`id`:
+       method, mode, referrer policy, referrer, headers, body, url), so a GET and a POST to one address are two
+       questions here. */
+    const provide = (id, reply, body) => {
       const b = new TextEncoder().encode(body);
       const p = M._malloc(b.length + 1);
       M.HEAPU8.set(b, p);
       /* This host mints every answer itself, for its one document, the session's own. */
       try { M.ccall("qjs_provide", "void",
                     ["number", "number", "number", "number", "number", "number", "number", "number", "number",
-                     "number"],
-                    [cs(method), cs(mode), cs(referrerPolicy), cs(referrer), cs(u), cs("answered-locally"),
-                     cs("observed"), cs(JSON.stringify(reply)), p, b.length]); }
+                     "number", "number", "number"],
+                    [...id.map(cs), cs("answered-locally"), cs("observed"), cs(JSON.stringify(reply)), p,
+                     b.length]); }
       finally { M._free(p); }
     };
     /* ONE MID-RUN SNAPSHOT, TAKEN AND CONSUMED. `qjs_emit_partial` prints exactly one `@RESULT` line per call
@@ -587,8 +588,8 @@ async function child(docPath, schedName) {
          vocabulary is asserted at the door that DECIDES from it (safe-fetch.js's `_credentialedOf`), which is
          one check for every host rather than a copy here. */
       /* BY NAME AND NEVER BY POSITION — see PENDING_LINE_FIELDS for what a hole cost here. */
-      const { method, destination, initiator, provenance, mode, referrerPolicy, referrer, url: u } =
-        Object.fromEntries(PENDING_LINE_FIELDS.map((k, i) => [k, t[i]]));
+      const { method, destination, initiator, provenance, mode, referrerPolicy, referrer, headersKey, bodyKey,
+              url: u } = Object.fromEntries(PENDING_LINE_FIELDS.map((k, i) => [k, t[i]]));
       /* A DOCUMENT WHOSE REPLY IS COMPILED IS REFUSED BY NAME, which is this gate's own idiom for a corpus
          document it cannot serve. It is not a solver finding and must not be reported as one: the refusal
          names the gate, so a reader is sent to the reply policy rather than to the compiler. */
@@ -659,7 +660,7 @@ async function child(docPath, schedName) {
       const reply = { status: 200, statusText: "OK",
                       headers: [["content-type", "application/json"]],
                       urlList: [new URL(u, url).href], computedType: "application/json", type: "basic" };
-      e.provide(method, mode, referrerPolicy, referrer, u, reply, MOCK_BODY);
+      e.provide([method, mode, referrerPolicy, referrer, headersKey, bodyKey, u], reply, MOCK_BODY);
       paid++;
     }
     return paid;

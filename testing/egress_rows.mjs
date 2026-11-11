@@ -73,7 +73,8 @@ const docOf = (page, reach, driven = 'undriven', pinned = 'unpinned') =>
 /* A page request as engine/trusted.mjs's workFetch states it, from the document `docKey` at `page`. */
 async function ask(page, url, docKey, { destination = '', mode = 'cors', provenance = 'derived', pinned = 'unpinned',
                                         driven = 'undriven', reach = 'observed', headers,
-                                        address = 'concrete', method = 'GET', body = null, bodyClass } = {}) {
+                                        address = 'concrete', method = 'GET', body = null,
+                                        bodyClass = body === null ? undefined : 'concrete' } = {}) {
   const origin = new URL(page).origin;
   return ZONE.safeFetch(url, {
     pageOrigin: origin, destination, mode, provenance, pinned, driven, address,
@@ -100,7 +101,8 @@ const refusalOf = (r) => r.refusal ? r.refusal.reason : 'sent';
 /* The firing question alone, for an act that sends nothing here. */
 const firing = (url, facts) => ZONE.safeFetchFiringRefusal(Object.assign(
   { url, destination: '', provenance: 'derived', pinned: 'unpinned', actor: 'page', driven: 'undriven',
-    address: 'concrete', method: 'GET', doc: docOf(PAGE_A, 'observed'), credentialed: false, headers: null }, facts));
+    address: 'concrete', bodyClass: 'none', method: 'GET', doc: docOf(PAGE_A, 'observed'), credentialed: false,
+    headers: null }, facts));
 const SIGNAL_NAMES = ZONE.safeFetchSignals().map((s) => s.name).sort().join(',');
 /* The one entry of a reply record's `egress` list, or a word saying why there is not exactly one. */
 const only = (r) => !Array.isArray(r.egress) ? 'no-egress-list' : r.egress.length !== 1 ? `entries=${r.egress.length}` : r.egress[0];
@@ -225,7 +227,8 @@ const ROWS = [
       const wide = await refused(PAGE_W, `${W}/no-bytes`);
       const exampleWide = ZONE.safeFetchFiringRefusal({
         url: `${W}/x`, destination: '', provenance: 'forced', pinned: 'unpinned', actor: 'page', driven: 'undriven',
-        doc: docOf(PAGE_W, 'observed'), credentialed: false, headers: null, address: 'example', method: 'GET' });
+        doc: docOf(PAGE_W, 'observed'), credentialed: false, headers: null, address: 'example', bodyClass: 'none',
+        method: 'GET' });
       ZONE.safeFetchUnwiden(W);
       return [['GET /no-bytes', count('GET', '/no-bytes'), 0], ['unwidened', own, 'blocked-signal:address=unknown'],
               ['widened', wide, 'blocked-signal:address=unknown'],

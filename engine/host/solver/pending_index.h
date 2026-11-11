@@ -71,16 +71,23 @@ void pending_index_ref(JSValueConst rec);
    host would fetch an address no flow is parked on. That is the resurrection hazard, closed at its origin. */
 void pending_index_unref(JSValueConst rec);
 
-/* A request's identity in the outstanding set: Fetch §2.2.5's method, mode, referrer policy, referrer and URL,
-   in the spellings the pending line carries. Two requests that differ in any of them are two requests: Fetch
-   §4.1 "Main fetch" answers two modes differently, and two referrers are two `Referer` headers. BORROWED. */
+/* A request's identity in the outstanding set: Fetch §2.2.5's method, mode, referrer policy, referrer, header
+   list, body and URL, in the spellings the pending line carries. Two requests that differ in any of them are
+   two requests: Fetch §4.1 "Main fetch" answers two modes differently, two referrers are two `Referer`
+   headers, and two header lists or two bodies are two messages to the server. `headers` and `body` are
+   pending_request_digest's words: "-" for an empty header list or a null body, else the lowercase hex SHA-256
+   of the list's `name:value\n` lines in order, or of the body's bytes. BORROWED. */
 typedef struct PendRequestKey {
     const char *method;
     const char *mode;
     const char *referrer_policy;
     const char *referrer;
+    const char *headers;
+    const char *body;
     const char *url;
 } PendRequestKey;
+/* The width of a digest word: 64 hex digits and the terminator. */
+#define PEND_DIGEST_WORD 65
 
 /* THIS RECORD IS NOW A COMPLETE OUTSTANDING REQUEST — key it under its PendRequestKey. The strings are COPIED:
    the node outlives every record that named it (see `answered` below), so it cannot borrow a register's
@@ -119,11 +126,11 @@ void pending_index_declined(JSValueConst rec, int rule);
     X(HEADER_AUTHORITY, 1, "header-authority", reply_declined_header_authority) \
     X(WITNESS, 1, "witness", reply_declined_witness) \
     X(ADDRESS, 1, "address", reply_declined_address) \
+    X(BODY, 1, "body", reply_declined_body) \
     X(URL_AUTHORITY, 1, "url-authority", reply_declined_url_authority) \
     X(LINEAGE, 1, "lineage", reply_declined_lineage) \
     X(REACHES, 1, "reaches", reply_declined_reaches) \
     X(METHOD_SIGNAL, 1, "method", reply_declined_method_signal) \
-    X(METHOD, 0, "blocked-method", reply_declined_method) \
     X(DESTRUCTIVE, 0, "blocked-destructive", reply_declined_destructive) \
     X(STREAM_BODY, 0, "blocked-stream-body-gated", reply_declined_stream_body) \
     X(WIRE_IDLE, 0, "wire-idle", reply_declined_wire_idle) \
@@ -147,6 +154,8 @@ const char *pending_index_node_mode(const PendIndexNode *n);
 const char *pending_index_node_referrer_policy(const PendIndexNode *n);
 const char *pending_index_node_referrer(const PendIndexNode *n);
 const char *pending_index_node_url(const PendIndexNode *n);
+/* The node's whole identity, borrowed from the node. */
+void         pending_index_node_key(const PendIndexNode *n, PendRequestKey *k);
 int          pending_index_node_count(const PendIndexNode *n);
 /* Member `i`, OWNED by the caller. */
 JSValue      pending_index_node_member(const PendIndexNode *n, int i);

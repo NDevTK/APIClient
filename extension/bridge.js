@@ -3812,17 +3812,16 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      carry without a codec or a decode, and a decode here would run in the zone that owns SOP/CORS and no
      semantics, before the engine's own decode sees the declared charset. So the record travels as text and the
      bytes as bytes, copied straight into the engine's linear memory. */
-  /* The request is the (method, url) pair the flow parked on; `method` arrives normalized (Fetch §2.2.1
-     Methods). A method this zone cannot issue is refused before the call and never downgraded: safeFetch is
-     GET only (SECURITY.md), so answering a POST's key with a GET's reply would be a response the server never
-     gave. On this seam the refusal is spelled `null`, because core/fetch builds any object into a Response,
+  /* The request is the identity the flow parked on; `method` arrives normalized (Fetch §2.2.1 Methods) and
+     is relayed with the header list and body the page composed. On this seam a network refusal is spelled
+     `null`, because core/fetch builds any object into a Response,
      so a status-0 record would resolve `fetch()` with a status no server returns. fetchedXhr spells a network
      refusal as an answer with no body, which xml_http_request.c's xhr_take_reply leaves as the initial network
      error of XHR §3 "Interface XMLHttpRequest", and a decline as `{declined}`, which goes to `hostDecline`. */
   /* The request's destination travels with it (Fetch §2.2.5 Requests): safe-fetch.js decides the CORB class
      from §2.2.5's script-like predicate over it, so it is passed through, not reduced to a boolean. */
   const fetched = async (method, u, destination, provenance, pinned, driven, address, credentials, mode,
-                         referrerPolicy, referrer, asked, signal, onBodyRead, onHead, onChunk) => {
+                         referrerPolicy, referrer, content, asked, signal, onBodyRead, onHead, onChunk) => {
     DCHECK(signal instanceof AbortSignal,
            "a pending request reached the fetch relay with no abort signal — engineIssue owns one per send, and " +
            "a `fetch.cancel` notice ends the send through it");
@@ -3848,9 +3847,13 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "one (pendingRequest), Fetch §2.2.5 \"Requests\" gives every request one, and only the algorithm " +
            "that created it knows which. A caller that drops it hands `safe-fetch.js` a request it can decide " +
            "nothing about");
-    /* The method half of the firing question is asked of the chokepoint (`safeFetchMethodRefusal`), so this
-       host and engine/trusted.mjs answer it once, in the chokepoint's refusal vocabulary, and the flow stays
-       parked rather than being told the server was unreachable. */
+    /* `content` is the request's header list, body bytes and body class as the engine stated them
+       (pendingRequestContent): the chokepoint sends what the page composed and judges the method and the
+       class as signals. */
+    DCHECK(content && Array.isArray(content.headers) &&
+           (content.body === null || content.body instanceof Uint8Array) && typeof content.bodyClass === "string",
+           "a pending request reached the fetch relay with no content record — the issue reads the header list " +
+           "and body the line's digest words name before it asks the chokepoint");
     /* The asking documents' judgement (askerRecord). A refusal declines under its closed token, which the
        egress histogram counts, and its sentence names the document that is not one of this instance's. */
     if (asked.refusal) {
@@ -3859,8 +3862,6 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     }
     const doc = asked.doc;
     DCHECK(docRecordIs(doc), "a pending request reached the fetch relay with no asking document's record");
-    const _mRefusal = self.safeFetchMethodRefusal(method);
-    if (_mRefusal) return { refusal: _mRefusal };
     /* A holed address is a park carrying an address the engine never determined, so there is no request to
        make and nothing for the chokepoint to grade; it is answered as a network error.
        Named residual: that answer sends the page's code down a failure path for a request nobody could make.
@@ -3904,13 +3905,16 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       /* `mode` is the request's own (Fetch §2.2.5 Requests), off the pending line, relayed: the engine states
          what the request IS, and the chokepoint's `_modeOf` CHECKs the word. */
       /* `useCorsPreflight: false`: Fetch §5.4 "Request class" sets that flag only for a ReadableStream body,
-         and a request on this seam is a GET, which §5.4 refuses a body. */
+         which the engine refuses before the park (core/fetch/fetch.c). */
       /* `driven` is the engine's drive mark off the same line (solver/engine.h's PENDING_DRIVEN_*), relayed:
          the chokepoint's `actor` row reads it. */
       /* `address` is the line's address class (core/fetch/fetch.h), relayed for the `address` row. */
-      /* `method` passed safeFetchMethodRefusal above, so it is GET and the request has no body. */
-      const opts = { pageOrigin: eng.origin, method, body: null, destination, mode, provenance, pinned,
+      /* The method, header list and body are the page's own (Fetch §2.2.5 "Requests"); an empty list is stated
+         as none, and a null body states no class. */
+      const opts = { pageOrigin: eng.origin, method, body: content.body, destination, mode, provenance, pinned,
                      driven, address, credentials, actor: "page", useCorsPreflight: false,
+                     headers: content.headers.length ? content.headers : null,
+                     ...(content.body === null ? {} : { bodyClass: content.bodyClass }),
                      doc, credentialed: false, signal, onBodyRead, onHead, onChunk,
                      identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, "engine:" + eng.docId, abs, credentials, mode,
                                                    referrerPolicy, referrer) };
@@ -4377,7 +4381,8 @@ function engineKey(eng, tree) {
 /* Delivered against the request, which is the pair: `qjs_provide` takes the method first, as a request line
    states it (RFC 9112 §3 Request Line), because the engine's pending register is keyed on both, so a GET and a
    POST to one address cannot collect each other's bodies. */
-async function engineProvide(eng, method, mode, referrerPolicy, referrer, url, rep, reach) {
+async function engineProvide(eng, id, rep, reach) {
+  const [method, mode, referrerPolicy, referrer, headers, requestBody, url] = id;
   /* A decline may not arrive here: `provide` settles the park, and `reply: "null"` settles it with a network
      error. A decline is delivered through engineDecline, which keeps the flow parked. */
   DCHECK(!(rep && rep.refusal),
@@ -4396,7 +4401,7 @@ async function engineProvide(eng, method, mode, referrerPolicy, referrer, url, r
      Named residual. Not covered: a network error states `unknown`, because `fetched` folds a refusal made before
      any send with a failure after one. Next diff builds: that fact on safeFetch's `network` refusal, stated here
      as `sent` or `answered-locally`. Absence shows as: every network error's record stating `unknown`. */
-  await eng.r.renderer.provide({ method, mode, referrerPolicy, referrer, url,
+  await eng.r.renderer.provide({ method, mode, referrerPolicy, referrer, headers, requestBody, url,
                                  how: rep === null ? "unknown" : "sent", reach,
                                  reply: JSON.stringify(rep === null ? null : rep.meta),
                                  body: rep === null ? null : rep.bytes });
@@ -4405,17 +4410,19 @@ async function engineProvide(eng, method, mode, referrerPolicy, referrer, url, r
    with a different payload, which is why engineProvide refuses a refusal. The engine keeps the flow's park and
    forks an arm that runs the page's `catch`, so the wait is preserved and the failure path explored. No bytes
    accompany it, since nothing was fetched. */
-async function engineDecline(eng, method, mode, referrerPolicy, referrer, url, reason) {
+async function engineDecline(eng, id, reason) {
+  const [method, mode, referrerPolicy, referrer, headers, requestBody, url] = id;
   DCHECK(typeof method === "string" && method !== "" && typeof mode === "string" && mode !== "" &&
          typeof referrerPolicy === "string" && typeof referrer === "string" && referrer !== "" &&
+         typeof headers === "string" && headers !== "" && typeof requestBody === "string" && requestBody !== "" &&
          typeof url === "string" && url !== "",
-         "a refusal was relayed naming no request — it is keyed on the line's five-field identity exactly as " +
+         "a refusal was relayed naming no request — it is keyed on the line's identity exactly as " +
          "a reply is, because it answers the same question, and a partly-named one refuses a request no flow " +
          "parked on");
   DCHECK(typeof reason === "string" && reason !== "",
          "a refusal was relayed with no reason — the flow it refuses will not drain this session, so this is " +
          "the only account of it anybody gets and it is what says whether a widening would change the answer");
-  await eng.r.renderer.decline({ method, mode, referrerPolicy, referrer, url, reason });
+  await eng.r.renderer.decline({ method, mode, referrerPolicy, referrer, headers, requestBody, url, reason });
 }
 /* The engine's xhr.send record (xml_http_request.c's `xhr_request_op`), or the first field that breaks it.
    Every field is one the chokepoint decides from: the URL and method (SOP, CORS, the method refusal), XHR
@@ -4465,11 +4472,11 @@ async function engineFetchXhr(eng, rec, doc, signal, onBodyRead) {
     if (!eng._crashed) engineRefuse(eng, _xhrRefusal);
     return { declined: _xhrRefusal };
   }
-  /* The refusal is the chokepoint's grade (`safeFetchMethodRefusal`), shared with `fetched` and
-     engine/trusted.mjs. It is a decline: no browser refuses a POST, so the rendezvous is declined and the
+  /* The refusal is the chokepoint's grade (`safeFetchMethodRefusal`), shared with engine/trusted.mjs's
+     workXhr. It is a decline: no browser refuses a POST, so the rendezvous is declined and the
      engine forks a waiting arm and a failure arm, as for a refused document load. */
   const _xhrMethodRefusal = self.safeFetchMethodRefusal(q.method);
-  if (_xhrMethodRefusal) return { declined: q.method + " " + q.url + " — " + _xhrMethodRefusal.reason };
+  if (_xhrMethodRefusal) return { declined: _xhrMethodRefusal.reason };
   try {
     const abs = new URL(q.url, eng.msg.sourceUrl).href;
     /* The credentials mode (XHR §3.5.6 The send() method: `include` if cross-origin credentials is true,
@@ -4530,7 +4537,7 @@ async function engineFetchXhr(eng, rec, doc, signal, onBodyRead) {
     if (r.refusal) {
       CHECK(r.refusal.kind === "network" || r.refusal.kind === "decline",
             "safeFetch graded an XHR's refusal `" + r.refusal.kind + "`, which is neither word it states");
-      if (r.refusal.kind === "decline") return { declined: "GET " + abs + " — " + r.refusal.reason };
+      if (r.refusal.kind === "decline") return { declined: r.refusal.reason };
       return { meta: { status: 0, statusText: r.statusText, headers: [] }, bytes: null };
     }
     /* The type the chokepoint computed, relayed as `fetched` does: this zone is the only one that may answer
@@ -4574,8 +4581,8 @@ function pendingRequest(line) {
      are relayed for the `Referer` this zone composes. The askers are the documents whose parks the line folds;
      the caller checks each names a document of the asking instance. */
   return { method: f[0], destination: f[1], initiator: f[2], provenance: f[3], pinned: f[4], driven: f[5],
-           credentials: f[6], mode: f[7], referrerPolicy: f[8], referrer: f[9], address: f[10],
-           askers: f[11].split(","), url: f[12] };
+           credentials: f[6], mode: f[7], referrerPolicy: f[8], referrer: f[9], headersKey: f[10], bodyKey: f[11],
+           address: f[12], askers: f[13].split(","), url: f[14] };
 }
 /* Referrer Policy §3 "Referrer Policies", the empty string included. */
 const _REFERRER_POLICIES = ["", "no-referrer", "no-referrer-when-downgrade", "same-origin", "origin",
@@ -4595,18 +4602,23 @@ const PENDING_TOKENS = Object.freeze([
   [7, "mode", ["same-origin", "cors", "no-cors"]],
   [8, "referrer policy", _REFERRER_POLICIES],
   /* core/fetch/fetch.h's address class; an address with no bytes is never listed. */
-  [10, "address class", ["concrete", "example"]]]);
+  [12, "address class", ["concrete", "example"]]]);
+/* A key digest word of the line (solver/pending_index.h): "-" for an empty header list or a null body, else a
+   SHA-256 in lowercase hex. */
+const _PENDING_DIGEST_WORD = /^(?:-|[0-9a-f]{64})$/;
 /* The line's shape, or what breaks it, worded to follow "whose". */
 function pendingLineRefusal(f) {
-  if (!(f.length === 13 && f[0] !== "" && f[7] !== "" && f[9] !== "" && f[11] !== "" && f[12] !== ""))
+  if (!(f.length === 15 && f[0] !== "" && f[7] !== "" && f[9] !== "" && f[13] !== "" && f[14] !== ""))
     return "fields are not METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>" +
-           "CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL";
+           "CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>HEADERS<TAB>BODY<TAB>ADDRESS<TAB>ASKERS<TAB>URL";
+  for (const k of [10, 11])
+    if (!_PENDING_DIGEST_WORD.test(f[k])) return (k === 10 ? "header list" : "body") + " digest word `" + f[k] + "` is neither - nor a SHA-256 in hex";
   for (const [k, name, words] of PENDING_TOKENS)
     if (words.indexOf(f[k]) < 0) return name + " `" + f[k] + "` is none of " + words.join(", ");
   if (f[9] !== "no-referrer" && !URL.canParse(f[9])) return "referrer `" + f[9] + "` is neither no-referrer nor a URL";
-  const askers = f[11].split(",");
+  const askers = f[13].split(",");
   if (!askers.every((a, n) => a !== "" && askers.indexOf(a) === n))
-    return "asker set `" + f[11] + "` is not a comma-joined set of document names";
+    return "asker set `" + f[13] + "` is not a comma-joined set of document names";
   return null;
 }
 /* The door every send is issued through without waiting: its answer is due a latency of engine work later
@@ -4629,8 +4641,8 @@ function engineIssue(eng, key, start, deliver, pair, reach) {
          "a request was issued with no starter or no deliverer — the pair is the whole contract: `start` is " +
          "called exactly once and only when this key is not already in flight, and `deliver` is what a later " +
          "round hands the answer to, so an issue missing either is a request nobody will ever answer");
-  DCHECK(pair === null || (Array.isArray(pair) && pair.length === 5),
-         "a request was issued stating neither a streamed fetch's five-field pair nor null — the pair is what its " +
+  DCHECK(pair === null || (Array.isArray(pair) && pair.length === 7),
+         "a request was issued stating neither a streamed fetch's identity nor null — the identity is what its " +
          "streamed head is provided under");
   if (eng._inflight.has(key)) return;
   /* The record enters the map before the call suspends, so the next round, re-listing the same request,
@@ -4664,14 +4676,14 @@ function engineIssue(eng, key, start, deliver, pair, reach) {
          "a request was issued whose starter did not answer a promise — the round its answer falls due in " +
          "waits on this, and a non-promise there delivers an answer that has not landed");
 }
-/* The in-flight key of a request, from the identity its answer is delivered under: the five-field pair of a
+/* The in-flight key of a request, from the identity its answer is delivered under: the seven fields of a
    park (`engine_provide`, `engine_decline`), or the rendezvous id of a host request (`engine_host_answer`),
    whichever operation it carries, since one id is one rendezvous. The issue sites and engineCancel both key
    through here, so a cancel names the send it ends. */
 function inflightKey(identity) {
-  DCHECK(Array.isArray(identity) && (identity.length === 1 || identity.length === 5) &&
+  DCHECK(Array.isArray(identity) && (identity.length === 1 || identity.length === 7) &&
          identity.every((x) => typeof x === "string"),
-         "a request identity is neither a rendezvous id nor the five-field pair: " + JSON.stringify(identity));
+         "a request identity is neither a rendezvous id nor a park's seven fields: " + JSON.stringify(identity));
   return (identity.length === 1 ? "req\n" : "fetch\n") + identity.join("\n");
 }
 /* Fetch §2 Infrastructure's "abort a fetch controller" or "terminate", on the zone's side: the two are one act
@@ -4768,10 +4780,11 @@ async function engineDeliverStreamRecord(eng, rec, last) {
            (h.type === "basic" || h.type === "cors"),
            "a streamed send's head is missing or short of a field — safeFetch's `onHead` states status, status " +
            "message, header map, URL list and a basic or cors type before it reads the body");
-    const [method, mode, referrerPolicy, referrer, url] = rec.pair;
+    const [method, mode, referrerPolicy, referrer, headers, requestBody, url] = rec.pair;
     DCHECK(typeof rec.reach === "string",
            "a streamed head is being provided with no reach for its asking documents");
-    await eng.r.renderer.provide({ method, mode, referrerPolicy, referrer, url, how: "sent", reach: rec.reach,
+    await eng.r.renderer.provide({ method, mode, referrerPolicy, referrer, headers, requestBody, url, how: "sent",
+                                   reach: rec.reach,
                                    reply: JSON.stringify({ status: h.status, statusText: h.statusText,
                                                            headers: Object.entries(h.headers),
                                                            urlList: h.urlList, type: h.type,
@@ -4834,14 +4847,16 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
     /* A refused line retires the instance; nothing more of this list is issued. */
     if (typeof req === "string") { engineRefuse(eng, req); return; }
     const { method, destination, provenance, pinned, driven, credentials, mode, referrerPolicy, referrer, address,
-            askers, url } = req;
+            headersKey, bodyKey, askers, url } = req;
+    /* The identity the answer is delivered under, in the order every renderer method takes it. */
+    const id = [method, mode, referrerPolicy, referrer, headersKey, bodyKey, url];
     /* The ask is counted at the call, before the gate, so the census separates a request nobody made from one
        the gate refused: `declined: {}` beside a nonzero `asked` says the policy refused nothing (an empty
        surface is then about the driving), while `asked: 0` says this loop never ran. */
-    /* The dedup key is the five-field identity the engine parked on, the key the answer is delivered under
+    /* The dedup key is the identity the engine parked on, the key the answer is delivered under
        (`engine_provide` and `engine_decline` key on it, and `engine_pending_fetches` dedups over it). It uses
        the raw address off the line, never the absolute URL `fetched` resolves. */
-    const key = inflightKey([method, mode, referrerPolicy, referrer, url]);
+    const key = inflightKey(id);
     /* An entry stays listed until answered and this visits the list every slice, so without the dedup one
        page `fetch` would become one request per round. */
     if (eng._inflight.has(key)) continue;
@@ -4854,18 +4869,24 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
        reach is stated on the provide. A refused asker has no record and is declined, never provided. */
     const asker = askerRecord(eng, askers, "asker");
     const reach = asker.doc === null ? null : asker.doc.reach;
+    /* The header list and body the digest words name, read before the starter runs so the send takes its
+       inputs with it. A refused record retires the instance. */
+    const content = await pendingRequestContent(eng, id);
+    if (typeof content === "string") { engineRefuse(eng, content); return; }
+    if (eng._crashed) return;
     engineIssue(eng, key,
       (signal, onBodyRead, onHead, onChunk) => { eng._egress.asked++;
                     return eng.fetched(method, url, destination, provenance, pinned, driven, address, credentials,
-                                       mode, referrerPolicy, referrer, asker, signal,
+                                       mode, referrerPolicy, referrer, content, asker, signal,
                                        onBodyRead, onHead, onChunk); },
-      (answer) => engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer, reach),
-      destination === "" ? [method, mode, referrerPolicy, referrer, url] : null, reach);
+      (answer) => engineDeliverReply(eng, id, answer, reach),
+      destination === "" ? id : null, reach);
   }
 }
 /* What a landed answer means on the pending seam: the `deliver` half of one issue, closing over the request's
    own pair, so the reply cannot be handed over against a pair it was not fetched under. */
-async function engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer, reach) {
+async function engineDeliverReply(eng, id, answer, reach) {
+  const method = id[0], url = id[6];
   /* A decline is its own delivery, on its own method. `Decline` carries the same pair `Provide` does with the
      chokepoint's reason: the engine records the refusal, stops listing the request (silence would be
      re-offered and re-refused every round), keeps one arm waiting with no reply invented, and forks the other
@@ -4897,11 +4918,39 @@ async function engineDeliverReply(eng, method, mode, referrerPolicy, referrer, u
     const _tok = answer.refusal.reason;
     if (!(_tok in eng._egress.declined)) eng._egress.declined[_tok] = 0;
     eng._egress.declined[_tok]++;
-    await engineDecline(eng, method, mode, referrerPolicy, referrer, url, answer.refusal.reason);
+    await engineDecline(eng, id, answer.refusal.reason);
     /* `return`: the decline is the whole delivery for this request. */
     return;
   }
-  await engineProvide(eng, method, mode, referrerPolicy, referrer, url, answer, reach);
+  await engineProvide(eng, id, answer, reach);
+}
+/* The header list and body of one pending line, by the line's identity (content.mojom.Renderer.GetRequest):
+   `{headers: [[name, value], …], body: Uint8Array | null, bodyClass}`. A line whose two digest words are "-"
+   has an empty list and a null body, and nothing is read. The record is the instance's statement and so
+   input: answers the content, or the reason it is refused. */
+const _PENDING_BODY_CLASSES = ["none", "concrete", "example", "unknown"];
+async function pendingRequestContent(eng, id) {
+  const [method, mode, referrerPolicy, referrer, headers, requestBody, url] = id;
+  if (headers === "-" && requestBody === "-") return { headers: [], body: null, bodyClass: "none" };
+  const text = (await eng.r.renderer.getRequest({ method, mode, referrerPolicy, referrer, headers, requestBody,
+                                                  url })).request;
+  let q;
+  try { q = JSON.parse(text); } catch (_) { q = undefined; }
+  const head = "content.mojom.Renderer.GetRequest answered " + method + " " + url + " with ";
+  if (!q || typeof q !== "object" || !Array.isArray(q.headers) ||
+      !q.headers.every((h) => Array.isArray(h) && h.length === 2 && typeof h[0] === "string" && typeof h[1] === "string"))
+    return head + "no header list of [name, value] pairs";
+  if ((q.headers.length === 0) !== (headers === "-")) return head + "a header list its line's digest word contradicts";
+  if (_PENDING_BODY_CLASSES.indexOf(q.bodyClass) < 0) return head + "the body class `" + String(q.bodyClass) + "`";
+  if ((q.body === null) !== (requestBody === "-") || (q.body === null) !== (q.bodyClass === "none"))
+    return head + "a body its line's digest word or its own class contradicts";
+  if (q.body === null) return { headers: q.headers, body: null, bodyClass: "none" };
+  /* RFC 4648 §4 base64, the engine's transport encoding of the bytes (solver/engine.h). */
+  if (typeof q.body !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(q.body))
+    return head + "a body that is not base64";
+  const bin = atob(q.body), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return { headers: q.headers, body: bytes, bodyClass: q.bodyClass };
 }
 /* Every owed list crosses the same way, newline-joined records or "" for none, and is split here. The caller
    names the mojom method and mojom declares the reply's type, so a NULL cannot become the text "null" and one
@@ -5193,8 +5242,9 @@ function noticeRefusal(f) {
              noticeName(f[3], "marks");
     case "fetch.cancel":
       return (f.length === 2 ? /^[1-9][0-9]*$/.test(f[1])
-                             : f.length === 6 && f[1] !== "" && f[2] !== "" && f[4] !== "" && f[5] !== "")
-        ? null : "names neither a rendezvous id nor the five-field pair";
+                             : f.length === 8 && f[1] !== "" && f[2] !== "" && f[4] !== "" &&
+                               _PENDING_DIGEST_WORD.test(f[5]) && _PENDING_DIGEST_WORD.test(f[6]) && f[7] !== "")
+        ? null : "names neither a rendezvous id nor a park's seven-field identity";
     case "world.gone": case "world.parked":
       return parts(2, false) || noticeName(f[1], "world");
     case "navigable.committed":
@@ -5683,7 +5733,7 @@ async function hostNotice(eng, line) {
     /* `actor: "tool"`: the load this asks about is this zone's act, as the load states (the seed arm says why). */
     const _seedRefusal = self.safeFetchFiringRefusal({
       url: f[1], destination: "document", provenance: f[2], pinned: f[4],
-      doc: _seedFrom.issuerDoc, actor: "tool", driven: f[3], address: "unstated", method: "GET",
+      doc: _seedFrom.issuerDoc, actor: "tool", driven: f[3], address: "unstated", bodyClass: "none", method: "GET",
       credentialed: navigationCarriesSession(f[1], eng.origin), headers: null });
     if (_seedRefusal) {
       console.warn("[bridge] a route declaration for `" + f[1] + "` is refused by this origin's egress " +
@@ -5794,7 +5844,7 @@ async function hostNotice(eng, line) {
      since releasing an unheld world is a no-op, and only this zone knows the other instances. A booting
      instance is skipped because both delivery branches wait for `_readyP`, so it holds no foreign world
      (qjs_world_gone asserts the frontier was seeded). */
-  /* `fetch.cancel <identity>` — no flow is owed this request any more; the identity is a park's five-field pair
+  /* `fetch.cancel <identity>` — no flow is owed this request any more; the identity is a park's seven fields
      or a rendezvous id (inflightKey). */
   if (f[0] === "fetch.cancel") {
     engineCancel(eng, f.slice(1));
@@ -7840,7 +7890,7 @@ self.astDispatch = async function astDispatch(msg) {
                        /* `public`: no document makes it, so its container would be a new one. */
                        doc: docRecord(PROVENANCE_FORCED, DRIVEN_NO, "unpinned", NAVIGABLE_NOTICE.sandbox.none,
                                       "public"),
-                       actor: "tool", driven: "unstated", address: "concrete", method: "GET",
+                       actor: "tool", driven: "unstated", address: "concrete", bodyClass: "none", method: "GET",
                        credentialed: false, headers: null };
       return { success: true, result: {
         origins: self.safeFetchWidenedOrigins(),

@@ -37,6 +37,7 @@
 #include "solver/cow.h"
 #include "solver/world.h"   /* the routed record's world vector: whose timeline a delivery belongs to */
 #include "solver/value_dump.h"   /* a host instrument's completion value, dumped with its examples resolved */
+#include "core/json_buf.h"   /* a parked request's header list and body, as the text a host reads */
 #include "core/dom/document.h"   /* which document a parked program belongs to: the realm it is compiled in */
 #include "core/dom/document_current_script.h"   /* §4.12.1.1's bracket around the classic arm of a row */
 #include "core/dom/node.h"       /* the element a row is the program of, crossing a park as its wrapper */
@@ -439,13 +440,8 @@ static void pending_park_request(JSContext *ctx, Flow *f, JSValue e, const Fetch
         pending_set(e, PEND_REFERRER, JS_NewString(ctx, referrer));
         free(referrer);
     }
-    pending_set(e, PEND_URL, JS_NewString(ctx, use_url));
-    pending_set(e, PEND_METHOD, JS_NewString(ctx, req->method));
-    pending_set(e, PEND_DESTINATION, JS_NewString(ctx, req->destination));
-    /* `fetch_credentials_token` owns the one wire spelling (core/fetch/fetch.h) and is fatal on the unplaced
-       zero, the release backstop under the DCHECK above. Written unconditionally, so a record still carrying
-       pending.h's JS_NULL is one this door never ran on. */
-    pending_set(e, PEND_CREDENTIALS, JS_NewString(ctx, fetch_credentials_token(req->credentials)));
+    /* The header list and the body, before the address and the method: the outstanding set's key holds their
+       digests and is composed at that pair's write (solver/pending.c). */
     if (req->headers && req->headers->n > 0) {
         JSValue hl = pending_list_new();
         int hi;
@@ -453,7 +449,19 @@ static void pending_park_request(JSContext *ctx, Flow *f, JSValue e, const Fetch
             pending_list_add_pair(hl, req->headers->e[hi].name, req->headers->e[hi].value);
         pending_set(e, PEND_HEADERS, hl);
     }
+    DCHECKF((req->body != NULL) == (req->body_class != FETCH_BODY_NONE),
+            "a request reached the park with %s body and the body class %d — the producer that extracted the "
+            "body states what its bytes are (core/fetch/fetch.h's FetchBodyClass), and a null body is `none`",
+            req->body ? "a" : "no", (int)req->body_class);
     if (req->body) pending_set_bytes(e, PEND_BODY, req->body, req->body_len);
+    pending_set_int(e, PEND_BODY_CLASS, (int)req->body_class);
+    pending_set(e, PEND_URL, JS_NewString(ctx, use_url));
+    pending_set(e, PEND_METHOD, JS_NewString(ctx, req->method));
+    pending_set(e, PEND_DESTINATION, JS_NewString(ctx, req->destination));
+    /* `fetch_credentials_token` owns the one wire spelling (core/fetch/fetch.h) and is fatal on the unplaced
+       zero, the release backstop under the DCHECK above. Written unconditionally, so a record still carrying
+       pending.h's JS_NULL is one this door never ran on. */
+    pending_set(e, PEND_CREDENTIALS, JS_NewString(ctx, fetch_credentials_token(req->credentials)));
     /* What the URL is, on the record, so the join can assert that only bytes are ever listed. */
     pending_set_int(e, PEND_ADDRESS, (int)req->address);
     /* AN ADDRESS WITH NO BYTES IS NOT FETCHABLE, and nothing asks a host for it: its URL is the display shape of
@@ -578,7 +586,8 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
    owes that request. Records are shared across forks, so a sibling that did not abort keeps the record in the
    outstanding set and the send goes on for it. A park that already holds its reply is left to deliver, since
    processResponse returns at locallyAborted; a park the zone declined was never sent. The notice is
-   `fetch.cancel<TAB>METHOD<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`, the key engine_provide reads. */
+   `fetch.cancel<TAB>METHOD<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>HEADERS<TAB>BODY<TAB>URL`, the key
+   engine_provide reads. */
 void engine_pending_fetch_cancel(JSContext *ctx, JSValueConst deliver) {
     Flow *f = flow_running();
     int i, n;
@@ -1522,13 +1531,12 @@ void engine_cancel_entry(JSContext *ctx, Flow *f, int slot) {
 }
 
 /* See engine.h. */
-void engine_pending_withdrawn(const char *method, const char *mode, const char *referrer_policy,
-                              const char *referrer, const char *url) {
-    const char *fv[5] = { method, mode, referrer_policy, referrer, url };
+void engine_pending_withdrawn(const PendRequestKey *k) {
+    const char *fv[7] = { k->method, k->mode, k->referrer_policy, k->referrer, k->headers, k->body, k->url };
     char *rec;
 
     if (!g_sess_live) return;
-    rec = engine_notice_build("fetch.cancel", fv, 5);
+    rec = engine_notice_build("fetch.cancel", fv, 7);
     engine_host_notify(g_sess_ctx, rec);
     free(rec);
 }
@@ -3810,11 +3818,12 @@ static void join_put(char **join, size_t *n_out, size_t *cap, const char *s, siz
    share a reply that Fetch §4.1 Main fetch gives one as a body and the other behind a CORS check.
    The set is solver/pending_index.h's: one node per identity, holding exactly the records the host can still be
    shown (keyed, unanswered, not refused, named by a live register), walked in creation order. So the work is the
-   outstanding requests and not every register entry of every flow, and the identity's five strings are the
+   outstanding requests and not every register entry of every flow, and the identity's strings are the
    node's own copies, parsed once at the park. The buffer is this function's, valid until the next call. Each
    line is `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>
-   REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL`, ASKERS being the comma-joined names of the documents whose
-   parks the line folds (engine_asker_name), each once. */
+   REFERRER_POLICY<TAB>REFERRER<TAB>HEADERS<TAB>BODY<TAB>ADDRESS<TAB>ASKERS<TAB>URL`, HEADERS and BODY being the key's
+   digest words and ASKERS the comma-joined names of the documents whose parks the line folds
+   (engine_asker_name), each once. */
 const char *engine_pending_fetches(void) {
     static char *join, *askers;
     static size_t cap, acap;
@@ -3830,6 +3839,7 @@ const char *engine_pending_fetches(void) {
         const char *m = pending_index_node_method(node), *o = pending_index_node_mode(node);
         const char *rp = pending_index_node_referrer_policy(node), *r = pending_index_node_referrer(node);
         const char *u = pending_index_node_url(node);
+        PendRequestKey nk;
         /* The fold's state: the line's destination, initiator, (provenance, witness, drive) vector, credentials
            mode and asker set, each stating what survives every member, independent of the members' order. */
         char dst[32];
@@ -3839,6 +3849,7 @@ const char *engine_pending_fetches(void) {
         FetchCredentialsMode cred = FETCH_CREDENTIALS_INCLUDE;
 
         if (n_mem == 0) continue;   /* every record answered, refused or dropped; the node keeps its history */
+        pending_index_node_key(node, &nk);
         /* The line grammar, asked once of the identity every member shares: URL Standard §4.4 URL parsing removes
            all ASCII tab and newline, and a method is an RFC 9110 §5.6.2 token, so a line breaking either never
            went through the parser (a concolic shape carried as an address) and would split into records the
@@ -3965,12 +3976,13 @@ const char *engine_pending_fetches(void) {
         listed += n_mem;
         {
             const char *ini = parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT;
-            const char *f[12];
+            const char *f[14];
             f[0] = m; f[1] = NULL; f[2] = ini; f[3] = engine_provenance_token(prov);
             f[4] = engine_pinned_token(pinned); f[5] = engine_driven_token(driven);
             f[6] = fetch_credentials_token(cred); f[7] = o; f[8] = rp; f[9] = r;
-            f[10] = fetch_address_token(address); f[11] = askers;
-            for (int k = 0; k < 12; k++) {
+            f[10] = nk.headers; f[11] = nk.body;
+            f[12] = fetch_address_token(address); f[13] = askers;
+            for (int k = 0; k < 14; k++) {
                 if (k == 1) join_put(&join, &n_out, &cap, dst, dl);
                 else        join_put(&join, &n_out, &cap, f[k], strlen(f[k]));
                 join_put(&join, &n_out, &cap, "\t", 1);
@@ -3987,18 +3999,26 @@ const char *engine_pending_fetches(void) {
     return join;
 }
 
+/* Whether `w` is a key digest word: "-" or 64 lowercase hex digits. */
+static int pend_digest_word_is(const char *w) {
+    if (!strcmp(w, "-")) return 1;
+    for (int i = 0; i < PEND_DIGEST_WORD - 1; i++)
+        if (!((w[i] >= '0' && w[i] <= '9') || (w[i] >= 'a' && w[i] <= 'f'))) return 0;
+    return w[PEND_DIGEST_WORD - 1] == 0;
+}
+
 void engine_pending_split(char *line, const char **method, const char **destination, const char **initiator,
                           const char **provenance, const char **pinned, const char **driven,
                           const char **credentials, const char **mode, const char **referrer_policy,
-                          const char **referrer, const char **address, const char **askers,
-                          const char **url) {
+                          const char **referrer, const char **headers, const char **body,
+                          const char **address, const char **askers, const char **url) {
     const char **field[] = { method, destination, initiator, provenance, pinned, driven, credentials, mode,
-                             referrer_policy, referrer, address, askers, url };
+                             referrer_policy, referrer, headers, body, address, askers, url };
     enum { NFIELDS = sizeof field / sizeof field[0] };
     char *at = line;
 
     DCHECK(line && method && destination && initiator && provenance && pinned && driven && credentials && mode &&
-           referrer_policy && referrer && address && askers && url,
+           referrer_policy && referrer && headers && body && address && askers && url,
            "a pending line was split with nowhere to put its fields");
     /* A CHECK per TAB, not a DCHECK: release has no defined answer, because the fields key the delivery and
        decide what fires, and a line not in this engine's grammar would decide them from the wrong field. A URL
@@ -4008,7 +4028,8 @@ void engine_pending_split(char *line, const char **method, const char **destinat
         CHECKF(tab != NULL,
                "engine: a host split a pending line carrying %d TABs where engine_pending_fetches writes %d "
                "(`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>"
-               "MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL`) — the host is reading another grammar, "
+               "MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>HEADERS<TAB>BODY<TAB>ADDRESS<TAB>ASKERS<TAB>URL`) — the host is "
+               "reading another grammar, "
                "and field %d would be decided from the wrong bytes", k, NFIELDS - 1, k + 1);
         *tab = 0;
         *field[k] = at;
@@ -4026,6 +4047,9 @@ void engine_pending_split(char *line, const char **method, const char **destinat
            "field to decide whether an ACT MAY BE SPENT on an address that may rest on a witness this engine "
            "chose, and a value it does not know would be answered by whichever of its arms is the default, "
            "which for a firing question is the permissive one");
+    DCHECK(pend_digest_word_is(*headers) && pend_digest_word_is(*body),
+           "a pending line's HEADERS or BODY is not a key digest word — the join writes \"-\" or a SHA-256 in "
+           "hex, and the host hands both back as part of the identity a reply is delivered under");
     DCHECK(!strcmp(*address, fetch_address_token(FETCH_ADDRESS_CONCRETE)) ||
            !strcmp(*address, fetch_address_token(FETCH_ADDRESS_EXAMPLE)),
            "a pending line's address class is neither `concrete` nor `example` — only an address this run has "
@@ -4121,10 +4145,10 @@ int engine_frontier_settled(void) {
    promise with a GET's reply, the mode (Fetch §2.2.5's request mode) because the trusted zone answers a `cors`
    request and a `no-cors` one to the same address differently, and the referrer pair because two referrers are
    two requests to the server. Returns how many entries it filled. */
-int engine_provide(JSContext *ctx, const char *method, const char *mode, const char *referrer_policy,
-                   const char *referrer, const char *url, const char *how, const char *reach,
+int engine_provide(JSContext *ctx, const PendRequestKey *key, const char *how, const char *reach,
                    JSValueConst value) {
-    PendRequestKey key = { method, mode, referrer_policy, referrer, url };
+    const char *method = key->method, *mode = key->mode, *referrer_policy = key->referrer_policy;
+    const char *referrer = key->referrer, *url = key->url;
     PendIndexNode *node;
     int n = 0, i, m;
     /* The zone's two statements about its answer, through the mappings that own the words; both are fatal on
@@ -4153,9 +4177,10 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
            "a reply was provided with a method that is not a token (Fetch §2.2.1, RFC 9110 §5.6.2) — the host's "
            "operands are shifted by one");
     /* The mode the line stated, handed back; the mapping is fatal on a word Fetch §2.2.5 does not define. */
-    DCHECK(mode != NULL && referrer_policy != NULL && referrer != NULL,
-           "a reply was provided with no MODE, REFERRER POLICY or REFERRER — the reply seam is keyed on all "
-           "five fields the pending line states");
+    DCHECK(mode != NULL && referrer_policy != NULL && referrer != NULL && key->headers != NULL &&
+           key->body != NULL,
+           "a reply was provided with no MODE, REFERRER POLICY, REFERRER, HEADERS or BODY — the reply seam is "
+           "keyed on every identity field the pending line states");
     (void)fetch_mode_of_token(mode);
     /* One lookup in the frontier's outstanding set (solver/pending_index.h) rather than a walk of every flow's
        register: the walked set does not shrink (a flow keeps an answered entry until it delivers, and @S
@@ -4163,7 +4188,7 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
        Membership is the predicate the walk used (an entry with an address, not a synchronous request, no value
        yet), and a record leaves only when answered or when the last register naming it is gone, so nothing is
        dropped. */
-    node = pending_index_find(&key);
+    node = pending_index_find(key);
     m = node ? pending_index_node_count(node) : 0;
     /* The zone answers only what it owes: a park leaves the outstanding set when it is answered, refused or
        withdrawn (`fetch.cancel`, engine_pending_withdrawn), so a reply with no member to fill is an answer the
@@ -4214,11 +4239,10 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
         JSValue p = pending_index_node_member(node, 0);
         /* The record's half of the fill: the park is stamped with the record's id, and the send's credentials
            mode and asking documents are folded as engine_pending_fetches folded them onto the line.
-           Named residual. Not covered: the outstanding set keys on five fields, so parks of one line that
-           differ in credentials mode or body are one send and one record, keyed by the line's folded
-           credentials mode and its first member's body. Next diff builds: the credentials mode and the body
-           digest in PendRequestKey, so each is its own line. Absence shows as: one record where a browser's
-           log shows two sends. */
+           Named residual. Not covered: the outstanding set's key holds no credentials mode, so parks of one
+           line that differ in it are one send and one record, keyed by the line's folded mode. Next diff
+           builds: the credentials mode in PendRequestKey, so each is its own line. Absence shows as: one
+           record where a browser's log shows two sends. */
         if (rec_id) {
             JSValue cv = pending_get(p, PEND_CREDENTIALS);
             size_t cl = 0, al;
@@ -4352,6 +4376,100 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
     return n;
 }
 
+/* The member of `node` its line is judged as: the one whose (drive, witness, provenance) vector
+   engine_pending_fetches' fold takes, a tie going to the lower body class. Owned. */
+static JSValue pending_node_judged_member(PendIndexNode *node) {
+    JSValue best = JS_UNDEFINED;
+    int driven = 0, pinned = 0, prov = 0, cls = 0;
+
+    for (int i = 0, n = pending_index_node_count(node); i < n; i++) {
+        JSValue pe = pending_index_node_member(node, i);
+        int m_driven = (int)pending_get_int(pe, PEND_DRIVEN), m_pinned = (int)pending_get_int(pe, PEND_PINNED);
+        int m_prov = (int)pending_get_int(pe, PEND_PROV), m_cls = (int)pending_get_int(pe, PEND_BODY_CLASS);
+        int same = m_driven == driven && m_pinned == pinned && m_prov == prov;
+
+        if (i == 0 || m_driven < driven || (m_driven == driven && (m_pinned < pinned ||
+            (m_pinned == pinned && m_prov < prov))) || (same && m_cls < cls)) {
+            JS_FreeValue(pending_ctx(), best);
+            best = pe;
+            driven = m_driven; pinned = m_pinned; prov = m_prov; cls = m_cls;
+        } else {
+            JS_FreeValue(pending_ctx(), pe);
+        }
+    }
+    return best;
+}
+
+/* See engine.h. */
+char *engine_pending_request(JSContext *ctx, const PendRequestKey *key) {
+    PendIndexNode *node = pending_index_find(key);
+    JSValue pe, hl, bv;
+    JsonBuf b = { 0 };
+    int n, cls;
+
+    if (!node || pending_index_node_count(node) == 0) {
+        DFAILF("a request's content was asked for with no outstanding park — the zone reads the header list "
+               "and body of a line it was shown, before it answers it. request=%s %s", key->method, key->url);
+        return NULL;
+    }
+    pe = pending_node_judged_member(node);
+    hl = pending_get(pe, PEND_HEADERS);
+    bv = pending_get(pe, PEND_BODY);
+    cls = (int)pending_get_int(pe, PEND_BODY_CLASS);
+    DCHECK(JS_IsNull(bv) == (cls == FETCH_BODY_NONE),
+           "a parked request's body and its body class disagree about whether there is a body — "
+           "pending_park_request writes both from one request");
+    json_buf_raw(&b, "{");
+    json_buf_key(&b, "headers");
+    json_buf_raw(&b, "[");
+    n = pending_list_len(hl);
+    for (int i = 0; i < n; i++) {
+        JSValue pair = JS_GetPropertyUint32(ctx, hl, (uint32_t)i);
+        JSValue nv = JS_GetPropertyUint32(ctx, pair, 0), vv = JS_GetPropertyUint32(ctx, pair, 1);
+        const char *nm = JS_ToCString(ctx, nv), *val = JS_ToCString(ctx, vv);
+
+        CHECK(nm != NULL && val != NULL, "engine: OOM reading a parked request's header");
+        if (i) json_buf_raw(&b, ",");
+        json_buf_raw(&b, "[");
+        json_buf_str(&b, nm);
+        json_buf_raw(&b, ",");
+        json_buf_str(&b, val);
+        json_buf_raw(&b, "]");
+        JS_FreeCString(ctx, nm);
+        JS_FreeCString(ctx, val);
+        JS_FreeValue(ctx, nv);
+        JS_FreeValue(ctx, vv);
+        JS_FreeValue(ctx, pair);
+    }
+    json_buf_raw(&b, "],");
+    json_buf_key(&b, "body");
+    if (JS_IsNull(bv)) {
+        json_buf_raw(&b, "null");
+    } else {
+        /* The bytes cross as RFC 4648 §4 base64 through the engine's codec: the answer is one text. */
+        size_t bn = 0, cap, wrote;
+        const uint8_t *bp = JS_GetArrayBuffer(ctx, &bn, bv);
+        char *text;
+
+        if (bp == NULL) bn = 0;   /* an empty body's buffer may hold no storage */
+        cap = JS_Base64EncodedSize(bn) + 1;
+        text = reclaim_malloc(cap);
+        CHECK(text != NULL, "engine: OOM encoding a parked request's body");
+        wrote = JS_Base64Encode(text, cap, bp, bn);
+        text[wrote] = 0;
+        json_buf_str(&b, text);
+        free(text);
+    }
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "bodyClass");
+    json_buf_str(&b, fetch_body_class_token((FetchBodyClass)cls));
+    json_buf_raw(&b, "}");
+    JS_FreeValue(ctx, bv);
+    JS_FreeValue(ctx, hl);
+    JS_FreeValue(ctx, pe);
+    return json_buf_take(&b);
+}
+
 /* The other answer a host can give one of these requests: this zone will not ask (engine.h).
  *
  * It writes a fact and forks nothing, the split engine_host_answer makes: this runs between scheduler steps,
@@ -4364,15 +4482,15 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
  * still owes its own arm, so the "this register has had its fork" mark is per register and not written here.
  * Every flow parked on it is askable again: a refusal is a host event, and without the clear the fork it exists
  * to make would never be taken. */
-int engine_decline(JSContext *ctx, const char *method, const char *mode, const char *referrer_policy,
-                   const char *referrer, const char *url, const char *reason) {
-    PendRequestKey key = { method, mode, referrer_policy, referrer, url };
+int engine_decline(JSContext *ctx, const PendRequestKey *key, const char *reason) {
+    const char *method = key->method, *mode = key->mode, *url = key->url;
     PendIndexNode *node;
     int matched, marked = 0, i;
     JSValue rv;
 
-    DCHECK(method != NULL && mode != NULL && referrer_policy != NULL && referrer != NULL && url != NULL,
-           "a refusal was recorded for no request — a decline answers the same five-field identity a reply "
+    DCHECK(method != NULL && mode != NULL && key->referrer_policy != NULL && key->referrer != NULL &&
+           key->headers != NULL && key->body != NULL && url != NULL,
+           "a refusal was recorded for no request — a decline answers the same identity a reply "
            "answers, because it is an answer to the same question, and one that names part of it refuses "
            "nothing and leaves every flow parked");
     DCHECK(method_is_token(method),
@@ -4386,7 +4504,7 @@ int engine_decline(JSContext *ctx, const char *method, const char *mode, const c
     DCHECK(reason != NULL && *reason != '\0',
            "a request was refused with no reason — the refusing party states which rule holds the frontier");
     (void)fetch_mode_of_token(mode);
-    node = pending_index_find(&key);
+    node = pending_index_find(key);
     matched = node ? pending_index_node_count(node) : 0;
     rv = JS_NewString(ctx, reason);
     CHECK(!JS_IsException(rv), "engine: OOM recording the trusted zone's refusal of a request");
