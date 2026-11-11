@@ -12708,13 +12708,15 @@ static int sale_hist_json(char *b, size_t cap, const char *name, const long *h) 
 }
 
 typedef struct { char *name; long n; } SaleTally;
-static SaleTally *g_sale_gap_kinds, *g_sale_other_reasons;
-static int g_sale_gap_kinds_n, g_sale_other_reasons_n;
+static SaleTally *g_sale_gap_kinds, *g_sale_other_reasons, *g_sale_gap_shapes;
+static int g_sale_gap_kinds_n, g_sale_other_reasons_n, g_sale_gap_shapes_n;
+/* A gap sale's shape: its kinds sorted and joined by '|', so kinds that co-occur are read per sale. */
+enum { SALE_SHAPE_KINDS = 24, SALE_SHAPE_NAME = SALE_SHAPE_KINDS * 48 };
 static int sale_tally_json(char *b, size_t cap, const char *key, const SaleTally *t, int n);
 
 char *engine_sale_census_json(void) {
     size_t cap = 20480 + (size_t)(g_sale_graph.n_gap * 2 + g_sale_gap_kinds_n + g_sale_other_reasons_n)
-                         * (SALE_GAP_NAME + 32);
+                         * (SALE_GAP_NAME + 32) + (size_t)g_sale_gap_shapes_n * (SALE_SHAPE_NAME + 32);
     char *b = malloc(cap);
     int n;
     long g0o, g0b, bo, bb;
@@ -12769,6 +12771,7 @@ char *engine_sale_census_json(void) {
     }
     n += sale_tally_json(b + n, cap - (size_t)n, "waitsGapKinds", g_sale_gap_kinds, g_sale_gap_kinds_n);
     n += sale_tally_json(b + n, cap - (size_t)n, "waitsOtherReasons", g_sale_other_reasons, g_sale_other_reasons_n);
+    n += sale_tally_json(b + n, cap - (size_t)n, "waitsGapShapes", g_sale_gap_shapes, g_sale_gap_shapes_n);
     n += snprintf(b + n, cap - (size_t)n, "}");
     CHECK((size_t)n < cap, "engine: the sale census outgrew its buffer");
     return b;
@@ -12902,8 +12905,22 @@ static void sale_head_gap(const char *kind, void *arg) {
    the delta head's kinds with no writer, and the graph survey's over the roots the write takes. Only the one
    agent's roots are gathered; a member of several agents waits on its reason whatever its gaps. The roots and
    the head's bytes are left in `vals`/`head` for the write. */
+static int sale_shape_cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+static void sale_shape_tally(char **kinds, int n, int more) {
+    char shape[SALE_SHAPE_NAME];
+    size_t w = 0;
+
+    qsort(kinds, (size_t)n, sizeof *kinds, sale_shape_cmp);
+    shape[0] = 0;
+    for (int i = 0; i < n && w < sizeof shape; i++)
+        w += (size_t)snprintf(shape + w, sizeof shape - w, "%s%s", i ? "|" : "", kinds[i]);
+    if (more && w < sizeof shape) snprintf(shape + w, sizeof shape - w, "|+more");
+    sale_tally(&g_sale_gap_shapes, &g_sale_gap_shapes_n, shape);
+}
+
 static int sale_write_gaps(Flow *f, SaleVals *vals, uint8_t **head, size_t *head_n) {
-    char name[SALE_GAP_NAME];
+    char name[SALE_GAP_NAME], *kinds[SALE_SHAPE_KINDS];
+    int n_kinds = 0, more = 0;
     uint32_t refs, n_gaps;
     JSFlowGraph *g;
     JSValue *frames[1] = { f->agents[0].frame };
@@ -12915,9 +12932,18 @@ static int sale_write_gaps(Flow *f, SaleVals *vals, uint8_t **head, size_t *head
     sale_val_take(JS_DupValue(g_sess_ctx, f->pending), vals);
     sale_val_take(JS_DupValue(g_sess_ctx, f->orphan_claim_fn), vals);
     sale_val_take(JS_DupValue(g_sess_ctx, f->agents[0].jobs), vals);
-    if (f->dom_n) { sale_tally(&g_sale_gap_kinds, &g_sale_gap_kinds_n, "dom head"); gaps++; }
+    if (f->dom_n) {
+        sale_tally(&g_sale_gap_kinds, &g_sale_gap_kinds_n, "dom head");
+        kinds[n_kinds++] = strdup("dom head");   /* first, so the array has room */
+        gaps++;
+    }
     if (f->delta) cow_delta_head_gaps((const CowDelta *)f->delta, sale_head_gap, &hg);
-    for (int i = 0; i < hg.n; i++) { sale_tally(&g_sale_gap_kinds, &g_sale_gap_kinds_n, hg.seen[i]); gaps++; }
+    for (int i = 0; i < hg.n; i++) {
+        sale_tally(&g_sale_gap_kinds, &g_sale_gap_kinds_n, hg.seen[i]);
+        if (n_kinds < SALE_SHAPE_KINDS) kinds[n_kinds++] = strdup(hg.seen[i]);
+        else more = 1;
+        gaps++;
+    }
     if (hg.n == 0 && f->delta)
         *head_n = cow_delta_head_write(g_sess_ctx, (const CowDelta *)f->delta, sale_val_take, vals, head);
     gr = (JSFlowGraphRoots){ .vals = vals->v, .frames = frames, .n_vals = vals->n, .n_frames = frames[0] != NULL };
@@ -12926,9 +12952,14 @@ static int sale_write_gaps(Flow *f, SaleVals *vals, uint8_t **head, size_t *head
     for (uint32_t i = 0; i < n_gaps; i++) {
         JS_FlowGraphGap(g_sess_ctx, g, i, name, sizeof name, &refs);
         sale_tally(&g_sale_gap_kinds, &g_sale_gap_kinds_n, name);
+        if (n_kinds < SALE_SHAPE_KINDS) kinds[n_kinds++] = strdup(name);
+        else more = 1;
         gaps++;
     }
     JS_FlowGraphFree(g_sess_ctx, g);
+    for (int i = 0; i < n_kinds; i++) CHECK(kinds[i] != NULL, "engine: OOM naming a sale's gap shape");
+    if (n_kinds) sale_shape_tally(kinds, n_kinds, more);
+    for (int i = 0; i < n_kinds; i++) free(kinds[i]);
     return gaps;
 }
 
