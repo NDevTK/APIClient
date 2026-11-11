@@ -26174,30 +26174,28 @@ TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
     fold_row(&ue_tt, &ue_why, param_value_is(js, "/api/uspe", "k", "v"),
              "URL §6.2's absent init is the empty list: the list built with no init, appended `k=v`, did not "
              "serialize to the concrete query `k=v`");
-    /* URL §6.2's update steps over a known list holding an unknown half. */
+    /* A known list holding an unknown half, written to a URL's query (URL §6.2's update steps) and extracted as
+       a body (Fetch §5.2). A fetch of a URL object records the URL's serialization, so those keys are absolute. */
     const char *uu_why = NULL; int uu_tt = 1;
-    fold_row(&uu_tt, &uu_why, param_value_is(js, "/api/uspa-done", "n", "1") &&
-                              !!strstr(js, "URLSearchParams.pairName"),
-             "NOT REACHED: no world appended a pair of the query to the URL's searchParams and fetched the URL");
-    fold_row(&uu_tt, &uu_why,
-             !emitted_record_has_both(js, "/api/uspa-url", "\"addressClass\":\"concrete\"", "URLSearchParams.pairName"),
-             "URL §6.2's update steps wrote an unknown pair's display shape into the URL's query as bytes, so the "
-             "fetch of that URL is recorded, and sent, as an address the run determined");
+    fold_row(&uu_tt, &uu_why, param_value_is(js, "/api/uspa-done", "n", "1"),
+             "NOT REACHED: no world appended a pair of the query to the URL's searchParams and ran past its fetch");
+    fold_row(&uu_tt, &uu_why, !strstr(js, "{\"name\":\"URLSearchParams.pairName("),
+             "a request parameter is named by an unknown pair's display shape: URL §6.2's update steps wrote the "
+             "shape into the URL's query as bytes, so the fetch of that URL is recorded, and sent, as an address "
+             "the run determined");
     const char *uv_why = NULL; int uv_tt = 1;
-    fold_row(&uv_tt, &uv_why, !!strstr(js, "\"/api/uspa-ex\""),
+    fold_row(&uv_tt, &uv_why, !!strstr(js, "\"https://x.test/api/uspa-ex\""),
              "NOT REACHED: there is no /api/uspa-ex record, so the URL given `lang` was never fetched");
-    fold_row(&uv_tt, &uv_why, param_value_is(js, "/api/uspa-ex", "lang", "en-US"),
+    fold_row(&uv_tt, &uv_why, param_value_is(js, "https://x.test/api/uspa-ex", "lang", "en-US"),
              "the URL whose appended value has an example was not fetched at the address that example "
-             "serializes to");
-    fold_row(&uv_tt, &uv_why,
-             !emitted_record_has_both(js, "/api/uspa-ex", "\"addressClass\":\"concrete\"", "navigator.language"),
-             "the appended value's display shape was written into the URL's query as bytes");
+             "serializes to: its query holds the value's display shape, or nothing");
     const char *uw_why = NULL; int uw_tt = 1;
     fold_row(&uw_tt, &uw_why, !!strstr(js, "\"/api/uspa-body\""),
-             "NOT REACHED: there is no /api/uspa-body record, so the list given the fragment was never sent as a body");
-    fold_row(&uw_tt, &uw_why, !emitted_record_has(js, "/api/uspa-body", "\"bodyBase64\""),
+             "NOT REACHED: there is no /api/uspa-body record, so the list given the fragment was never sent as a "
+             "body");
+    fold_row(&uw_tt, &uw_why, emitted_record_has(js, "/api/uspa-body", "URLSearchParams.toString("),
              "Fetch §5.2's URLSearchParams arm: a list holding an unknown half was extracted as known bytes, so "
-             "the body carries the half's display shape");
+             "the body is the half's display shape and not the unknown the list's serialization derives");
     const Probe rows[] = {
         { "usp-url-append-unknown", uu_tt, "/api/uspa-url", SESS_EXPLORE, uu_why },
         { "usp-url-append-example", uv_tt, "/api/uspa-ex", SESS_EXPLORE, uv_why },
