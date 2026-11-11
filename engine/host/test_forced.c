@@ -2332,6 +2332,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/joincompose.h"
 #include "fixture/recordless.h"
 #include "fixture/agenfork.h"
+#include "fixture/agendefer.h"
 #include "fixture/msgchain.h"
 #include "fixture/msgorigin.h"
 #include "fixture/libstate.h"
@@ -3194,6 +3195,7 @@ TF_DOCS[] = {
     { "requestredrive", HTML_REQUESTREDRIVE },
     { "recordless", HTML_RECORDLESS },
     { "agenfork", HTML_AGENFORK },
+    { "agendefer", HTML_AGENDEFER },
     { "msgchain", HTML_MSGCHAIN },
     { "msgorigin", HTML_MSGORIGIN },
     { "libstate", HTML_LIBSTATE },
@@ -28901,6 +28903,25 @@ TF_UNIT void probes_agenfork(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `agendefer` document (fixture/agendefer.h). */
+TF_UNIT void probes_agendefer(const char *js, Probe *tab, int *n) {
+    /* Both arms of a branch in page code an async generator's queue runs while its drive is deferred, each read
+       at the settle the deferred drive delivers in that arm's world. */
+    static const char *const arms[] = { "/api/ad/ret-a", "/api/ad/ret-b", "/api/ad/step-a", "/api/ad/step-b" };
+    const char *ad_why = NULL; int ad_tt = 1;
+    for (size_t i = 0; i < COUNTOF(arms); i++) {
+        char q[64];
+        snprintf(q, sizeof q, "\"%s\"", arms[i]);
+        fold_row(&ad_tt, &ad_why, !!strstr(js, q),
+                 "NOT REACHED: an arm forked while an async generator's drive was deferred has no record, so that "
+                 "fork's deferred drive was not copied");
+    }
+    const Probe rows[] = {
+        { "agen-defer-fork", ad_tt, "__tfAgenDeferRole", SESS_EXPLORE, ad_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `recordless` document (fixture/recordless.h). */
 TF_UNIT void probes_recordless(const char *js, Probe *tab, int *n) {
     /* Both arms of a branch on an unknown inside four recordless callees: each pair is reached only if the
@@ -33986,6 +34007,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_requestroute(js, probes, &np);
     probes_recordless(js, probes, &np);
     probes_agenfork(js, probes, &np);
+    probes_agendefer(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_swapfn(js, probes, &np);
     probes_closureflag(js, probes, &np);
