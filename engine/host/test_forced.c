@@ -39,6 +39,8 @@
 #include "core/xml/xml_element.h" /* XML §3's [39] element over §3.1's [43] content — the element stack */
 #include "core/xml/xml_document.h"/* XML §2.1's [1] document with §2.8's [22] prolog and [27] Misc */
 #include "core/xml/xml_tree.h"   /* Namespaces §6 expansion INTO a tree, and §6.3 over expanded names */
+#include "core/loader/xml_document.h"   /* HTML §7.5.3's load, whose discard xml_discard_walk_selftest steps */
+#include "core/mime/mime_type.h"
 #include "core/xml/xml_parse.h"  /* the entry §7.5.3, §8.5.1 and XHR §3.6.6 share, and §8.5.1's parsererror */
 #include "core/layout/box_tree.h"   /* css-display-3 §2.5's spliced child sequence — the tree §4's items
                                       are drawn from, and the one @FLEX contents-splice walks */
@@ -9073,6 +9075,56 @@ TF_UNIT void wasm_compile_fork_selftest(JSContext *ctx)
     CHECK(tf_step_diff_run(ctx, TF_WASM_FORK_TEARDOWN_SRC, "wasm-fork-teardown", &TF_DIFF_DECLINE, &total, &mach)
               == 1, "the WebAssembly fork fixture's globals could not be removed");
     JS_SetFlowControlHooks(&TF_DIFF_NONE);
+}
+
+/* HTML §7.5.3's discard of a failed XML parse's partial tree rests per node: an ill-formed document of 2,001
+   elements (a root holding 1,000 `<i>`, each holding a `<b>`, closed by an end tag that matches nothing) is
+   loaded one step at a time, and no step is charged more than two THREAD_WORK_DOM_WALK nodes (the walk's own
+   and the name index's upkeep of the one node a step frees) while the load is charged at least 2,001 in all.
+   The document is left holding HTML §8.5.1's `parsererror` element and nothing else. */
+TF_UNIT void xml_discard_walk_selftest(void)
+{
+    enum { XD_PAIRS = 1000 };
+    static const char PAIR[] = "<i><b/></i>";
+    lxb_html_document_t *d = dom_document_create();
+    lxb_dom_node_t *root, *only;
+    XmlDocumentLoad *load;
+    MimeType type;
+    size_t len = 3 + XD_PAIRS * (sizeof PAIR - 1) + 4, at = 0;
+    char *xml = malloc(len + 1);
+    uint64_t worst = 0, total = 0;
+
+    CHECK(d != NULL && xml != NULL, "the XML discard fixture could not allocate its document");
+    memcpy(xml, "<r>", 3); at = 3;
+    for (int i = 0; i < XD_PAIRS; i++) { memcpy(xml + at, PAIR, sizeof PAIR - 1); at += sizeof PAIR - 1; }
+    memcpy(xml + at, "</x>", 5);
+    CHECK(mime_type_parse(&type, "application/xml", strlen("application/xml")),
+          "the XML discard fixture's own MIME type did not parse");
+    root = lxb_dom_interface_node(d);
+    load = xml_document_load_begin(d, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, &type, (const lxb_char_t *)xml,
+                                   len);
+    while (!xml_document_load_ended(load)) {
+        ThreadWorkCensus before, now;
+        uint64_t step;
+
+        thread_work_census(&before);
+        xml_document_load_step(load);
+        thread_work_census(&now);
+        step = now.charged_input[THREAD_WORK_DOM_WALK] - before.charged_input[THREAD_WORK_DOM_WALK];
+        if (step > worst) worst = step;
+        total += step;
+    }
+    CHECK(xml_document_load_finish(load) == LXB_STATUS_OK, "an ill-formed XML load did not finish");
+    only = root->first_child;
+    CHECK(only != NULL && only->next == NULL && only->type == LXB_DOM_NODE_TYPE_ELEMENT,
+          "an ill-formed XML load left something other than one parsererror element in its document");
+    CHECKF(worst <= 2 && total >= 2 * XD_PAIRS + 1,
+           "an ill-formed XML load of 2,001 elements was charged %llu DOM-walk nodes in one step and %llu in all, "
+           "not at most 2 a step and at least 2,001: HTML §7.5.3's discard freed a subtree inside one step, or a "
+           "walk of it charged nothing", (unsigned long long)worst, (unsigned long long)total);
+    mime_type_free(&type);
+    free(xml);
+    dom_document_destroy(d);
 }
 
 /* DOM §4.2.10's live collections rest per node: the same reads of 300 detached elements answer the same under a
@@ -46628,6 +46680,8 @@ int main(int argc, char **argv) {
     adopt_walk_selftest(ctx);
     /* JS API §5.1's compile is shared by a fork's two arms; needs the fixture's WebAssembly natives. */
     wasm_compile_fork_selftest(ctx);
+    /* HTML §7.5.3's discard of a failed XML parse's partial tree is charged and rests per node. */
+    xml_discard_walk_selftest();
     /* HTML §4.12.5.1.16's ROUND TRIP, immediately after the union arms and for the same two reasons: it needs
        a REALM and the DOCUMENT, which the block above establishes, and it must stand BEFORE the time-travel
        hooks below so its canvas and its bitmap belong to the pre-boot baseline rather than to whichever flow
