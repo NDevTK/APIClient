@@ -1971,7 +1971,7 @@ const row = {
      replyOutstanding`, which solver/result.c asserts and engine/build.mjs reads) and its own siblings' prose
      says the five mean nothing read apart -- so one of them alone in this row would be a part with no total,
      which is the defect this file spends most of its length refusing. It is also a DIFFERENT DENOMINATOR: a
-     refusal names a (method, url) PAIR and `engine_decline` marks every parked RECORD keyed on it, so one
+     refusal names a pending LINE and `engine_decline` marks every parked RECORD that line absorbs, so one
      refusal counted here can raise that counter several times. The cross-check is still available to a reader
      holding both objects -- this row nonzero with `replyDeclined` at 0 is a refusal that never reached the
      engine -- and it is not a subtraction anything here may make.
@@ -2009,7 +2009,7 @@ const row = {
      engine is still owed.
      IT IS A DIFFERENT DENOMINATOR FROM `egressDeclined` AND IS NOT A SUBTRACTION FROM IT, which that same
      paragraph already establishes and this does not restate as its own claim: a chokepoint refusal names a
-     (method, url) PAIR and `engine_decline` marks every parked RECORD keyed on it, so one refusal can raise the
+     pending LINE and `engine_decline` marks every parked RECORD that line absorbs, so one refusal can raise the
      engine's counter several times. The cross-check stays a READER'S to make while holding both objects — this
      row nonzero with `replyDeclined` at 0 is a refusal that never reached the engine — and it is still not a
      subtraction anything here may perform.

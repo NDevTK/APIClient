@@ -4415,20 +4415,17 @@ async function engineProvide(eng, id, rep, reach) {
 /* The other answer on the same pair: this zone stating it will not make the request. It is not a delivery
    with a different payload, which is why engineProvide refuses a refusal. The engine keeps the flow's park and
    forks an arm that runs the page's `catch`, so the wait is preserved and the failure path explored. No bytes
-   accompany it, since nothing was fetched. */
-async function engineDecline(eng, id, reason) {
-  const [method, mode, referrerPolicy, referrer, headers, requestBody, url] = id;
-  DCHECK(typeof method === "string" && method !== "" && typeof mode === "string" && mode !== "" &&
-         typeof referrerPolicy === "string" && typeof referrer === "string" && referrer !== "" &&
-         typeof headers === "string" && headers !== "" && typeof requestBody === "string" && requestBody !== "" &&
-         typeof url === "string" && url !== "",
-         "a refusal was relayed naming no request — it is keyed on the line's identity exactly as " +
-         "a reply is, because it answers the same question, and a partly-named one refuses a request no flow " +
-         "parked on");
+   accompany it, since nothing was fetched. It names the pending line the send was judged from, verbatim: the
+   engine writes the refusal onto the parks that line absorbs, since a park that joined while the answer was
+   owed may state a vector the line did not (solver/engine.h's engine_decline). */
+async function engineDecline(eng, line, reason) {
+  DCHECK(typeof line === "string" && pendingLineRefusal(line.split("\t")) === null,
+         "a refusal was relayed naming no pending line — it answers the line this zone judged, whose identity " +
+         "a reply is keyed on and whose folded fields say which parks the refusal covers");
   DCHECK(typeof reason === "string" && reason !== "",
          "a refusal was relayed with no reason — the flow it refuses will not drain this session, so this is " +
          "the only account of it anybody gets and it is what says whether a widening would change the answer");
-  await eng.r.renderer.decline({ method, mode, referrerPolicy, referrer, headers, requestBody, url, reason });
+  await eng.r.renderer.decline({ line, reason });
 }
 /* The engine's xhr.send record (xml_http_request.c's `xhr_request_op`), or the first field that breaks it.
    Every field is one the chokepoint decides from: the URL and method (SOP, CORS, the method refusal), XHR
@@ -4889,13 +4886,13 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
                     return eng.fetched(method, url, destination, provenance, pinned, driven, address, credentials,
                                        mode, referrerPolicy, referrer, content, asker, signal,
                                        onBodyRead, onHead, onChunk); },
-      (answer) => engineDeliverReply(eng, id, answer, reach),
+      (answer) => engineDeliverReply(eng, id, line, answer, reach),
       destination === "" && mode !== "websocket" ? id : null, reach);
   }
 }
 /* What a landed answer means on the pending seam: the `deliver` half of one issue, closing over the request's
    own pair, so the reply cannot be handed over against a pair it was not fetched under. */
-async function engineDeliverReply(eng, id, answer, reach) {
+async function engineDeliverReply(eng, id, line, answer, reach) {
   const method = id[0], url = id[6];
   /* A decline is its own delivery, on its own method. `Decline` carries the same pair `Provide` does with the
      chokepoint's reason: the engine records the refusal, stops listing the request (silence would be
@@ -4928,7 +4925,7 @@ async function engineDeliverReply(eng, id, answer, reach) {
     const _tok = answer.refusal.reason;
     if (!(_tok in eng._egress.declined)) eng._egress.declined[_tok] = 0;
     eng._egress.declined[_tok]++;
-    await engineDecline(eng, id, answer.refusal.reason);
+    await engineDecline(eng, line, answer.refusal.reason);
     /* `return`: the decline is the whole delivery for this request. */
     return;
   }

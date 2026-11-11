@@ -860,26 +860,13 @@
 
       { ordinal: 23, name: "Decline",
         params: [
-          { name: "method", type: "string", retained: false,
-            why: "the METHOD half of the request this refuses, keyed exactly as `Provide`'s is, because a " +
-                 "refusal answers the same question a reply answers: the engine's pending register is keyed " +
-                 "on the PAIR, and a refusal naming the address alone would refuse whichever request happens " +
-                 "to be parked on it first" },
-          { name: "mode", type: "string", retained: false,
-            why: "the request mode, keyed exactly as `Provide`'s is: two requests that differ only in mode are " +
-                 "two requests, and a refusal of one is not a refusal of the other" },
-          { name: "referrerPolicy", type: "string", retained: false,
-            why: "the request's referrer policy, keyed exactly as `Provide`'s is" },
-          { name: "referrer", type: "string", retained: false,
-            why: "the request's referrer, keyed exactly as `Provide`'s is" },
-          { name: "headers", type: "string", retained: false,
-            why: "the header list's digest word, keyed exactly as `Provide`'s is" },
-          { name: "requestBody", type: "string", retained: false,
-            why: "the body's digest word, keyed exactly as `Provide`'s is" },
-          { name: "url", type: "string", retained: false,
-            why: "the TARGET half of that same request, matched against what a flow parked on — " +
-                 "`engine_decline` DFAILs on a pair no flow is parked on and no sale explains, for the reason " +
-                 "`Provide` does" },
+          { name: "line", type: "string", retained: false,
+            why: "the GetPending line this zone judged, verbatim: its identity fields are the ones `Provide` is " +
+                 "keyed on, because a refusal answers the same question a reply answers, and its folded fields " +
+                 "(the provenance, witness and drive vector, destination, credentials mode and askers) say " +
+                 "which parks the judgment covers. A park that joined while the answer was owed and that the " +
+                 "line does not absorb stays parked and is listed on a line of its own; `engine_decline` " +
+                 "DFAILs on a request no flow is parked on, for the reason `Provide` does" },
           { name: "reason", type: "string", retained: false,
             why: "why this zone will not make the request, in the zone's own words. It is not diagnostics: " +
                  "the flow refused here will not drain this session, so this sentence is the only account " +

@@ -1416,18 +1416,9 @@ static int tf_dk_pay(JSContext *ctx) {
     int filled = 0;
 
     if (g_tf_dk.refused && g_tf_dk.refusal_due) {
-        const char *f[15];
-        char *one = g_tf_dk.refused;
-
-        engine_pending_split(one, &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6], &f[7], &f[8], &f[9], &f[10],
-                             &f[11], &f[12], &f[13], &f[14]);
-        {
-            PendRequestKey key = { f[0], f[7], f[8], f[9], f[10], f[11], f[14] };
-
-            filled += engine_decline(ctx, &key, "blocked-signal:provenance=forced");
-        }
+        filled += engine_decline(ctx, g_tf_dk.refused, "blocked-signal:provenance=forced");
         g_tf_dk.refusals++;
-        free(one);
+        free(g_tf_dk.refused);
         g_tf_dk.refused = NULL;
         g_tf_dk.refusal_due = 0;
     }
@@ -1651,7 +1642,7 @@ static int fixture_provide(JSContext *ctx) {
             /* Owed, and written by tf_dk_pay below once it is due. */
         } else if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
             /* The zone's own token (extension/lib/safe-fetch.js): the signal and the value that refused. */
-            filled += engine_decline(ctx, &key, "blocked-signal:destination=program");
+            filled += engine_decline(ctx, whole, "blocked-signal:destination=program");
         } else if (!strncmp(abs, "https://x.test/api/decl", strlen("https://x.test/api/decl")) &&
                    (strcmp(method, "GET") || !strcmp(provenance, PENDING_PROVENANCE_FORCED) ||
                     !strcmp(driven, PENDING_DRIVEN_YES))) {
@@ -1661,7 +1652,7 @@ static int fixture_provide(JSContext *ctx) {
             char by_method[64];
 
             snprintf(by_method, sizeof by_method, "blocked-signal:method=%.40s", method);
-            filled += engine_decline(ctx, &key,
+            filled += engine_decline(ctx, whole,
                                      strcmp(method, "GET") ? by_method
                                      : !strcmp(driven, PENDING_DRIVEN_YES) ? "blocked-signal:actor=tool"
                                                                            : "blocked-signal:provenance=forced");
@@ -45644,8 +45635,8 @@ static int abi_pay(void)
             /* A REFUSAL ADDRESSED TO A PARKED REQUEST, WHICH IS A DIFFERENT RECORD FROM THE ONE ABOVE BECAUSE
                IT IS A DIFFERENT ACT. `decline` states a reason and owes nothing: a notice the zone would not
                provision, or the session-ending sentence that nothing more is coming. This one ANSWERS one of
-               the requests `qjs_pending` listed — the same (method, url) pair a `provide` answers, because it
-               answers the same question — and the engine acts on it: the record carries the refusal, the flow
+               the requests `qjs_pending` listed — the line the zone judged, whose identity a `provide` answers,
+               because it answers the same question — and the engine acts on it: the record carries the refusal, the flow
                parked on it keeps its snapshot, and one arm is forked to run the page's failure path.
                THE ARITY DOES NOT DISTINGUISH THEM AND MUST NOT BE ASKED TO. A reader that told a one-field
                record from a three-field one by counting tabs would be reading the grammar out of the data,
@@ -45655,24 +45646,17 @@ static int abi_pay(void)
                acted on this instance's registers — the flow it refused becomes runnable again and forks. Left
                uncounted, the very first refusal would end the session at `abi_stalled` before the arm it
                creates had ever been stepped, so the fork would exist and never once run. */
-            const char *method = abi_take(&p, "refused request method");
-            const char *mode = abi_take(&p, "refused request mode");
-            const char *referrer_policy = abi_take(&p, "refused request referrer policy");
-            const char *referrer = abi_take(&p, "refused request referrer");
-            const char *headers_key = abi_take(&p, "refused request header list digest");
-            const char *body_key = abi_take(&p, "refused request body digest");
-            const char *url = abi_take(&p, "refused request URL");
-            char *reason;
-            size_t rn = 0;
+            char *line, *reason;
+            size_t ln = 0, rn = 0;
 
+            /* The line the zone judged, as the bill showed it (base64, since a line holds TABs): the refusal
+               answers that line, so the engine reaches only the parks it absorbs. */
+            line = abi_bytes(abi_take(&p, "refused line"), &ln, "refused line");
             reason = abi_bytes(abi_take(&p, "refusal reason"), &rn, "refusal reason");
             CHECKF(p == NULL, "a refused request carries a field after its reason. trailing=[%s]", p ? p : "");
-            DCHECK(rn == strlen(reason), "a refusal reason carries a NUL");
-            CHECK(*method != '\0' && *mode != '\0' && *url != '\0',
-                  "a refused request named no method or no address — the refusal is keyed on the PAIR exactly "
-                  "as a reply is, so a half-named one refuses whichever request the engine's pairing assert "
-                  "happens to fall on and leaves the flow that IS parked waiting for the session");
-            qjs_decline(method, mode, referrer_policy, referrer, headers_key, body_key, url, reason);
+            DCHECK(ln == strlen(line) && rn == strlen(reason), "a refused line or a refusal reason carries a NUL");
+            qjs_decline(line, reason);
+            free(line);
             /* AND THE SENTENCE IS STILL READ ALOUD, WHICH THE ENGINE ALONE WOULD NOT DO. The refusal now rides
                the engine's own record, which is what lets the flow park and fork — but nothing in this process
                PRINTS a record, so a reason relayed only through the ABI would be stored, asserted, acted on,

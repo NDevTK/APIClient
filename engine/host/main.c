@@ -1823,22 +1823,17 @@ QJS_EXPORT void qjs_provide_body(const char *token, const char *state, const cha
 
 /* The zone refusing to ask, which is an answer, not a reply (solver/engine.h's engine_decline; safe-fetch.js
    grades the axis). The pairing assert is engine_decline's, as qjs_provide's is engine_provide's. */
-QJS_EXPORT void qjs_decline(const char *method, const char *mode, const char *referrer_policy,
-                            const char *referrer, const char *headers, const char *request_body,
-                            const char *url, const char *reason)
+QJS_EXPORT void qjs_decline(const char *line, const char *reason)
 {
-    PendRequestKey key = { method, mode, referrer_policy, referrer, headers, request_body, url };
-
     DCHECK(g_begun, "a request was refused to an engine that never ran");
-    DCHECK(method != NULL && mode != NULL && referrer_policy != NULL && referrer != NULL && headers != NULL &&
-           request_body != NULL && url != NULL,
-           "a refusal arrived naming part of a request — it answers the same identity a reply does (method, "
-           "mode, referrer policy, referrer, headers, body, url), because it answers the same question");
+    DCHECK(line != NULL && *line != '\0' && !strchr(line, '\n'),
+           "a refusal arrived naming no line, or more than one — it answers the one qjs_pending line the zone "
+           "judged, whose identity is the request's and whose folded fields say which parks it covers");
     DCHECK(reason != NULL && *reason != '\0',
            "a refusal arrived with no REASON — the flow it refuses will not drain this session, so the reason "
            "is the only account a reader ever gets of it, and it is what says whether a per-origin widening "
            "would make this request fire");
-    engine_decline(g_ctx, &key, reason);
+    engine_decline(g_ctx, line, reason);
 }
 
 /* What only the trusted zone can answer, as `id<TAB>asker<TAB>op` lines (`asker` the asking document): a

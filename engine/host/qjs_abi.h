@@ -97,10 +97,10 @@ QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *re
    browser performing this same request would also produce one. Where none would — the firing policy declining
    to spend an act, the destructive deny list — this entry is the answer:
    nothing is fabricated about the origin, the flow keeps its park, and the engine forks the arm that runs the
-   page's failure path so the `catch` is explored without the wait being spent. */
-QJS_EXPORT void qjs_decline(const char *method, const char *mode, const char *referrer_policy,
-                            const char *referrer, const char *headers, const char *request_body,
-                            const char *url, const char *reason);
+   page's failure path so the `catch` is explored without the wait being spent. `line` is the qjs_pending line
+   the zone judged, verbatim and without its newline: the refusal answers that line, so it reaches only the
+   parks the line absorbs (solver/engine.h's engine_decline). */
+QJS_EXPORT void qjs_decline(const char *line, const char *reason);
 /* …AND A STREAMED REPLY'S LATER RECORDS. A `qjs_provide` reply carrying a `stream` token is a response's head
    (Fetch §5.6 resolves `fetch()` there) with the first read of its body; each further read arrives here, the
    last stating how the body ended. */

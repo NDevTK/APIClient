@@ -288,19 +288,17 @@ function splitPending(line) {
      guessing would attribute one request's address to another's method. The join asserts every field's
      content and pending_park_request refuses an empty address, so the count is the shape left to check here.
      The method, mode, referrer policy, referrer, digest words and URL are the request's identity, which the
-     reply is delivered against. */
+     reply is delivered against. The line itself is kept: a refusal names it (`qjs_decline`). */
   const f = line.split('\t');
   if (f.length !== PENDING_FIELDS.length)
     fail('a pending line carries ' + f.length + ' field(s) where engine_pending_split names ' +
          PENDING_FIELDS.length + ' (' + PENDING_FIELDS.join(', ') + '): ' + JSON.stringify(line.slice(0, 200)));
-  return Object.fromEntries(PENDING_FIELDS.map((k, i) => [k, f[i]]));
+  return Object.assign(Object.fromEntries(PENDING_FIELDS.map((k, i) => [k, f[i]])), { line });
 }
 
 async function serveOne(M, cs, req, docOrigin, log) {
   const decline = (why) => {
-    M.ccall('qjs_decline', 'void', ['number', 'number', 'number', 'number', 'number', 'number', 'number', 'number'],
-            [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.headersKey),
-             cs(req.bodyKey), cs(req.url), cs(why)]);
+    M.ccall('qjs_decline', 'void', ['number', 'number'], [cs(req.line), cs(why)]);
     log.push({ url: req.url, destination: req.destination, action: 'decline', why });
   };
   if (!PROGRAM_DESTINATIONS.has(req.destination))

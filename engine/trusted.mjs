@@ -375,11 +375,13 @@ function decline(reason) { return `decline\t${b64(reason)}`; }
 
 /* …AND THE SAME WORDS ADDRESSED TO THE PARK THEY REFUSE, WHICH IS A DIFFERENT RECORD BECAUSE IT IS A DIFFERENT
    ACT. The one above owes nothing: it explains a NOTICE this zone would not provision, or states that nothing
-   more is coming for an instance. This one ANSWERS one of the requests `qjs_pending` listed, and it is keyed on
-   the same `(method, url)` pair a `provide` is because it answers the same question — so the engine can act on
+   more is coming for an instance. This one ANSWERS one of the requests `qjs_pending` listed, and it names the
+   pending line this zone judged, verbatim (base64, since it holds TABs): its identity is the one a `provide` is
+   keyed on, and its folded fields say which parks the judgment covers, since a park that joined while the
+   answer was owed may state a vector the line did not (solver/engine.h's engine_decline). The engine acts on
    it: the record carries the refusal, the flow parked on it keeps its snapshot, and the engine forks the arm
-   that runs the page's failure path (solver/engine.h's engine_decline).
-   THE PAIR IS THE JOIN'S OWN, WHICH IS WHY IT IS `url` AND NEVER `abs`. The engine parked on the address it
+   that runs the page's failure path.
+   THE LINE IS THE JOIN'S OWN, WHICH IS WHY IT CARRIES `url` AND NEVER `abs`. The engine parked on the address it
    wrote on the pending line; `abs` is this zone resolving that address against the document in order to apply
    a policy to it, and a refusal that named the resolved form would refuse a request no register holds.
    The reason is the refusing party's own token, whole and unprefixed (`blocked-signal:<name>=<value>`,
@@ -422,8 +424,8 @@ function requestBodyOf(q) {
   return { body: new ZONE_BYTES(Buffer.from(q.body, 'base64')), bodyClass: q.bodyClass };
 }
 
-function declineRequest(id, reason) {
-  return `decline-request\t${id.join('\t')}\t${b64(reason)}`;
+function declineRequest(judged, reason) {
+  return `decline-request\t${b64(judged)}\t${b64(reason)}`;
 }
 
 /* …AND THE SAME ACT ADDRESSED BY REQUEST ID, WHICH IS A THIRD RECORD BECAUSE A THIRD INDEX ANSWERS IT. The pair
@@ -1365,8 +1367,8 @@ async function main() {
     settle(['answer', String(id), b64(JSON.stringify(meta)), '0', rec ? b64(rec.bytes) : ABSENT].join('\t'));
   };
 
-  const workFetch = async (e, id, destination, initiator, provenance, pinned, driven, credentials, address,
-                           askers, content, send) => {
+  const workFetch = async (e, id, judged, destination, initiator, provenance, pinned, driven, credentials,
+                           address, askers, content, send) => {
     const [method, mode, referrerPolicy, referrer, , , url] = id;
     const abs = new URL(url, e.docUrl).href;
     /* Every answer this function has leaves through one door into the send's owed entry: a method refusal,
@@ -1413,7 +1415,7 @@ async function main() {
        document that is not one of this instance's is declined, since no record of it exists here to judge by. */
     const asked = askerRecord(e, askers, 'asker');
     if (asked.refusal) {
-      settle(declineRequest(id, asked.refusal.token));
+      settle(declineRequest(judged, asked.refusal.token));
       return;
     }
     const doc = asked.doc;
@@ -1500,7 +1502,7 @@ async function main() {
        the policy or words a second sentence. */
     if (raw.refusal && raw.refusal.kind === 'decline') {
       if (streamed) entry.end = { state: 'decline', reason: raw.refusal.reason };
-      settle(declineRequest(id, raw.refusal.reason));
+      settle(declineRequest(judged, raw.refusal.reason));
       return;
     }
     const rec = replyRecord(raw, `the ${provenance} ${destination || 'data'} load ${abs}`);
@@ -2472,8 +2474,10 @@ async function main() {
       if (e.answered.has(key)) return;
       const send = { controller: new AbortController(), cancelled: false, entry: owe(e, key) };
       e.sends.set(key, send);
-      send.entry.done = track(e, key, workFetch(e, id, destination, initiator, provenance, pinned, driven,
-                                                credentials, address, askers, content, send));
+      /* The pending line this send is worked from, verbatim: a refusal answers it (declineRequest). */
+      const judged = f.slice(1, 16).join('\t');
+      send.entry.done = track(e, key, workFetch(e, id, judged, destination, initiator, provenance, pinned,
+                                                driven, credentials, address, askers, content, send));
     } else if (f[0] === 'request') {
       /* `request<TAB>id<TAB>asker<TAB>op` (solver/engine.h's engine_host_requests). */
       if (f.length < 4 || !f[2])

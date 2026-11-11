@@ -225,7 +225,9 @@ declined request's outcome is unobserved, so the engine runs both outcomes (`flo
 parked on the request, a search that fires when the origin is widened or the address is grounded; the other
 takes Fetch §5.6's network error and runs the page's failure path with its path marked forced, so nothing it
 builds is graded `observed` or `derived`, and a page error raised only on forced paths is the engine's
-exploration rather than the page's own.
+exploration rather than the page's own. A refusal names the pending line the zone judged and reaches only the
+parks that line absorbs (`engine_decline`): a park of the page's own run that joined while a forced line's
+refusal was owed stays parked, is listed on a line of its own, and is judged as itself.
 
 Every request the chokepoint judges leaves an entry in its reply record's `egress` list: the address, the signal
 vector, the class of each part the `bytes` row folds (`parts`), the default arm or grant that admitted it, how it was answered (sent, answered locally, or not sent) and

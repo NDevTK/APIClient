@@ -975,8 +975,12 @@ char *engine_pending_request(JSContext *ctx, const PendRequestKey *key);
 int engine_provide(JSContext *ctx, const PendRequestKey *key, const char *how, const char *reach,
                    JSValueConst value);
 
-/* Refuse one request, keyed on the same identity; returns how many records it newly refused (0 is a zone
- * refusing what it does not owe, asserted as engine_provide asserts a reply). It is not a network error: a refusal a real browser
+/* Refuse one request: `line` is the engine_pending_fetches line the zone judged, verbatim (the identity is its
+ * key's fields, and its folded fields say which parks it answers). The refusal is written onto the parks that
+ * line absorbs, the ones a line composed with them among its members would state identically; a park that
+ * joined while the answer was owed and is not absorbed stays outstanding and is listed on its own line. Returns
+ * how many records it newly refused (a request with no outstanding park is a zone refusing what it does not owe,
+ * asserted as engine_provide asserts a reply). It is not a network error: a refusal a real browser
  * also makes (a blocked scheme, Fetch §4.3 "Scheme fetch"; a §4.10 "CORS check" failure; a CORB-blocked body)
  * arrives through engine_provide as Fetch §5.6 "Fetch methods"' network error. This is for a refusal only this
  * tool makes, where a network error would be an observation that does not exist and would spend the page's
@@ -987,7 +991,7 @@ int engine_provide(JSContext *ctx, const PendRequestKey *key, const char *how, c
  * forced (core/fetch/fetch.h's fetch_reply_unknown). flow_decline_fork builds the arms at a scheduler step, because an arm
  * minted between steps would clone whichever flow ran last; this only records the fact. `reason` is the zone's
  * own words and is copied. */
-int engine_decline(JSContext *ctx, const PendRequestKey *key, const char *reason);
+int engine_decline(JSContext *ctx, const char *line, const char *reason);
 
 /* The same refusal for a synchronous request, keyed on the rendezvous id from engine_host_requests: such a
  * request has no (method, mode, url), and pending_push keeps FLOW_PENDING_HOSTREQ out of the pair index, so

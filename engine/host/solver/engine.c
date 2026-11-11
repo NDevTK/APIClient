@@ -3825,6 +3825,145 @@ static void join_put(char **join, size_t *n_out, size_t *cap, const char *s, siz
     (*join)[*n_out] = 0;
 }
 
+/* What a pending line states of the parks it folds (engine_pending_fetches): the destination, initiator,
+   (provenance, witness, drive) vector with its address class, and credentials mode, each stating what survives
+   every member, independent of the members' order. Folding a park a line already absorbs leaves it unchanged,
+   which is what engine_decline asks. The asker set is the caller's. */
+typedef struct {
+    char dst[32];
+    size_t dl;
+    int parser, prov, pinned, driven;
+    FetchAddressClass address;
+    FetchCredentialsMode cred;
+} PendLineFold;
+
+/* Folds the park `pe` into `s`, or starts the fold from it when `first`. The member's half of the park's
+   contract is asserted where the record is read. */
+static void pend_line_fold(PendLineFold *s, int first, JSValueConst pe) {
+    JSValue dv = pending_get(pe, PEND_DESTINATION), cv = pending_get(pe, PEND_CREDENTIALS);
+    size_t mdl = 0, cl = 0;
+    const char *md = JS_IsString(dv) ? JS_ToCStringLen(pending_ctx(), &mdl, dv) : NULL;
+    const char *c = JS_IsString(cv) ? JS_ToCStringLen(pending_ctx(), &cl, cv) : NULL;
+    /* What each member is evidence of, read off its record and never recomputed: it was true at the instant the
+       request was built, and this runs later, over a flow that may since have taken a contradicted arm. HTML
+       §4.12.1.1's `parser document` likewise (pending.h's `parserIns`). */
+    int m_parser = (int)pending_get_int(pe, PEND_PARSER_INS) != 0;
+    int m_prov = (int)pending_get_int(pe, PEND_PROV);
+    int m_pinned = (int)pending_get_int(pe, PEND_PINNED);
+    int m_driven = (int)pending_get_int(pe, PEND_DRIVEN);
+    FetchAddressClass m_address = (FetchAddressClass)pending_get_int(pe, PEND_ADDRESS);
+    FetchCredentialsMode m_cred;
+
+    /* Only bytes are listed (pending_park_request declines an address with none), a synchronous host request
+       has no address and belongs to engine_host_requests, and the destination and credentials mode are the
+       record's own, written unconditionally by the park. */
+    DCHECKF(m_address == FETCH_ADDRESS_CONCRETE || m_address == FETCH_ADDRESS_EXAMPLE,
+            "an outstanding request is about to be listed with the address class %d — only an address this "
+            "run has bytes for may reach a host, and pending_park_request declines the rest", (int)m_address);
+    DCHECK(pending_get_int(pe, PEND_KIND) != FLOW_PENDING_HOSTREQ,
+           "a synchronous host request stands in the outstanding set — it is answered by "
+           "engine_host_answer against a request id, and pending_push never tracks one");
+    DCHECK(md != NULL && fetch_is_destination_type(md),
+           "an outstanding request carries no DESTINATION Fetch §2.2.5 Requests enumerates — the trusted "
+           "zone reads it to decide whether the reply may be ingested as CODE, so a value outside the "
+           "enumeration would be read as `not code` and a script's reply ingested as data");
+    DCHECK(c != NULL,
+           "an outstanding request carries no CREDENTIALS MODE — pending_park_request writes it "
+           "unconditionally after refusing the unplaced zero, so this record bypassed that door");
+    /* The line's destination is copied into a fixed buffer, so its width is a memory bound in every build;
+       §2.2.5's longest destination is far inside it. */
+    CHECK(md == NULL || mdl < sizeof s->dst,
+          "engine: an outstanding request's destination is wider than any Fetch §2.2.5 destination");
+    m_cred = cred_of_token(c, cl);   /* fatal on a word §2.2.5 does not define */
+    if (first) {
+        memcpy(s->dst, md, mdl); s->dl = mdl;
+        s->parser = m_parser; s->prov = m_prov; s->pinned = m_pinned; s->driven = m_driven; s->cred = m_cred;
+        s->address = m_address;
+    } else {
+        /* The (provenance, witness, drive) vector folds as one, taking one member's whole, so the line never
+           states a vector no member held: folding each by its own extremum gave (derived, unpinned, undriven)
+           from a (forced, pinned, undriven) member and a (derived, unpinned, driven) one, each refused alone.
+           The order is whose act first: drive, then witness, then provenance, the egress default's own
+           discriminator, so a line fires by default exactly when one member alone would; ties fold toward most
+           observed. */
+        int take = m_driven < s->driven ||
+                   (m_driven == s->driven && (m_pinned < s->pinned || (m_pinned == s->pinned && m_prov < s->prov)));
+        /* The address class rides the member whose vector is taken, and breaks a tie toward bytes the page
+           computed, so the line states the class of the member it is judged as. */
+        if (take || (m_driven == s->driven && m_pinned == s->pinned && m_prov == s->prov && m_address < s->address))
+            s->address = m_address;
+        int f_prov = take ? m_prov : s->prov, f_pinned = take ? m_pinned : s->pinned;
+        int f_driven = take ? m_driven : s->driven;
+        DCHECK((f_prov == s->prov && f_pinned == s->pinned && f_driven == s->driven) ||
+               (f_prov == m_prov && f_pinned == m_pinned && f_driven == m_driven),
+               "a folded request line states a (provenance, witness, drive) vector neither the line nor the "
+               "member it folds holds — the zone judges the line as one request, so the fold would fire an "
+               "act no member was permitted as the page's own");
+        s->prov = f_prov; s->pinned = f_pinned; s->driven = f_driven;
+        /* The initiator folds to parser-inserted if any member is. The destination folds to the strictest
+           ingestion: if any member compiles the reply the bytes must pass the code rule, so script-like
+           (§2.2.5) wins; then any member that consumes the body whole outranks the empty destination, because
+           the zone streams a reply after its head only to a line whose every member is a `fetch()`
+           (reply_body.h). No consumer distinguishes, say, `image` from `font`. The credentials mode folds the
+           other way (see `cred_narrower` for the rule and its residual). */
+        s->parser = s->parser || m_parser;
+        if ((destination_is_script_like(md, mdl) && !destination_is_script_like(s->dst, s->dl)) ||
+            (s->dl == 0 && mdl != 0)) {
+            memcpy(s->dst, md, mdl); s->dl = mdl;
+        }
+        s->cred = cred_narrower(s->cred, m_cred);
+    }
+    if (md) JS_FreeCString(pending_ctx(), md);
+    if (c) JS_FreeCString(pending_ctx(), c);
+    JS_FreeValue(pending_ctx(), cv);
+    JS_FreeValue(pending_ctx(), dv);
+}
+
+/* The fold a line states, read back off its own fields: the words are the join's, through the mappings that own
+   them, so a word the join cannot have written is fatal. */
+static void pend_line_fold_of_line(PendLineFold *s, const char *destination, const char *initiator,
+                                   const char *provenance, const char *pinned, const char *driven,
+                                   const char *credentials, const char *address) {
+    size_t dl = strlen(destination);
+    FetchAddressClass a;
+
+    DCHECK(fetch_is_destination_type(destination),
+           "a judged line's DESTINATION is none Fetch §2.2.5 Requests enumerates — the join wrote it");
+    CHECK(dl < sizeof s->dst, "engine: a judged line's destination is wider than any Fetch §2.2.5 destination");
+    memcpy(s->dst, destination, dl);
+    s->dl = dl;
+    CHECKF(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
+           "engine: a judged line states the initiator `%s`, which the join does not write", initiator);
+    s->parser = !strcmp(initiator, PENDING_INITIATOR_PARSER);
+    s->prov = engine_provenance_of_token(provenance);
+    CHECKF(!strcmp(pinned, PENDING_PINNED_YES) || !strcmp(pinned, PENDING_PINNED_NO),
+           "engine: a judged line states the witness mark `%s`, which the join does not write", pinned);
+    s->pinned = !strcmp(pinned, PENDING_PINNED_YES);
+    CHECKF(!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO),
+           "engine: a judged line states the drive mark `%s`, which the join does not write", driven);
+    s->driven = !strcmp(driven, PENDING_DRIVEN_YES);
+    s->cred = cred_of_token(credentials, strlen(credentials));
+    for (a = FETCH_ADDRESS_CONCRETE; a <= FETCH_ADDRESS_EXAMPLE; a++)
+        if (!strcmp(address, fetch_address_token(a))) break;
+    CHECKF(a <= FETCH_ADDRESS_EXAMPLE,
+           "engine: a judged line states the address class `%s`, which the join does not list", address);
+    s->address = a;
+}
+
+/* Whether the line `judged`, with the asker set `askers`, absorbs the park `pe`: folding the park in leaves the
+   line as it is, so the line composed with this park among its members is the line the zone judged. Every park
+   folded into a line is absorbed by it. */
+static int pend_line_absorbs(const PendLineFold *judged, const char *askers, JSValueConst pe) {
+    PendLineFold t = *judged;
+    const char *asker = engine_asker_name(pe);
+
+    pend_line_fold(&t, 0, pe);
+    return t.dl == judged->dl && !memcmp(t.dst, judged->dst, t.dl) && t.parser == judged->parser &&
+           t.prov == judged->prov && t.pinned == judged->pinned && t.driven == judged->driven &&
+           t.address == judged->address && t.cred == judged->cred &&
+           asker_set_has(askers, strlen(askers), asker, strlen(asker));
+}
+
 /* The URLs the host owes, newline-joined and deduplicated over the request's identity, or "". Several flows park
    on one request (a candidate re-fire re-runs the exploring flow's fetches) and engine_provide fills every entry
    that names it, so the list is a set of requests, not of waiters; deduplicating over the URL alone would drop a
@@ -3854,13 +3993,8 @@ const char *engine_pending_fetches(void) {
         const char *rp = pending_index_node_referrer_policy(node), *r = pending_index_node_referrer(node);
         const char *u = pending_index_node_url(node);
         PendRequestKey nk;
-        /* The fold's state: the line's destination, initiator, (provenance, witness, drive) vector, credentials
-           mode and asker set, each stating what survives every member, independent of the members' order. */
-        char dst[32];
-        size_t dl = 0, a_n = 0;
-        int parser = 0, prov = 0, pinned = 0, driven = 0;
-        FetchAddressClass address = FETCH_ADDRESS_UNPLACED;
-        FetchCredentialsMode cred = FETCH_CREDENTIALS_INCLUDE;
+        PendLineFold fold;
+        size_t a_n = 0;
 
         if (n_mem == 0) continue;   /* every record answered, refused or dropped; the node keeps its history */
         pending_index_node_key(node, &nk);
@@ -3892,112 +4026,32 @@ const char *engine_pending_fetches(void) {
                "URL) and its refusal is indistinguishable from a network failure, so this flow would park for the "
                "rest of the session on an answer that can only be `blocked`. The park that created this entry did "
                "not run §4.3 — route it through pending_park_request (this file)");
-        a_n = 0;
         askers[0] = 0;
         for (int i = 0; i < n_mem; i++) {
             JSValue pe = pending_index_node_member(node, i);
-            JSValue dv = pending_get(pe, PEND_DESTINATION), cv = pending_get(pe, PEND_CREDENTIALS);
-            size_t mdl = 0, cl = 0, al;
-            const char *md = JS_IsString(dv) ? JS_ToCStringLen(pending_ctx(), &mdl, dv) : NULL;
-            const char *c = JS_IsString(cv) ? JS_ToCStringLen(pending_ctx(), &cl, cv) : NULL;
-            /* What each member is evidence of, read off its record and never recomputed: it was true at the
-               instant the request was built, and this walk runs later, over a flow that may since have taken a
-               contradicted arm. HTML §4.12.1.1's `parser document` likewise (pending.h's `parserIns`). */
-            int m_parser = (int)pending_get_int(pe, PEND_PARSER_INS) != 0;
-            int m_prov = (int)pending_get_int(pe, PEND_PROV);
-            int m_pinned = (int)pending_get_int(pe, PEND_PINNED);
-            int m_driven = (int)pending_get_int(pe, PEND_DRIVEN);
-            FetchAddressClass m_address = (FetchAddressClass)pending_get_int(pe, PEND_ADDRESS);
             const char *asker = engine_asker_name(pe);
-            FetchCredentialsMode m_cred;
+            size_t al = strlen(asker);
 
-            /* The member's half of the park's contract, asserted where the record is read. Only bytes are
-               listed (pending_park_request declines an address with none), a synchronous host request has no
-               address and belongs to engine_host_requests, and the destination and credentials mode are the
-               record's own, written unconditionally by the park. */
-            DCHECKF(pending_get_int(pe, PEND_ADDRESS) == FETCH_ADDRESS_CONCRETE ||
-                    pending_get_int(pe, PEND_ADDRESS) == FETCH_ADDRESS_EXAMPLE,
-                    "an outstanding request is about to be listed with the address class %d — only an address this "
-                    "run has bytes for may reach a host, and pending_park_request declines the rest",
-                    (int)pending_get_int(pe, PEND_ADDRESS));
-            DCHECK(pending_get_int(pe, PEND_KIND) != FLOW_PENDING_HOSTREQ,
-                   "a synchronous host request stands in the outstanding set — it is answered by "
-                   "engine_host_answer against a request id, and pending_push never tracks one");
-            DCHECK(md != NULL && fetch_is_destination_type(md),
-                   "an outstanding request carries no DESTINATION Fetch §2.2.5 Requests enumerates — the trusted "
-                   "zone reads it to decide whether the reply may be ingested as CODE, so a value outside the "
-                   "enumeration would be read as `not code` and a script's reply ingested as data");
-            DCHECK(c != NULL,
-                   "an outstanding request carries no CREDENTIALS MODE — pending_park_request writes it "
-                   "unconditionally after refusing the unplaced zero, so this record bypassed that door");
-            /* The line's destination is copied into a fixed buffer, so its width is a memory bound in every
-               build; §2.2.5's longest destination is far inside it. */
-            CHECK(md == NULL || mdl < sizeof dst,
-                  "engine: an outstanding request's destination is wider than any Fetch §2.2.5 destination");
-            m_cred = cred_of_token(c, cl);   /* fatal on a word §2.2.5 does not define */
-            if (i == 0) {
-                memcpy(dst, md, mdl); dl = mdl;
-                parser = m_parser; prov = m_prov; pinned = m_pinned; driven = m_driven; cred = m_cred;
-                address = m_address;
-            } else {
-                /* The (provenance, witness, drive) vector folds as one, taking one member's whole, so the line
-                   never states a vector no member held: folding each by its own extremum gave (derived,
-                   unpinned, undriven) from a (forced, pinned, undriven) member and a (derived, unpinned,
-                   driven) one, each refused alone. The order is whose act first: drive, then witness, then
-                   provenance, the egress default's own discriminator, so a line fires by default exactly when one
-                   member alone would; ties fold toward most observed. */
-                int take = m_driven < driven ||
-                           (m_driven == driven && (m_pinned < pinned || (m_pinned == pinned && m_prov < prov)));
-                /* The address class rides the member whose vector is taken, and breaks a tie toward bytes the
-                   page computed, so the line states the class of the member it is judged as. */
-                if (take || (m_driven == driven && m_pinned == pinned && m_prov == prov && m_address < address))
-                    address = m_address;
-                int f_prov = take ? m_prov : prov, f_pinned = take ? m_pinned : pinned;
-                int f_driven = take ? m_driven : driven;
-                DCHECK((f_prov == prov && f_pinned == pinned && f_driven == driven) ||
-                       (f_prov == m_prov && f_pinned == m_pinned && f_driven == m_driven),
-                       "a folded request line states a (provenance, witness, drive) vector neither the line nor the "
-                       "member it folds holds — the zone judges the line as one request, so the fold would fire an "
-                       "act no member was permitted as the page's own");
-                prov = f_prov; pinned = f_pinned; driven = f_driven;
-                /* The initiator folds to parser-inserted if any member is. The destination folds to the
-                   strictest ingestion: if any member compiles the reply the bytes must pass the code rule, so
-                   script-like (§2.2.5) wins; then any member that consumes the body whole outranks the empty
-                   destination, because the zone streams a reply after its head only to a line whose every
-                   member is a `fetch()` (reply_body.h). No consumer distinguishes, say, `image` from `font`.
-                   The credentials mode folds the other way (see `cred_narrower` for the rule and its
-                   residual). */
-                parser = parser || m_parser;
-                if ((destination_is_script_like(md, mdl) && !destination_is_script_like(dst, dl)) ||
-                    (dl == 0 && mdl != 0)) {
-                    memcpy(dst, md, mdl); dl = mdl;
-                }
-                cred = cred_narrower(cred, m_cred);
-            }
+            pend_line_fold(&fold, i == 0, pe);
             /* The asker set is the union of the members' documents, so the zone judges the one reply against
                every document it fills. */
-            al = strlen(asker);
             if (!asker_set_has(askers, a_n, asker, al)) {
                 if (a_n) join_put(&askers, &a_n, &acap, ",", 1);
                 join_put(&askers, &a_n, &acap, asker, al);
             }
-            if (md) JS_FreeCString(pending_ctx(), md);
-            if (c) JS_FreeCString(pending_ctx(), c);
-            JS_FreeValue(pending_ctx(), cv);
-            JS_FreeValue(pending_ctx(), dv);
             JS_FreeValue(pending_ctx(), pe);
         }
         listed += n_mem;
         {
-            const char *ini = parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT;
+            const char *ini = fold.parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT;
             const char *f[14];
-            f[0] = m; f[1] = NULL; f[2] = ini; f[3] = engine_provenance_token(prov);
-            f[4] = engine_pinned_token(pinned); f[5] = engine_driven_token(driven);
-            f[6] = fetch_credentials_token(cred); f[7] = o; f[8] = rp; f[9] = r;
+            f[0] = m; f[1] = NULL; f[2] = ini; f[3] = engine_provenance_token(fold.prov);
+            f[4] = engine_pinned_token(fold.pinned); f[5] = engine_driven_token(fold.driven);
+            f[6] = fetch_credentials_token(fold.cred); f[7] = o; f[8] = rp; f[9] = r;
             f[10] = nk.headers; f[11] = nk.body;
-            f[12] = fetch_address_token(address); f[13] = askers;
+            f[12] = fetch_address_token(fold.address); f[13] = askers;
             for (int k = 0; k < 14; k++) {
-                if (k == 1) join_put(&join, &n_out, &cap, dst, dl);
+                if (k == 1) join_put(&join, &n_out, &cap, fold.dst, fold.dl);
                 else        join_put(&join, &n_out, &cap, f[k], strlen(f[k]));
                 join_put(&join, &n_out, &cap, "\t", 1);
             }
@@ -4496,25 +4550,28 @@ char *engine_pending_request(JSContext *ctx, const PendRequestKey *key) {
  * would be a stranger's timeline. The refusal lands on the record; flow_decline_fork builds the pair of arms
  * later from each parked flow's own step.
  *
- * One record is one member of the outstanding set however many arms hold it (pending_index.h), so marking the
- * pair's members refuses the request for every timeline at once, as one reply fills every entry. Each timeline
- * still owes its own arm, so the "this register has had its fork" mark is per register and not written here.
- * Every flow parked on it is askable again: a refusal is a host event, and without the clear the fork it exists
- * to make would never be taken. */
-int engine_decline(JSContext *ctx, const PendRequestKey *key, const char *reason) {
-    const char *method = key->method, *mode = key->mode, *url = key->url;
+ * A refusal answers the line the zone judged, so it is written onto exactly the parks that line absorbs
+ * (pend_line_absorbs): every park folded into it, and any later park whose own (provenance, witness, drive)
+ * vector, destination, credentials mode and document the line already stated. A park that joined while the
+ * answer was owed and that the line does not absorb stays outstanding, and the next join lists it on a line of
+ * its own: the zone answers asynchronously, so the page's own run can park on a request whose forced line is
+ * being refused. One record is one member however many arms hold it (pending_index.h), so each mark refuses
+ * the request for every timeline holding that record; each timeline still owes its own arm, so the "this
+ * register has had its fork" mark is per register and not written here. Every flow parked on a refused record
+ * is askable again: without the clear the fork the refusal exists to make would never be taken. */
+int engine_decline(JSContext *ctx, const char *line, const char *reason) {
+    const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
+    const char *referrer_policy, *referrer, *headers, *body, *address, *askers;
+    char *one;
+    PendRequestKey key;
+    PendLineFold judged;
     PendIndexNode *node;
+    JSValue *members = NULL, rv;
     int matched, marked = 0, i;
-    JSValue rv;
 
-    DCHECK(method != NULL && mode != NULL && key->referrer_policy != NULL && key->referrer != NULL &&
-           key->headers != NULL && key->body != NULL && url != NULL,
-           "a refusal was recorded for no request — a decline answers the same identity a reply "
-           "answers, because it is an answer to the same question, and one that names part of it refuses "
-           "nothing and leaves every flow parked");
-    DCHECK(method_is_token(method),
-           "a refusal names a method that is not a token (Fetch §2.2.1, RFC 9110 §5.6.2) — the host's operands are "
-           "shifted by one");
+    DCHECK(line != NULL,
+           "a refusal was recorded for no line — it answers the line the zone judged, whose identity is the "
+           "request's and whose folded fields say which parks it covers");
     /* The reason is required and non-empty: it is the only account of a request nobody made, whose flow will
        not drain this session, and it decides what happens next (`blocked-signal` names the signal and value of
        the person's per-origin egress control that holds it, `blocked-destructive` a refusal nothing reopens);
@@ -4522,18 +4579,32 @@ int engine_decline(JSContext *ctx, const PendRequestKey *key, const char *reason
        policy for the grade, never a `statusText`). */
     DCHECK(reason != NULL && *reason != '\0',
            "a request was refused with no reason — the refusing party states which rule holds the frontier");
+    one = strdup(line);
+    CHECK(one != NULL, "engine: OOM reading a refused line");
+    engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
+                         &mode, &referrer_policy, &referrer, &headers, &body, &address, &askers, &url);
+    DCHECK(method_is_token(method),
+           "a refusal names a method that is not a token (Fetch §2.2.1, RFC 9110 §5.6.2) — the host's operands are "
+           "shifted by one");
     (void)fetch_mode_of_token(mode);
-    node = pending_index_find(key);
+    key = (PendRequestKey){ method, mode, referrer_policy, referrer, headers, body, url };
+    pend_line_fold_of_line(&judged, destination, initiator, provenance, pinned, driven, credentials, address);
+    node = pending_index_find(&key);
     matched = node ? pending_index_node_count(node) : 0;
     rv = JS_NewString(ctx, reason);
     CHECK(!JS_IsException(rv), "engine: OOM recording the trusted zone's refusal of a request");
-    /* Bounded by the count above and always taking the head, as in engine_provide's fill loop: each mark removes
-       its own record (the `declined` write reaches solver/pending.c, which tells the index), so the list shrinks
-       by one per iteration. An increasing index would skip one member per mark (pend_unkey fills a hole with the
-       last member), and a skipped member would stay listed and be refused again every round, forking a failure
-       arm each time. */
+    /* The members are read before any is marked: a mark removes its record from the node (pend_unkey fills the
+       hole with the last member), while a park the line does not absorb stays in it. */
+    if (matched) {
+        members = malloc((size_t)matched * sizeof *members);
+        CHECK(members != NULL, "engine: OOM reading a refused request's parks");
+        for (i = 0; i < matched; i++) members[i] = pending_index_node_member(node, i);
+    }
     for (i = 0; i < matched; i++) {
-        JSValue p = pending_index_node_member(node, 0);
+        JSValue p = members[i];
+        int m_driven = (int)pending_get_int(p, PEND_DRIVEN), m_pinned = (int)pending_get_int(p, PEND_PINNED);
+        int m_prov = (int)pending_get_int(p, PEND_PROV);
+
         /* An already-refused record cannot be a member: the refusal takes it out of the pair. So a fresh park on
            the same address (an @S re-fire re-issues its fetches) puts an unrefused record in the node, and no
            waiting arm can have its reason replaced by one written for a different park. */
@@ -4543,25 +4614,41 @@ int engine_decline(JSContext *ctx, const PendRequestKey *key, const char *reason
         DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
                "the frontier's outstanding set holds an answered record — a record leaves that set on the write that "
                "answers it");
-        pending_set(p, PEND_DECLINED, JS_DupValue(ctx, rv));
-        marked++;
+        if (pend_line_absorbs(&judged, askers, p)) {
+            /* The vector order the fold takes by: a park whose vector is more permissive than the judged line's
+               would have been the member the line was judged as, so the zone never judged it. */
+            DCHECKF(m_driven > judged.driven ||
+                    (m_driven == judged.driven && (m_pinned > judged.pinned ||
+                                                   (m_pinned == judged.pinned && m_prov >= judged.prov))),
+                    "a refusal judged on the vector (%s, %s, %s) is being written onto a park whose vector is "
+                    "(%s, %s, %s) — the zone never judged that park, and the refusal would fork its timeline as a "
+                    "forced failure arm. request=%s %s",
+                    engine_provenance_token(judged.prov), engine_pinned_token(judged.pinned),
+                    engine_driven_token(judged.driven), engine_provenance_token(m_prov),
+                    engine_pinned_token(m_pinned), engine_driven_token(m_driven), method, url);
+            pending_set(p, PEND_DECLINED, JS_DupValue(ctx, rv));
+            marked++;
+        }
         JS_FreeValue(ctx, p);
     }
+    free(members);
     JS_FreeValue(ctx, rv);
-    /* The set is empty for this pair, engine_provide's closing assert for refusals: a survivor would stay listed,
-       be refused again next slice, and fork another failure arm each time. */
-    DCHECK(!node || pending_index_node_count(node) == 0,
-           "a refusal marked every record the frontier's outstanding set held for its request and the set "
-           "still holds one — the refusal is what removes a record, so this member's `declined` write did not "
-           "reach the index, and the host will be shown this request again on the next slice and refuse it "
-           "again, one failure arm per round for the rest of the session");
+    /* The refused records left the pair and the others stayed, engine_provide's closing assert for refusals: a
+       refused survivor would stay listed, be refused again next slice, and fork another failure arm each time. */
+    DCHECKF(!node || pending_index_node_count(node) == matched - marked,
+            "a refusal marked %d of the %d records the frontier's outstanding set held for its request and the "
+            "set now holds %d — the refusal is what removes a record, so a marked member's `declined` write did "
+            "not reach the index, and the host will be shown it again and refuse it again, one failure arm per "
+            "round", marked, matched, node ? pending_index_node_count(node) : 0);
     if (marked) flow_clear_host_owed_all();
     /* Nobody is parked on it, engine_provide's assert for refusals: every park on the pair was answered, refused
-       or withdrawn (`fetch.cancel`) before it, or none was made. */
+       or withdrawn (`fetch.cancel`) before it, or none was made. A refusal that absorbs none of the parks
+       outstanding is not this: the parks it judged left and others joined while it was owed. */
     if (matched == 0)
         DFAILF("a refusal was recorded for a request with no outstanding park — every park on this pair was "
                "answered, refused or withdrawn by `fetch.cancel` before it, or none was made. request=%s %s "
                "reason=%s", method, url, reason);
+    free(one);
     return marked;
 }
 
