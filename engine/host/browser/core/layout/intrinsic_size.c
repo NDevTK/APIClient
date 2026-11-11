@@ -28,7 +28,8 @@
 #include "core/layout/text_run.h"
 #include "core/layout/used_value.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
-#include "solver/metrics.h"   /* `_layoutRunMeasures`, `_layoutRunMeasuredAgain` */
+#include "core/timing/thread_work.h"   /* the residency span a paid answer is re-derived in */
+#include "solver/metrics.h"   /* `_layoutRunMeasures`, `_layoutRunMeasuredAgain`, `_layoutAnswersShed` */
 
 static char *is_computed(lxb_dom_element_t *el, const char *name)
 {
@@ -508,6 +509,7 @@ typedef struct {
    entry per container and run for the job's life. */
 typedef struct {
     bool answered;
+    bool rederive;               /* a paid key's answer, not yet re-derived (intrinsic_size_record_shed) */
     uint64_t reads;              /* the context reads its own activations made (layout_job_context_taint); an
                                     answer with none is one no grid row context decided */
     IsMeasure *meas;             /* a run's or a label's measurement while begun and not released; owned */
@@ -517,11 +519,14 @@ typedef struct {
     IsTable *table;              /* a table's, while built and not released; owned */
 } IsHeld;
 
+/* `held` NULL is a paid key: a run's or a label's answer the job had and a shed released, with the context reads
+   its activations made, which serving it re-states. */
 typedef struct IsEntry {
     lxb_dom_element_t *el;          /* the container; NULL is empty, and nothing is removed */
     IsKind kind;
     lxb_dom_node_t *after, *end;    /* the run, for a run entry; NULL for a walk */
     IsHeld *held;                   /* owned */
+    uint64_t paid_reads;
 } IsEntry;
 
 static size_t is_key_slot(lxb_dom_element_t *el, IsKind kind, BlockFlowRun run, size_t cap)
@@ -614,13 +619,45 @@ void intrinsic_size_record_release(IntrinsicSizeRecord *r)
             "a layout job's intrinsic size record holds %zu entries after %lld were begun; each records exactly "
             "one new key", r->used, r->built);
     for (i = 0; i < r->cap; i++) {
-        if (r->tab[i].el == NULL) continue;
+        if (r->tab[i].el == NULL || r->tab[i].held == NULL) continue;
         if (r->tab[i].held->meas != NULL) is_measure_end(r->tab[i].held, r->tab[i].kind != IS_ENTRY_LABEL);
         if (r->tab[i].held->table != NULL) is_table_release(r->tab[i].held);
         free(r->tab[i].held);
     }
     free(r->tab);
     memset(r, 0, sizeof *r);
+}
+
+void intrinsic_size_record_shed(IntrinsicSizeRecord *r)
+{
+    size_t i;
+
+    for (i = 0; i < r->cap; i++) {
+        IsEntry *e = &r->tab[i];
+
+        if (e->el == NULL || e->held == NULL || (e->kind != IS_ENTRY_RUN && e->kind != IS_ENTRY_LABEL) ||
+            !e->held->answered || e->held->rederive)
+            continue;
+        DCHECK(e->held->meas == NULL && e->held->table == NULL,
+               "an answered run or label entry still holds the state that computed it — its answer is two numbers");
+        e->paid_reads = e->held->reads;
+        free(e->held);
+        e->held = NULL;
+        METRIC_ADD(answers_shed, 1);
+    }
+}
+
+/* The held answer of a paid key in `r`'s slot `i`: re-made unanswered, with its reads, for its ask to re-derive
+   (is_rederive), and counted served as the job's no-pressure twin's ask was. */
+static IsHeld *is_paid_held(IntrinsicSizeRecord *r, size_t i)
+{
+    IsHeld *h = lexbor_calloc(1, sizeof *h);
+
+    CHECK(h != NULL, "out of memory re-deriving one intrinsic inline size answer");
+    h->rederive = true;
+    h->reads = r->tab[i].paid_reads;
+    r->tab[i].held = h;
+    return h;
 }
 
 /* The answer the job's shared record holds for a run, which every grid row context serves, or NULL. Only a
@@ -635,8 +672,8 @@ static IsHeld *is_shared_run(lxb_dom_element_t *el, IsKind kind, BlockFlowRun ru
     if (s == NULL || s->cap == 0 || kind != IS_ENTRY_RUN) return NULL;
     i = is_key_probe(s->tab, s->cap, el, kind, run);
     if (s->tab[i].el == NULL) return NULL;
-    h = s->tab[i].held;
-    DCHECKF(h->answered && h->reads == 0,
+    h = s->tab[i].held != NULL ? s->tab[i].held : is_paid_held(s, i);
+    DCHECKF((h->answered || h->rederive) && h->reads == 0,
             "%s: a run answer every grid row context serves was answered %d with %llu context reads during its "
             "measurement; only an answer no context decided is shared",
             box_subject(el, nbuf, sizeof nbuf), (int)h->answered, (unsigned long long)h->reads);
@@ -699,10 +736,10 @@ static IsHeld *is_held_of(lxb_dom_element_t *el, IsKind kind, BlockFlowRun run)
     if (r->cap != 0) {
         i = is_key_probe(r->tab, r->cap, el, kind, run);
         if (r->tab[i].el != NULL) {
-            h = r->tab[i].held;
-            if (h->answered) r->served++;
-            else             r->resumed++;
-            if (h->answered && h->reads != 0) layout_job_context_taint();
+            h = r->tab[i].held != NULL ? r->tab[i].held : is_paid_held(r, i);
+            if (h->answered || h->rederive) r->served++;
+            else                            r->resumed++;
+            if ((h->answered || h->rederive) && h->reads != 0) layout_job_context_taint();
             return h;
         }
     }
@@ -726,19 +763,33 @@ static IsHeld *is_held_of(lxb_dom_element_t *el, IsKind kind, BlockFlowRun run)
 }
 
 #if APICLIENT_DEV
-/* The entry for the key if the current job's record holds one, counting nothing, for asserts. */
-static const IsHeld *is_held_peek(lxb_dom_element_t *el, IsKind kind, BlockFlowRun run)
+/* Whether the current job's record, or its shared one, holds the key answered or paid, counting nothing, for
+   asserts. */
+static bool is_answered_peek(lxb_dom_element_t *el, IsKind kind, BlockFlowRun run)
 {
-    IntrinsicSizeRecord *r = layout_job_intrinsic_sizes();
+    IntrinsicSizeRecord *r = layout_job_intrinsic_sizes(), *s = layout_job_intrinsic_sizes_shared();
     size_t i;
 
     if (r != NULL && r->cap != 0) {
         i = is_key_probe(r->tab, r->cap, el, kind, run);
-        if (r->tab[i].el != NULL) return r->tab[i].held;
+        if (r->tab[i].el != NULL) return r->tab[i].held == NULL || r->tab[i].held->answered;
     }
-    return is_shared_run(el, kind, run);
+    if (s == NULL || s->cap == 0 || kind != IS_ENTRY_RUN) return false;
+    i = is_key_probe(s->tab, s->cap, el, kind, run);
+    return s->tab[i].el != NULL;
 }
 #endif
+
+/* A paid answer re-derived in a residency span: answered as it was, its reads the ones its first activations
+   made (a residency span counts no context read). */
+static void is_rederived(IsHeld *h)
+{
+    DCHECK(h->rederive && !h->answered && h->meas == NULL,
+           "a paid intrinsic size answer was closed without its measurement having run to its answer");
+    h->rederive = false;
+    h->answered = true;
+    METRIC_ADD(answers_rederived, 1);
+}
 
 static bool is_label_steps(lxb_dom_element_t *el, const lxb_char_t *text, size_t len, bool rests, IsHeld *h)
 {
@@ -781,6 +832,12 @@ static bool is_label_width(lxb_dom_element_t *el, const lxb_char_t *text, size_t
     none.after = NULL;
     none.end = NULL;
     h = is_held_of(el, IS_ENTRY_LABEL, none);
+    if (h->rederive) {
+        thread_work_residency_begin();
+        (void)is_label_steps(el, text, len, false, h);
+        thread_work_residency_end();
+        is_rederived(h);
+    }
     if (!h->answered) {
         uint64_t at = layout_job_context_taints();
 
@@ -884,7 +941,7 @@ static void is_count_measure(lxb_dom_element_t *el, BlockFlowRun run)
     for (i = 0; (o = layout_job_intrinsic_sizes_at(i)) != NULL; i++) {
         if (o == r || o->cap == 0) continue;
         j = is_key_probe(o->tab, o->cap, el, IS_ENTRY_RUN, run);
-        if (o->tab[j].el != NULL && o->tab[j].held->answered) {
+        if (o->tab[j].el != NULL && (o->tab[j].held == NULL || o->tab[j].held->answered)) {
             METRIC_ADD(run_measured_again, 1);
             return;
         }
@@ -945,6 +1002,17 @@ bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
     IsHeld *h = is_held_of(el, IS_ENTRY_RUN, run);
     uint64_t at;
 
+    if (h->rederive) {
+        LayoutJobDrive d;
+
+        /* On a drive nested at the ask, which takes no allowance and computes what the measurement defers. */
+        thread_work_residency_begin();
+        layout_job_drive_begin(&d);
+        while (!is_run_steps(el, run, h)) (void)block_flow_drive_deferred(&d);
+        layout_job_drive_end(&d);
+        thread_work_residency_end();
+        is_rederived(h);
+    }
     if (h->answered) return true;
     at = layout_job_context_taints();
     if (!is_activation_end(h, at, is_run_steps(el, run, h))) return false;
@@ -964,10 +1032,9 @@ IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, BlockFlow
     DCHECK(el != NULL, "CSS 2.2 §9.4.2's context was measured with no block container to style it");
 #if APICLIENT_DEV
     if (layout_job_rests_innermost()) {
-        const IsHeld *held = is_held_peek(el, IS_ENTRY_RUN, run);
         char nbuf[160];
 
-        DCHECKF(held != NULL && held->answered,
+        DCHECKF(is_answered_peek(el, IS_ENTRY_RUN, run),
                 "an intrinsic inline size of %s was read under a resting drive with no answered ask before it, so "
                 "its drive would measure the run inside this activation; the body whose read reaches here asks "
                 "`intrinsic_inline_sizes_ask` first and propagates \"not yet\", as core/layout/line_box.c's "

@@ -156,6 +156,11 @@ typedef struct {
     long long       asks, served, built, resumed;
 } IntrinsicSizeRecord;
 void intrinsic_size_record_release(IntrinsicSizeRecord *r);
+/* Releases every answered run and label entry, whose answer is two numbers, and keeps its key paid with the
+   context reads its activations made; walk entries (a stack's, a flex container's, a table's) and measurements in
+   progress stay. The ask of a paid key is served, as the job's no-pressure twin's was, and re-derives the answer
+   in a residency span on a drive nested at the ask. */
+void intrinsic_size_record_shed(IntrinsicSizeRecord *r);
 
 /* The outer size of `el`'s box over inner sizes the caller computed. css-sizing-3 §2 "Terminology": an outer
    size is "the margin-box size of a box", an inner size "the content-box size of a box"; §2.2 "Intrinsic Size

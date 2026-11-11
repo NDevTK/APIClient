@@ -434,7 +434,12 @@ size_t layout_job_shed(LayoutJob *job)
     lj_answers_free(job);
     css_cascade_record_shed(&job->cascade);
     line_box_record_shed(&job->line_boxes);
-    for (i = 0; i < job->nctx; i++) line_box_record_shed(&job->ctxs[i]->line_boxes);
+    intrinsic_size_record_shed(&job->intrinsic);
+    intrinsic_size_record_shed(&job->shared);
+    for (i = 0; i < job->nctx; i++) {
+        line_box_record_shed(&job->ctxs[i]->line_boxes);
+        intrinsic_size_record_shed(&job->ctxs[i]->intrinsic);
+    }
     freed = live - c_alloc_live();
     job->shed_at = job->held;
     job->held -= (int64_t)freed;

@@ -8,7 +8,8 @@
    suspended and resumed with its memo. `_layoutLineItems` counts the items line box fills took under a resting drive and `_layoutFillRests` the asks a fill answered "not yet"
    because those were spent: a nonzero value is a CSS 2.2 §9.4.2 context that rested inside its fill.
    `_layoutFillsShed` counts complete fills RAM pressure released and `_layoutFillsRederived` those an ask then
-   re-derived in a residency span; each re-derivation follows its own shed.
+   re-derived in a residency span; each re-derivation follows its own shed. `_layoutAnswersShed` and
+   `_layoutAnswersRederived` count the same for css-sizing-3 §5.1's run and label answers.
    `_layoutClientExtentAsks` counts the reads of CSSOM VIEW §6's `clientWidth`/`clientHeight` that reached step
    3's padding edge and `_layoutClientExtentRests` the rests those reads took, a subset of `_layoutJobRests`, so
    one read takes 1 + rests/asks activations on average. `_layoutClientRectsAsks` and `_layoutClientRectsRests`
@@ -33,6 +34,8 @@ METRIC(line_items,         "_layoutLineItems",        LIFETIME, "item", AGENT, "
 METRIC(fill_rests,         "_layoutFillRests",        LIFETIME, "ask",  AGENT, "core/layout/line_box.c",   INT)
 METRIC(fills_shed,         "_layoutFillsShed",        LIFETIME, "fill", AGENT, "core/layout/line_box.c",   INT)
 METRIC(fills_rederived,    "_layoutFillsRederived",   LIFETIME, "fill", AGENT, "core/layout/line_box.c",   INT)
+METRIC(answers_shed,       "_layoutAnswersShed",      LIFETIME, "answer", AGENT, "core/layout/intrinsic_size.c", INT)
+METRIC(answers_rederived,  "_layoutAnswersRederived", LIFETIME, "answer", AGENT, "core/layout/intrinsic_size.c", INT)
 METRIC(client_extent_asks,  "_layoutClientExtentAsks",  LIFETIME, "ask",  AGENT, "core/dom/element_view.c", INT)
 METRIC(client_extent_rests, "_layoutClientExtentRests", LIFETIME, "rest", AGENT, "core/dom/element_view.c", INT)
 METRIC(client_rects_asks,   "_layoutClientRectsAsks",   LIFETIME, "ask",  AGENT, "core/dom/element_view.c", INT)
@@ -48,6 +51,7 @@ METRIC(run_measures,        "_layoutRunMeasures",        LIFETIME, "measurement"
 METRIC(run_measured_again,  "_layoutRunMeasuredAgain",   LIFETIME, "measurement", AGENT, "core/layout/intrinsic_size.c", INT)
 IDENTITY_LE(stacked_served,     stacked_asks)
 IDENTITY_LE(fills_rederived,    fills_shed)
+IDENTITY_LE(answers_rederived,  answers_shed)
 IDENTITY_LE(stacked_deferred,   stacked_asks)
 IDENTITY_LE(bf_asks,            stacked_asks)
 IDENTITY_LE(bf_served,          stacked_served)
