@@ -1633,6 +1633,7 @@ char *result_cold_json(void) {
     METRIC_SET(sold_cands, e.sold_cands);
     METRIC_SET(cold, flow_cold_count());
     METRIC_SET(sale_unfunded, e.sale_unfunded);
+    METRIC_SET(sale_over_reserve, e.sale_over_reserve);
     METRIC_SET(sale_reserve_kib, e.sale_reserve_kib);
     METRIC_SET(sale_need_max_kib, e.sale_need_max_kib);
     METRIC_SET(forks, e.forks);

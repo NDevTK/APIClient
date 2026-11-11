@@ -100,8 +100,10 @@ METRIC(sold_cands, "soldCands", LIFETIME, "member", PROCESS, "solver/engine.c", 
 /* …and the sold members standing in the registry as stubs (solver/flow.h's `cold`), counted in `live`. */
 METRIC(cold, "cold", GAUGE, "member", AGENT, "solver/flow.c", INT)
 /* …and the sale's own working storage (solver/engine.c's sale reserve): the sales that found none held and ran
-   without their census, the block held now, and the most one sale's allocations asked for. */
+   without their census, the funded sales that asked for more than the block they gave back, the block held now,
+   and the most one sale's allocations asked for. */
 METRIC(sale_unfunded, "saleUnfunded", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+METRIC(sale_over_reserve, "saleOverReserve", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 METRIC(sale_reserve_kib, "saleReserveKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
 METRIC(sale_need_max_kib, "saleNeedMaxKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
 METRIC(forks, "forks", LIFETIME, "fork", AGENT, "solver/engine.c", INT)

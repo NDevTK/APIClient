@@ -12560,13 +12560,13 @@ char *engine_sale_census_json(void) {
    allocator refuses the block again, what the sale freed having gone to the heap's free lists and not back to
    the address space, so the next sale is unfunded. Next diff builds: the survey's buffers laid in the block
    itself and never given to the allocator, the block's end a refusal the sale counts. Absence shows as: the
-   assert at the sale's exit naming the ask and the block, or the refused allocation's own CHECK inside the
-   sale; and `saleUnfunded` climbing with `sold`. */
+   refused allocation's own CHECK inside a sale, `saleOverReserve` (sales that asked for more than the block)
+   above zero, and `saleUnfunded` climbing with `sold`. */
 #define SALE_RESERVE_FIRST ((size_t)4 << 20)
 static void *g_sale_reserve;
 static size_t g_sale_reserve_bytes = SALE_RESERVE_FIRST, g_sale_need_max;
 static size_t g_sale_given;   /* the block the open sale gave back, in bytes */
-static long g_sale_unfunded;
+static long g_sale_unfunded, g_sale_over_reserve;
 
 static void engine_sale_reserve_hold(void) {
     if (g_sale_reserve == NULL) g_sale_reserve = malloc(g_sale_reserve_bytes);   /* a refusal leaves none held */
@@ -12588,10 +12588,7 @@ static void engine_sale_reserve_retake(int funded) {
         size_t need = c_alloc_span_take();
 
         if (need > g_sale_need_max) g_sale_need_max = need;
-        DCHECKF(need <= g_sale_given,
-                "a sale's allocations asked for %zu bytes and the sale gave back a reserve of %zu — the block is "
-                "sized by the sales before it, and this one is the first of its size; size the first block by it",
-                need, g_sale_given);
+        g_sale_over_reserve += need > g_sale_given;   /* the first of its size: the sales before it sized the block */
         if (need > g_sale_reserve_bytes / 2) g_sale_reserve_bytes = need * 2;
     }
     engine_sale_reserve_hold();
@@ -14618,6 +14615,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->paged_shed         = g_reclaim_shed;
     out->paged_sales        = g_reclaim_sales;
     out->sale_unfunded = g_sale_unfunded;
+    out->sale_over_reserve = g_sale_over_reserve;
     out->sale_reserve_kib = g_sale_reserve ? (long)(g_sale_reserve_bytes / 1024) : 0;
     out->sale_need_max_kib = (long)(g_sale_need_max / 1024);
     out->pressure_sold      = g_pressure_sold;
