@@ -88,6 +88,9 @@ ReplyTrailRow *reply_trail_share(ReplyTrailRow *head);
 /* One holder fewer. Rows no chain reaches are freed. */
 void reply_trail_release(ReplyTrailRow *head);
 
+/* Whether the chain `head` holds the row (`slot`, `id`). Ids do not fall along a chain, so the walk ends at the
+   first older row. */
+int reply_trail_holds(const ReplyTrailRow *head, int64_t slot, uint64_t id);
 const ReplyTrailRow *reply_trail_up(const ReplyTrailRow *row);
 int64_t  reply_trail_slot(const ReplyTrailRow *row);
 uint64_t reply_trail_id(const ReplyTrailRow *row);

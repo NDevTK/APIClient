@@ -286,6 +286,12 @@ void reply_trail_release(ReplyTrailRow *head) {
     }
 }
 
+int reply_trail_holds(const ReplyTrailRow *head, int64_t slot, uint64_t id) {
+    for (const ReplyTrailRow *r = head; r && r->id >= id; r = r->up)
+        if (r->id == id && r->slot == slot) return 1;
+    return 0;
+}
+
 const ReplyTrailRow *reply_trail_up(const ReplyTrailRow *row) { return row->up; }
 int64_t  reply_trail_slot(const ReplyTrailRow *row)           { return row->slot; }
 uint64_t reply_trail_id(const ReplyTrailRow *row)             { return row->id; }

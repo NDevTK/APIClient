@@ -8626,6 +8626,16 @@ static void engine_trail_arrivals(Flow *f) {
                 rows[at] = rows[at - 1];
             rows[at].id = id;
             rows[at].slot = slot;
+        } else if (id != 0) {
+            /* A record's id is stamped by the one provide that issues it, on every park of its line at once, and
+               is above every trail's mark then; so a park at or under this trail's mark came with the path (a
+               fork, an arrival on a snapshot, a body's fuse) and its row came with it. */
+            DCHECKF(reply_trail_holds(f->trail, pending_get_int(e, PEND_SLOT), id),
+                    "a park of slot %lld names reply record %llu, which this flow's trail has passed (mark %llu), "
+                    "and the trail holds no row for it — the park was stamped apart from its record's other "
+                    "parks, or reached this register without its path's trail",
+                    (long long)pending_get_int(e, PEND_SLOT), (unsigned long long)id,
+                    (unsigned long long)f->trail_seen);
         }
         JS_FreeValue(pending_ctx(), e);
     }
