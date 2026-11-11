@@ -9106,8 +9106,12 @@ static int preempt_hook(int kind) {
        offer. */
     {
         int64_t gap_now = g_service_work + (int64_t)JS_FlowPeekRetiredWork();
-        if (gap_now - g_gap_last_work > g_gap_max_work) g_gap_max_work = gap_now - g_gap_last_work;
+        int64_t gap = gap_now - g_gap_last_work;
+        if (gap > g_gap_max_work) g_gap_max_work = gap;
         g_gap_last_work = gap_now;
+        /* Every suspend point offers the host its turn after the stretch it closes (a compile's offers among
+           them); the turn returns here with nothing moved. */
+        quantum_step_turn_point(QUANTUM_TURN_DISPATCH, (uint64_t)gap);
     }
     /* The wall gap census belongs to the seam message and is compiled out with it; the count and the
        work gap above are not, because solver/result.c publishes them in every build. `engine_now_ms()`

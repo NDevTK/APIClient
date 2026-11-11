@@ -34,8 +34,9 @@ int quantum_host_wants_thread(void);
    instance). Stated between steps, after a turn duration; the native driver states one, and a host that states
    none takes its turn only between steps. */
 void quantum_set_step_turn(void (*take)(void));
-/* Where a step offered the host its turn: the interpreter's dispatch (every ENGINE_QUANTUM_ASK_EVERY
-   dispatches), host work charged to the running flow, or a residency span's uncharged re-derivation. */
+/* Where a step offered the host its turn: the interpreter (every suspend point it offers, and every
+   ENGINE_QUANTUM_ASK_EVERY dispatches), host work charged to the running flow, or a residency span's uncharged
+   re-derivation. */
 typedef enum { QUANTUM_TURN_DISPATCH, QUANTUM_TURN_HOST_WORK, QUANTUM_TURN_RESIDENCY, QUANTUM_TURN_N } QuantumTurnSite;
 /* Offers the host its turn after `units` of work at `site`. The clock is read once per ENGINE_QUANTUM_ASK_EVERY
    units offered, a cadence and nothing else; when the hold has lasted the turn, the stated entry runs and the
