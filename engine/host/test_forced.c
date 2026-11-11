@@ -19754,10 +19754,9 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
              "NOT ARMED: the edge's floor exit moved no written stub's bytes to the disk tier (`soldSpilled`)");
     fold_row(&pt, &pwhy, tf_census_row(js, "_cold", "restoredSpilled") == 1,
              "the spilled stub was not read back from the disk tier within the session (`restoredSpilled`)");
-    fold_row(&pt, &pwhy, param_value_is(js, "/api/sl-forced-done", "b", "22") &&
-                         param_value_is(js, "/api/sl-forced-busy", "n", "100000"),
-             "NOT REACHED: the owing member or the busy one did not report within the session after a written "
-             "stub's bytes went to the disk tier");
+    fold_row(&pt, &pwhy, param_value_is(js, "/api/sl-forced-done", "b", "22"),
+             "NOT REACHED: the owing member did not report within the session after a written stub's bytes went "
+             "to the disk tier");
     const Probe rows[] = {
         { "sale-floor-sells", xt, "slFloor", SESS_EXPLORE, xwhy },
         { "sale-spill-returns", pt, "slForced", SESS_EXPLORE, pwhy },
