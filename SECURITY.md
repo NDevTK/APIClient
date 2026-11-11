@@ -191,7 +191,7 @@ Which extension context can open a connection at all is enforced by CSP in all b
 | Gate | Enforcing symbol | Refusal reason |
 |------|------------------|----------------|
 | closed option set: an option `safeFetch` does not read (`as`, …) is refused, not dropped | `_refuseUnreadOptions` (DCHECK) | throws in dev; in release the option is dropped |
-| facts every caller must state | `_destinationOf`, `_provenanceOf`, `_docOf`, `_pinnedOf`, `_actorOf`, `_credentialedOf`, `_addressOf`, `_methodOf`, `_bodyOf`, `_bodyClassOf` (CHECK) | throws in dev and release |
+| facts every caller must state | `_destinationOf`, `_provenanceOf`, `_docOf`, `_pinnedOf`, `_actorOf`, `_credentialedOf`, `_addressOf`, `_methodOf`, `_bodyOf`, `_bodyClassOf`, and each header list entry's class (`_headerListIs`) (CHECK) | throws in dev and release |
 | a URL the URL Standard §6.1 "URL class" constructor refuses is no request, as in a browser | `safeFetch`, `safeFetchOperator` | `bad-url`, graded `network` |
 | the method is the caller's statement and a gating signal: a non-GET leaves only where a default arm admits it, and never credentialed | `_methodOf`, the `method` row (default-only), `_safeFetchJudged` (CHECK: a credentialed request is a GET); for an XMLHttpRequest both hosts still ask `safeFetchMethodRefusal` first | `blocked-signal:method=<VERB>`; `blocked-method:<M>` on an XMLHttpRequest only |
 | http(s) only | `safeFetch` | `blocked-scheme:<scheme>` |
@@ -217,8 +217,9 @@ identity: method, URL, header list, the speak-as set with its Cookie, body, cred
 partition, so composing the key reads the identity's cookies only where the unforced run sent that method to
 that URL). The engine declines
 on the same grade a request whose address holds a value it has no bytes for (`pending_park_request`), and a
-record that states `address=unknown` to the zone is refused there too. A request whose body has no bytes is
-listed with the body class `unknown` and refused by the zone (`blocked-signal:body=unknown`). A
+record that states the address class `unknown` to the zone is refused there too. A request whose body or a
+header value has no bytes is listed with that part's class `unknown` and refused by the zone
+(`blocked-signal:bytes=unknown`). A
 declined request's outcome is unobserved, so the engine runs both outcomes (`flow_decline_fork`): one arm stays
 parked on the request, a search that fires when the origin is widened or the address is grounded; the other
 takes Fetch §5.6's network error and runs the page's failure path with its path marked forced, so nothing it
@@ -226,7 +227,7 @@ builds is graded `observed` or `derived`, and a page error raised only on forced
 exploration rather than the page's own.
 
 Every request the chokepoint judges leaves an entry in its reply record's `egress` list: the address, the signal
-vector, the default arm or grant that admitted it, how it was answered (sent, answered locally, or not sent) and
+vector, the class of each part the `bytes` row folds (`parts`), the default arm or grant that admitted it, how it was answered (sent, answered locally, or not sent) and
 the refusal where there is one. The extension's zone takes a settled request's list into the log of the instance
 that asked (`egressTake` in `bridge.js`, a CHECK: a record with no list is refused, never read as an empty one),
 the instance's analysis states the log as `egressSends`, and its run row carries a census of it (`egressHow`).
@@ -254,10 +255,12 @@ fetch skips the browser's own CORS, so `safeFetch` runs Fetch §4.1 "Main fetch"
   `engine_provide`), so a `<script src=u>` and a `fetch(u)` are two requests with two
   answers. The pending channel carries only `same-origin`, `cors` and `no-cors` (`pendingRequest` in `bridge.js`
   CHECKs it), because its reply returns to the asking page.
-- A fetch()'s header list, body bytes and body class are the untrusted engine's statement (`qjs_request`, the
+- A fetch()'s header list (each entry `[name, value, class]`), body bytes and body class, and an
+  XMLHttpRequest record's header list in the same form, are the untrusted engine's statement (`qjs_request`, the
   Renderer interface's `GetRequest`; on the native host the last field of the bill's `fetch` record). Each host
   reads it as input (`pendingRequestContent` in `bridge.js`, `fetchContent` in `engine/trusted.mjs`): a record
-  whose shape contradicts its line's digest words, or whose body class is none the zone declares, is refused.
+  whose shape contradicts its line's digest words, whose header list is not such entries
+  (`safeFetchHeaderListIs`), or whose body class is none the zone declares, is refused.
   The digest words are the engine's own key; the zone computes its own wire identity for a send and trusts
   neither word as a digest. What the statement can cause is bounded as any engine statement is: the request is
   judged by the signal table with the document record's floors, and leaves uncredentialed.
@@ -547,9 +550,9 @@ signal → permitted values; `_firingRefusal` fires a request when a default arm
 signal's value is permitted at the request URL's own `.origin`, and otherwise names the signal that decided:
 the first condition of the page's-own-run arm the request fails (`provenance`, `doc-reach`, `actor`, `witness`,
 in that order) that the origin's table does not permit either, or else the first unpermitted signal in
-registry order. Two values are refused at every setting: `address=unknown` and `body=unknown`, an address or
-a body holding a value with no concrete example. No default arm admits either, the attacker-site arm
-included, and no grant can name them.
+registry order. One value is refused at every setting: `bytes=unknown`, a request one of whose parts (its
+address, a header value, its body) holds a value with no concrete example. No default arm admits it, the
+attacker-site arm included, and no grant can name it.
 
 | Signal | Values | Reliability |
 |--------|--------|-------------|
@@ -560,12 +563,11 @@ included, and no grant can name them.
 | `cookies` | `yes`, `no` | certain |
 | `header-authority` | `none`, `unknown` | certain |
 | `witness` | `pinned`, `unpinned`, `unstated` | stated (engine), floored at `pinned` by the document record |
-| `address` | `concrete`, `example`, `unknown`, `unstated` | stated (engine): `example` is the bytes the page computes from an unknown's example; `unknown` is never permitted; `unstated` is a record that carries no class, which every engine-named navigation is today |
+| `bytes` | `concrete`, `example`, `unknown`, `unstated` | stated (engine): the weakest class over the address, each header value and the body; `example` is the bytes the page computes from an unknown's example; `unknown` is never permitted; `unstated` is a part whose record carries no class, which every engine-named navigation's address is today |
 | `url-authority` | `present`, `unknown` | partial: a miss is `unknown`, never "none" |
 | `lineage` | `unknown` | undetermined |
 | `reaches` | `attacker-site`, `another-party` | certain: the URL parser's host against the attacker site the person configured (`lib/attacker-site.js`); `attacker-site` fires by default, since it is the person's own server |
 | `method` | `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, `other` | stated (the caller): every value but `GET` is default-only, admitted by a default arm and named by no grant |
-| `body` | `none`, `concrete`, `example`, `unknown` | stated (engine): `none` is a request with no body; `unknown` is never permitted |
 | `invalidity` (does not gate) | `unstated` | intent |
 
 `actor` is the one gating row the untrusted zone cannot reach; the `stated` rows are words the
@@ -673,9 +675,10 @@ included. The mark can only narrow `actor`, never widen it, and a `page` caller 
 - Signals added since grants were first stored, each narrowing every grant stored before it: `reaches`
   (`attacker-site`, `another-party`), with the attacker-site setting. A grant stored before it refuses
   `reaches=another-party` until the person permits it again. `actor` gained the value `drive`: a grant of
-  `actor=tool` stored before it does not cover a driven request. `address`, `method` and `body` gate: a grant
-  stored before one of them names no value of it and permits nothing at that origin until the person permits
-  it again.
+  `actor=tool` stored before it does not cover a driven request. `bytes` and `method` gate: a grant stored
+  before one of them names no value of it and permits nothing at that origin until the person permits it
+  again; a stored grant's `address` or `body` row names a row this build does not have and is dropped at the
+  restore.
 - The native host states its table synchronously, and `--explore <origin>` in `engine/trusted.mjs` is
   `safeFetchWiden`.
 
