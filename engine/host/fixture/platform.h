@@ -1338,15 +1338,15 @@ static const char HTML_PLATFORM[] =
        `window.EventSource` is a [[Get]] missing the global's whole prototype chain (JSConcolicHooks.absent);
        `typeof EventSource` is an unresolvable Reference that ECMAScript §13.5.3.1 "Runtime Semantics:
        Evaluation" step 2.a answers before step 3's GetValue (JSConcolicHooks.absent_unresolved). Neither
-       throws or forks. The run's `_absent` row for `"EventSource"` puts 1 in `read` and 1 in `typeof`. No
-       probe row: a census member is neither an endpoint nor a param. */
+       throws or forks. The run's `_absent` row for `"EventSource"` counts both. No probe row: a census member
+       is neither an endpoint nor a param. */
     "var absTy = typeof EventSource;"
     "var absRd = window.EventSource;"
     /* The third spelling: `'EventSource' in window` is ECMAScript §13.10.1 "Runtime Semantics: Evaluation",
        whose last step is "Return ? HasProperty(rightValue, ? ToPropertyKey(leftValue))"; §7.3.11 "HasProperty
        ( obj, propertyKey )" performs no [[Get]], so it reaches neither hook above and is recorded at the `in`
-       operator's own placement. It answers `false`. The `"EventSource"` row then reads `read 1, typeof 1,
-       in 1`; a regressed per-name split reads `read 3, typeof 0, in 0`. */
+       operator's own placement. It answers `false`. The `"EventSource"` row then holds equal counts in
+       `read`, `typeof` and `in`; a regressed per-name split puts all of them in `read`. */
     "var absIn = 'EventSource' in window;"
     /* §4.13 CUSTOM ELEMENTS — the reason this component exists: connectedCallback's body is code NOTHING ELSE IN
        THE PROGRAM CALLS. The endpoints below are reachable only through the lifecycle, so their presence is the
