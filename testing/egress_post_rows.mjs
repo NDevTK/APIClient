@@ -2,9 +2,10 @@
 // a page from a loopback server that records every request, so each row reads what reached the server beside the
 // zone's `@EGRESS` lines. The page's unforced boot POSTs JSON and reads the reply; it POSTs two bodies to one
 // address; and on an arm that assumes absent state it POSTs to a new address and repeats a POST its unforced run
-// already made. It also sends a header whose value is an unknown with an example (`navigator.language`) and, on
-// the arm that contradicts that example, the same unknown with no bytes, by fetch() and by XMLHttpRequest. Its
-// XMLHttpRequests POST JSON and read the reply, POST binary bytes, and POST on the forced arm. The control is
+// already made. It POSTs JSON.stringify over unknowns: with examples on the unforced run (sent as the serializer's
+// text over them), on the forced arm (not sent), with no example (not sent), and once more on an arm whose example
+// differs (a second request, not the first one's record). It also sends a header whose value is an unknown with an example (`navigator.language`) and, on
+// the arm that contradicts that example, the same unknown with no bytes, by fetch() and by XMLHttpRequest.// XMLHttpRequests POST JSON and read the reply, POST binary bytes, and POST on the forced arm. The control is
 // the seed load: the server served the page, or nothing below is a reading.
 //
 //   node testing/egress_post_rows.mjs [path-to-native-binary]      (after `node engine/build.mjs native`)
@@ -34,18 +35,26 @@ fetch('/api/same', { method: 'POST', body: 's=1' }).then(function () {
     fetch('/api/forced', { method: 'POST', body: 'f=1' });
     fetch('/api/same', { method: 'POST', body: 's=1' });
     var xf = new XMLHttpRequest(); xf.open('POST', '/api/xhr-forced'); xf.send('f=2');
+    fetch('/api/body-forced', { method: 'POST', body: JSON.stringify({ r: window.__FLAGS.role }) });
   }
 });
 var xp = new XMLHttpRequest(); xp.open('POST', '/api/xhr-post'); xp.setRequestHeader('Content-Type', 'application/json');
 xp.onload = function () { fetch('/api/xhr-read?n=' + JSON.parse(xp.responseText).n); };
 xp.send(JSON.stringify({ x: 1 }));
 var xb = new XMLHttpRequest(); xb.open('POST', '/api/xhr-bin'); xb.send(new Uint8Array([0, 255, 1, 128]));
+fetch('/api/body-ex', { method: 'POST', body: JSON.stringify({ u: location.href, l: navigator.language }) });
+function bodyTwo() { fetch('/api/body-two', { method: 'POST', body: JSON.stringify({ l: navigator.language }) }); }
+bodyTwo();
 fetch('/api/hdr-ex', { headers: { 'X-Probe': navigator.language } });
 var xe = new XMLHttpRequest(); xe.open('GET', '/api/xhr-ex'); xe.setRequestHeader('X-Probe', navigator.language); xe.send();
 if (navigator.language !== 'en-US') {
   fetch('/api/hdr-unk', { headers: { 'X-Probe': navigator.language } });
   var xu = new XMLHttpRequest(); xu.open('GET', '/api/xhr-unk'); xu.setRequestHeader('X-Probe', navigator.language); xu.send();
+  fetch('/api/body-unk', { method: 'POST', body: JSON.stringify({ l: navigator.language }) });
 }
+/* Only the arm that contradicted the example reaches a second test, so the arm pinning another value is one of
+   its descendants and every row above reads its world unchanged. */
+if (navigator.language === 'fr') bodyTwo();
 </script>`;
 
 /* Every request that arrived, as "METHOD path?query <body> <content-type> <x-page>". */
@@ -98,6 +107,10 @@ const bytes = (list) => distinct(list.filter((e) => e.vector !== null).map((e) =
   e.vector.bytes + ' ' + (e.parts ? e.parts.headers.map((h) => h.join(':')).join(',') : 'no-parts')));
 /* Every refusal the entries carry, distinct; `none` where no ask was refused. */
 const refusals = (list) => distinct(list.filter((e) => e.refusal).map((e) => e.refusal)) || 'none';
+/* What the judged entries say the body's bytes are, beside the request's whole class. */
+const bodyIs = (list) => distinct(list.filter((e) => e.vector !== null).map((e) =>
+  e.vector.bytes + ' body:' + (e.parts ? e.parts.body : 'no-parts')));
+const bodies = (method, path) => got(method, path).map((a) => a.body + ' ' + a.type).sort().join('|');
 const echo = got('POST', '/api/echo');
 const ROWS = [
   ['CONTROL: the seed load reached the server', [['GET /', got('GET', '/').length, 1]]],
@@ -151,6 +164,29 @@ const ROWS = [
    [['POST /api/xhr-forced', got('POST', '/api/xhr-forced').length, 0],
     ['how every ask was answered', distinct(said(sends('POST', '/api/xhr-forced')).split(' | ')),
      'not-sent/none provenance=forced']]],
+  ['an unforced POST whose body is JSON.stringify over unknowns with examples leaves as the serializer\'s text ' +
+   'over those examples, and the entry says the body is an example',
+   [['POST /api/body-ex', got('POST', '/api/body-ex').length, 1],
+    ['its body and type', bodies('POST', '/api/body-ex'),
+     JSON.stringify({ u: ORIGIN + '/', l: 'en-US' }) + ' text/plain;charset=UTF-8'],
+    ['how the zone answered it', said(sends('POST', '/api/body-ex')), 'sent/default'],
+    ['what the entry states', bodyIs(sends('POST', '/api/body-ex')), 'example body:example']]],
+  ['a POST on a forced path whose body is serialized over the arm\'s pinned value is recorded and not sent, its ' +
+   'body an example',
+   [['POST /api/body-forced', got('POST', '/api/body-forced').length, 0],
+    ['how the zone answered it', said(sends('POST', '/api/body-forced')), 'not-sent/none provenance=forced'],
+    ['what the entry states', bodyIs(sends('POST', '/api/body-forced')), 'example body:example']]],
+  ['a POST whose body is serialized over an unknown with no example is listed, judged and not sent',
+   [['POST /api/body-unk', got('POST', '/api/body-unk').length, 0],
+    ['what refused it', refusals(sends('POST', '/api/body-unk')), 'bytes=unknown'],
+    ['what the entry states', bodyIs(sends('POST', '/api/body-unk')), 'unknown body:unknown']]],
+  ['one POST in two worlds whose examples differ is two requests: the unforced one is sent, and the forced ' +
+   'one is not answered from its record',
+   [['POST /api/body-two', got('POST', '/api/body-two').length, 1],
+    ['its body', bodies('POST', '/api/body-two'), JSON.stringify({ l: 'en-US' }) + ' text/plain;charset=UTF-8'],
+    ['how the zone answered the two asks', said(sends('POST', '/api/body-two')),
+     'not-sent/none provenance=forced | sent/default'],
+    ['what the entries state', bodyIs(sends('POST', '/api/body-two')), 'example body:example']]],
 ];
 let bad = 0;
 for (const [label, notes] of ROWS) {
