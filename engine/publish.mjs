@@ -186,6 +186,17 @@ if (prose.length) {
            "blocks it names; history belongs in the commit message.");
 }
 
+/* A DCHECK condition that writes (engine/dcheckgate.mjs), over the tree of exactly the commit this push
+   publishes, read through git so the working tree is not what is audited. Nonzero pushes nothing. */
+{
+  const dg = spawnSync(process.execPath,
+                       [new URL("dcheckgate.mjs", import.meta.url).pathname, "--rev", sha],
+                       { stdio: "inherit" });
+  if (dg.status !== 0)
+    die(1, `REFUSED by engine/dcheckgate.mjs (exit ${dg.status}) and NOTHING was pushed. Make the call it names`,
+           "a statement and assert its result; a release build does not evaluate a DCHECK's condition.");
+}
+
 /* Each push is its own spawn and carries nothing else. A retry is only for a network failure; a refusal is a
    verdict. */
 const moved = [];
