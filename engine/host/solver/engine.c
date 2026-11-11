@@ -5614,6 +5614,17 @@ int64_t engine_reply_clock(const Flow *f) {
     return at;
 }
 
+/* Lands the answers due at the running member's reply clock now, and answers whether one was due: landed, or owed
+   by the host at a point the clock has passed (flow_next_unit_pass's due rung then waits for it). */
+static int engine_land_due_now(Flow *f) {
+    int64_t now = engine_reply_clock(f), due = pending_next_due(f->pending);
+
+    DCHECK(f == flow_running() && g_in_step > 0, "an answer was landed for a member not stepping");
+    if (due == 0 || due > now) return 0;
+    pending_land_due(f->pending, now, flow_work_seq_next);
+    return 1;
+}
+
 int64_t engine_reply_due(const Flow *f) {
     return engine_reply_clock(f) + ENGINE_REPLY_LATENCY_WORK;
 }
@@ -10912,6 +10923,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 /* A drive building its own call stands at its body, as a seeded drive does. */
                 engine_stand_running(f, FLOW_SITE_DRIVE, f->orphan_hash);
                 g_step_unit = engine_orphan_unit(orphan_step); return 0; }
+            /* An answer this pass's own work made due: the gate's asks above retire work on the open step, so the
+               reply clock can pass a due point after the landing at the pass's start. The answer arrives at that
+               point, before a clock-driven source below could run a task ahead of it: landed here, it is ordered
+               against them by arrival at the next step's selection, or waited for there if the host owes it. */
+            else if (engine_land_due_now(f)) {
+                g_step_unit = STEP_UNIT_REPLY_CLOCK_MOVE; return 0; }
             /* §8.1.7.3's in-parallel half, the first clock-driven source because it can defer: it compares the next
                rendering opportunity with the earliest timer expiry and yields to an earlier timer. Without it there
                is no requestAnimationFrame, ResizeObserver or IntersectionObserver delivery, no
