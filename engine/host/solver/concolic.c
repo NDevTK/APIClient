@@ -8523,8 +8523,8 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
                        "performed INLINE as gp_fwd over a trapless proxy's target, so a page that wraps an "
                        "unknown in `new Proxy(x, {})` and enumerates it lands here with the seam having "
                        "asked its question about the PROXY. SO RUN BOTH GREPS AND NEVER "
-                       "ONE: `git grep -n 'gp_op = GP_OWNKEYS' engine/qjs/quickjs.c` names every REQUESTER, "
-                       "`git grep -n 'gp_fwd =' engine/qjs/quickjs.c` names every SUBSTITUTION, and the "
+                       "ONE: `git grep -n 'gp_op = GP_OWNKEYS' -- engine/qjs` names every REQUESTER, "
+                       "`git grep -n 'gp_fwd =' -- engine/qjs` names every SUBSTITUTION, and the "
                        "requester grep alone is what missed shape (2)",
                        c->ident);
             }
