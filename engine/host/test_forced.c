@@ -39638,7 +39638,12 @@ TF_UNIT void painted_frame_graph_selftest(JSContext *ctx, lxb_html_document_t *d
         " document.body.appendChild(c); globalThis.graphCanvas = c; return 0; })()"));
     layout_job_enter(job);
     frame = document_paint_begin(ctx, lxb_dom_interface_document(dom));
-    while (document_paint_step(frame)) {}
+    for (;;) {
+        while (!document_paint_ready(frame))
+            CHECK(!layout_job_declined(job), "the painted-frame graph witness's offer declined a selector match, "
+                                             "whose fork only update the rendering's step machine can take");
+        if (!document_paint_step(frame)) break;
+    }
     document_paint_finish(frame);
     layout_job_leave(job);
     layout_job_free(job);
