@@ -4554,14 +4554,11 @@ char *engine_pending_request(JSContext *ctx, const PendRequestKey *key) {
  * later from each parked flow's own step.
  *
  * A refusal answers the line the zone judged, so it is written onto exactly the parks that line absorbs
- * (pend_line_absorbs): every park folded into it, and any later park whose own (provenance, witness, drive)
- * vector, destination, credentials mode and document the line already stated. A park that joined while the
- * answer was owed and that the line does not absorb stays outstanding, and the next join lists it on a line of
- * its own: the zone answers asynchronously, so the page's own run can park on a request whose forced line is
- * being refused. One record is one member however many arms hold it (pending_index.h), so each mark refuses
- * the request for every timeline holding that record; each timeline still owes its own arm, so the "this
- * register has had its fork" mark is per register and not written here. Every flow parked on a refused record
- * is askable again: without the clear the fork the refusal exists to make would never be taken. */
+ * (pend_line_absorbs). A park that joined while the answer was owed and that the line does not absorb stays
+ * outstanding and is listed on a line of its own: the zone answers asynchronously, so the page's own run can
+ * park on a request whose forced line is being refused. One record is one member however many arms hold it
+ * (pending_index.h), so each mark refuses it for every timeline holding it; the per-register fork mark is not
+ * written here. Every flow parked on a refused record is askable again, or its fork would never be taken. */
 int engine_decline(JSContext *ctx, const char *line, const char *reason) {
     const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
     const char *referrer_policy, *referrer, *headers, *body, *address, *askers;

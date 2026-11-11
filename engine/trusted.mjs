@@ -381,7 +381,7 @@ function decline(reason) { return `decline\t${b64(reason)}`; }
    answer was owed may state a vector the line did not (solver/engine.h's engine_decline). The engine acts on
    it: the record carries the refusal, the flow parked on it keeps its snapshot, and the engine forks the arm
    that runs the page's failure path.
-   THE LINE IS THE JOIN'S OWN, WHICH IS WHY IT CARRIES `url` AND NEVER `abs`. The engine parked on the address it
+   The line is the join's own, which is why it carries `url` and never `abs`. The engine parked on the address it
    wrote on the pending line; `abs` is this zone resolving that address against the document in order to apply
    a policy to it, and a refusal that named the resolved form would refuse a request no register holds.
    The reason is the refusing party's own token, whole and unprefixed (`blocked-signal:<name>=<value>`,
