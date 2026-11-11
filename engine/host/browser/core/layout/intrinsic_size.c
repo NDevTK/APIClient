@@ -28,6 +28,7 @@
 #include "core/layout/text_run.h"
 #include "core/layout/used_value.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
+#include "solver/metrics.h"   /* `_layoutRunMeasures`, `_layoutRunMeasuredAgain` */
 
 static char *is_computed(lxb_dom_element_t *el, const char *name)
 {
@@ -856,6 +857,24 @@ static size_t is_collect_step(IsMeasure *k)
     return m->count > before ? m->count - before : 1;
 }
 
+/* Counts a run measurement answered into the current record, and again when another record of its job holds
+   the run answered. */
+static void is_count_measure(lxb_dom_element_t *el, BlockFlowRun run)
+{
+    const IntrinsicSizeRecord *r = layout_job_intrinsic_sizes(), *o;
+    size_t i, j;
+
+    METRIC_ADD(run_measures, 1);
+    for (i = 0; (o = layout_job_intrinsic_sizes_at(i)) != NULL; i++) {
+        if (o == r || o->cap == 0) continue;
+        j = is_key_probe(o->tab, o->cap, el, IS_ENTRY_RUN, run);
+        if (o->tab[j].el != NULL && o->tab[j].held->answered) {
+            METRIC_ADD(run_measured_again, 1);
+            return;
+        }
+    }
+}
+
 bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
 {
     IsHeld *h = is_held_of(el, IS_ENTRY_RUN, run);
@@ -905,6 +924,7 @@ bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
     /* §5.1's answer is two numbers, so the measurement is freed once they are read. */
     is_measure_end(h, true);
     is_answer(h);
+    is_count_measure(el, run);
     is_publish(el, run, h);
     return true;
 }

@@ -2807,6 +2807,7 @@ TF_DOCS[] = {
     { "linecrossrest", HTML_LINECROSSREST },
     { "gridnest2", HTML_GRIDNEST2 },
     { "gridnest4", HTML_GRIDNEST4 },
+    { "gridrun", HTML_GRIDRUN },
     { "gridtemplate", HTML_GRIDTEMPLATE },
     { "calctree", HTML_CALCTREE },
     { "svgattr", HTML_SVGATTR },
@@ -21767,9 +21768,10 @@ TF_UNIT void probes_layoutnest(const char *js, Probe *tab, int *n) {
         { "grid-nest-4", "/api/gridnest4", "w", "10", "CSS 2.2 §10.3.9: the outer inline-block is not its inner grid's 10px" },
         { "grid-nest-4", "/api/gridnest4", "l", "0", "css-grid-1 §11: the innermost square does not start at the left edge" },
         { "grid-nest-4", "/api/gridnest4", "sw", "200", "css-grid-1 §11.8: the outer grid's scrolling area is not 200px wide" },
+        { "grid-run-once", "/api/gridrun", "w", "200", "css-grid-1 §11.8: the inner grid's stretched column is not 200px" },
     };
     static const char *const ROWS[] = { "flex-nest-3", "flex-nest-6", "flex-nest-10", "line-cross-rest", "grid-nest-2",
-                                        "grid-nest-4" };
+                                        "grid-nest-4", "grid-run-once" };
     Probe rows[COUNTOF(ROWS)];
     unsigned i, j;
 
@@ -21796,6 +21798,15 @@ TF_UNIT void probes_layoutnest(const char *js, Probe *tab, int *n) {
                                               strtol(b + strlen("\"_layoutBfServed\":"), NULL, 10),
                      "the layout census does not show more memo answers served across a rest than §9.4.1 "
                      "answers served, so the document no longer serves a cross size after its job rests");
+        }
+        if (strcmp(ROWS[j], "grid-run-once") == 0) {
+            const char *m = strstr(js, "\"_layoutRunMeasures\":"), *a = strstr(js, "\"_layoutRunMeasuredAgain\":");
+
+            fold_row(&tt, &why, m && strtol(m + strlen("\"_layoutRunMeasures\":"), NULL, 10) > 0,
+                     "the layout census shows no run measured, so the row cannot see a second measurement");
+            fold_row(&tt, &why, a && strtol(a + strlen("\"_layoutRunMeasuredAgain\":"), NULL, 10) == 0,
+                     "css-sizing-3 §5.1: a run no grid row context decides was measured again in another record "
+                     "of its job instead of served from the first measurement");
         }
         rows[j] = (Probe){ ROWS[j], tt, addr, SESS_EXPLORE, why };
     }

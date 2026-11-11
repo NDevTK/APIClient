@@ -180,6 +180,9 @@ IntrinsicSizeRecord *layout_job_intrinsic_sizes(void);
 /* The job's own intrinsic size record while a grid row context is current, and NULL otherwise: the store of
    answers that read nothing a context decides, which every context serves (core/layout/intrinsic_size.c). */
 IntrinsicSizeRecord *layout_job_intrinsic_sizes_shared(void);
+/* The held job's intrinsic size records by index: its own for 0, its grid row contexts' for 1 to the number
+   entered, and NULL past them or with no job held. For the census of a run measured in two of them. */
+IntrinsicSizeRecord *layout_job_intrinsic_sizes_at(size_t i);
 
 /* A layout read whose answer a grid row context can decide: a grid area's block size or its definiteness, a
    stacked question's answer, a line box fill, or a placement fact other than the box tree's own structure, all

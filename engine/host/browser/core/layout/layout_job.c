@@ -494,6 +494,14 @@ IntrinsicSizeRecord *layout_job_intrinsic_sizes_shared(void)
     return job != NULL && lj_context(job) != NULL ? &job->intrinsic : NULL;
 }
 
+IntrinsicSizeRecord *layout_job_intrinsic_sizes_at(size_t i)
+{
+    LayoutJob *job = lj_held();
+
+    if (job == NULL || i > job->nctx) return NULL;
+    return i == 0 ? &job->intrinsic : &job->ctxs[i - 1]->intrinsic;
+}
+
 void layout_job_context_taint(void)
 {
     LayoutJob *job = lj_held();
