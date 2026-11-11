@@ -9,8 +9,8 @@
    allocations are refused unless the sale funds them. `saleasync`: `sale`'s shape where the owing arm first
    settles a promise made before the fork, so its delta holds that promise's settlement and its resolving
    function's latch when it is sold, and its report reads the settled value. `salekeep`, `salector`,
-   `salecatch`, `salepexec`, `saleasyncfn` and `saleroot` are described at their constants. Eleven of
-   test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c defines before including this file. */
+   `salecatch`, `salepexec`, `saleasyncfn`, `saleroot` and `saleapply` are described at their constants. Twelve
+   of test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c defines before including this file. */
 #ifndef ENGINE_HOST_FIXTURE_SALE_H
 #define ENGINE_HOST_FIXTURE_SALE_H
 #ifndef TF_CANVAS_INK
@@ -189,6 +189,24 @@ static const char HTML_SALEROOT[] =
     "} else {"
     "  Promise.resolve('[' + '1,'.repeat(150000) + '1]').then(JSON.parse)"
     "    .then(function (a) { fetch('/api/sl-root-busy?n=' + a.length); });"
+    "}"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+/* `sale`'s shape where the busy arm's loop runs in a function of no parameters that Function.prototype.apply
+   called with an empty list, so the member sold beside the owing one stands in a frame the apply pushed. */
+static const char HTML_SALEAPPLY[] =
+    "<!doctype html><html><body>"
+    "<script>"
+    "var slApOwe = location.hash === '#owe';"
+    "if (slApOwe) {"
+    "  fetch('/api/sl-apply-owed').then(function (r) { return r.text(); })"
+    "    .then(function (t) { fetch('/api/sl-apply-done?b=' + t.length); });"
+    "} else {"
+    "  (function () { var n = 0;"
+    "    for (var i = 0; i < 200000; i++) n += i & 1;"
+    "    fetch('/api/sl-apply-busy?n=' + n); }).apply(null, []);"
     "}"
     "</script>"
     TF_CANVAS_INK
