@@ -5,7 +5,9 @@
    member's report is reached only if it returns within the session.
    `sale`: the arm against the example owes the request and the page's own run is busy. `saleown`: the page's own
    run owes it and the arm against the example is busy. `salectl`: `sale`'s shape with no act, the control.
-   Three of test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c
+   `salefloor`: `sale`'s shape, sold with the allocator placed at its floor (tf_floor_place), so the sale's own
+   allocations are refused unless the sale funds them.
+   Four of test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c
    defines before including this file. */
 #ifndef ENGINE_HOST_FIXTURE_SALE_H
 #define ENGINE_HOST_FIXTURE_SALE_H
@@ -26,6 +28,21 @@ static const char HTML_SALE[] =
     "} else {"
     TF_SALE_BUSY
     "  fetch('/api/sl-forced-busy?n=' + slN);"
+    "}"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+static const char HTML_SALEFLOOR[] =
+    "<!doctype html><html><body>"
+    "<script>"
+    "var slFloor = location.hash === '#owe';"
+    "if (slFloor) {"
+    "  fetch('/api/sl-floor-owed').then(function (r) { return r.text(); })"
+    "    .then(function (t) { fetch('/api/sl-floor-done?b=' + t.length); });"
+    "} else {"
+    TF_SALE_BUSY
+    "  fetch('/api/sl-floor-busy?n=' + slN);"
     "}"
     "</script>"
     TF_CANVAS_INK

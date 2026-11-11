@@ -1343,18 +1343,71 @@ static int tf_replytwice_pay(JSContext *ctx) {
 
 /* The sale documents' act (fixture/sale.h): `listed` once a bill has named an owed request, `gave` the members
    the reclaim edge then gave back, `relisted` whether the bill still named the request after them. */
-static struct { int listed; long gave; int relisted; } g_tf_sale;
+static struct { int listed; long gave; int relisted; int floor; } g_tf_sale;
+
+/* The allocator at its floor, for `salefloor`'s act: the address-space limit is lowered to what is mapped now
+   and every free chunk is taken, so until tf_floor_lift each allocation is refused unless address space is given
+   back first. Returns 1 once an allocation is seen refused, 0 if one still succeeds, 2 on a host with no
+   address-space limit to place (the wasm vehicle, a sanitized build). */
+typedef struct TfFloorBlock { struct TfFloorBlock *next; } TfFloorBlock;
+static struct { struct rlimit was; TfFloorBlock *held; } g_tf_floor;
+
+static int tf_floor_place(void) {
+#if defined(__EMSCRIPTEN__) || defined(__SANITIZE_ADDRESS__) || \
+    (defined(__has_feature) && __has_feature(address_sanitizer))
+    return 2;
+#else
+    volatile char stack_room[256 * 1024];   /* the sale's own stack, mapped before the limit is its size */
+    unsigned long pages = 0;
+    FILE *statm = fopen("/proc/self/statm", "r");
+    struct rlimit rl;
+    void *probe;
+
+    CHECK(statm != NULL && fscanf(statm, "%lu", &pages) == 1, "the native host could not read its mapped size");
+    fclose(statm);
+    for (size_t i = 0; i < sizeof stack_room; i += 4096) stack_room[i] = 0;
+    CHECK(getrlimit(RLIMIT_AS, &g_tf_floor.was) == 0, "the native host could not read its address-space limit");
+    rl = g_tf_floor.was;
+    rl.rlim_cur = (rlim_t)pages * (rlim_t)sysconf(_SC_PAGESIZE);
+    CHECK(setrlimit(RLIMIT_AS, &rl) == 0, "the native host could not lower its address-space limit to its size");
+    for (size_t sz = 64 * 1024; sz >= sizeof(TfFloorBlock); sz /= 2) {
+        TfFloorBlock *b;
+
+        while ((b = malloc(sz)) != NULL) { b->next = g_tf_floor.held; g_tf_floor.held = b; }
+    }
+    probe = malloc(1024);
+    free(probe);
+    return probe == NULL;
+#endif
+}
+
+static void tf_floor_lift(void) {
+#if !(defined(__EMSCRIPTEN__) || defined(__SANITIZE_ADDRESS__) || \
+      (defined(__has_feature) && __has_feature(address_sanitizer)))
+    CHECK(setrlimit(RLIMIT_AS, &g_tf_floor.was) == 0, "the native host could not restore its address-space limit");
+    while (g_tf_floor.held) {
+        TfFloorBlock *b = g_tf_floor.held;
+
+        g_tf_floor.held = b->next;
+        free(b);
+    }
+#endif
+}
 
 /* At the payment whose bill first lists a sale document's owed request, sells every member but the one switched
    in through the allocator's refusal edge (engine_reclaim_at_rest), before anything is paid, and answers the
    bill as it stands after. */
 static const char *tf_sale_act(const char *urls) {
-    static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed" };
+    static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed", "/api/sl-floor-owed" };
 
     for (size_t i = 0; !g_tf_sale.listed && i < COUNTOF(owed); i++) {
+        const int at_floor = i == 2;
+
         if (!strstr(urls, owed[i])) continue;
         g_tf_sale.listed = 1;
+        if (at_floor) g_tf_sale.floor = tf_floor_place();
         while (engine_reclaim_at_rest() > 0) g_tf_sale.gave++;
+        if (at_floor) tf_floor_lift();
         urls = engine_pending_fetches();
         g_tf_sale.relisted = strstr(urls, owed[i]) != NULL;
     }
@@ -2539,6 +2592,7 @@ TF_DOCS[] = {
     { "sale", HTML_SALE },
     { "saleown", HTML_SALEOWN },
     { "salectl", HTML_SALECTL },
+    { "salefloor", HTML_SALEFLOOR },
     { "replyrec", HTML_REPLYREC },
     { "replynone", HTML_REPLYNONE },
     { "rangeinsertrest", HTML_RANGEINSERTREST },
@@ -18934,12 +18988,15 @@ TF_UNIT void probes_rangerest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the three sale documents (fixture/sale.h). sale-forced-returns and sale-own-returns: the member
+/* The rows of the four sale documents (fixture/sale.h). sale-forced-returns and sale-own-returns: the member
    owing the request was sold at the act and its report is in the result, so it returned within the session.
    sale-forced-stays-listed and sale-own-stays-listed: the bill taken after the sale still lists the request the
-   sold member owes. sale-control-reaches: the same shape with no act reports with no member sold. */
+   sold member owes. sale-control-reaches: the same shape with no act reports with no member sold.
+   sale-floor-sells: with every allocation refused at the act, the members were sold and the run went on to the
+   sold member's report. */
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
-    const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *at = strstr(js, "\"sold\":");
+    const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
+    int xt = 1;
     long sold = at ? strtol(at + strlen("\"sold\":"), NULL, 10) : -1;
     int ft = 1, ot = 1, ct = 1, lt = 1;
 
@@ -18967,7 +19024,16 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     fold_row(&ct, &cwhy, param_value_is(js, "/api/sl-ctl-done", "b", "22"),
              "NOT REACHED: no /api/sl-ctl-done?b=22 record with no member sold, so the shape itself does not "
              "report and the armed rows say nothing about a sale");
+    fold_row(&xt, &xwhy, g_tf_sale.floor != 0,
+             "NOT ARMED: an allocation still succeeded with the floor placed, or the act did not place it, so the "
+             "sale was not asked to fund its own storage");
+    fold_row(&xt, &xwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
+             "the act sold nothing with the allocator at its floor");
+    fold_row(&xt, &xwhy, param_value_is(js, "/api/sl-floor-done", "b", "22"),
+             "NOT REACHED: no /api/sl-floor-done?b=22 record, so the member sold at the floor did not return "
+             "within the session");
     const Probe rows[] = {
+        { "sale-floor-sells", xt, "slFloor", SESS_EXPLORE, xwhy },
         { "sale-forced-returns", ft, "slForced", SESS_EXPLORE, fwhy },
         { "sale-own-returns", ot, "slOwn", SESS_EXPLORE, owhy },
         { "sale-control-reaches", ct, "slCtl", SESS_EXPLORE, cwhy },
