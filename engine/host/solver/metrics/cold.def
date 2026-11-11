@@ -219,6 +219,7 @@ METRIC(reply_declined_destructive, "replyDeclinedDestructive", LIFETIME, "record
 METRIC(reply_declined_stream_body, "replyDeclinedStreamBody", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_declined_wire_idle, "replyDeclinedWireIdle", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_declined_asker, "replyDeclinedAsker", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
+METRIC(reply_declined_transport, "replyDeclinedTransport", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_declined_unaddressed, "replyDeclinedUnaddressed", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 /* …and the requests the engine itself declined for an address with no bytes (solver/engine.h's
    PENDING_DECLINED_UNADDRESSED), on the pending lines and the synchronous rendezvous alike. */
