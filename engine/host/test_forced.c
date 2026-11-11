@@ -13513,9 +13513,10 @@ static int emitted_record_method_has(const char *js, const char *url, const char
     for (i = 0; i < cnt; i++) {
         const char *u = r[i].at, *o, *v, *p;
 
-        for (o = u; o > js && *o != '{'; o--) { }
-        DCHECK(*o == '{' && strncmp(o + 1, "\"method\":\"", 10) == 0 && u > o + 12 && u[-1] == ',' &&
-               u[-2] == '"',
+        /* Back to the record's opening `{"method":"`, never to the nearest brace: a shape spells its holes in
+           braces, so the method's own bytes can hold one. */
+        for (o = u; o > js && strncmp(o, "{\"method\":\"", 11) != 0; o--) { }
+        DCHECK(strncmp(o, "{\"method\":\"", 11) == 0 && u > o + 12 && u[-1] == ',' && u[-2] == '"',
                "endpoint_json_array writes a record whose `\"url\"` is not immediately preceded by the "
                "`\"method\"` field this reader reads it out of");
         v = o + 11;
