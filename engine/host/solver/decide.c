@@ -1806,14 +1806,12 @@ static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, con
         /* the cursor moved inside dec_replay, and only because the slot answered this question */
     } else if (arm == DEC_REPLAY_CONTRADICTED) {
         /* The delivery took an arm the recorded path did not, so this candidate's timeline does not exist from
-           here: no slot, no fork, and the flow parks at this arm's first dispatch (engine.c's preempt policy) to
-           be retired at its next step. The arm returned is the observed one, and none of it runs. */
+           here: no slot, no fork, and the flow parks before its arm (engine.c's preempt policy answers yes for it)
+           to be retired at its next step. A branch's arm parks at its first dispatch; a machine's outcome parks
+           at the offer quickjs.c's step driver and its two argument-list chains make after every answer, before
+           the machine is stepped with it. The arm returned is the observed one, and none of it runs. */
         Flow *f = flow_running();
 
-        DCHECK(op == NULL,
-               "a candidate's delivery contradicted its recorded path at a C machine's outcome ask — the machine "
-               "runs its arm on to its next re-entry before any dispatch could park it, so the contradicted "
-               "timeline would act; build the outcome's park before its arm");
         g_replay_contradicted++;
         f->delivery_contradicted = 1;
         JS_RequestFlowYield();
