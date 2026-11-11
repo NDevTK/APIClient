@@ -117,8 +117,9 @@ static const char HTML_SALECTOR[] =
     TF_CANVAS_INK
     "</body></html>";
 
-/* `sale`'s shape where the busy arm's loop runs inside a `try`, so the member sold beside the owing one holds
-   the catch offset OP_catch pushed (JS_TAG_CATCH_OFFSET) among its frame's live values. */
+/* `sale`'s shape where the busy arm's loop runs inside a `try` in a function over its own locals, so the member
+   sold beside the owing one holds the catch offset OP_catch pushed (JS_TAG_CATCH_OFFSET) among its frame's live
+   values, and no global lookup the loop makes parks it on a property machine instead. */
 static const char HTML_SALECATCH[] =
     "<!doctype html><html><body>"
     "<script>"
@@ -127,8 +128,9 @@ static const char HTML_SALECATCH[] =
     "  fetch('/api/sl-catch-owed').then(function (r) { return r.text(); })"
     "    .then(function (t) { fetch('/api/sl-catch-done?b=' + t.length); });"
     "} else {"
-    "  try {" TF_SALE_BUSY "} catch (e) { slN = -1; }"
-    "  fetch('/api/sl-catch-busy?n=' + slN);"
+    "  (function () { var n = 0;"
+    "    try { for (var i = 0; i < 200000; i++) n += i & 1; } catch (e) { n = -1; }"
+    "    fetch('/api/sl-catch-busy?n=' + n); })();"
     "}"
     "</script>"
     TF_CANVAS_INK
