@@ -19748,18 +19748,18 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
              "the bill taken after the sale at the floor no longer lists the owed request, so the sale withdrew a "
              "request its sold member still owes");
     /* At the floor a written stub's bytes move to the disk tier and come back at its pick within the session. */
-    const char *pwhy = NULL;
-    int pt = 1;
-    fold_row(&pt, &pwhy, g_tf_sale.spilled == 1 && tf_census_row(js, "_cold", "soldSpilled") == 1,
+    const char *stwhy = NULL;
+    int st = 1;
+    fold_row(&st, &stwhy, g_tf_sale.spilled == 1 && tf_census_row(js, "_cold", "soldSpilled") == 1,
              "NOT ARMED: the edge's floor exit moved no written stub's bytes to the disk tier (`soldSpilled`)");
-    fold_row(&pt, &pwhy, tf_census_row(js, "_cold", "restoredSpilled") == 1,
+    fold_row(&st, &stwhy, tf_census_row(js, "_cold", "restoredSpilled") == 1,
              "the spilled stub was not read back from the disk tier within the session (`restoredSpilled`)");
-    fold_row(&pt, &pwhy, param_value_is(js, "/api/sl-forced-done", "b", "22"),
+    fold_row(&st, &stwhy, param_value_is(js, "/api/sl-forced-done", "b", "22"),
              "NOT REACHED: the owing member did not report within the session after a written stub's bytes went "
              "to the disk tier");
     const Probe rows[] = {
         { "sale-floor-sells", xt, "slFloor", SESS_EXPLORE, xwhy },
-        { "sale-spill-returns", pt, "slForced", SESS_EXPLORE, pwhy },
+        { "sale-spill-returns", st, "slForced", SESS_EXPLORE, stwhy },
         { "sale-forced-returns", ft, "slForced", SESS_EXPLORE, fwhy },
         { "sale-own-returns", ot, "slOwn", SESS_EXPLORE, owhy },
         { "sale-async-returns", yt, "slAsync", SESS_EXPLORE, awhy },
