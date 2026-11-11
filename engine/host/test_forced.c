@@ -13039,6 +13039,25 @@ TF_UNIT void tf_park_store(const char *path) {
           "the records it kept name segments the records it lost were standing on");
 }
 
+/* The digest of the engine binary this process runs (solver/cold.h's cold_set_binary_digest): its executable's
+   bytes, folded 64-bit FNV-1a, which a wasm host answers from the module bytes it instantiated instead. */
+#if !defined(__EMSCRIPTEN__)
+TF_UNIT uint64_t tf_binary_digest(void) {
+    uint64_t h = 14695981039346656037ULL;
+    uint8_t buf[1 << 16];
+    size_t got;
+    FILE *f = fopen("/proc/self/exe", "rb");
+    int closed;
+
+    CHECK(f, "this host could not read its own executable to state the engine binary's digest");
+    while ((got = fread(buf, 1, sizeof buf, f)) > 0)
+        for (size_t i = 0; i < got; i++) h = (h ^ buf[i]) * 1099511628211ULL;
+    closed = ferror(f) | fclose(f);
+    CHECK(closed == 0, "this host read less of its own executable than the file holds");
+    return h;
+}
+#endif
+
 /* …AND BACK. The residue is handed to engine_sched_begin exactly as read: no join, no split, no re-encode —
    the one translation the extension performs (an array joined by ';') exists because IndexedDB stores JSON,
    and a host with a file has no such boundary to translate across. */
@@ -32530,6 +32549,9 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
     int cold_resumed_any   = g_sess == SESS_RESUME && (g_cr.flows + g_cr.cands) > 0;
     int cold_resumed_segs  = g_sess == SESS_RESUME && g_cr.segs > 0;
     int cold_resumed_cand  = g_sess == SESS_RESUME && g_cr.cands > 0;
+    /* The same binary over the same document seals the same baseline, so session TWO reads its residue's build
+       as its own: the precondition of a restore without replay (solver/cold.h's ColdResumed build rows). */
+    int cold_resumed_same  = g_sess == SESS_RESUME && g_cr.same_build == 1;
     /* AND THE 'w' ARM AT BOTH ENDS, WHICH THE PASS SENTENCE HAS BEEN CLAIMING WITHOUT A ROW BEHIND IT. That
        sentence says the residue is "every record kind this document can produce", and solver/cold.h declares
        'w' A KIND for a reason it states outright — "there are as many as this instance answered peers, and zero
@@ -33027,6 +33049,7 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
         { "park-cand", cold_park_cand, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "resumed", cold_resumed_any, "state.code", SESS_RESUME },
         { "resumed-segs", cold_resumed_segs, "state.code", SESS_RESUME, .gate = "resumed" },
+        { "resumed-same-build", cold_resumed_same, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-cand", cold_resumed_cand, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-fired", cold_fired, "state.code", SESS_RESUME },
         { "resumed-keyed-fired", cold_kfired, "state.code", SESS_RESUME },
@@ -48858,6 +48881,10 @@ int main(int argc, char **argv) {
        choice between it and a boot flow is made once, inside engine_sched_begin, and a residue that arrived
        after that point would be a second seeding of the same document. */
     if (cold_resume_path) cold_residue = tf_park_load(cold_resume_path);
+    /* The build a residue names and a resume compares, stated by the two sessions of the round trip. */
+#if !defined(__EMSCRIPTEN__)
+    if (cold_doc) cold_set_binary_digest(tf_binary_digest());
+#endif
     /* WHEN THIS ENGINE LEAVES MEMORY — ONE seam, and the two sessions that install it answer it about different
        things because they are measuring different things. The --cold-park session's moment is a statement about
        the RESIDUE (a candidate standing on a segment: every arm of the recipe grammar in one member). An

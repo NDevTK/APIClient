@@ -887,12 +887,25 @@ const char *cold_park_json(void);
    were built on a start this build cannot replay. An admitted one hands its start back before any flow runs. */
 int cold_resume(JSContext *ctx, const char *recipes);
 
+/* THE BUILD THIS SESSION IS, as the pair CLAUDE.md's time-travel resume names: the host's digest of the engine
+   binary it runs, and the pre-boot baseline's digest (engine_sched_begin, from JS_BaselineSeal and the root
+   document's tree), each stated once before the frontier is seeded. The park document's generation record
+   carries both, and cold_resume compares them with this session's (ColdResumed's build rows).
+   Named residual. Not covered: the extension's wasm host states no binary digest, so its residues read as
+   `build_unstated` and every resume there replays. Next diff builds: main.c's ABI taking the module's digest,
+   which extension/bridge.js computes from the bytes it instantiates. Absence shows as: `resumedBuildUnstated`
+   at 1 on every extension resume. */
+void cold_set_binary_digest(uint64_t digest);
+void cold_set_baseline_digest(uint64_t digest);
+
 /* Named residual. Not covered: a same-build resume restores no serialized COW delta, so every resume replays
-   its recipe. The next diff has cold_park write each flow's delta through the flow-graph writer and
-   cold_resume restore it when the engine-binary and pre-boot-baseline digests match, keeping the recipe for
-   a different build; the delta includes a compile parked in the flow's world (quickjs.h's compile carrier,
-   on a program body, an agent's program or a direct eval's frame), which the replay now reaches again. Its
-   absence shows as resume work that grows with each flow's recorded prefix.
+   its recipe, though cold_resume now decides the build (ColdResumed's `same_build`). The next diff has
+   cold_park write each flow's delta in the cross-session form (anchors and cells by their baseline names,
+   JS_BaselineName; bodies and functions by their cross-session names) and cold_resume restore it when
+   `same_build` holds, keeping the recipe for a different build; the delta includes a compile parked in the
+   flow's world (quickjs.h's compile carrier, on a program body, an agent's program or a direct eval's frame),
+   which the replay now reaches again. Its absence shows as resume work that grows with each flow's recorded
+   prefix, beside `resumedSameBuild` 1.
    Named residual. Not covered: a replay re-issues its prefix's requests and the live zone or peer answers
    them; the park document holds no reply record. The next diff writes one record per prefix request and
    serves it at its recorded slot before the zone is asked. Its absence shows as a resumed flow leaving its
@@ -952,6 +965,10 @@ typedef struct {
     /* 1 when the residue handed over was refused whole for an older name spelling or a missing session start
        (cold_resume), 0 otherwise. */
     long refused;
+    /* Which build wrote the residue, against this session's (cold_set_binary_digest, cold_set_baseline_digest),
+       decided in this order: either binary digest unstated, the binary digests differ, the baselines' digests
+       differ, or the same build. Exactly one is 1 when a residue was rebuilt, and none otherwise. */
+    long build_unstated, binary_differs, baseline_differs, same_build;
 } ColdResumed;
 void cold_resumed(ColdResumed *out);
 

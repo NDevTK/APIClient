@@ -154,6 +154,12 @@ METRIC(resumed_worlds, "resumedWorlds", CONSTANT, "world", AGENT, "solver/cold.c
 /* 1 when the residue handed over was refused whole: an older build folded its cross-session names otherwise
    (cold.h's cold_resume). `resumed` is then 0 beside it. */
 METRIC(resumed_refused, "resumedRefused", CONSTANT, "rebuild", AGENT, "solver/cold.c", INT)
+/* Which build wrote the rebuilt residue against this session's (cold.h's ColdResumed): a partition of `resumed`,
+   asserted where all five are in one hand. Only `resumedSameBuild` admits a restore without replay. */
+METRIC(resumed_build_unstated, "resumedBuildUnstated", CONSTANT, "rebuild", AGENT, "solver/cold.c", INT)
+METRIC(resumed_binary_differs, "resumedBinaryDiffers", CONSTANT, "rebuild", AGENT, "solver/cold.c", INT)
+METRIC(resumed_baseline_differs, "resumedBaselineDiffers", CONSTANT, "rebuild", AGENT, "solver/cold.c", INT)
+METRIC(resumed_same_build, "resumedSameBuild", CONSTANT, "rebuild", AGENT, "solver/cold.c", INT)
 /* The path half's verdict rows, lifetime counts. Units differ: `replayHits` and `replayLeftArms`
    are arms (decision-vector slots), `replayLeft` is divergence events; their identity is asserted
    in result_cold_json. They say what the `resumed*` rows cannot: whether a rebuilt session followed its

@@ -461,9 +461,28 @@ static void park_rec(const char *s)
    collision this record exists to prevent, so the ordering is asserted at both ends. */
 static int g_park_gen_written;
 
+/* This session's build (cold.h's cold_set_binary_digest): each digest and whether it was stated. The binary's
+   is the process's; the baseline's is the session's seal, forgotten by cold_free with the session's document. */
+static uint64_t g_build_binary, g_build_baseline;
+static int g_build_binary_stated, g_build_baseline_stated;
+
+void cold_set_binary_digest(uint64_t digest)
+{
+    DCHECK(!g_build_binary_stated, "the engine binary's digest was stated twice — a process runs one binary");
+    g_build_binary = digest;
+    g_build_binary_stated = 1;
+}
+
+void cold_set_baseline_digest(uint64_t digest)
+{
+    DCHECK(!g_build_baseline_stated, "the pre-boot baseline's digest was stated twice — a process seals one");
+    g_build_baseline = digest;
+    g_build_baseline_stated = 1;
+}
+
 static void park_gen_rec(void)
 {
-    char rec[64];
+    char rec[128], bin[24];
 
     if (g_park_gen_written) return;
     DCHECK(g_park_recs == 0,
@@ -475,8 +494,12 @@ static void park_gen_rec(void)
     /* And the session start the current time's example is built on (hr_time_wall_now), so a resumed flow
        replays the example its first session computed rather than one from this session's clock. */
     /* And the decision slot's width, so a document whose slots carry fewer columns is refused whole too. */
-    snprintf(rec, sizeof rec, "g%u,%d,%.0f,%d", world_session(), JS_ORPHAN_LOCATOR_SPELLING, hr_time_session_start(),
-             PARK_DEC_SLOT_CHARS);
+    /* And the build that wrote it, the binary's digest (`-` when the host stated none) and the baseline's. */
+    DCHECK(g_build_baseline_stated, "a park document was written before its session sealed the pre-boot baseline");
+    if (g_build_binary_stated) snprintf(bin, sizeof bin, "%llu", (unsigned long long)g_build_binary);
+    else snprintf(bin, sizeof bin, "-");
+    snprintf(rec, sizeof rec, "g%u,%d,%.0f,%d,%s,%llu", world_session(), JS_ORPHAN_LOCATOR_SPELLING,
+             hr_time_session_start(), PARK_DEC_SLOT_CHARS, bin, (unsigned long long)g_build_baseline);
     park_rec(rec);
     /* THE FLAG GOES UP AFTER THE WRITE, SO IT IS A COUNT AND NOT AN INTENTION. park_doc_agrees reads it as the
        number of 'g' records in this document, and one raised BEFORE park_rec would make that identity false
@@ -1984,7 +2007,8 @@ void cold_resumed(ColdResumed *out)
 }
 
 /* Whether `recipes` opens with a generation record stating this build's name spelling, its session's start and
-   this build's decision slot width: `g<digits>,<spelling>,<start ms>,<slot chars>`. */
+   this build's decision slot width, `g<digits>,<spelling>,<start ms>,<slot chars>`, then optionally the build that
+   wrote it, `,<binary digest|->,<baseline digest>`, which an older writer did not state. */
 static int park_doc_spelling_current(const char *recipes)
 {
     const char *q = recipes;
@@ -2003,7 +2027,39 @@ static int park_doc_spelling_current(const char *recipes)
     if (*q++ != ',') return 0;
     sp = strtol(q, &ep, 10);
     if (ep == q || sp != PARK_DEC_SLOT_CHARS) return 0;
-    return *ep == ';' || *ep == '\0';
+    if (*ep == ';' || *ep == '\0') return 1;
+    q = ep + 1;
+    if (*ep != ',') return 0;
+    if (*q == '-') q++;
+    else if (*q < '0' || *q > '9') return 0;
+    while (*q >= '0' && *q <= '9') q++;
+    if (*q++ != ',' || *q < '0' || *q > '9') return 0;
+    while (*q >= '0' && *q <= '9') q++;
+    return *q == ';' || *q == '\0';
+}
+
+/* The build verdict of an admitted generation record (park_doc_spelling_current), against this session's. */
+static void park_doc_build(const char *recipes, ColdResumed *c)
+{
+    const char *q = recipes;
+    unsigned long long bin, base;
+    int bin_stated;
+    char *ep;
+
+    DCHECK(g_build_baseline_stated, "a residue was resumed before this session sealed the pre-boot baseline");
+    for (int commas = 0; commas < 4; q++) {
+        if (*q == ';' || *q == '\0') { c->build_unstated = 1; return; }   /* an older writer's record */
+        if (*q == ',') commas++;
+    }
+    bin_stated = *q != '-';
+    bin = bin_stated ? strtoull(q, &ep, 10) : 0;
+    if (!bin_stated) ep = (char *)q + 1;
+    DCHECK(*ep == ',', "a generation record's build fields did not parse as park_doc_spelling_current admitted");
+    base = strtoull(ep + 1, NULL, 10);
+    if (!bin_stated || !g_build_binary_stated) c->build_unstated = 1;
+    else if (bin != g_build_binary) c->binary_differs = 1;
+    else if (base != g_build_baseline) c->baseline_differs = 1;
+    else c->same_build = 1;
 }
 
 /* The records of one park document after its generation record, rebuilt as flows appended to the frontier and
@@ -2691,6 +2747,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
            "park_doc_spelling_current admitted this document, so the two readers of one record disagree");
     world_session_resume(gen);
     hr_time_session_start_adopt(strtod(ep + 1, NULL));   /* the slot width after it was admitted above */
+    park_doc_build(recipes, &g_resumed);
     flows = park_rebuild(ctx, (*end == ';') ? end + 1 : end, &g_resumed);
     /* THE ONE OBSERVABLE THAT THE RESUME RAN, and it had a READER and no WRITER. `extension/bridge.js` parses
        `@RESUMED <n>` and reports it in the per-run engine log beside the park count, so that "the full
@@ -2726,6 +2783,7 @@ void cold_free(void)
        with the segments (decide.c's `park_id`), which flow_registry_free has just asserted are all gone. */
     g_park_segs = 0;
     g_park_gen_written = 0;   /* …and so does the statement of which namespace it was written under */
+    g_build_baseline_stated = 0;   /* …and the seal it was written over */
     memset(&g_parked_census, 0, sizeof g_parked_census);   /* the census is OF the document; it dies with it */
     /* …AND SO IS THE ASK CENSUS BESIDE IT: the preview walks THIS document's frontier, so how often a host
        asked about it is a fact about the document and not about the process. The result document is

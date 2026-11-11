@@ -1679,6 +1679,13 @@ char *result_cold_json(void) {
     METRIC_SET(resumed_cands, resumed.cands);
     METRIC_SET(resumed_worlds, resumed.worlds);
     METRIC_SET(resumed_refused, resumed.refused);
+    DCHECKF(resumed.build_unstated + resumed.binary_differs + resumed.baseline_differs + resumed.same_build == ran,
+            "the resumed residue's build rows sum to %ld against %ld rebuilds — cold_resume decides one per rebuild",
+            resumed.build_unstated + resumed.binary_differs + resumed.baseline_differs + resumed.same_build, (long)ran);
+    METRIC_SET(resumed_build_unstated, resumed.build_unstated);
+    METRIC_SET(resumed_binary_differs, resumed.binary_differs);
+    METRIC_SET(resumed_baseline_differs, resumed.baseline_differs);
+    METRIC_SET(resumed_same_build, resumed.same_build);
     METRIC_SET(replay_hits, rp_hits);
     METRIC_SET(replay_left, rp_left);
     METRIC_SET(replay_left_arms, rp_left_arms);

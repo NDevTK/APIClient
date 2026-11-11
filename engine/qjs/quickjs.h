@@ -3859,7 +3859,19 @@ JS_EXTERN void JS_FlowReachEnd(JSFlowReach *out);
 /* The live JS objects by birth: gen 0 (baseline, named across a session boundary by what made it) and born
    since (a serialized frontier writes each once), with the census's own byte estimate. A walk of the GC list. */
 JS_EXTERN void JS_FlowGenCensus(JSRuntime *rt, long *gen0_objs, long *gen0_bytes, long *born_objs, long *born_bytes);
-/* A PARKED FLOW'S PRIVATE GRAPH AS BYTES: the objects reachable from `roots` that were born after `floor`, written
+/* The pre-boot baseline sealed, once per runtime, before the first flow: every object, closed cell, function body
+   and realm born at generation 0 and live now takes a name, its ordinal in the runtime's object list plus one,
+   which a later process of the same build sealing the same inputs gives the same object. Answers a digest of the
+   sealed state (each named thing's kind, class, prototype, extensibility, own keys with their attributes and
+   values, a body's code, by content, with a named thing as its name), so two seals that agree on it agree on every
+   name. A name dies with its object.
+   Named residual. Not covered: a host record's bytes (a class's opaque record) are not in the digest. Next diff
+   builds: each record folded by its JSRecordLayout, a named pointer as its name. Absence shows as: a same-build
+   resume over a baseline whose host records differ while its objects agree. */
+JS_EXTERN uint64_t JS_BaselineSeal(JSRuntime *rt);
+/* `v`'s baseline name, 0 when it has none (not an object, cell, body or realm, born after the seal, or dead). */
+JS_EXTERN uint32_t JS_BaselineName(JSRuntime *rt, JSValueConst v);
+/* A PARKED FLOW'S PRIVATE GRAPH AS BYTES:the objects reachable from `roots` that were born after `floor`, written
    by content, with every object born at or before it held as a counted anchor the graph keeps (in a session, the
    live shared state is its own name). JS_FlowGraphRead rebuilds the roots into `roots` (n of them, as written)
    over fresh objects that resolve each anchor to the object it names, so writing the rebuilt roots again gives

@@ -13785,6 +13785,45 @@ static void engine_rejection_console(JSContext *ctx, JSValueConst reason, Reject
           "here has been taught to render");
 }
 
+/* The pre-boot baseline's digest (cold.h's cold_set_baseline_digest): JS_BaselineSeal's over the heap, then the
+   root document's tree in tree order, each node's type, its qualified name and attributes or its data. */
+static uint64_t engine_fold(uint64_t h, const void *p, size_t n) {
+    const uint8_t *b = p;
+    for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 1099511628211ULL;
+    return h;
+}
+static uint64_t engine_baseline_seal(JSContext *ctx) {
+    lxb_dom_node_t *root = lxb_dom_interface_node(document_associated(ctx));
+    uint64_t h = JS_BaselineSeal(JS_GetRuntime(ctx));
+
+    for (lxb_dom_node_t *n = root; n != NULL;) {
+        const lxb_char_t *v;
+        size_t len = 0;
+        uint32_t type = (uint32_t)n->type;
+
+        h = engine_fold(h, &type, sizeof type);
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            v = lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &len);
+            h = engine_fold(engine_fold(h, &len, sizeof len), v, len);
+            for (lxb_dom_attr_t *a = lxb_dom_interface_element(n)->first_attr; a != NULL; a = a->next) {
+                v = lxb_dom_attr_qualified_name(a, &len);
+                h = engine_fold(engine_fold(h, &len, sizeof len), v, len);
+                v = lxb_dom_attr_value(a, &len);
+                h = engine_fold(engine_fold(h, &len, sizeof len), v, v ? len : 0);
+            }
+        } else if (n->type == LXB_DOM_NODE_TYPE_TEXT || n->type == LXB_DOM_NODE_TYPE_COMMENT ||
+                   n->type == LXB_DOM_NODE_TYPE_CDATA_SECTION ||
+                   n->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION) {
+            const lexbor_str_t *d = &lxb_dom_interface_character_data(n)->data;
+            h = engine_fold(engine_fold(h, &d->length, sizeof d->length), d->data, d->length);
+        }
+        if (n->first_child != NULL) { n = n->first_child; continue; }
+        while (n != root && n->next == NULL) n = n->parent;
+        n = n == root ? NULL : n->next;
+    }
+    return h;
+}
+
 void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types,
                         const ScriptSchedule *sched, lxb_dom_element_t **els, int n, int forking,
                         const char *recipes) {
@@ -13947,6 +13986,8 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     DCHECK(flow_count() == 0,
            "a session began over a frontier that already has members — the boot flow and a parked residue are "
            "alternative seedings");
+    /* The baseline is whole before either seeding: a park names its build by it and a resume compares it. */
+    cold_set_baseline_digest(engine_baseline_seal(ctx));
     /* A residue refused whole for an older name spelling seeds the boot flow, as no residue does. */
     if (!(recipes && *recipes && cold_resume(ctx, recipes)))
         flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* the first flow: the page's scripts, empty decision vector */

@@ -776,6 +776,8 @@ struct JSRuntime {
        the runtime): each distinct name read from a serialized buffer, copied once and freed with the runtime. */
     char **ab_codec;
     int ab_codec_n, ab_codec_size;
+    /* The sealed pre-boot baseline's names (JS_BaselineSeal), NULL before the seal; freed with the runtime. */
+    struct JSBaseline *baseline;
 };
 
 struct JSClass {
@@ -3144,6 +3146,8 @@ static JSAtom js_symbol_to_atom(JSContext *ctx, JSValueConst val);
 static void add_gc_object(JSRuntime *rt, JSGCObjectHeader *h,
                           JSGCObjectTypeEnum type);
 static void remove_gc_object(JSRuntime *rt, JSGCObjectHeader *h);
+static void js_baseline_forget(JSRuntime *rt, JSGCObjectHeader *h);
+static void js_baseline_free(JSRuntime *rt);
 static void js_async_function_free0(JSRuntime *rt, JSAsyncFunctionData *s);
 static void js_async_function_free(JSRuntime *rt, JSAsyncFunctionData *s);
 static void js_release_coro(JSRuntime *rt, JSGCObjectHeader *coro);
@@ -5056,6 +5060,7 @@ void JS_FreeRuntime(JSRuntime *rt)
     if (g_flow_base_rt == rt)
         g_flow_base_rt = NULL;
     rt->in_free = true;
+    js_baseline_free(rt);   /* before any death below asks it to forget */
     DCHECK(JS_IsUndefined(rt->suspended_on),
            "JS_FreeRuntime with a suspension the host never took (JS_TakeSuspension)");
     /* A PARKED FLOW AT TEARDOWN IS A DROPPED FLOW. The queue is not a GC root: each member holds a raw callback
@@ -10645,6 +10650,7 @@ static void remove_gc_object(JSRuntime *rt, JSGCObjectHeader *h)
 {
     rt->gc_mut_epoch++;   /* a death can cut the path a reference taken since the trial began was found by */
     list_del(&h->link);
+    if (rt->baseline) js_baseline_forget(rt, h);
 }
 
 void JS_MarkValue(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
@@ -47359,6 +47365,179 @@ static void fg_map_put(FGMap *m, const void *k, uint32_t v)
     }
     for (h = fg_home(k, m->cap); m->s[h].k; h = (h + 1) & (m->cap - 1)) ;
     m->s[h].k = k; m->s[h].v = v; m->n++;
+}
+
+/* JS_BaselineSeal — see quickjs.h. `objs` holds each named thing by its name less one, NULL once it died; the map
+   is never shrunk, so a lookup is confirmed against `objs` (a dead thing's address may be reused). */
+typedef struct JSBaseline {
+    JSGCObjectHeader **objs;
+    uint32_t n;
+    FGMap names;
+} JSBaseline;
+
+static bool bl_namable(JSGCObjectHeader *gp)
+{
+    switch (JS_GC_TYPE(gp)) {
+    case JS_GC_OBJ_TYPE_JS_OBJECT: case JS_GC_OBJ_TYPE_VAR_REF: case JS_GC_OBJ_TYPE_FUNCTION_BYTECODE:
+    case JS_GC_OBJ_TYPE_JS_CONTEXT:
+        return !gc_born_after(gp, 0);
+    default:
+        return false;   /* a shape is folded with its objects, an activation belongs to no baseline */
+    }
+}
+static uint32_t bl_name(const JSBaseline *b, const void *gp)
+{
+    uint32_t v;
+    return gp && fg_map_get(&b->names, gp, &v) && b->objs[v - 1] == gp ? v : 0;
+}
+static void js_baseline_forget(JSRuntime *rt, JSGCObjectHeader *h)
+{
+    uint32_t v = bl_name(rt->baseline, h);
+    if (v) rt->baseline->objs[v - 1] = NULL;
+}
+static uint64_t bl_fold(uint64_t h, const void *p, size_t n)
+{
+    const uint8_t *b = p;
+    for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 1099511628211ULL;
+    return h;
+}
+static uint64_t bl_u32(uint64_t h, uint32_t v) { return bl_fold(h, &v, 4); }
+static uint64_t bl_str(uint64_t h, JSString *p)
+{
+    h = bl_u32(h, p->len | ((uint32_t)p->is_wide_char << 31));
+    return bl_fold(h, strv(p), (size_t)p->len << p->is_wide_char);
+}
+/* An atom by content: an index by its number, a string by its units, a symbol by its kind, its description and
+   its index, which is its identity. */
+static uint64_t bl_atom(JSRuntime *rt, uint64_t h, JSAtom a)
+{
+    JSAtomStruct *s;
+    if (__JS_AtomIsTaggedInt(a)) return bl_u32(bl_fold(h, "i", 1), __JS_AtomToUInt32(a));
+    s = rt->atom_array[a];
+    h = bl_str(bl_u32(h, s->atom_type), s);
+    return s->atom_type == JS_ATOM_TYPE_STRING ? h : bl_u32(h, a);
+}
+static uint64_t bl_ref(const JSBaseline *b, uint64_t h, const void *gp) { return bl_u32(h, gp ? bl_name(b, gp) : 0); }
+static uint64_t bl_value(JSRuntime *rt, const JSBaseline *b, uint64_t h, JSValueConst v)
+{
+    int tag = JS_VALUE_GET_TAG(v);
+    h = bl_u32(h, (uint32_t)tag);
+    switch (tag) {
+    case JS_TAG_INT: case JS_TAG_BOOL: case JS_TAG_CATCH_OFFSET: return bl_u32(h, (uint32_t)JS_VALUE_GET_INT(v));
+    case JS_TAG_FLOAT64: { double d = JS_VALUE_GET_FLOAT64(v); return bl_fold(h, &d, 8); }
+    case JS_TAG_SHORT_BIG_INT: { int64_t i = JS_VALUE_GET_SHORT_BIG_INT(v); return bl_fold(h, &i, 8); }
+    case JS_TAG_STRING: return bl_str(h, JS_VALUE_GET_STRING(v));
+    case JS_TAG_STRING_ROPE: {
+        JSStringRope *r = JS_VALUE_GET_PTR(v);
+        return bl_value(rt, b, bl_value(rt, b, h, r->left), r->right);
+    }
+    case JS_TAG_SYMBOL: return bl_atom(rt, h, js_get_atom_index(rt, JS_VALUE_GET_PTR(v)));
+    case JS_TAG_OBJECT: case JS_TAG_FUNCTION_BYTECODE: return bl_ref(b, h, JS_VALUE_GET_PTR(v));
+    default: return h;   /* null, undefined, uninitialized: the tag is the value */
+    }
+}
+static uint64_t bl_object(JSRuntime *rt, const JSBaseline *b, uint64_t h, JSObject *p)
+{
+    JSShape *sh = p->shape;
+    JSShapeProperty *prs = get_shape_prop(sh);
+
+    h = bl_u32(bl_u32(h, p->class_id), p->extensible);
+    h = bl_ref(b, h, sh->proto);
+    h = bl_u32(h, (uint32_t)sh->prop_count);
+    for (int i = 0; i < sh->prop_count; i++, prs++) {
+        JSProperty *pr = &p->prop[i];
+        int kind = prs->flags & JS_PROP_TMASK;
+
+        h = bl_u32(bl_atom(rt, h, prs->atom), prs->flags);
+        if (prs->atom == JS_ATOM_NULL) continue;
+        if (kind == JS_PROP_GETSET) h = bl_ref(b, bl_ref(b, h, pr->u.getset.getter), pr->u.getset.setter);
+        else if (kind == JS_PROP_VARREF) h = bl_ref(b, h, pr->u.var_ref);
+        else if (kind == JS_PROP_AUTOINIT)
+            h = bl_ref(b, bl_u32(h, js_autoinit_get_id(pr)), js_autoinit_get_realm(pr));
+        else h = bl_value(rt, b, h, pr->u.value);
+    }
+    if (p->fast_array && (p->class_id == JS_CLASS_ARRAY || p->class_id == JS_CLASS_ARGUMENTS)) {
+        h = bl_u32(h, p->u.array.count);
+        for (uint32_t k = 0; k < p->u.array.count; k++) h = bl_value(rt, b, h, p->u.array.u.values[k]);
+    }
+    switch (p->class_id) {
+    case JS_CLASS_NUMBER: case JS_CLASS_STRING: case JS_CLASS_BOOLEAN: case JS_CLASS_SYMBOL: case JS_CLASS_DATE:
+    case JS_CLASS_BIG_INT:
+        h = bl_value(rt, b, h, p->u.object_data);
+        break;
+    }
+    if (js_class_has_bytecode(p->class_id)) {
+        h = bl_ref(b, h, p->u.func.function_bytecode);
+        h = bl_ref(b, h, p->u.func.home_object);
+        for (int k = 0; p->u.func.var_refs && k < p->u.func.function_bytecode->closure_var_count; k++)
+            h = bl_ref(b, h, p->u.func.var_refs[k]);
+    }
+    return h;
+}
+static uint64_t bl_thing(JSRuntime *rt, const JSBaseline *b, uint64_t h, JSGCObjectHeader *gp)
+{
+    h = bl_u32(h, JS_GC_TYPE(gp));
+    switch (JS_GC_TYPE(gp)) {
+    case JS_GC_OBJ_TYPE_JS_OBJECT: return bl_object(rt, b, h, (JSObject *)gp);
+    case JS_GC_OBJ_TYPE_VAR_REF: {
+        JSVarRef *vr = (JSVarRef *)gp;
+        h = bl_u32(h, vr->is_detached | (vr->is_lexical << 1) | (vr->is_const << 2));
+        return vr->is_detached ? bl_value(rt, b, h, vr->value) : h;
+    }
+    case JS_GC_OBJ_TYPE_FUNCTION_BYTECODE: {
+        JSFunctionBytecode *fb = (JSFunctionBytecode *)gp;
+        h = bl_atom(rt, h, fb->func_name);
+        h = bl_u32(bl_u32(h, fb->arg_count), fb->var_count);
+        h = bl_fold(bl_u32(h, (uint32_t)fb->byte_code_len), fb->byte_code_buf, (size_t)fb->byte_code_len);
+        h = bl_ref(b, h, fb->realm);
+        for (int k = 0; k < fb->cpool_count; k++) h = bl_value(rt, b, h, fb->cpool[k]);
+        return h;
+    }
+    case JS_GC_OBJ_TYPE_JS_CONTEXT: return bl_value(rt, b, h, ((JSContext *)gp)->global_obj);
+    }
+    DFAIL("the baseline seal folded a thing bl_namable does not name");
+    return h;
+}
+
+uint64_t JS_BaselineSeal(JSRuntime *rt)
+{
+    JSBaseline *b;
+    struct list_head *el;
+    uint32_t cap = 0;
+    uint64_t h = 14695981039346656037ULL;
+
+    DCHECK(rt->baseline == NULL, "the pre-boot baseline was sealed twice — its names are the first seal's");
+    DCHECK(rt->gc_cycle.step == JS_GC_CYCLE_IDLE && rt->gc_phase == JS_GC_PHASE_NONE,
+           "the baseline was sealed with a collection standing, so the objects it joined are off the object list "
+           "the names are ordinals in");
+    b = calloc(1, sizeof *b);
+    CHECK(b != NULL, "OOM sealing the pre-boot baseline");
+    list_for_each(el, &rt->gc_obj_list) {
+        JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
+        if (!bl_namable(gp)) continue;
+        b->objs = fg_room(b->objs, b->n, &cap, sizeof *b->objs);
+        b->objs[b->n++] = gp;
+        fg_map_put(&b->names, gp, b->n);
+    }
+    h = bl_u32(h, b->n);
+    for (uint32_t i = 0; i < b->n; i++) h = bl_thing(rt, b, h, b->objs[i]);
+    rt->baseline = b;
+    return h;
+}
+
+uint32_t JS_BaselineName(JSRuntime *rt, JSValueConst v)
+{
+    DCHECK(rt->baseline != NULL, "a baseline name was asked before the seal named anything");
+    return JS_VALUE_HAS_REF_COUNT(v) ? bl_name(rt->baseline, JS_VALUE_GET_PTR(v)) : 0;
+}
+
+static void js_baseline_free(JSRuntime *rt)
+{
+    if (!rt->baseline) return;
+    (free)(rt->baseline->objs);
+    (free)(rt->baseline->names.s);
+    (free)(rt->baseline);
+    rt->baseline = NULL;
 }
 static void fg_put(FGBuf *b, const void *p, size_t n)
 {
