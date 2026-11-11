@@ -46696,6 +46696,7 @@ struct JSFlowGraph {
     JSVarRef **cells;   /* baseline closure cells the graph names, one counted reference each */
     JSContext **realms; /* the realms a lazily built property is built in, one counted reference each */
     uint32_t n_anchors, n_roots, n_objs, n_cells, n_realms;
+    uint32_t cap_anchors, cap_cells;
     FGGap *gaps;
     uint32_t n_gaps;
     JSFlowGraphFrames frames;
@@ -46706,6 +46707,15 @@ static void *fg_grow(void *p, size_t n)
     void *q = (realloc)(p, n);
     CHECK(q != NULL, "flow graph: OOM growing a serialized graph's host storage");
     return q;
+}
+/* Room for element `n` of an array of `size`-byte elements whose capacity is `*cap`: the capacity doubles, so an
+   array a graph appends to one element at a time costs amortized constant work per element, never a copy of the
+   whole array per element. */
+static void *fg_room(void *p, uint32_t n, uint32_t *cap, size_t size)
+{
+    if (n < *cap) return p;
+    *cap = *cap ? *cap * 2 : 64;
+    return fg_grow(p, size * *cap);
 }
 static size_t fg_home(const void *k, size_t cap) { return (size_t)(((uintptr_t)k * 0x9E3779B97F4A7C15ull) >> 17) & (cap - 1); }
 static bool fg_map_get(const FGMap *m, const void *k, uint32_t *v)
@@ -46861,7 +46871,7 @@ static uint32_t fg_anchor(FGWriter *w, JSValueConst v)
 
     if (fg_map_get(&w->anch, JS_VALUE_GET_PTR(v), &i)) return i;
     i = g->n_anchors++;
-    g->anchors = fg_grow(g->anchors, sizeof *g->anchors * g->n_anchors);
+    g->anchors = fg_room(g->anchors, i, &g->cap_anchors, sizeof *g->anchors);
     g->anchors[i] = js_dup(v);
     fg_map_put(&w->anch, JS_VALUE_GET_PTR(v), i);
     return i;
@@ -47096,7 +47106,7 @@ static void fg_cell(FGWriter *w, FGBuf *out, JSVarRef *vr)
     if (vr->flow_gen <= w->floor) {
         if (!fg_map_get(&w->cell_anch, vr, &i)) {
             i = g->n_cells++;
-            g->cells = fg_grow(g->cells, sizeof *g->cells * g->n_cells);
+            g->cells = fg_room(g->cells, i, &g->cap_cells, sizeof *g->cells);
             g->cells[i] = vr;
             JS_REF_COUNT(vr)++;
             fg_map_put(&w->cell_anch, vr, i);
