@@ -1249,7 +1249,7 @@ static bool mq_viewport_extent(const char *u, const MqEnv *e, double *extent)
     return false;
 }
 
-/* THE EXTENT ONE PERCENT IS TAKEN OF, for each of CSS Conditional 5 §7 "Container Relative Lengths: the cqw,
+/* The extent one percent is taken of, for each of CSS Conditional 5 §7 "Container Relative Lengths: the cqw,
    cqh, cqi, cqb, cqmin, cqmax units"' six. §7 selects a query container "for each element" from its ancestors,
    and a media query is evaluated outside the context of any element, so no container is ever eligible here and
    §7's fallback is the whole answer: "If no eligible query container is available, then use the small viewport

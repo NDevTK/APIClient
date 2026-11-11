@@ -1,4 +1,4 @@
-/* THE CONTAINER UNITS DOCUMENT: CSS Conditional 5 §5.1 "Creating Query Containers: the container-type property",
+/* The container units document: CSS Conditional 5 §5.1 "Creating Query Containers: the container-type property",
    §5.2's `container-name` through §5.3's `container` shorthand, and §7 "Container Relative Lengths: the cqw,
    cqh, cqi, cqb, cqmin, cqmax units". One of test_forced.c's exploring documents (its TF_DOCS table). It reads
    the six units under a `size` container, under no container (§7's small viewport fallback, 1280 x 720 here),
