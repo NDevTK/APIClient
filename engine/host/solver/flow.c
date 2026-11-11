@@ -7065,7 +7065,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
            partitioning the members. Before acct_depart, which clears the bucket and family the index reads. */
         DCHECK(!f->assembling, "a sibling was removed from the frontier before its assembly ended");
         if (f->ix_in) flow_ix_remove(f);
-        else if (!f->cold && !f->held) flow_owed_unlink(f);   /* a stub left both at flow_sale_begin */
+        else if (!f->bulk_released && !f->held) flow_owed_unlink(f);   /* the bulk release or the sale took it out */
         if (f->held) g_held_n--;
         if (f->cold) { g_cold_n--; g_cold_departed++; }
         flow_site_leave(f);
