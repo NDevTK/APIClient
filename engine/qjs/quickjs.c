@@ -57544,6 +57544,8 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             PD_RET(-1);
         goto pfx_after_switch;
     case TOK_STRING:
+        if (js_parse_token_finish(s))
+            PD_RET(-1);
         if (emit_push_const(s, js_parse_token_str(s), 1))
             PD_RET(-1);
         if (next_token(s))
@@ -58561,6 +58563,9 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             }
         }
     } else if (s->token.val == TOK_STRING) {
+        /* After an accessor, generator or async prefix the name was asked for in this step. */
+        if (js_parse_token_finish(s))
+            goto pn_fail;
         f->atom = JS_ValueToAtom(ctx, js_parse_token_str(s));
         if (f->atom == JS_ATOM_NULL)
             goto pn_fail;
@@ -62875,6 +62880,10 @@ static __exception int js_parse_with_clause(JSParseState *s, JSReqModuleEntry *r
         }
         if (s->token.val != TOK_STRING) {
             js_parse_error(s, "string expected");
+            JS_FreeAtom(ctx, key);
+            return -1;
+        }
+        if (js_parse_token_finish(s)) {
             JS_FreeAtom(ctx, key);
             return -1;
         }
