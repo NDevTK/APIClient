@@ -1607,7 +1607,7 @@ static void tf_keep_watch(void) {
 static const char *tf_sale_act(const char *urls) {
     static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed", "/api/sl-floor-owed",
                                         "/api/sl-async-owed", "/api/sl-keep-owed", "/api/sl-ctor-owed",
-                                        "/api/sl-catch-owed", "/api/sl-pexec-owed" };
+                                        "/api/sl-catch-owed", "/api/sl-pexec-owed", "/api/sl-asyncfn-owed" };
 
     if (g_tf_pressure_none) return urls;
     for (size_t i = 0; !g_tf_sale.listed && i < COUNTOF(owed); i++) {
@@ -2846,6 +2846,7 @@ TF_DOCS[] = {
     { "salector", HTML_SALECTOR },
     { "salecatch", HTML_SALECATCH },
     { "salepexec", HTML_SALEPEXEC },
+    { "saleasyncfn", HTML_SALEASYNCFN },
     { "layoutshed", HTML_LAYOUTSHED, OPENER_POLICY_UNSAFE_NONE, 0, NULL, NULL, 1 },
     { "replyrec", HTML_REPLYREC },
     { "replynone", HTML_REPLYNONE },
@@ -19492,7 +19493,8 @@ static long tf_hist_above(const char *js, const char *key, int from) {
    body, or inside a `try`, waits on no gap of that kind, returns and reports its count. sale-pexec-record,
    sale-pexec-machine and sale-pexec-link: a member sold in a promise executor two Reflect.construct calls reached
    waits on no `cont PROMISE_EXEC`, no Reflect.construct machine or its `array` field, and no `cont CONSTRUCT`;
-   sale-pexec-returns: it returns and reports its count. */
+   sale-pexec-returns: it returns and reports its count. sale-asyncfn-written and sale-asyncfn-returns: a member
+   sold in an async function's body before its first await waits on no `frame async`, returns and reports. */
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
     const char *cat = strstr(js, "\"saleCensus\":{\"n\":");
@@ -19506,7 +19508,8 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     long named = nat ? strtol(nat + strlen("\"soldNamed\":"), NULL, 10) : -1;
     int ft = 1, ot = 1, ct = 1, lt = 1, yt = 1, kt = 1, rt = 1, ht = 1, pr = 1, pm = 1, pl = 1, pt = 1;
     const char *awhy = NULL, *kwhy = NULL, *rwhy = NULL, *hwhy = NULL, *gk = strstr(js, "\"waitsGapKinds\":{");
-    const char *prwhy = NULL, *pmwhy = NULL, *plwhy = NULL, *ptwhy = NULL;
+    const char *prwhy = NULL, *pmwhy = NULL, *plwhy = NULL, *ptwhy = NULL, *awwhy = NULL, *arwhy = NULL;
+    int aw = 1, ar = 1;
     const char *gk_end = gk ? strchr(gk, '}') : NULL;
 
     fold_row(&lt, &lwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
@@ -19611,6 +19614,23 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
                  "NOT REACHED: no /api/sl-pexec-busy?n=100000 record, so the member sold in the executor did not "
                  "return within the session with its count");
     }
+    {
+        const int armed = g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0 &&
+                          tf_hist_above(js, "\"hFrameHeap\":[", 1) > 0;
+        const char *unarmed = "NOT ARMED: the act sold nothing, or no sold member held a heap frame (`hFrameHeap`), so "
+                              "none was sold in the async body";
+
+        fold_row(&aw, &awwhy, armed, unarmed);
+        fold_row(&aw, &awwhy, gk_end && !tf_span_has(gk, gk_end, "\"frame async\""),
+                 "a sale waited on `frame async`, or the result carries no `waitsGapKinds`: an async function's "
+                 "heap frame was not written");
+        fold_row(&ar, &arwhy, armed, unarmed);
+        fold_row(&ar, &arwhy, wrote > 0 && restored > 0,
+                 "no sold member was restored from its written bytes (`soldRestores`, `restored`)");
+        fold_row(&ar, &arwhy, param_value_is(js, "/api/sl-asyncfn-busy", "n", "100000"),
+                 "NOT REACHED: no /api/sl-asyncfn-busy?n=100000 record, so the member sold in the async body did "
+                 "not return within the session with its count");
+    }
     fold_row(&ot, &owhy, param_value_is(js, "/api/sl-own-done", "b", "22"),
              "NOT REACHED: no /api/sl-own-done?b=22 record, so the page's own run, sold while it owed "
              "/api/sl-own-owed, did not return within the session");
@@ -19642,6 +19662,8 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
         { "sale-pexec-machine", pm, "slPexecOwe", SESS_EXPLORE, pmwhy },
         { "sale-pexec-link", pl, "slPexecOwe", SESS_EXPLORE, plwhy },
         { "sale-pexec-returns", pt, "slPexecOwe", SESS_EXPLORE, ptwhy },
+        { "sale-asyncfn-written", aw, "slAfOwe", SESS_EXPLORE, awwhy },
+        { "sale-asyncfn-returns", ar, "slAfOwe", SESS_EXPLORE, arwhy },
         { "sale-control-reaches", ct, "slCtl", SESS_EXPLORE, cwhy },
         { "sale-forced-stays-listed", lt, "slForced", SESS_EXPLORE, lwhy },
         { "sale-own-stays-listed", lt, "slOwn", SESS_EXPLORE, lwhy },
