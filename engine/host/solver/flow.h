@@ -493,16 +493,14 @@ typedef struct Flow {
     FlowAgent *agents;
     int n_agents;
     int cur_agent;
-    /* This flow's program still being compiled, NULL when there is none (quickjs.h's JS_FlowCompileStep and
-     * JS_FlowCompileModule take it). The compile of the row at `script_i` (its parse, then its code generation) is
-     * O(a length the page chose), so it suspends, and a compile that gave the thread back waits here. It is not a second frame: while it stands the
-     * row's program has not started, `frame` is NULL and the cursor has not moved.
-     * Not cold-tier state: the suspended parse is a graph of raw pointers the cold tier cannot serialize, and a
-     * recipe replays the document, which re-compiles; flow_release frees it. A fork never carries one, because a
-     * branch is taken by running bytecode; asserted where a sibling is built.
-     * One slot for both §8.1.4.4 "Calling scripts" entries, since a flow holds at most one row's parse; which
-     * entry parked it is read off the step arm (two rows of solver/step_unit.h's list). */
-    void *compile;
+    /* Whether this flow stands inside the compile of the row at `script_i`: a stint of it ran in this flow and
+     * left the compile parked. The compile itself (its parse, then its code generation) rests on the row's body
+     * and is advanced by every world standing at the row (solver/dyn_body.h's dyn_body_compile_stint), so the
+     * flow holds only this mark. While it stands the row's program has not started, `frame` is NULL, the cursor
+     * has not moved, and the flow is inside HTML §8.1.4.3 Creating scripts' task (flow_stack_empty).
+     * Not cold-tier state: a recipe replays the document and reaches the row again. A fork never carries it,
+     * because a branch is taken by running bytecode; asserted where a sibling is built. */
+    int in_compile;
     /* Is that frame the row's program, or the report the row's program owes? HTML §8.1.4.4 "Calling scripts",
      * run a classic script step 8's third bullet reports an abrupt completion before step 8.3.2's clean up, so
      * the report is the flow's next work and takes the vacated frame slot as a continuation of the same row.

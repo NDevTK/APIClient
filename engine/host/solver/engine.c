@@ -5443,12 +5443,12 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
     /* How far the sequence has been run, so the no-replay assert at the compile site holds for an arm, which has
        run what its parent ran; a frameless sibling is the shape that can reach that compile. */
     sib->last_compiled = parent->last_compiled;
-    /* No parse in flight: a branch is taken by running bytecode, and a compiling flow runs none, so a parent
-       holding one means a fork from inside the compiler. Asserted rather than zeroed. */
-    DCHECK(parent->compile == NULL,
-           "a flow was forked while its program was still being parsed — branches are taken by running bytecode, so "
-           "the fork came from inside the parser or the compile handle outlived its program");
-    DCHECK(sib->compile == NULL, "a freshly built sibling already held a suspended compile");
+    /* Not inside a compile: a branch is taken by running bytecode, and a flow inside its row's compile runs
+       none, so a parent standing in one means a fork from inside the compiler. Asserted rather than copied. */
+    DCHECK(!parent->in_compile,
+           "a flow was forked while its program was still being compiled — branches are taken by running bytecode, "
+           "so the fork came from inside the compiler or the mark outlived its row's compile");
+    DCHECK(!sib->in_compile, "a freshly built sibling already stands inside a compile");
     /* Where the program it stands in has already interposed (flow.h): the arm inherits the parent's `dyn` rows
        and so their interpositions; without this pair it would compute its next immediate slot as if none had
        happened. A pair, because `imm_next` means nothing without the cursor it was computed against. */
@@ -6089,13 +6089,13 @@ static int flow_success_arm(JSContext *ctx, Flow *f, int i, int in_program, int 
  * a declined request (flow_success_arm). Asked before the reply is delivered, so the arm clones the flow still
  * waiting on it; this flow keeps the observed reply unless its recorded path chose the success arm. A reply no
  * server sent is never asked again. One per step. */
-/* Whether a fork may clone this flow's suspension now: not while a parse is parked mid-row, and, where `one_home`
-   is set, not with both homes held at once. An atomic operation is the ladder's to wait for (flow_agent_atomic).
+/* Whether a fork may clone this flow's suspension now: not inside its row's compile, the task in progress, and,
+   where `one_home` is set, not with both homes held at once. An atomic operation is the ladder's to wait for (flow_agent_atomic).
    A read, asked of the switched-in flow. */
 static int flow_fork_homes_open(JSContext *ctx, const Flow *f, int one_home) {
     int in_program = flow_frame(f) != NULL, in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
 
-    return f->compile == NULL && !(one_home && in_program && in_job);
+    return !f->in_compile && !(one_home && in_program && in_job);
 }
 
 /* The first reply whose success arm is owed (a `fetch()` answered, observed, not opaque, with a status that is not
@@ -6261,8 +6261,8 @@ static void flow_decline_fork(JSContext *ctx, Flow *f, int i) {
         /* No fork rung is taken while the selected agent stands inside an atomic operation (flow_next_unit_pass
            asks flow_agent_atomic), and no second continuation is ever parked beside an atomic one (asserted at
            quickjs.c's flow_park), so the call site this request's outcome reaches resumes after the operation and
-           forking at its end is the same pair of arms. A parse parked mid-row (`f->compile`) is a third home of
-           the suspension no arm could clone; flow_decline_fork_at refuses it. */
+           forking at its end is the same pair of arms. A flow inside its row's compile (`f->in_compile`) stands in
+           a task no arm is taken in; flow_decline_fork_at refuses it. */
         DCHECK(flow_fork_homes_open(ctx, f, 0),
                "a decline fork was performed while the suspension cannot be cloned — flow_decline_fork_at refuses "
                "that state");
@@ -9069,9 +9069,9 @@ static int engine_drop_jobs(JSContext *ctx) {
    microtask checkpoint, not a FIFO pop: arrival order within a queue, but no task may begin while this flow holds
    a microtask, so `setTimeout(f, 0)` cannot run in the middle of a promise chain. */
 static void flow_run_one_job(JSContext *ctx, Flow *f) {
-    DCHECK(f->compile == NULL,
-           "a job ran while this flow holds a parse parked part way — the parse is the task in progress (HTML §8.1.4.3 "
-           "Creating scripts), and flow_stack_empty, which every job arm is guarded on, answers no while it is held");
+    DCHECK(!f->in_compile,
+           "a job ran while this flow stands inside its row's compile — the parse is the task in progress (HTML "
+           "§8.1.4.3 Creating scripts), and flow_stack_empty, which every job arm is guarded on, answers no in it");
     JSValue job = flow_job_take(ctx, f);   /* the pick IS the checkpoint rule — see flow.h */
     f->unit_seq = flow_work_seq_next();    /* a job is its own unit: an await's continuation is the next job */
     f->close_req_none = 0;                 /* page code runs: step 9's latch is released (engine_close_request_fork) */
@@ -9292,7 +9292,7 @@ static uint64_t g_pick_digest = 14695981039346656037ULL;
    `g_step_unit_over` say a turn met the slice and in which arm, not which phase: a start step is a compile
    (JS_FlowNew -> JS_Eval over `body_n` bytes) then an execution (JS_FlowResume), and only the second runs bytecode.
    The parse rests: JS_FlowCompileStep polls the budget hook and preempt policy from the production dispatch and
-   hands back through `f->compile`, so a stint that still meets the slice is one whose rest points were too far
+   hands back through the body's carrier (dyn_body_compile_stint), so a stint that still meets the slice is one whose rest points were too far
    apart (the production dispatch's granularity). solver/engine.h's `over_arms` observation (`start-ended-its-frame`
    ran 153 times and overran never) is stratified by source length, since outcome correlates with it, so it speaks
    only for short compiles.
@@ -9959,10 +9959,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
            park), and an uncaught throw from it must be recorded as this page's error (§8.1.4.6 Runtime script
            errors' "report an exception", the hook scripts and jobs use) and taken out of the per-runtime
            `rt->current_exception` before another flow's evaluation finds it. */
-        DCHECK(f->compile == NULL || !JS_HasParkedFlow(JS_GetRuntime(ctx)),
-               "a flow holds a parked parse and a parked continuation at once — no job runs while a parse is held "
-               "(flow_run_one_job), so the continuation parked before the parse began, when the compile arm below "
-               "could not have been reached");
+        DCHECK(!f->in_compile || !JS_HasParkedFlow(JS_GetRuntime(ctx)),
+               "a flow stands inside its row's compile and holds a parked continuation — no job runs inside a "
+               "compile (flow_run_one_job), so the continuation parked before the compile began, when the compile "
+               "arm below could not have been reached");
         if (nu.arm == NEXT_RESUME_PARKED) {
             JSValue pcv = JS_UNDEFINED;
             if (JS_ResumeParkedFlow(JS_GetRuntime(ctx), &pcv)) {
@@ -10608,16 +10608,16 @@ static int flow_step(JSContext *ctx, Flow *f) {
             /* No replay, asserted at the only place a program can start. A flow compiles each row of its sequence
                once and thereafter resumes the suspended frame, so reaching here again for a row it already started
                means the resume path lost the frame and the flow would re-run side effects against a delta that
-               already holds them. The one exception is a compile that handed the thread back: the parse is
-               suspended at an exact production, no bytecode has run, and the next stint continues it. `compile` is
-               NULL the moment a program starts, so the first assert keeps its force for every other reading, and
-               the second keeps a parked parse from resuming against a row the flow has moved off. */
-            DCHECK(f->script_i > f->last_compiled || f->compile != NULL,
+               already holds them. The one exception is a compile that handed the thread back: the row's compile
+               is parked on its body, no bytecode has run, and the next stint continues it. `in_compile` is lowered
+               the moment a program starts, so the first assert keeps its force for every other reading, and the
+               second keeps a flow from re-entering a compile at a row it has moved off. */
+            DCHECK(f->script_i > f->last_compiled || f->in_compile,
                    "a flow compiled a program it had already started — the suspended frame was lost and the flow is "
                    "replaying its side effects");
-            DCHECK(f->compile == NULL || f->script_i == f->last_compiled,
-                   "a flow holds a parse suspended for a different row than its cursor names — the parse would "
-                   "resume into a program the flow has left");
+            DCHECK(!f->in_compile || f->script_i == f->last_compiled,
+                   "a flow stands inside the compile of a different row than its cursor names — its next stint "
+                   "would advance a program the flow has left");
             f->last_compiled = f->script_i;
             /* The deepest program this document has reached, recorded where a program starts and by whichever flow
                starts it: a coverage fact about the document, not the flow holding the thread (see g_deepest). A row
@@ -10713,27 +10713,27 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "record asked of the body below would be another row's");
                 DynBody *pb = f->dyn[f->script_i];
                 /* 16.2.1.7.1 ParseModule's record is a fact about the row's bytes under the row's key, so one
-                   parse serves every world that reaches the row. The body is asked before every stint, a parked
-                   one included: where another world's parse has finished, this flow drops its own and evaluates
-                   that record. The identity is the body, as for a classic row; the module map cannot be it, since
-                   every inline module of a document is named by the document's address. */
+                   compile serves every world that reaches the row, and it is the body's: the body is asked for
+                   the finished record before every stint, and a stint advances the one compile parked there,
+                   whichever world parked it. The identity is the body, as for a classic row; the module map
+                   cannot be it, since every inline module of a document is named by the document's address. */
                 JSValue rec = JS_UNDEFINED;
-                if (f->compile == NULL) g_module_rows_reached++;
+                if (!f->in_compile) g_module_rows_reached++;
                 int have = dyn_body_parse_ref(pb, prog_ctx, prog_name, src_flags, &rec);
                 if (have) {
-                    if (f->compile != NULL) JS_FlowCompileDrop(prog_ctx, &f->compile);
                     g_module_parse_shared++;
                 } else {
-                    /* The parse rests through `&f->compile` (solver/rest_unit.h's bound (1)); a parked stint
-                       leaves the row and the cursor as they are, and the ladder re-enters here. */
+                    /* The compile rests on the body (solver/rest_unit.h's bound (1)); a parked stint leaves the
+                       row and the cursor as they are, and the ladder re-enters here. */
                     uint64_t parsed0 = JS_FlowParseBytesLife();
                     compile_stint_begins(f, pb);
-                    int mr = JS_FlowCompileModule(prog_ctx, body, body_n, prog_name, src_flags, &rec, &f->compile);
+                    int mr = dyn_body_compile_stint(pb, prog_ctx, prog_name, src_flags, /*module*/1, &rec);
                     g_module_parse_bytes += (int64_t)(JS_FlowParseBytesLife() - parsed0);
                     compile_stint_ended(f, pb, mr == 0);
                     if (mr == 0) {
-                        DCHECK(f->compile != NULL && JS_IsUndefined(rec),
-                               "a module compile answered suspended and left neither a parked parse nor a record");
+                        DCHECK(dyn_body_compile_parked(pb) && JS_IsUndefined(rec),
+                               "a module compile answered suspended and left neither a parked compile nor a record");
+                        f->in_compile = 1;
                         g_step_unit = STEP_UNIT_MODULE_COMPILE_YIELDED;
                         return 0;
                     }
@@ -10747,9 +10747,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                         have = 1;
                     }
                 }
-                DCHECK(f->compile == NULL,
-                       "a module row is past its compile and still holds a parked parse — the next step would "
-                       "resume a parse for a module that has already been linked and evaluated");
+                f->in_compile = 0;
                 /* The evaluation folds an abrupt completion into its status, so `started` is one answer. */
                 started = have && JS_FlowEvalModuleRecord(prog_ctx, rec, &ev) > 0;
                 if (started) g_module_starts++;
@@ -10774,14 +10772,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    compile: `prog_ctx` (the document's realm; JS_CallInternal takes the running realm from the
                    bytecode, so a frame over a foreign closure runs against the wrong global), `prog_name` (the
                    ScriptOrModule name, the module map key and the base of a relative `import()`) and `src_flags`
-                   (strictness and JS_EVAL_FLAG_INLINE_SCRIPT). `f->compile == NULL` is when the question can be
-                   asked at all: a non-NULL carrier is this flow's own suspended parse of this row, and taking a
-                   shared closure would leave it live under a started program, which the assert below and
-                   JS_FlowCompileStep's suspend assert forbid. So the consult is made once per row, at the stint that
-                   begins it. */
+                   (strictness and JS_EVAL_FLAG_INLINE_SCRIPT). The question is asked before every stint, since
+                   the compile in flight is the body's and the stint that finished it may have been any world's. */
                 JSValue held = JS_UNDEFINED;
-                int shared = (f->compile == NULL)
-                             && dyn_body_parse_ref(pb, prog_ctx, prog_name, src_flags, &held);
+                int shared = dyn_body_parse_ref(pb, prog_ctx, prog_name, src_flags, &held);
                 if (shared) {
                     /* No bracket and no compile row here, which keeps the census's identities exact:
                        `g_classic_compiles` is one per program parsed and this stint parses nothing,
@@ -10799,25 +10793,25 @@ static int flow_step(JSContext *ctx, Flow *f) {
                      * either.
                      *
                      * JS_FlowCompileStep polls the same budget hook and preempt policy as the interpreter's
-                     * dispatch, from the parse's production dispatch, and hands a suspended parse back through
-                     * `f->compile`; the next stint continues it at the exact production, and nothing below runs.
+                     * dispatch, from the parse's production dispatch, and parks a suspended compile on the body
+                     * (dyn_body_compile_stint); the next stint of any world standing at the row continues it at
+                     * the exact production, and nothing below runs.
                      * So the bracket times one stint: a stint that meets the slice is one the seam did not fire in,
                      * which makes `g_classic_compile_over` a measurement of this seam, not of the page's source
                      * length. It is per stint while `g_classic_compiles` is per program; its denominator is derived
                      * at g_classic_compiles's declaration from the two arms every stint ends in. */
                     /* Whether this stint resumes a parse (g_classic_compile_resumed), read before the call because
-                       the call takes the carrier out of the slot (`*pcompile = NULL`) when it continues a parse; it
-                       reads the storage the call is handed, one statement earlier. Above the timing bracket, so the
-                       bracket's span stays the parse. Unconditional, not under an outcome arm: a resume is a fact
-                       about how the stint started, true of one that parks again, finishes or ends in a SyntaxError,
-                       and raised under an arm it would partition outcomes rather than stints. */
-                    if (f->compile != NULL) g_classic_compile_resumed++;
+                       the call takes the carrier off the body when it continues a parse. Above the timing bracket,
+                       so the bracket's span stays the parse. Unconditional, not under an outcome arm: a resume is a
+                       fact about how the stint started, true of one that parks again, finishes or ends in a
+                       SyntaxError, and raised under an arm it would partition outcomes rather than stints. */
+                    if (dyn_body_compile_parked(pb)) g_classic_compile_resumed++;
                     JSValue fn = JS_UNDEFINED;
                     ThreadWorkSpan tw;
                     uint64_t parsed0 = JS_FlowParseBytesLife();
                     thread_work_begin(&tw);
                     compile_stint_begins(f, pb);
-                    int cr = JS_FlowCompileStep(prog_ctx, body, body_n, prog_name, src_flags, &fn, &f->compile);
+                    int cr = dyn_body_compile_stint(pb, prog_ctx, prog_name, src_flags, /*module*/0, &fn);
                     compile_stint_ended(f, pb, cr == 0);
                     thread_work_end(&tw, THREAD_WORK_SCRIPT_PARSE, JS_FlowParseBytesLife() - parsed0);
                     if ((int64_t)((JS_FlowParseBytesLife() - parsed0) * THREAD_WORK_UNITS_PER_BYTE_SCRIPT) >=
@@ -10826,14 +10820,15 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     if (cr == 0) {
                         /* Parked mid-parse. No ENGINE_LEAVE_ROW and no cursor move: this row is still the row the
                            flow is at, and the ladder re-enters here when the flow is next picked. */
-                        DCHECK(f->compile != NULL && JS_IsUndefined(fn),
-                               "a compile answered suspended and left neither a parked parse nor a program");
+                        DCHECK(dyn_body_compile_parked(pb) && JS_IsUndefined(fn),
+                               "a compile answered suspended and left neither a parked compile nor a program");
+                        f->in_compile = 1;
                         g_step_unit = STEP_UNIT_COMPILE_YIELDED;
                         return 0;
                     }
-                    DCHECK(f->compile == NULL,
-                           "a compile that finished left a parked parse behind it — the next step would resume a "
-                           "parse for a program that has already started");
+                    DCHECK(!dyn_body_compile_parked(pb),
+                           "a compile that finished left a parked compile behind it — the next world at the row "
+                           "would resume a compile for a program that has already started");
                     /* A failed compile is still a compile and a suspended one is not (see g_classic_compiles): the
                        row is about what the span cost, and a stint that handed the thread back has not finished
                        spending it. Counting stints would make the denominator the number of times the scheduler
@@ -10843,10 +10838,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        g_classic_compile_again, and solver/dyn_body.h for why the identity is the body). On this
                        line, not at the entry: a stint that handed the thread back has finished no program, so
                        marking at the entry would report the second stint of one parse as a repeat of its first.
-                       The row stays nonzero with the parse shared, for two populations only this block can see: a
+                       The row stays nonzero with the parse shared, for one population only this block can see: a
                        program whose parse failed holds nothing (its exception is one flow's completion, not a fact
-                       about the bytes), and a flow already mid-parse of a row another flow has since finished
-                       resumes its own parse to the end. Both parse the bytes twice. */
+                       about the bytes), so the next world at the row parses the bytes again. */
                     if (dyn_body_note_parsed(pb)) {
                         g_classic_compile_again++;
                         g_classic_compile_again_bytes += (int64_t)dyn_body_len(pb);
@@ -10872,6 +10866,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                         flow_frame(f) = NULL;
                     }
                 }
+                f->in_compile = 0;
                 started = (flow_frame(f) != NULL);
                 /* §4.12.1.1's classic arm, steps 1-2, here rather than around a call: the arm's third step ("run
                    the classic script") is JS_FlowNew plus every JS_FlowResume after it, spread over any number of
@@ -10903,9 +10898,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
                the row at the cursor, never the flow: a candidate session (`Flow.cand_src`) re-runs the document
                from the baseline and compiles the page's own programs too, and `progQueuedCand` is the ask these
                starts are read against. */
-            DCHECK(f->compile == NULL,
-                   "a program's start is counted while the flow still holds a suspended parse — both compile arms "
-                   "clear the carrier and both park arms return, so a park arm falls through to the start count");
+            DCHECK(!f->in_compile,
+                   "a program's start is counted while the flow still stands inside its row's compile — both "
+                   "compile arms lower the mark and both park arms return, so a park arm fell through to the count");
             if (started) {
                 g_prog_starts++;
                 if (flow_dyn_kind(f) == DYN_CANDIDATE) g_prog_starts_cand++; else g_prog_starts_other++;
@@ -11503,7 +11498,7 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     /* The stint partition's containment, an exact accounting identity. A parse's stints are one begin and k
        resumes; every resume follows a park of that parse and every park is followed by at most one resume, so
        `resumed <= yielded`, the slack being exactly the parses begun and not ended (g_classic_compile_resumed
-       derives it). A violation is a stint continuing a parse this process never parked: `f->compile` made
+       derives it). A violation is a stint continuing a parse this process never parked: a body's carrier made
        non-NULL by a route other than a park arm, the third-site defect JS_FlowCompileStep's suspend assert names
        from the other side. Both rows are copied at one instant above. It stays exact with the module arm parking
        into the same field, because the two park sites name different rows (`compile-handed-the-thread-back`,
@@ -11785,13 +11780,12 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     /* A finished flow has no live frame and no program still being parsed. `frame` is the JS_FlowNew handle
        holding this flow's heap frame chain (every activation, closure and local it is suspended across), so one
        left at finish retains the whole execution graph, which the runtime's leak walk reports as thousands of
-       anonymous Functions. A suspended compile holds no frame, so the frame assert alone would pass while the flow
-       walked off with a half-parsed program, its descent chunks and its JSFunctionDef chain; the compile arm
-       returns the moment a parse parks, so a flow here holding one means a completion arm ran while a parse was in
-       flight. Asserted rather than freed, since freeing would hide that the finish path ran on a suspended flow. */
-    DCHECK(f->compile == NULL,
-           "a flow finished with a program still being parsed — a completion arm ran for an unreached row, or the "
-           "compile handle outlived its program");
+       anonymous Functions. A flow inside its row's compile holds no frame, so the frame assert alone would pass
+       for one that finished there; the compile arm returns the moment a compile parks, so a flow here inside one
+       means a completion arm ran for a row whose program had not started. */
+    DCHECK(!f->in_compile,
+           "a flow finished inside its row's compile — a completion arm ran for an unreached row, or the mark "
+           "outlived its row's compile");
     DCHECK(!flow_holds_frame(f), "a flow finished with a live preemptible frame — its whole activation chain, and "
                              "everything those frames close over, is retained by a handle nothing will free");
     DCHECK(flow_deliver_pending(f) == 0,
@@ -11954,6 +11948,7 @@ static void engine_session_close(void) {
        session in this process still compiles and builds closures, so a standing hook would walk a registry that
        has been given back. */
     JS_SetOrphanBornHook(JS_GetRuntime(g_sess_ctx), NULL, NULL);
+    JS_SetCompileStintHook(NULL);
     JS_SetFlowControlHooks(&FC_OFF);
     g_sess_forking = 0;   /* …and the same bit for the callers that ask the seam by symbol — see engine_sched_begin */
     /* The session's generation ends here. The live stamp is cleared rather than the scheduler's saved copy,
@@ -12006,6 +12001,24 @@ static void engine_session_close(void) {
    which the teardown asserts read: a paged flow's continuation, owed replies and queued jobs are regenerated by
    the replay its recipe drives. */
 static int g_park_req, g_parked;
+
+/* A compile stint's capture route (quickjs.h's JSCompileStintFunc): off while a stint is open, so nothing the
+   compile writes lands in the running world's delta, whose head stays applied; put back as the stint closes or
+   pauses. `g_stint_route` holds the route across it. */
+static CowDelta *g_stint_route;
+static int g_stint_route_held;
+static void engine_compile_stint(int open) {
+    DCHECK(open != g_stint_route_held,
+           "a compile stint opened twice or closed unopened — quickjs raises the hook once per edge");
+    if (open) {
+        g_stint_route = cow_current();
+        cow_set_current(NULL);
+    } else {
+        cow_set_current(g_stint_route);
+        g_stint_route = NULL;
+    }
+    g_stint_route_held = open;
+}
 
 /* The generation the scheduler holds across the host's own time. Not a second source of truth: the live stamp is
    quickjs's g_flow_gen, engine_sched_step puts it down here while the host has the thread, and JS_FlowGen() is
@@ -13000,7 +13013,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        live one set here would stamp everything created before the first step (the host reads qjs_bundle_id, pulls
        the pending list, provides replies it already had) as belonging to a flow that has not run. This call and
        cold_resume above create at baseline. */
-    g_slice_flow_gen = 1;
+    g_slice_flow_gen = JS_FLOW_GEN_COMPILE + 1;
     /* And no flow is running yet, so the first slice opens with captures routed nowhere. Stated rather than left
        to zero-initialisation, because a second session in one process would otherwise start on the delta the
        previous session's last slice left, a pointer into a released frontier. */
@@ -13025,6 +13038,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        would be asked about an unrebuilt frontier and engine_orphan_route would close the latch on the compile's
        first closure, before any claim existed. */
     JS_SetOrphanBornHook(JS_GetRuntime(ctx), engine_orphan_born, NULL);
+    JS_SetCompileStintHook(engine_compile_stint);
     /* The frontier is the engine's reserve, and this lets an allocator spend it: installed with the session, when
        there is a frontier to page, so a refusal asks engine_reclaim_tail, which sells the lowest-weight member to
        the cold tier and answers "retry". Every allocator, not only the runtime's (solver/reclaim.h): most of this

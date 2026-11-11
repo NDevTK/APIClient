@@ -3545,6 +3545,8 @@ static void js_arena_free_all(JSRuntime *rt)
     }
 }
 
+static bool js_compile_stint_pause(void);
+static void js_compile_stint_resume(bool paused);
 /* ASK THE EMBEDDER FOR MEMORY BACK — see quickjs.h's JSMemoryReclaimFunc. Answers whether the caller should
    retry, and decides NOTHING else: the two refusals below are properties of the RUNTIME's state, which the
    embedder cannot see and must not be asked to reason about.
@@ -3565,7 +3567,10 @@ int JS_ReclaimMemory(JSRuntime *rt, size_t wanted)
         return 0;
     rt->in_mem_reclaim = true;
     {
+        /* A sale parks another world: what it creates and writes is not a compile's. */
+        bool stint = js_compile_stint_pause();
         int r = rt->mem_reclaim(rt, rt->mem_reclaim_opaque, wanted);
+        js_compile_stint_resume(stint);
         rt->mem_reclaim_not_floor = r < 0;
         freed = r > 0;
     }
@@ -8536,8 +8541,54 @@ static __maybe_unused void JS_DumpShapes(JSRuntime *rt)
    slice opens; INCREMENTED at every snapshot fork (JS_FlowBumpGen) so an object created after a fork gets a
    strictly-higher generation than the fork's — marking it flow-private. Monotonic ACROSS slices: the scheduler
    suspends the stamp to 0 for the host's time and restores this same number, never restarts it. */
-uint32_t g_flow_gen = 0;
+static _Thread_local uint32_t g_flow_gen = 0;
 uint32_t JS_FlowGen(void) { return g_flow_gen; }
+
+/* A compile stint: one stretch of a parse or a code generation run by JS_FlowCompileStep or JS_FlowCompileModule.
+   A compile is a fact about source bytes, shared by every world that reaches them, so a stint is no world's act.
+   What it creates is stamped JS_FLOW_GEN_COMPILE, the embedder's hook routes its writes to no world, and the call
+   and property entries assert it runs none of a world's code and reads none of its state. `g_compile_stint_gen`
+   holds the running world's stamp across it. */
+static _Thread_local bool g_compile_stint;
+static _Thread_local uint32_t g_compile_stint_gen;
+static _Thread_local JSCompileStintFunc *g_compile_stint_hook;
+
+void JS_SetCompileStintHook(JSCompileStintFunc *fn) { g_compile_stint_hook = fn; }
+int JS_FlowInCompileStint(void) { return g_compile_stint; }
+
+static void js_compile_stint_open(void)
+{
+    DCHECK(!g_compile_stint, "a compile stint opened inside another — a parse reaches no second compile entry");
+    DCHECK(g_flow_gen != JS_FLOW_GEN_COMPILE,
+           "a compile stint opened under the generation reserved for one — a world was stamped with it");
+    g_compile_stint_gen = g_flow_gen;
+    g_flow_gen = JS_FLOW_GEN_COMPILE;
+    g_compile_stint = true;
+    if (g_compile_stint_hook) g_compile_stint_hook(1);
+}
+
+static void js_compile_stint_close(void)
+{
+    DCHECK(g_compile_stint && g_flow_gen == JS_FLOW_GEN_COMPILE,
+           "a compile stint closed that was not open, or its generation was moved inside it");
+    if (g_compile_stint_hook) g_compile_stint_hook(0);
+    g_compile_stint = false;
+    g_flow_gen = g_compile_stint_gen;
+}
+
+/* Steps out of an open stint for an act that is the running world's own: the birth of the error a compile
+   completes with, and a sale the allocator asks for. Answers whether one was open, which the resume takes. */
+static bool js_compile_stint_pause(void)
+{
+    if (!g_compile_stint) return false;
+    js_compile_stint_close();
+    return true;
+}
+
+static void js_compile_stint_resume(bool paused)
+{
+    if (paused) js_compile_stint_open();
+}
 uint32_t JS_FlowBumpGen(void) { return ++g_flow_gen; }
 uint32_t JS_ObjFlowGen(JSValueConst obj) {
     return JS_VALUE_GET_TAG(obj) == JS_TAG_OBJECT ? JS_VALUE_GET_OBJ(obj)->flow_gen : 0;
@@ -12752,8 +12803,11 @@ JS_ThrowError2(JSContext *ctx, JSErrorEnum error_num, bool add_backtrace,
                JS_PRINTF_FORMAT const char *fmt, va_list ap)
 {
     JSValue obj;
+    /* An error a compile raises is the completion of the world whose stint raised it, so it is born there. */
+    bool stint = js_compile_stint_pause();
 
     obj = JS_MakeError(ctx, error_num, add_backtrace, fmt, ap);
+    js_compile_stint_resume(stint);
     if (unlikely(JS_IsException(obj))) {
         /* out of memory: throw JS_NULL to avoid recursing */
         obj = JS_NULL;
@@ -27082,6 +27136,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 #define DEFAULT         case_default
 #define BREAK           DISPATCH()
 
+    DCHECK(!g_compile_stint,
+           "a call was made inside a compile stint — a compile runs no code of any world, so the parse production "
+           "or code generation pass that reached a callable must do its work in the compiler");
     if (js_poll_interrupts(caller_ctx))
         return JS_EXCEPTION;
     if (unlikely(JS_VALUE_GET_TAG(func_obj) != JS_TAG_OBJECT)) {
@@ -30279,6 +30336,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     /* A machine step is a dispatch of a built-in and retires one unit, as an opcode does, past
                        the offer above so a step that parks in front of it is counted once, when it runs. */
                     FLOW_WORK_RETIRE();
+                    DCHECK(!g_compile_stint,
+                           "a built-in's step machine was invoked inside a compile stint — a compile runs no code "
+                           "of any world; the parse production that reached it must do the work in the parser");
                     st = h->def->step(step_realm(ctx, h), stt, ret_val, &cb, &cbn);
                     step_stage_check(h, "after");
                     step_request_check(ctx, h, st, abrupt_in);
@@ -44509,6 +44569,7 @@ int JS_FlowCompileStep(JSContext *ctx, const char *src, size_t len, const char *
 
     DCHECK(pfn != NULL, "a flow compile was started with nowhere to put the program it parses");
     *pfn = JS_UNDEFINED;
+    js_compile_stint_open();
     if (pcompile != NULL && *pcompile != NULL) {
         carrier = (JSEvalCompile *)*pcompile;
         *pcompile = NULL;
@@ -44522,6 +44583,7 @@ int JS_FlowCompileStep(JSContext *ctx, const char *src, size_t len, const char *
         fn = JS_FlowCompileSource(ctx, src, len, filename, eval_flags);
         g_eval_compile_slot = outer;
     }
+    js_compile_stint_close();
     if (JS_VALUE_GET_TAG(fn) == JS_TAG_UNINITIALIZED) {
         DCHECK(carrier != NULL && pcompile != NULL,
                "a compile answered SUSPENDED with nothing parked — the marker and the carrier are written by "
@@ -44684,6 +44746,7 @@ int JS_FlowCompileModule(JSContext *ctx, const char *src, size_t len, const char
     DCHECK(filename != NULL && filename[0] != '\0',
            "a module compile was given no name — a module's name is its resolution base, so the caller passes the "
            "script's base URL rather than leave it to be invented here");
+    js_compile_stint_open();
     if (pcompile != NULL && *pcompile != NULL) {
         carrier = (JSEvalCompile *)*pcompile;
         *pcompile = NULL;
@@ -44697,6 +44760,7 @@ int JS_FlowCompileModule(JSContext *ctx, const char *src, size_t len, const char
                      (eval_flags & (JS_EVAL_FLAG_STRICT | JS_EVAL_FLAG_INLINE_SCRIPT)));
         g_eval_compile_slot = outer;
     }
+    js_compile_stint_close();
     if (JS_VALUE_GET_TAG(bc) == JS_TAG_UNINITIALIZED) {
         DCHECK(carrier != NULL && pcompile != NULL,
                "a module compile answered suspended with nothing parked — the marker and the carrier are written "
@@ -51206,6 +51270,8 @@ int JS_PRINTF_FORMAT_ATTR(2, 3) js_parse_error(JSParseState *s, JS_PRINTF_FORMAT
     JSContext *ctx = s->ctx;
     va_list ap;
     int backtrace_flags;
+    /* The SyntaxError and its trace are the running world's (JS_ThrowError2). */
+    bool stint = js_compile_stint_pause();
 
     va_start(ap, fmt);
     JS_ThrowError2(ctx, JS_SYNTAX_ERROR, false, fmt, ap);
@@ -51220,6 +51286,7 @@ int JS_PRINTF_FORMAT_ATTR(2, 3) js_parse_error(JSParseState *s, JS_PRINTF_FORMAT
         err_col_num = (int)(s->token.ptr - s->token.line_start) + 1;
     build_backtrace(ctx, ctx->rt->current_exception, JS_UNDEFINED, s->filename,
                     s->token.line_num, err_col_num, backtrace_flags, NULL);
+    js_compile_stint_resume(stint);
     return -1;
 }
 

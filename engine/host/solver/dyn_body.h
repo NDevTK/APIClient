@@ -199,6 +199,20 @@ int dyn_body_is_own_decode(const DynBody *b);
    a repeat, which is the honest reading and not a gap. */
 int  dyn_body_parse_ref(const DynBody *b, JSContext *realm, const char *name, int flags, JSValue *pfn);
 void dyn_body_parse_hold(DynBody *b, JSContext *realm, const char *name, int flags, JSValueConst fn);
+/* The compile of these bytes, one in flight per body. A compile is a fact about the bytes, as the parse it ends in
+   is, so its parked state (quickjs.h's compile carrier) rests on the body and every world standing at the row
+   advances the one compile: dyn_body_compile_stint runs one stint of it through JS_FlowCompileModule (`module`)
+   or JS_FlowCompileStep and answers what the entry answers, 1 with `*pout` the record or closure, which the
+   caller owns, 0 with the compile parked on the body, -1 with the exception pending in the running world. The
+   stint that finishes it is whichever world's runs last; a failed compile is that world's completion and leaves
+   nothing parked, so the next world to ask begins the compile again.
+   The key is the held parse's (realm, name, flags), asserted against the one the compile began under. The body
+   keeps its own copy of the name and a reference on the realm while a compile is parked, since the parse borrows
+   both across stints and no one world outlives it; the body's last release drops a parked compile through that
+   realm. dyn_body_compile_parked answers whether one is parked now. */
+int dyn_body_compile_stint(DynBody *b, JSContext *realm, const char *name, int flags, int module, JSValue *pout);
+int dyn_body_compile_parked(const DynBody *b);
+
 /* HOW MANY BODIES ARE HOLDING ONE RIGHT NOW — a GAUGE and not a lifetime count, so it may not be differenced
    across two censuses and its sum over a partition is a live population rather than a total of events. It is
    published for the one comparison a reader of a shared-parse row can make without re-deriving the mechanism:

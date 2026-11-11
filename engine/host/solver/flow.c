@@ -2366,7 +2366,7 @@ void flow_credit_pick(Flow *f) {
    script step 3: "If the JavaScript execution context stack is now empty, perform a microtask checkpoint." That is
    the precondition of a checkpoint and of a task alike (§8.1.7.3 "Processing model" runs one task, then a
    checkpoint). `Flow::frame` is that stack (NULL between scripts, solver/flow.h), so a live frame answers no; so
-   does a parse parked part way (`Flow::compile`), since §8.1.4.3 Creating scripts runs ParseScript or ParseModule
+   does a flow inside its row's compile (`Flow::in_compile`), since §8.1.4.3 Creating scripts runs ParseScript or ParseModule
    inside the task that creates the script. The other half is the row at the cursor: §4.12.1.1 "Processing model"
    ends "prepare the script element" with "Otherwise, immediately execute the script element el, even if other
    scripts are already executing", so that program runs inside its inserter. Every other program the flow has left
@@ -2380,7 +2380,7 @@ int flow_stack_empty(const Flow *f) {
     int row;
 
     if (flow_frame(f)) return 0;
-    if (f->compile) return 0;
+    if (f->in_compile) return 0;
     row = f->script_i;
     if (row < f->dyn_n) {
         DCHECK(f->dyn_pos != NULL,
@@ -2690,12 +2690,9 @@ void flow_release_bulk(JSContext *ctx, Flow *f) {
        the memory the continuations hold is freed by no recipe and is invisible to the gc_obj_list walk (neither the
        activations nor their TrampFrames are GC objects). That every member carries a resume, a disposer and a realm is
        asserted over the whole ring in JS_PutParkedFlows and JS_FreeParkedFlows.
-       A program this flow was still parsing is not behind `paged`: a suspended compile is re-derivable from the row's
-       bytes, so the memory is this flow's to give back either way. It is released through the engine's entry because it
-       holds the descent's state (every frame's atoms, the chunk array, the token and the JSFunctionDef chain). A no-op
-       on a NULL slot. */
+       A compile this flow stood inside is not this flow's: it rests on the row's body (solver/dyn_body.h) and goes
+       with the body's last reference. */
     cow_release_scope_begin();
-    JS_FlowCompileDrop(ctx, &f->compile);
     JS_FreeParkedFlows(f->parked);
     f->parked = NULL;
     for (int i = 0; i < f->n_agents; i++) { JS_FreeParkedFlows(f->agents[i].parked); f->agents[i].parked = NULL; }

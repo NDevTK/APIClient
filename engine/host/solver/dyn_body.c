@@ -31,6 +31,14 @@ struct DynBody {
     JSContext *parse_realm;  /* NULL when none is held; the realm the bytecode names and this file frees through */
     char      *parse_name;   /* the program NAME it was compiled under, owned here; NULL is a distinct key */
     int        parse_flags;  /* the eval flags it was compiled under */
+    /* The compile in flight (dyn_body.h). `compile` is the parked carrier, NULL when none is parked;
+       `compile_realm` is non-NULL from the stint that begins a compile to the stint that ends it, holds a
+       reference on the realm, and is the predicate for the three fields after it. */
+    void      *compile;
+    JSContext *compile_realm;
+    char      *compile_name;    /* the name the parse borrows across stints, owned here; NULL for a nameless row */
+    int        compile_flags;
+    char       compile_module;  /* which entry began it */
 };
 
 /* THE INSTANCE'S TOTAL, kept incrementally rather than walked, because the walk that would answer it is the
@@ -64,6 +72,11 @@ static DynBody *dyn_body_wrap(char *text, size_t len, int own_decode)
     b->parse_realm = NULL;
     b->parse_name = NULL;
     b->parse_flags = 0;
+    b->compile = NULL;
+    b->compile_realm = NULL;
+    b->compile_name = NULL;
+    b->compile_flags = 0;
+    b->compile_module = 0;
     g_dyn_body_bytes += (long)len + 1;
     g_dyn_body_live++;
     return b;
@@ -114,6 +127,19 @@ DynBody *dyn_body_adopt(char *text, size_t len)
     return dyn_body_wrap(text, len, /*own_decode*/1);
 }
 
+/* Gives back what a compile in flight held: the realm reference and the name copy. */
+static void dyn_body_compile_key_release(DynBody *b)
+{
+    JSContext *realm = b->compile_realm;
+
+    DCHECK(realm != NULL && b->compile == NULL,
+           "a compile's key was released with none recorded, or with the compile still parked under it");
+    free(b->compile_name);
+    b->compile_name = NULL;
+    b->compile_realm = NULL;
+    JS_FreeContext(realm);
+}
+
 DynBody *dyn_body_ref(DynBody *b)
 {
     DCHECK(b != NULL,
@@ -160,6 +186,13 @@ void dyn_body_unref(DynBody *b)
     }
     free(b->parse_name);
     b->parse_name = NULL;
+    /* A compile nobody will finish: no world stands at these bytes any more. */
+    DCHECK(b->compile == NULL || b->compile_realm != NULL,
+           "a program text holds a parked compile and no realm to drop it through");
+    if (b->compile_realm != NULL) {
+        JS_FlowCompileDrop(b->compile_realm, &b->compile);
+        dyn_body_compile_key_release(b);
+    }
     g_dyn_body_bytes -= (long)b->len + 1;
     g_dyn_body_live--;
     DCHECK(g_dyn_body_bytes >= 0 && g_dyn_body_live >= 0,
@@ -301,19 +334,12 @@ void dyn_body_parse_hold(DynBody *b, JSContext *realm, const char *name, int fla
     DCHECK((b->parse_realm != NULL) == !JS_IsUndefined(b->parse),
            "a program text's held parse and the realm it names disagree about whether one is held — the two "
            "are written together, so this hold would overwrite a closure without releasing it");
-    if (b->parse_realm != NULL) {
-        /* ALREADY HELD, AND THE FIRST ONE STAYS — this is not a race to be asserted away. A flow may PARK
-           mid-parse of a row (quickjs's JS_FlowCompileStep hands the parse back), a sibling may finish the
-           same bytes while it is parked, and the parked flow then finishes its own parse and arrives here. Both
-           closures are correct and interchangeable; keeping the FIRST keeps one bytecode per text, so the
-           orphan population (per timeline, through each body's `entered` mark) does not depend on which flow
-           was picked last. The caller still owns the reference it passed and frees it as it would have anyway. */
-        DCHECK((b->parse_realm == realm) && dyn_body_name_eq(b->parse_name, name) && (b->parse_flags == flags),
-               "a second parse of one program text was offered under a DIFFERENT realm, name or flag set than "
-               "the one already held — see dyn_body_parse_ref for why every reference to one body agrees about "
-               "all three");
-        return;
-    }
+    /* One compile per body, and a stint is refused over a held parse (dyn_body_compile_stint), so nothing is held
+       when a finished parse is offered. The release arm keeps the first; either closure is right for the bytes. */
+    DCHECK(b->parse_realm == NULL,
+           "a second finished parse of one program text was offered — a body runs one compile at a time and none "
+           "once a parse is held, so two worlds compiled these bytes apart");
+    if (b->parse_realm != NULL) return;
     /* THE NAME IS COPIED BEFORE ANYTHING IS TAKEN, so a failure to copy it leaves the body exactly as it was.
        A KEY THIS FILE CANNOT STATE IS A KEY IT MAY NOT COMPARE, so the parse is simply not shared: that costs
        one re-parse per later timeline and truncates nothing, because a parse is RE-DERIVABLE from the text this
@@ -332,6 +358,46 @@ void dyn_body_parse_hold(DynBody *b, JSContext *realm, const char *name, int fla
     /* THE PREDICATE LAST, so that a body is never observable as holding a parse whose key is half written. */
     b->parse_realm = realm;
     g_dyn_body_parses++;
+}
+
+int dyn_body_compile_parked(const DynBody *b)
+{
+    DCHECK(b != NULL && b->refs > 0, "a parked compile was asked of no body, or after its last holder released it");
+    return b->compile != NULL;
+}
+
+/* See dyn_body.h. */
+int dyn_body_compile_stint(DynBody *b, JSContext *realm, const char *name, int flags, int module, JSValue *pout)
+{
+    int r;
+
+    DCHECK(b != NULL && b->refs > 0, "a compile stint was asked of no body, or after its last holder released it");
+    DCHECK(realm != NULL && pout != NULL, "a compile stint was asked with no realm, or nowhere to put its result");
+    DCHECK(b->parse_realm == NULL,
+           "a compile stint was asked of a body that holds a finished parse — the row asks for the held parse "
+           "first, so this stint would parse bytes whose parse every world can already take");
+    DCHECK((b->compile != NULL) == (b->compile_realm != NULL),
+           "a body's parked compile and its recorded key disagree — the key is recorded by the stint that begins "
+           "a compile and released by the stint that ends it");
+    if (b->compile_realm == NULL) {
+        if (name != NULL) {
+            b->compile_name = reclaim_strdup(name);
+            CHECK(b->compile_name != NULL, "dyn_body: OOM copying the name a compile borrows across its stints");
+        }
+        b->compile_flags = flags;
+        b->compile_module = (char)(module != 0);
+        b->compile_realm = JS_DupContext(realm);
+    }
+    DCHECK(b->compile_realm == realm && dyn_body_name_eq(b->compile_name, name) && b->compile_flags == flags &&
+               b->compile_module == (char)(module != 0),
+           "a world continued a body's compile under a different realm, name, flag set or entry than the compile "
+           "began under — every row holding one body computes one key (dyn_body_parse_ref)");
+    r = module ? JS_FlowCompileModule(realm, b->text, b->len, b->compile_name, flags, pout, &b->compile)
+               : JS_FlowCompileStep(realm, b->text, b->len, b->compile_name, flags, pout, &b->compile);
+    DCHECK((r == 0) == (b->compile != NULL),
+           "a compile stint's answer and the body's carrier disagree about whether the compile is parked");
+    if (b->compile == NULL) dyn_body_compile_key_release(b);
+    return r;
 }
 
 long dyn_body_total_bytes(void) { return g_dyn_body_bytes; }

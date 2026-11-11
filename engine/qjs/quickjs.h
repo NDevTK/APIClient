@@ -2512,6 +2512,15 @@ JS_EXTERN int  JS_IsFlowShared(JSValueConst obj);
 JS_EXTERN uint32_t JS_ObjFlowGen(JSValueConst obj);
 JS_EXTERN uint32_t JS_FlowGen(void);
 JS_EXTERN uint32_t JS_FlowBumpGen(void);
+/* The generation of what a compile stint creates (JS_FlowCompileStep, JS_FlowCompileModule): a parse product is
+   shared by every world that reaches its bytes and written by none, so no slice is opened at this generation and
+   the first slice opens above it. JS_FlowInCompileStint answers whether a stint is open on this thread. The hook
+   is called with 1 as a stint opens and 0 as it closes, a pause for the running world's own act included: the
+   embedder routes captures to no world between the two. */
+#define JS_FLOW_GEN_COMPILE ((uint32_t)1)
+typedef void JSCompileStintFunc(int open);
+JS_EXTERN void JS_SetCompileStintHook(JSCompileStintFunc *fn);
+JS_EXTERN int  JS_FlowInCompileStint(void);
 /* Is this captured slot's storage a DENSE array element (a fast Array, index inside its dense count)? Only then
    is removing the slot a shrink of the dense part; every other integer-indexed slot on an Array is an ordinary
    property JS_DeleteOwnSlot removes. Pairs with the shrink below — the delta's element half. */

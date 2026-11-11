@@ -1310,6 +1310,8 @@ void *decide_fork_same_path(const char *why) {
     DCHECK(g_running, "a sibling's decision state was forked while no flow's was loaded — the blob would stand "
                       "on whatever chain the previously-switched-in flow left behind, and the sibling would "
                       "replay a path it never took");
+    DCHECK(!JS_FlowInCompileStint(),
+           "a sibling was minted inside a compile stint — a compile is no world's act and forks none");
     b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM forking a flow's decision state");
     b->seg = dec_freeze();   /* the caller's reference, on top of the running flow's own */
     b->c = g_c;
@@ -1332,6 +1334,9 @@ static int dec_arrival_fork(const char *why, uint32_t asked, void **sib_blob) {
 
     DCHECK(g_running, "an arrival fork was asked while no flow's decision state was loaded");
     DCHECK(sib_blob != NULL, "an arrival fork was asked with nowhere to hand the sibling's decision state");
+    DCHECK(!JS_FlowInCompileStint(),
+           "an arrival fork was asked inside a compile stint — a compile is no world's act, so nothing in it "
+           "arrives in one and no arm is taken");
     *sib_blob = NULL;
     if ((arm = dec_owed_take(asked)) >= 0) return arm;
     if (g_c < dec_total()) {
@@ -1850,6 +1855,9 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     int op, forked = 0, arm, real, neg, eq_holds, eq_fails, forced_arm, pinned = 0, refined, slot;
 
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
+    DCHECK(!JS_FlowInCompileStint(),
+           "a branch over a concolic value was asked inside a compile stint — a compile reads no input of any "
+           "world, so the parse or the code generation was handed a world's value");
 
     /* The polarity between the value this branch tests and the predicate it is about, read once and applied
        twice: to the observation on the way in and to the arm on the way out. Between those lines the function

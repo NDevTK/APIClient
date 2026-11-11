@@ -10489,6 +10489,9 @@ void concolic_install_source_overlay(void)
    can be. */
 JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src, unsigned types, JSValue computed)
 {
+    DCHECK(!JS_FlowInCompileStint(),
+           "a source was read inside a compile stint — a compile reads the source bytes and no input of any "
+           "world, so a component ran inside the parse");
     /* The host must have answered before this seam is asked: the answer decides whether the value forks, and a
        caller minting for a realm's lifetime cannot ask again (see the three states above). */
     DCHECK(g_source_overlay != SOURCE_OVERLAY_UNDECLARED,

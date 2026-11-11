@@ -240,7 +240,7 @@
     /* `classic_compile_overruns <= that sum` and                                */ \
     /* `classic_compile_resumed <= arms[compile-handed-the-thread-back]`, and    */ \
     /* the second's own message calls that arm "the one site that leaves a       */ \
-    /* carrier in `f->compile`". A module park filed there would leave both      */ \
+    /* carrier on a row's body". A module park filed there would leave both      */ \
     /* inequalities TRUE and make the equality FALSE: the right-hand side would  */ \
     /* carry stints of a phase whose numerator counts none of them, so a reader  */ \
     /* subtracting `yielded - resumed` to recover "parses begun and not ended"   */ \

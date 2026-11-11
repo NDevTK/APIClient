@@ -1121,7 +1121,7 @@ typedef struct {
     int64_t  slice_overrun_gap_work;  /* the worst no-suspend-point stretch of any non-seamless overrunning turn */
     long     over_gap_arms[STEP_UNIT_N];
     /* The classic compile phase of a start step. A compile rests: JS_FlowCompileStep polls the preempt hook in
-     * the parse's own dispatch and parks through `f->compile` (`compile-handed-the-thread-back`).
+     * the parse's own dispatch and parks on the row's body (`compile-handed-the-thread-back`).
      * `classic_compiles` is one per program, raised when a parse finishes; `classic_compile_overruns` is one
      * per stint whose parse retired a slice's work, so neither is a subset of the other. Stints are `classic_compiles +
      * arms[STEP_UNIT_COMPILE_YIELDED]`, and overruns are asserted under that and under `slice_overruns`. Module
@@ -1142,8 +1142,7 @@ typedef struct {
      * raise none of the rows above. `classic_compiles + classic_parse_shared` is the classic programs whose
      * closure was obtained, which is the figure comparable with a pre-sharing revision's `classic_compiles`.
      * Asserted: a share requires a finished parse, and `dyn_body_parses_held() <= classic_compiles`.
-     * `classic_compile_again` stays nonzero by design: a failed parse holds nothing, and a flow mid-parse when
-     * another finishes completes its own. */
+     * `classic_compile_again` stays nonzero only for a failed parse, which holds nothing. */
     long classic_parse_shared;       /* classic programs started from a parse another flow had finished */
     /* The same for root module rows: parses finished, their bodies' source bytes, and modules evaluated from a
        record another flow's parse produced. */

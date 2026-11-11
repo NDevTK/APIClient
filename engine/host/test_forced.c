@@ -40238,12 +40238,12 @@ TF_UNIT void painted_frame_graph_selftest(JSContext *ctx, lxb_html_document_t *d
     layout_job_free(job);
     JS_FreeValue(ctx, tf_graph_program(ctx,
         "(function () { graphCanvas.remove(); delete globalThis.graphCanvas; return 0; })()"));
-    JS_SetFlowGen(1);
+    JS_SetFlowGen(JS_FLOW_GEN_COMPILE + 1);
     painted_frame_publish(ctx, frame);
     JS_SetFlowGen(0);
     obj = painted_frame_object(ctx);
     g1 = JS_FlowGraphWrite(ctx, &obj, 1, 0);
-    JS_SetFlowGen(1);
+    JS_SetFlowGen(JS_FLOW_GEN_COMPILE + 1);
     CHECK(JS_FlowGraphRead(ctx, g1, back) == 0, "the painted-frame graph witness could not rebuild its graph");
     JS_SetFlowGen(0);
     g2 = JS_FlowGraphWrite(ctx, back, 1, 0);

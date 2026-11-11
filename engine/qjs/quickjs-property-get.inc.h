@@ -101,6 +101,9 @@ static JSValue JS_GetPropertyInternal(JSContext *ctx, JSValueConst obj,
     uint32_t tag;
 
     (void)file; (void)line;
+    DCHECK(!g_compile_stint,
+           "a [[Get]] ran inside a compile stint — a compile reads no state of any world; the parse product is "
+           "built from the source bytes alone");
     DCHECK(file != NULL,
            "a property read reached JS_GetPropertyInternal with no call site — every public spelling is a macro "
            "that captures __FILE__/__LINE__ and every internal caller passes js_read_site_routed, so a NULL "

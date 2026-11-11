@@ -431,6 +431,9 @@ static int JS_SetPropertyInternal2(JSContext *ctx, JSValueConst obj, JSAtom prop
     int desc_flags;
     int ret;
 
+    DCHECK(!g_compile_stint,
+           "a [[Set]] ran inside a compile stint — a compile writes no state of any world; a parse product's own "
+           "slots are defined, never set through the prototype chain");
     cow_capture(ctx, obj, prop);   /* forced-exec: record the baseline object's pre-write state for per-flow revert */
     if (unlikely(g_concolic.unit_seq != NULL) && JS_VALUE_GET_PTR(obj) == JS_VALUE_GET_PTR(this_obj))
         js_record_write_note(ctx, obj, prop);

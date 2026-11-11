@@ -275,6 +275,23 @@ void cow_release_scope_end(void)
                              "in the baseline at a rest point, never its own; what it entered goes with its "  \
                              "delta, so the teardown gives back references and writes nothing")
 
+/* A compile stint is no world's act (quickjs.h's JS_FlowInCompileStint): it writes only what a stint created, and
+   what a stint created no world writes. Asked at every hook that names the object written, ahead of the route
+   test, since a stint runs with the route off. */
+#define COW_CHECK_COMPILE_STINT(obj, what)                                                                      \
+    do {                                                                                                        \
+        DCHECK(!JS_FlowInCompileStint() || JS_ObjFlowGen(obj) == JS_FLOW_GEN_COMPILE,                           \
+               "a compile stint wrote " what " of an object no stint created — the parse reached state of the " \
+               "world it runs in; build the value from the source bytes alone");                                \
+        DCHECK(JS_FlowInCompileStint() || JS_ObjFlowGen(obj) != JS_FLOW_GEN_COMPILE,                            \
+               "a world wrote " what " of an object a compile stint created — a parse product is shared by "    \
+               "every world that reaches its bytes; give the world its own object at the site that wrote");     \
+    } while (0)
+/* And the hooks that name no object: a stint reaches none of them. */
+#define COW_REFUSE_COMPILE_STINT(what)                                                                          \
+    DCHECK(!JS_FlowInCompileStint(), "a compile stint changed " what " — a compile runs no code and changes no " \
+                                     "state of any world")
+
 static void cow_capture_begin(void) { g_capturing++; }
 static void cow_capture_end(void) {
     DCHECK(g_capturing > 0,
@@ -930,6 +947,7 @@ uint32_t cow_composing_capture_rows(void) { return g_composing_cap; }
 
 void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     COW_REFUSE_RELEASE_WRITE("a property slot");
+    COW_CHECK_COMPILE_STINT(obj, "a property slot");
     if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     /* FLOW-PRIVATE skip — the O(shared-state) invariant. An object created AFTER this flow's fork (flow_gen >
@@ -985,6 +1003,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
    built after the fork — is not captured). */
 void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     COW_REFUSE_RELEASE_WRITE("an array element");
+    COW_CHECK_COMPILE_STINT(obj, "an array element");
     if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;
@@ -1005,6 +1024,7 @@ void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
    built after the fork) are skipped. base = key, cur = value for a STRONG collection; a weak one holds a cell and
    leaves both UNDEFINED, for the reason the CowEntry comment gives. Unapply deletes, apply re-adds. */
 void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst val) {
+    COW_CHECK_COMPILE_STINT(obj, "a collection entry");
     if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
@@ -1035,6 +1055,7 @@ void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSV
    COW_MAP_DELETE (base=key, map_old=old), those three fields being where a STRONG collection's operands live; a
    weak one holds them in a cell instead. Flow-private collections are skipped. */
 void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst old_val, JSValueConst val, int op, int pos) {
+    COW_CHECK_COMPILE_STINT(obj, "a collection entry");
     if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip */
@@ -1072,6 +1093,7 @@ void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, 
    arm is lost rather than isolated. Flow-private promises (created after the fork) are skipped by the same
    generational test as every other capture — nothing else can observe them. */
 void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
+    COW_CHECK_COMPILE_STINT(obj, "the settlement");
     CowDelta *d = cow_state_ask(COW_STATE_ASYNC);
     if (!d) return;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
@@ -1345,6 +1367,7 @@ void cow_capture_agen_isolate(JSContext *ctx, JSValueConst agobj, void *base_ad,
 
 void cow_capture_module_eval(JSContext *ctx, void *mod) {
     CowDelta *d;
+    COW_REFUSE_COMPILE_STINT("a module record's evaluation state");
     /* A SILENT `if (bad) return` PAST THIS HOOK IS THE LEAK IT EXISTS TO PREVENT, which is why this is an
        assert and not a skip: every one of the engine's six call sites holds a module record it took from the
        graph, so a NULL is this codebase's own logic wrong, and the write that follows the call then lands
@@ -1425,6 +1448,7 @@ void cow_capture_host_state_at(JSContext *ctx, JSValueConst owner, void *p, size
    then resize, or resize then write) decides nothing now: whichever comes first takes the baseline, and the
    baseline it takes describes the whole storage either way. */
 void cow_capture_body_mark(JSContext *ctx, JSValueConst body, uint8_t *mark) {
+    COW_REFUSE_COMPILE_STINT("a body's entered mark");
     CowDelta *d = cow_state_ask(COW_STATE_BODY);
     if (!d) return;
     DCHECK(JS_VALUE_GET_TAG(body) == JS_TAG_FUNCTION_BYTECODE && mark != NULL && *mark == 0,
@@ -1443,6 +1467,7 @@ void cow_capture_body_mark(JSContext *ctx, JSValueConst body, uint8_t *mark) {
 }
 
 void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
+    COW_CHECK_COMPILE_STINT(abuf, "the storage");
     CowDelta *d = cow_state_ask(COW_STATE_BUFFER);
     if (!d) return;
     uint32_t len;
@@ -1474,6 +1499,7 @@ void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
    field, because the three fields are one object and the flow that reached one may write any of them; the
    dedup is therefore what makes six mutation sites cost one entry. */
 void cow_capture_obj_state(JSContext *ctx, JSValueConst obj) {
+    COW_CHECK_COMPILE_STINT(obj, "the own state");
     CowDelta *d = cow_state_ask(COW_STATE_OBJECT);
     if (!d) return;
     DCHECK(JS_IsObject(obj), "an object's own state was captured with no object");
@@ -1507,6 +1533,7 @@ void cow_capture_obj_state(JSContext *ctx, JSValueConst obj) {
    BASELINE object, which never takes the generational skip and never sees a short head. The case the argument
    did not cover is a long-lived flow that has not forked recently, and it is the ordinary one. */
 void cow_capture_iter_state(JSContext *ctx, JSValueConst obj) {
+    COW_CHECK_COMPILE_STINT(obj, "the iteration state");
     CowDelta *d = cow_state_ask(COW_STATE_ITER);
     if (!d) return;
     DCHECK(JS_IsObject(obj), "an iteration record's state was captured with no object");
@@ -1771,6 +1798,7 @@ void cow_record_set_at(JSContext *ctx, void *p, const CowRecord *rec, JSValue *s
 
 void cow_capture_varref(JSContext *ctx, void *vref) {
     COW_REFUSE_RELEASE_WRITE("a closure cell");
+    COW_REFUSE_COMPILE_STINT("a closure cell");
     if (cow_hooks_off() || !g_current || !vref) return;
     CowDelta *d = g_current;
     if (cow_hash_find(d, cow_key_cell(vref)) >= 0) return;   /* capture each cell ONCE (O(1)) */
