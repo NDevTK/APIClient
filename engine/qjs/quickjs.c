@@ -86452,22 +86452,17 @@ static bool fg_frame_written(JSContext *ctx, TrampFrame *t, bool top)
     return fg_frame_anchor_written(ctx, t, top);
 }
 
-/* A bytecode base's chain of heap frames, after the base's record: the count, then each frame from the bottom
-   (the base's callee) to the top (the live point), each 'c' for an ordinary activation as do_tramp_call pushes
-   it, 'a' for an async body before its first await as do_async_tramp_call pushes it (fg_frame_async_written),
-   'y' for an anchor at the top (fg_frame_anchor_written), or for a survey 'X' where the frame is another kind.
-   An anchor's record is its caller's realm where the caller is a call root, its caller's receiver and
-   new.target, and its continuation (fg_links). A frame's record is its body (an anchor), its function,
-   its receiver and new.target ('c') or the activation's receiver, resolving pair and the promise the call
-   evaluated to ('a'), its caller's receiver and new.target, its call shape (call_first, call_argc and owns_func
-   for 'c', which 'a' holds at 0; is_tail, its continuation kind and for-of offset), its buffer's law
-   (arg_allocated and callee_argc for 'c', the activation's argc for 'a'; arg_count), the caller's argc and
-   argument allocation, its flags (strict, then constructor for 'c' or the activation's pending throw for 'a'),
-   where a 'c' frame's arguments are (its own buffer, none, or an offset into its caller's), its program
-   counter, its live slots, its cells, and what its continuation waits on (fg_links). The caller's stack
-   position is the caller's live end, which the caller's record states, and every other caller pointer is the
-   caller's own frame, so neither is written; each is asserted here. A frame whose caller is a call root (a
-   step-root base) also names the caller's realm, which no body states. */
+/* A bytecode base's chain of heap frames: the count, then each frame bottom to top, 'c' for an ordinary
+   activation (do_tramp_call), 'a' for an async body before its first await (do_async_tramp_call), 'y' for an
+   anchor at the top (ANCHOR_NEW), or for a survey 'X' at the first frame of another kind. Each names its
+   caller's realm under a call root and its caller's receiver and new.target. A 'c' or 'a' frame then holds its
+   body (an anchor) and function; its receiver and new.target ('c') or the activation's receiver, resolving
+   pair and owed promise ('a'); call_first, call_argc and owns_func ('c' only); is_tail, continuation kind and
+   for-of offset; arg_allocated and callee_argc ('c') or the activation's argc ('a'); arg_count; the caller's
+   argc and argument allocation; strict mode with the constructor bit ('c') or the pending throw ('a'); where a
+   'c' frame's arguments are (own, none, or an offset into its caller's); its pc, live slots, cells and
+   continuation (fg_links). An anchor holds only its continuation. Every caller pointer is the caller's own
+   frame and live end, so none is written; each is asserted here. */
 static void fg_chain_calls(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s, uint32_t n)
 {
     TrampFrame **ts = fg_grow(NULL, sizeof *ts * n);
