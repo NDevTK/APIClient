@@ -975,6 +975,7 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    truth: a predicate was already decided in this flow. `if (cfg.admin)` pins nothing but fixes truthiness for
    this flow, and bundles test one flag repeatedly; without this N tests cost 2^N flows whose siblings are
    contradicted. It prunes only a branch on the same predicate the flow already fixed.
+   truth_seen: `truth` was taken on the arm an example of the run gave for this key (concolic_constrain_branch).
    ex_contra: this flow took an arm the value's own example says a real session does not take
    (concolic_contradict_example).
    val_assumed: the arm that wrote `val` is one no example of this run confirmed (concolic_pin_note_assumed), so
@@ -1026,7 +1027,7 @@ typedef struct { char *key; char *val; signed char valkind; signed char val_assu
                  Bound *bnd;
                  ConcolicPred *pred; int npred; ConcolicLooseEq *leq; int nleq;
                  ConcolicPrincipalPin *ppin; int nppin; char **ptok; int nptok;
-                 signed char truth; signed char ex_contra;
+                 signed char truth; signed char truth_seen; signed char ex_contra;
                  char *adec; int adec_arm; signed char adec_what; signed char adec_neg; char *tostr;
                  unsigned short types_out, lang_in, lang_out;
                  SearchRange *srange; SubFacet *sub; int nsub; } Cons;
@@ -1272,6 +1273,7 @@ static Cons *cons_entry(const char *key) {
         g_pins[g_pins_n].nptok = below->nptok;
     }
     g_pins[g_pins_n].truth = below ? below->truth : -1;
+    g_pins[g_pins_n].truth_seen = below ? below->truth_seen : 0;
     g_pins[g_pins_n].ex_contra = below ? below->ex_contra : 0;
     g_pins[g_pins_n].adec = (below && below->adec) ? reclaim_strdup(below->adec) : NULL;
     CHECK(!(below && below->adec) || g_pins[g_pins_n].adec, "concolic: OOM copying an inherited assumed decision");
@@ -1803,12 +1805,22 @@ static void sub_file(const char *recv, const char *tok, int holds, int last, dou
 }
 
 
-void concolic_constrain_branch(const char *key, int truth) {
-    cons_entry(key)->truth = (signed char)(truth ? 1 : 0);
+void concolic_constrain_branch(const char *key, int truth, int seen) {
+    Cons *e = cons_entry(key);
+    const signed char t = (signed char)(truth ? 1 : 0);
+
+    DCHECK(seen == 0 || seen == 1, "a decided truth was filed as neither seen nor unseen");
+    if (e->truth != t) e->truth_seen = 0;
+    e->truth = t;
+    if (seen) e->truth_seen = 1;
 }
 int concolic_branch_decided(const char *key) {
     const Cons *c = cons_lookup(key);
     return c ? c->truth : -1;
+}
+int concolic_branch_seen(const char *key) {
+    const Cons *c = cons_lookup(key);
+    return c && c->truth >= 0 && c->truth_seen;
 }
 
 /* Drop a chain reference: refcount--, free the segment's entries at zero, continue into its base. A loop, not
@@ -2336,7 +2348,7 @@ void concolic_entail(JSValueConst eq)
     had = concolic_branch_decided(key);
     DCHECK(had != 0, "an equality this flow's own predicates entail was decided false on this flow's path");
     if (had == 1) { free(key); return; }                     /* already filed on this flow's path */
-    concolic_constrain_branch(key, 1);
+    concolic_constrain_branch(key, 1, 0);
     free(key);
     pinned = concolic_pin(eq);
     DCHECK(pinned, "an entailed equality pinned nothing: its subject is a derivation, not a value with a source");

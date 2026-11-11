@@ -1723,6 +1723,17 @@ static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, con
     if (key) g_branch_asked++;
     if (key && (arm = concolic_branch_decided(key)) >= 0) {
         g_branch_refined++;   /* the ask above was answered without a slot or a fork; see the declaration */
+        /* One key names one value, and a value holds one example along a path. A flow standing on no assumption
+           took every seen truth on its example's arm, so the example answering the other arm here is a second
+           value composed under the first one's key: the constraint decides it, the flow leaves its example's
+           arm with no fork, and no member stands on the page's own run. A forced or pinned path is exempt: its
+           assumption may have replaced the example the truth was seen on. */
+        if (real_arm != REAL_ARM_UNOBSERVED && real_arm != arm && concolic_branch_seen(key) && flow_running() &&
+            !flow_path_forced(flow_running()) && !flow_path_pinned(flow_running()))
+            DFAILF("a flow standing on no assumption took arm %d of a predicate on its example's answer, and the "
+                   "example now answers %d under the same key — the key names two values. Build: the identity "
+                   "the key is composed from holds every operand the value is a function of, by value where the "
+                   "operation reads the operand's value. The key is %s", arm, real_arm, key);
         /* Feasible refinement, asked first. This flow has already decided this predicate, so the other arm is
            contradicted, and forking again would add a flow that explores nothing. It consumes no slot, because it
            adds no decision. The order (constraint, then recorded arm, then a new fork) is what makes a replay
@@ -1766,7 +1777,7 @@ static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, con
     /* One place for all three arms: a replayed or refined arm narrows this flow exactly as a forked one does.
        `*forked` says only whether the caller owes a snapshot. It is applied after the fork's freeze, so the
        sibling's frozen constraint does not carry this flow's arm. */
-    if (key) concolic_constrain_branch(key, arm);
+    if (key) concolic_constrain_branch(key, arm, real_arm != REAL_ARM_UNOBSERVED && real_arm == arm);
     DCHECK(g_c <= dec_total(), "the decision cursor ran past the vector — a branch answered without consuming "
                                "its recorded slot, so the next one will read that slot as its own");
     return arm;
@@ -2126,8 +2137,9 @@ static char *outcome_key(JSValueConst over, const char *op, int c) {
  * freezes the sibling's constraint before decide_arm applies the parent's arm, so these entries land in the
  * parent alone; the sibling settles its own when it re-walks. The assert reads before it writes: a recorded truth
  * that disagrees with the returned completion is a flow standing in a world its own path denies, and overwriting
- * it would hide that. */
-static void outcome_settle(JSValueConst over, const char *op, int n, int c) {
+ * it would hide that. `seen` is whether `c` is the completion the machine's run on the example reached, which
+ * every entry here then follows from. */
+static void outcome_settle(JSValueConst over, const char *op, int n, int c, int seen) {
     int d;
 
     DCHECK(c >= 0 && c < n, "the outcome walk settled on a completion the machine never declared");
@@ -2147,7 +2159,7 @@ static void outcome_settle(JSValueConst over, const char *op, int n, int c) {
                 "completion in the key is the machine's EXAMPLE, and this seam's own decide_note_forced_arm "
                 "contradicts that example on the sibling it mints — after which the same fact composes the "
                 "other spelling", c, d, op);
-        concolic_constrain_branch(key, want);
+        concolic_constrain_branch(key, want, seen);
         free(key);
     }
 }
@@ -2264,7 +2276,7 @@ int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, 
             /* The answer, written under every name it has (see outcome_settle), after decide_note_forced_arm,
                which may have taken this operand's example away, and on the arm that ended the walk, which also
                proved "not d" for every completion it never reached. */
-            outcome_settle(over, op, n, c);
+            outcome_settle(over, op, n, c, c == real);
             if (c != real) outcome_note_assumed(over, op, c);
             return forked ? (c | SOLVER_FORKED_BIT) : c;
         }
@@ -2282,7 +2294,7 @@ int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, 
        completion this walk proved, so a later ask that composes this completion's key finds it. */
     {
         int last = outcome_nth(n - 1, n, real);
-        outcome_settle(over, op, n, last);
+        outcome_settle(over, op, n, last, 0);   /* the walk's first ask found the example's completion refused */
         if (last != real) outcome_note_assumed(over, op, last);
         return last;
     }

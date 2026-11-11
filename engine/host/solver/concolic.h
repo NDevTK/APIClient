@@ -1753,8 +1753,12 @@ const ConcolicPred *concolic_strpred_read(const char *hole, int *n);
    while the key names one predicate: it may prune an arm the flow's own constraint contradicts and never one
    whose domain still permits both. It is what keeps N tests of one flag from costing 2^N flows. -1 = not yet
    decided in this flow, which is also what an unspellable value answers for ever. */
-void        concolic_constrain_branch(const char *key, int truth);
+void        concolic_constrain_branch(const char *key, int truth, int seen);
 int         concolic_branch_decided(const char *key);
+/* `seen` says the flow took `truth` on the arm an example of the run gave for the key, and concolic_branch_seen
+   answers whether the decided truth was ever filed so: an example answering the other arm under that key later
+   on the path is then a second value under one name. An entailed or unobserved truth is filed unseen. */
+int         concolic_branch_seen(const char *key);
 void        concolic_clear_pins(void);                        /* per-flow: clear the whole constraint */
 /* Swap the per-flow pin map when the scheduler interleaves flows: suspend snapshots it, resume restores it. */
 void       *concolic_pins_suspend(void);
