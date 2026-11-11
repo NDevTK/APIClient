@@ -1102,14 +1102,14 @@ static const TfServed *tf_served_at(const char *abs) {
 
 /* The (address, witness mark, provenance) triples the zone was shown, deduplicated: the egress signals a request
    carries are on its pending line and not in the result document, so a row about them reads this. */
-typedef struct { char *url, *pinned, *prov; } TfSeenLine;
+typedef struct { char *url, *pinned, *prov, *address; } TfSeenLine;
 static TfSeenLine *g_tf_seen;
 static int g_tf_seen_n, g_tf_seen_cap;
 
-static void tf_seen_note(const char *url, const char *pinned, const char *prov) {
+static void tf_seen_note(const char *url, const char *pinned, const char *prov, const char *address) {
     for (int i = 0; i < g_tf_seen_n; i++)
         if (!strcmp(g_tf_seen[i].url, url) && !strcmp(g_tf_seen[i].pinned, pinned) &&
-            !strcmp(g_tf_seen[i].prov, prov))
+            !strcmp(g_tf_seen[i].prov, prov) && !strcmp(g_tf_seen[i].address, address))
             return;
     if (g_tf_seen_n == g_tf_seen_cap) {
         g_tf_seen_cap = g_tf_seen_cap ? 2 * g_tf_seen_cap : 64;
@@ -1119,7 +1119,9 @@ static void tf_seen_note(const char *url, const char *pinned, const char *prov) 
     g_tf_seen[g_tf_seen_n].url = strdup(url);
     g_tf_seen[g_tf_seen_n].pinned = strdup(pinned);
     g_tf_seen[g_tf_seen_n].prov = strdup(prov);
-    CHECK(g_tf_seen[g_tf_seen_n].url && g_tf_seen[g_tf_seen_n].pinned && g_tf_seen[g_tf_seen_n].prov,
+    g_tf_seen[g_tf_seen_n].address = strdup(address);
+    CHECK(g_tf_seen[g_tf_seen_n].url && g_tf_seen[g_tf_seen_n].pinned && g_tf_seen[g_tf_seen_n].prov &&
+          g_tf_seen[g_tf_seen_n].address,
           "the fixture could not record a pending line it was shown");
     g_tf_seen_n++;
 }
@@ -1132,6 +1134,15 @@ static int tf_seen_line(const char *prefix, const char *pinned, const char *prov
             (!prov || !strcmp(g_tf_seen[i].prov, prov)))
             return 1;
     return 0;
+}
+
+/* How many lines whose address begins with `prefix` were shown with the address class `address`. */
+static int tf_seen_address(const char *prefix, const char *address) {
+    int n = 0;
+
+    for (int i = 0; i < g_tf_seen_n; i++)
+        if (!strncmp(g_tf_seen[i].url, prefix, strlen(prefix)) && !strcmp(g_tf_seen[i].address, address)) n++;
+    return n;
 }
 
 /* The zone's latency, modelled for one address. engine/trusted.mjs owes an answer from the bill that showed it
@@ -1170,13 +1181,13 @@ static int tf_replytwice_hold(const char *abs, const char *const pair[5]) {
 /* The provider's statement of what it holds (engine_set_provider): a bill line naming the owed pair. */
 static int tf_replytwice_holds(const char *line) {
     const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
-    const char *referrer_policy, *referrer, *askers;
+    const char *referrer_policy, *referrer, *address, *askers;
     char *one = strdup(line);
     int held;
 
     CHECK(one != NULL, "the fixture could not read a bill line it was asked about");
     engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
-                         &mode, &referrer_policy, &referrer, &askers, &url);
+                         &mode, &referrer_policy, &referrer, &address, &askers, &url);
     held = g_tf_r2.owed_at >= 0 && !strcmp(method, g_tf_r2.pair[0]) && !strcmp(mode, g_tf_r2.pair[1]) &&
            !strcmp(referrer_policy, g_tf_r2.pair[2]) && !strcmp(referrer, g_tf_r2.pair[3]) &&
            !strcmp(url, g_tf_r2.pair[4]);
@@ -1263,7 +1274,7 @@ static int fixture_provide(JSContext *ctx) {
         size_t len = nl ? (size_t)(nl - urls) : strlen(urls);
         char *one = malloc(len + 1);
         const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
-        const char *referrer_policy, *referrer, *askers;
+        const char *referrer_policy, *referrer, *address, *askers;
         UrlRecord rec;
         char *abs;
         JSValue reply;
@@ -1271,9 +1282,9 @@ static int fixture_provide(JSContext *ctx) {
 
         CHECK(one, "the fixture could not name the request it is answering");
         memcpy(one, urls, len); one[len] = 0;
-        /* THE LINE IS `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>
-           MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL` AND IT IS SPLIT BY THE
-           ENGINE'S OWN SPLITTER — the reply seam is keyed on the pair, so a fixture that answered the whole
+        /* The line is `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>
+           MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL` and it is split by the
+           engine's own splitter — the reply seam is keyed on the pair, so a fixture that answered the whole
            line as an address would match nothing. THIS FIXTURE ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT
            ITSELF, deliberately: what it exercises is the PATH (parked, delivered, resumed), and both a firing
            policy and a CORB class are the trusted zone's — engine/trusted.mjs is where these fields decide
@@ -1281,7 +1292,7 @@ static int fixture_provide(JSContext *ctx) {
            what a fixture is for; the DESTINATION's is asserted inside the splitter against Fetch §2.2.5's own
            enumeration, which is too long to restate at each host and is one table for that reason. */
         engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
-                             &mode, &referrer_policy, &referrer, &askers, &url);
+                             &mode, &referrer_policy, &referrer, &address, &askers, &url);
         DCHECK(!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO),
                "the pending join stated a drive mark that is neither token engine.h declares");
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
@@ -1302,7 +1313,7 @@ static int fixture_provide(JSContext *ctx) {
         abs = ok ? url_serialize(&rec, /*exclude_fragment*/ false) : NULL;
         url_record_free(&rec);
         CHECK(abs, "the fixture could not serialize the URL it is answering");
-        tf_seen_note(abs, pinned, provenance);
+        tf_seen_note(abs, pinned, provenance, address);
         /* THE ONE REPLY RECORD every host delivers — the same shape the trusted zone stringifies as JSON. */
         /* `application/json` is what this fixture SERVES, stated by the host that serves it — the same
            position the trusted zone is in when it stamps `computedType` on a real reply (fetch.h). */
@@ -26338,6 +26349,15 @@ TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
     const char *uv_why = NULL; int uv_tt = 1;
     fold_row(&uv_tt, &uv_why, !!strstr(js, "https://x.test/api/uspa-ex"),
              "NOT REACHED: no record names /api/uspa-ex, so the URL given `lang` was never fetched");
+    /* The pending line's address class: the example's address reads `example`, and the control beside it, a
+       literal address, reads `concrete`. */
+    fold_row(&uv_tt, &uv_why, tf_seen_address("https://x.test/api/uspa-ex?lang=en-US", "example") >= 1 &&
+                              tf_seen_address("https://x.test/api/uspa-ex?lang=en-US", "concrete") == 0,
+             "the request whose address is its unknown's example was not shown to the zone with the address class "
+             "`example`: the pending line states `concrete`, or the request was never listed");
+    fold_row(&uv_tt, &uv_why, tf_seen_address("https://x.test/api/uspm-get", "concrete") >= 1 &&
+                              tf_seen_address("https://x.test/api/uspm-get", "example") == 0,
+             "the control's address, a literal of the page's text, was not shown with the address class `concrete`");
     fold_row(&uv_tt, &uv_why, !!strstr(js, "\"validValues\":[\"https://x.test/api/uspa-ex?lang=en-US\"]"),
              "the URL whose appended value has an example was not fetched at the address that example "
              "serializes to: its query holds the value's display shape, or nothing");

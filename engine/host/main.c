@@ -1716,7 +1716,7 @@ QJS_EXPORT void qjs_teardown(void)
  * reports no pending fetches while a flow is parked on one that never arrives. */
 
 /* What the trusted zone still owes the frontier, as `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>
-   PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL` lines;
+   PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL` lines;
    engine_pending_split is the authority on the grammar. The method, the mode and the referrer pair are part of the request's identity
    (solver/engine.h), so a GET and a POST to one address are two requests; the zone issues each line as it names it
    and hands (method, mode, referrer policy, referrer, url) back to qjs_provide. The destination is Fetch §2.2.5
@@ -1748,7 +1748,7 @@ QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *re
     DCHECK(method != NULL && mode != NULL && referrer_policy != NULL && referrer != NULL,
            "a reply was provided with no METHOD, MODE, REFERRER POLICY or REFERRER — qjs_pending answers "
            "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>"
-           "REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL` and this entry takes (method, mode, referrer policy, "
+           "REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL` and this entry takes (method, mode, referrer policy, "
            "referrer, url); a host sending less is answering a request it cannot name");
     DCHECK(reply != NULL, "a reply was provided with no text at all — a network error is the JSON `null`, "
                           "which is a value the engine's delivery distinguishes from a reply it never got");
@@ -1810,7 +1810,7 @@ QJS_EXPORT void qjs_decline(const char *method, const char *mode, const char *re
     DCHECK(g_begun, "a request was refused to an engine that never ran");
     DCHECK(method != NULL && mode != NULL && referrer_policy != NULL && referrer != NULL && url != NULL,
            "a refusal arrived naming no request — qjs_pending answers `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>"
-           "PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>"
+           "PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>"
            "URL` and a refusal answers the same five-field identity a reply does, because it answers the same question");
     DCHECK(reason != NULL && *reason != '\0',
            "a refusal arrived with no REASON — the flow it refuses will not drain this session, so the reason "

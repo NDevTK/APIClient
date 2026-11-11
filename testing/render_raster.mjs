@@ -281,7 +281,7 @@ const PROGRAM_DESTINATIONS = new Set(['script', 'style', 'worker', 'sharedworker
 
 /* The twelve fields of solver/engine.h's pending line, in engine_pending_split's order. */
 const PENDING_FIELDS = ['method', 'destination', 'initiator', 'provenance', 'pinned', 'driven', 'credentials',
-                        'mode', 'referrerPolicy', 'referrer', 'askers', 'url'];
+                        'mode', 'referrerPolicy', 'referrer', 'address', 'askers', 'url'];
 function splitPending(line) {
   /* Split where the engine joined it. No field can hold a TAB (URL Standard §4.4 URL parsing removes them and
      the rest are tokens), so a line with another field count is a grammar this host does not share, and

@@ -926,7 +926,7 @@ char *engine_record_head(const char *op, const char *doc, const struct Flow *f);
    the same predicate in `extension/lib/safe-fetch.js` over the bytes it read. */
 
 /* What the host still owes the frontier's network parks: one `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>
- * PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL` line
+ * PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL` line
  * per outstanding request, newline-terminated, "" for none, deduped by the request's identity (solver/pending_index.h's
  * PendRequestKey); engine_pending_split is the authority on the shape, and the buffer is valid until the next
  * call. The method, mode, referrer policy and referrer are in the identity: a GET and a POST, or a `no-cors`
@@ -934,14 +934,15 @@ char *engine_record_head(const char *op, const char *doc, const struct Flow *f);
  * §2.2.5) lets the chokepoint apply CORB to every park; the credentials mode (`fetch_credentials_token`) says
  * whose session pays, and `same-origin` is resolved by the trusted zone. The referrer policy is the request's
  * after Fetch §4.1 "Main fetch" gave an empty one the policy container's, and the referrer is "no-referrer" or
- * a URL (core/fetch/fetch.h's fetch_referrer_for_wire), from which the zone composes `Referer` with Referrer
- * Policy §8.3's later steps. No field can hold a TAB: URL Standard §4.4 URL parsing strips tabs, a method is an
- * RFC 9110 §5.6.2 token, and the vocabularies are lowercase ASCII; the join asserts them. ASKERS is the
- * comma-joined set of the documents whose parks the line folds, each by its world name; the trusted zone judges
- * the request against those documents' records, and a name is never empty and holds no TAB or comma. */
+ * a URL (fetch_referrer_for_wire), from which the zone composes `Referer` with Referrer Policy §8.3's later
+ * steps. ADDRESS is the address class (fetch_address_token: `concrete` or `example`; an address with no bytes
+ * is never listed), folded with the (provenance, witness, drive) vector. ASKERS is the comma-joined set of the
+ * documents whose parks the line folds, by world name, which the zone judges the request against; a name is
+ * never empty and holds no TAB or comma. No other field can hold a TAB (URL Standard §4.4 URL parsing strips
+ * tabs, a method is an RFC 9110 §5.6.2 token, the vocabularies are lowercase ASCII); the join asserts them. */
 const char *engine_pending_fetches(void);
 /* Split one engine_pending_fetches line where it was joined, so hosts do not each re-derive the grammar. `line`
-   is the host's own mutable copy of one line without its newline; each TAB becomes a NUL and the twelve fields
+   is the host's own mutable copy of one line without its newline; each TAB becomes a NUL and the thirteen fields
    are returned pointing into it. Every out-parameter is required (asserted): a host that skipped the
    destination would fetch a script as data, one that skipped the provenance would carry a forced reply as an
    observation, one that skipped the credentials mode would decide by silence whose session pays, and one that
@@ -949,8 +950,8 @@ const char *engine_pending_fetches(void);
 void engine_pending_split(char *line, const char **method, const char **destination,
                           const char **initiator, const char **provenance, const char **pinned,
                           const char **driven, const char **credentials, const char **mode,
-                          const char **referrer_policy, const char **referrer, const char **askers,
-                          const char **url);
+                          const char **referrer_policy, const char **referrer, const char **address,
+                          const char **askers, const char **url);
 /* Deliver a body for one request, keyed on the (method, mode, referrer policy, referrer, url) the flow parked
    on. Returns how many entries it filled. A reply for a pair with no outstanding park is the zone writing an
    answer it does not owe (answered, refused, withdrawn or never shown), asserted here. `how` and `reach` are

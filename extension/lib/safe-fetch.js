@@ -647,6 +647,24 @@ function _drivenOf(opts) {
         "act the request is");
   return opts.driven;
 }
+/* The address class the engine states beside the witness mark (core/fetch/fetch.h's fetch_address_token, on
+   the pending line and the XHR record): `concrete` when the page's code computed the bytes, `example` when the
+   address holds an unknown and the bytes are what the page computes from that unknown's example. `unknown` is an
+   address with no bytes, which the engine declines itself and never lists; a record stating it is refused at
+   every setting. `unstated` is this zone's word for an engine record that carries no class. A caller states
+   `concrete` only for an address no engine path composed. A CHECK for the provenance reason.
+   Named residual. Not covered: a navigation's record (core/frame/navigable.c's load job and notices,
+   solver/route_seed.c's declaration) carries no class, so its request states `unstated`. Next diff: those
+   records carry fetch_address_token. Its absence shows as every engine-named navigation's entry reading
+   `address=unstated`. */
+var _ADDRESS_CLASSES = ["concrete", "example", "unknown", "unstated"];
+function _addressOf(opts) {
+  CHECK(_ADDRESS_CLASSES.indexOf(opts.address) >= 0,
+        "safeFetch was called with an address class that is none this file declares: " +
+        JSON.stringify(opts.address) + " — relay `concrete` or `example` from the engine's record, state " +
+        "`unstated` for a record that carries none, or `concrete` for an address this zone composed");
+  return opts.address;
+}
 /* What this function does not read: a field outside this set is refused rather than dropped in silence and
    read by its caller as carried. The option that matters is `method`: `init` hardcodes `method: "GET"` and
    nothing reads `opts.method` or `opts.body`, so a caller stating a verb would otherwise get the reply to a
@@ -655,7 +673,7 @@ function _drivenOf(opts) {
    rule also refuses `as`, since the CORB class is the request's destination. A closed set restates what the
    body reads, and the drift direction is safe: an option added to the body and not here aborts on its
    author's first call. */
-var _SAFEFETCH_OPTIONS = ["pageOrigin", "destination", "mode", "provenance", "pinned", "driven",
+var _SAFEFETCH_OPTIONS = ["pageOrigin", "destination", "mode", "provenance", "pinned", "driven", "address",
                           "doc", "actor", "credentialed", "credentials", "headers", "useCorsPreflight",
                           "identity", "signal", "onChunk", "onBodyRead", "onHead"];
 /* Fetch §2.2.5 "Requests"' credentials mode — "which is `omit`, `same-origin`, or `include`" — the same three
@@ -878,6 +896,11 @@ var _SIGNALS = [
      whatever the engine states (`_docOf`). */
   { name: "witness", gates: true, certainty: "stated", values: _PINNED_MARKS,
     of: function (f) { return f.doc.pinned === "pinned" ? "pinned" : f.pinned; } },
+  /* Whether the address is bytes the page computed or its unknown's example (see `_addressOf`). No default arm
+     reads it: a session whose input is the example sends exactly this request. `never` lists the values no
+     setting permits: an address with no bytes names no request, so it is refused before any arm is asked. */
+  { name: "address", gates: true, certainty: "stated", values: _ADDRESS_CLASSES, never: ["unknown"],
+    of: function (f) { return f.address; } },
   /* Authority in the address (see `_urlAuthorityMarker`). `partial`: `present` is a fact, and `unknown` is not
      the statement that there is none. */
   { name: "url-authority", gates: true, certainty: "partial", values: ["present", "unknown"],
@@ -942,6 +965,10 @@ function _signalRegistryCheck() {
           "the egress signal `" + s.name + "` declares no value space — the surface renders one row per " +
           "value and a grant permits values, so a signal with none is a row a person can neither see nor " +
           "permit while the firing walk still asks it");
+    CHECK(s.never === undefined || (Array.isArray(s.never) && s.gates && s.never.every(function (n) {
+            return s.values.indexOf(n) >= 0; }) && s.never.length < s.values.length),
+          "the egress signal `" + s.name + "` lists a never-permitted value outside its value space, or does " +
+          "not gate, or permits no value at all");
     CHECK(s.gates || s.values.length === 1,
           "the egress signal `" + s.name + "` does not gate and has more than one possible value — a signal " +
           "whose value VARIES and which no permission can express is a control that was silently dropped: " +
@@ -993,7 +1020,7 @@ function _requireFacts(facts) {
   CHECK(typeof facts.destination === "string" && _PROVENANCE_TYPES.indexOf(facts.provenance) >= 0 &&
         docRecordIs(facts.doc) &&
         _PINNED_MARKS.indexOf(facts.pinned) >= 0 && _ACTOR_WORDS.indexOf(facts.actor) >= 0 &&
-        _DRIVEN_MARKS.indexOf(facts.driven) >= 0 &&
+        _DRIVEN_MARKS.indexOf(facts.driven) >= 0 && _ADDRESS_CLASSES.indexOf(facts.address) >= 0 &&
         typeof facts.credentialed === "boolean" &&
         facts.url !== null && typeof facts.url === "object" && typeof facts.url.origin === "string",
         "a signal vector was asked for without the facts that decide it — Fetch §2.2.5 \"Requests\"' " +
@@ -1113,14 +1140,19 @@ function safeFetchWidenable(origin) {
   if (origin.indexOf("http://") !== 0 && origin.indexOf("https://") !== 0) return "not-http";
   return null;
 }
-/* Whether a signal name and value are ones this file knows, as a reason or null, split for the same two
-   callers as `safeFetchWidenable`. */
+/* Whether `value` is one of the signal's values no setting permits (its `never` list). */
+function _signalNever(s, value) {
+  return Array.isArray(s.never) && s.never.indexOf(value) >= 0;
+}
+/* Whether a signal name and value are ones this file knows and a grant may name, as a reason or null, split
+   for the same two callers as `safeFetchWidenable`. */
 function safeFetchSignalUsable(signal, value) {
   var i;
   for (i = 0; i < _SIGNALS.length; i++) {
     if (_SIGNALS[i].name !== signal) continue;
     if (!_SIGNALS[i].gates) return "does-not-gate";
-    return _SIGNALS[i].values.indexOf(value) >= 0 ? null : "not-a-value";
+    if (_SIGNALS[i].values.indexOf(value) < 0) return "not-a-value";
+    return _signalNever(_SIGNALS[i], value) ? "never-permitted" : null;
   }
   return "not-a-signal";
 }
@@ -1137,7 +1169,8 @@ function _isSiteSetting(name) {
    functions stay here, so a surface cannot compute a value the walk did not decide from. */
 function safeFetchSignals() {
   return _SIGNALS.map(function (s) {
-    return { name: s.name, gates: s.gates, certainty: s.certainty, values: s.values.slice() };
+    return { name: s.name, gates: s.gates, certainty: s.certainty, values: s.values.slice(),
+             never: Array.isArray(s.never) ? s.never.slice() : [] };
   });
 }
 /* A host's promise that it will state the table (see `_EXPLORED_STATING`), registered once at the host's
@@ -1264,7 +1297,8 @@ function safeFetchWiden(origin) {
   for (i = 0; i < _SIGNALS.length; i++) {
     if (!_SIGNALS[i].gates) continue;
     for (j = 0; j < _SIGNALS[i].values.length; j++)
-      safeFetchPermit(origin, _SIGNALS[i].name, _SIGNALS[i].values[j], true);
+      if (!_signalNever(_SIGNALS[i], _SIGNALS[i].values[j]))
+        safeFetchPermit(origin, _SIGNALS[i].name, _SIGNALS[i].values[j], true);
   }
 }
 /* The person takes a whole origin's egress back; a site setting stored under the same key stays. Answers
@@ -1399,6 +1433,10 @@ function _firingDecision(facts) {
      one to forbid, and it is exactly a page this tool chose to open making its own `fetch()`, which the
      engine correctly grades `observed`. All nine pairs are reachable and distinct: the request's grade is the
      engine's, the reach grade is this zone's, and neither bounds the other. */
+  /* A value no setting permits refuses before any arm is asked, so no arm's silence about its row admits it. */
+  for (i = 0; i < _SIGNALS.length; i++)
+    if (_signalNever(_SIGNALS[i], v[_SIGNALS[i].name]))
+      return { vector: v, admittedBy: null, refusal: _SIGNALS[i].name + "=" + v[_SIGNALS[i].name] };
   /* Defaults first: they are permissions and the table only widens, so the order changes no answer. */
   arm = _defaultArmAdmitting(v);
   if (arm >= 0)
@@ -1455,7 +1493,7 @@ function safeFetchFiringRefusal(facts) {
         "make and a caller that parsed one for itself would be the second copy of that rule");
   return _firingRefusal({ url: new URL(String(facts.url)), destination: facts.destination,
                           provenance: facts.provenance, pinned: facts.pinned, doc: facts.doc,
-                          actor: facts.actor, driven: facts.driven,
+                          actor: facts.actor, driven: facts.driven, address: facts.address,
                           credentialed: facts.credentialed, headers: facts.headers });
 }
 /* A cross-document act reaches another document's state, so it is judged by `_firingRefusal` over the facts a
@@ -1463,7 +1501,8 @@ function safeFetchFiringRefusal(facts) {
    and a cross-agent operation (a member of another agent's Window, §7.2.1; a traversable's close, §7.3.1.6; a
    lent object's internal method). Which member a read names changes no signal, and a member outside §7.2.1.3.1
    CrossOriginProperties is never routed (window_proxy.c answers it locally), so there is no branch on it.
-   It carries no address, so its URL is the receiving document's origin, and `url-authority` reads `unknown`.
+   It carries no address, so its URL is the receiving document's origin, which this zone composed (`address`
+   reads `concrete`), and `url-authority` reads `unknown`.
    An opaque origin is one no widening can name, so it is asked as `about:blank`'s, whose origin is opaque too.
    Its destination is the empty string, a value like a page `fetch()`. It is the page's act. Its provenance,
    drive and witness are the sending timeline's marks (the record's `<derived|forced>,<driven|undriven>,
@@ -1483,7 +1522,7 @@ function safeFetchCrossDocumentRefusal(act) {
         "engine_record_head writes — the engine that routed it refuses any other (peer_marks_word_ok)");
   return _firingRefusal({ url: new URL(_isRealOrigin(act.targetOrigin) ? act.targetOrigin + "/" : "about:blank"),
                           destination: "", provenance: m[0], pinned: m[2], doc: act.doc, actor: "page",
-                          driven: m[1], credentialed: false, headers: null });
+                          driven: m[1], address: "concrete", credentialed: false, headers: null });
 }
 /* The vector for a hypothetical request, for a surface that shows a person what they are deciding about. It
    is the same derivation the firing walk reads, so the rows a person ticks are about the request the policy
@@ -1496,7 +1535,7 @@ function safeFetchSignalVector(facts) {
      space and render a row about nothing. */
   return _signalVector({ url: new URL(String(facts.url)), destination: facts.destination,
                          provenance: facts.provenance, pinned: facts.pinned, doc: facts.doc,
-                         actor: facts.actor, driven: facts.driven,
+                         actor: facts.actor, driven: facts.driven, address: facts.address,
                          credentialed: facts.credentialed, headers: facts.headers });
 }
 /* Fetch §4.10 "CORS check", over the reply's own headers: "Let origin be the result of getting
@@ -2086,6 +2125,7 @@ async function _safeFetchJudged(url, opts, egress) {
   var doc = _docOf(opts);
   var actor = _actorOf(opts);
   var driven = _drivenOf(opts);
+  var address = _addressOf(opts);
   /* Derived once, above every gate it scopes; `_credentialedOf` also refuses a header list on a
      cookie-bearing request. */
   var credentialed = _credentialedOf(opts);
@@ -2264,7 +2304,7 @@ async function _safeFetchJudged(url, opts, egress) {
          statement about one host, so a hop to another is asked again, and `url-authority` reads the hop's
          own address. */
       var _signalFacts = { url: _current, destination: destination, provenance: provenance,
-                           pinned: pinnedMark, doc: doc, actor: actor, driven: driven,
+                           pinned: pinnedMark, doc: doc, actor: actor, driven: driven, address: address,
                            credentialed: credentialed, headers: _headerList };
       var _decision = _firingDecision(_signalFacts);
       var _entry = { url: _current.href, vector: _decision.vector, admittedBy: _decision.admittedBy,

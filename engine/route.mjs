@@ -197,7 +197,7 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arriv
     return [p, u8.length];
   };
   /* KEYED ON THE REQUEST: `qjs_pending` answers `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>
-     CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL` lines and the delivery matches the
+     CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL` lines and the delivery matches the
      five-field identity, so a GET and a POST to one address are two questions with two replies. */
   const provide = (method, mode, referrerPolicy, referrer, u, reply, body) => {
     const [p, n] = bs(body);
@@ -394,9 +394,9 @@ async function service(e) {
   await drainNotices(e);
   for (const line of e.str('qjs_pending').split('\n').filter(Boolean)) {
     const t = line.split('\t');
-    if (t.length !== 12 || t.some((x, i) => i !== 1 && i !== 8 && x === ''))
+    if (t.length !== 13 || t.some((x, i) => i !== 1 && i !== 8 && x === ''))
       fail('a pending line is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>' +
-           `DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL\`: ${line} — ` +
+           `DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL\`: ${line} — ` +
            'the empty DESTINATION is Fetch §2.2.5\'s own default and the empty REFERRER POLICY is Referrer ' +
            'Policy §3\'s, and they are the fields that may be empty');
     /* THE DESTINATION IS NOT NAMED HERE, AND THAT IS A STATEMENT. It is the CORB class — whether a reply may
@@ -412,7 +412,7 @@ async function service(e) {
        the same, for the reason the other two vocabularies are. */
     /* THE ASKERS are skipped for the pinned mark's reason: they name the documents a firing policy judges the
        request by, and this driver fires nothing. */
-    const [method, , initiator, provenance, pinned, driven, , mode, referrerPolicy, referrer, , u] = t;
+    const [method, , initiator, provenance, pinned, driven, , mode, referrerPolicy, referrer, , , u] = t;
     /* THIS DRIVER ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT ITSELF — its fixtures' fetches are named `/hold`,
        `/resume`, `/got` and `/closed` and the reply is `{}` served out of a literal, so there is no network
        here for a firing policy to be about. The vocabularies are checked because a driver that read a field it

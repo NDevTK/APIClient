@@ -3809,7 +3809,7 @@ static void join_put(char **join, size_t *n_out, size_t *cap, const char *s, siz
    outstanding requests and not every register entry of every flow, and the identity's five strings are the
    node's own copies, parsed once at the park. The buffer is this function's, valid until the next call. Each
    line is `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>
-   REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL`, ASKERS being the comma-joined names of the documents whose
+   REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL`, ASKERS being the comma-joined names of the documents whose
    parks the line folds (engine_asker_name), each once. */
 const char *engine_pending_fetches(void) {
     static char *join, *askers;
@@ -3831,6 +3831,7 @@ const char *engine_pending_fetches(void) {
         char dst[32];
         size_t dl = 0, a_n = 0;
         int parser = 0, prov = 0, pinned = 0, driven = 0;
+        FetchAddressClass address = FETCH_ADDRESS_UNPLACED;
         FetchCredentialsMode cred = FETCH_CREDENTIALS_INCLUDE;
 
         if (n_mem == 0) continue;   /* every record answered, refused or dropped; the node keeps its history */
@@ -3877,6 +3878,7 @@ const char *engine_pending_fetches(void) {
             int m_prov = (int)pending_get_int(pe, PEND_PROV);
             int m_pinned = (int)pending_get_int(pe, PEND_PINNED);
             int m_driven = (int)pending_get_int(pe, PEND_DRIVEN);
+            FetchAddressClass m_address = (FetchAddressClass)pending_get_int(pe, PEND_ADDRESS);
             const char *asker = engine_asker_name(pe);
             FetchCredentialsMode m_cred;
 
@@ -3907,6 +3909,7 @@ const char *engine_pending_fetches(void) {
             if (i == 0) {
                 memcpy(dst, md, mdl); dl = mdl;
                 parser = m_parser; prov = m_prov; pinned = m_pinned; driven = m_driven; cred = m_cred;
+                address = m_address;
             } else {
                 /* The (provenance, witness, drive) vector folds as one, taking one member's whole, so the line
                    never states a vector no member held: folding each by its own extremum gave (derived,
@@ -3916,6 +3919,10 @@ const char *engine_pending_fetches(void) {
                    member alone would; ties fold toward most observed. */
                 int take = m_driven < driven ||
                            (m_driven == driven && (m_pinned < pinned || (m_pinned == pinned && m_prov < prov)));
+                /* The address class rides the member whose vector is taken, and breaks a tie toward bytes the
+                   page computed, so the line states the class of the member it is judged as. */
+                if (take || (m_driven == driven && m_pinned == pinned && m_prov == prov && m_address < address))
+                    address = m_address;
                 int f_prov = take ? m_prov : prov, f_pinned = take ? m_pinned : pinned;
                 int f_driven = take ? m_driven : driven;
                 DCHECK((f_prov == prov && f_pinned == pinned && f_driven == driven) ||
@@ -3954,11 +3961,12 @@ const char *engine_pending_fetches(void) {
         listed += n_mem;
         {
             const char *ini = parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT;
-            const char *f[11];
+            const char *f[12];
             f[0] = m; f[1] = NULL; f[2] = ini; f[3] = engine_provenance_token(prov);
             f[4] = engine_pinned_token(pinned); f[5] = engine_driven_token(driven);
-            f[6] = fetch_credentials_token(cred); f[7] = o; f[8] = rp; f[9] = r; f[10] = askers;
-            for (int k = 0; k < 11; k++) {
+            f[6] = fetch_credentials_token(cred); f[7] = o; f[8] = rp; f[9] = r;
+            f[10] = fetch_address_token(address); f[11] = askers;
+            for (int k = 0; k < 12; k++) {
                 if (k == 1) join_put(&join, &n_out, &cap, dst, dl);
                 else        join_put(&join, &n_out, &cap, f[k], strlen(f[k]));
                 join_put(&join, &n_out, &cap, "\t", 1);
@@ -3978,14 +3986,16 @@ const char *engine_pending_fetches(void) {
 void engine_pending_split(char *line, const char **method, const char **destination, const char **initiator,
                           const char **provenance, const char **pinned, const char **driven,
                           const char **credentials, const char **mode, const char **referrer_policy,
-                          const char **referrer, const char **askers, const char **url) {
+                          const char **referrer, const char **address, const char **askers,
+                          const char **url) {
     const char **field[] = { method, destination, initiator, provenance, pinned, driven, credentials, mode,
-                             referrer_policy, referrer, askers, url };
+                             referrer_policy, referrer, address, askers, url };
     enum { NFIELDS = sizeof field / sizeof field[0] };
     char *at = line;
 
     DCHECK(line && method && destination && initiator && provenance && pinned && driven && credentials && mode &&
-           referrer_policy && referrer && askers && url, "a pending line was split with nowhere to put its fields");
+           referrer_policy && referrer && address && askers && url,
+           "a pending line was split with nowhere to put its fields");
     /* A CHECK per TAB, not a DCHECK: release has no defined answer, because the fields key the delivery and
        decide what fires, and a line not in this engine's grammar would decide them from the wrong field. A URL
        cannot contain a TAB (URL Standard §4.4), so the URL is the remainder of the line. */
@@ -3994,7 +4004,7 @@ void engine_pending_split(char *line, const char **method, const char **destinat
         CHECKF(tab != NULL,
                "engine: a host split a pending line carrying %d TABs where engine_pending_fetches writes %d "
                "(`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>"
-               "MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL`) — the host is reading another grammar, "
+               "MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL`) — the host is reading another grammar, "
                "and field %d would be decided from the wrong bytes", k, NFIELDS - 1, k + 1);
         *tab = 0;
         *field[k] = at;
@@ -4012,6 +4022,10 @@ void engine_pending_split(char *line, const char **method, const char **destinat
            "field to decide whether an ACT MAY BE SPENT on an address that may rest on a witness this engine "
            "chose, and a value it does not know would be answered by whichever of its arms is the default, "
            "which for a firing question is the permissive one");
+    DCHECK(!strcmp(*address, fetch_address_token(FETCH_ADDRESS_CONCRETE)) ||
+           !strcmp(*address, fetch_address_token(FETCH_ADDRESS_EXAMPLE)),
+           "a pending line's address class is neither `concrete` nor `example` — only an address this run has "
+           "bytes for is listed, and the trusted zone shows the word as the request's `address` signal");
     DCHECK(!strcmp(*driven, PENDING_DRIVEN_YES) || !strcmp(*driven, PENDING_DRIVEN_NO),
            "a pending line's DRIVE MARK is neither of the two tokens engine.h declares — the trusted zone's "
            "`actor` row reads it, and an unknown word would let a drive's request fire as the page's own");

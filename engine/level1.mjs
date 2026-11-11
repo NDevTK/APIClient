@@ -935,15 +935,16 @@ async function mintDrive(minted, slices) {
      before anything is sent. */
   const line = (o) => {
     const f = ['GET', '', 'script', 'derived', 'unpinned', 'undriven', 'same-origin', 'cors', '', 'https://a.test/',
-               'gap-doc', 'https://a.test/api'];
+               'concrete', 'gap-doc', 'https://a.test/api'];
     for (const k of Object.keys(o)) f[k] = o[k];
     return f.join('\t');
   };
-  const lines = [['the valid line', line({}), null], ['eleven fields', line({}).split('\t').slice(1).join('\t'), 'fields'],
+  const lines = [['the valid line', line({}), null], ['twelve fields', line({}).split('\t').slice(1).join('\t'), 'fields'],
                  ['initiator', line({ 2: 'worker' }), 'initiator'], ['provenance', line({ 3: 'guessed' }), 'provenance'],
                  ['witness mark', line({ 4: 'unstated' }), 'witness mark'], ['drive mark', line({ 5: 'maybe' }), 'drive mark'],
                  ['mode', line({ 7: 'navigate' }), 'mode'], ['referrer policy', line({ 8: 'always' }), 'referrer policy'],
-                 ['referrer', line({ 9: 'client' }), 'referrer'], ['asker set', line({ 10: 'gap-doc,gap-doc' }), 'asker set']];
+                 ['referrer', line({ 9: 'client' }), 'referrer'], ['address class', line({ 10: 'unknown' }), 'address class'],
+                 ['asker set', line({ 11: 'gap-doc,gap-doc' }), 'asker set']];
   for (const [label, text, names] of lines) {
     let fired = 0;
     const e = inst({ docId: 'gap-doc', joinedDocIds: [], _inflight: new Map(), residentBytes: 131072,
@@ -966,7 +967,8 @@ async function mintDrive(minted, slices) {
   }
   const xhr = (o) => JSON.stringify(Object.assign({ url: '/api', method: 'GET', credentials: 'same-origin', mode: 'cors',
                                                     referrerPolicy: '', referrer: 'https://a.test/', useCorsPreflight: false,
-                                                    provenance: 'derived', pinned: 'unpinned', driven: 'undriven' }, o));
+                                                    provenance: 'derived', pinned: 'unpinned', driven: 'undriven',
+                                                    address: 'concrete' }, o));
   const records = [['the valid record', xhr({}), null], ['an older build with no witness mark', xhr({ pinned: undefined }), null],
                    ['text that is not JSON', '{"url":', 'not a JSON object'], ['no URL', xhr({ url: '' }), 'no URL'],
                    ['no method', xhr({ method: 7 }), 'no method'], ['credentials', xhr({ credentials: 'omit' }), 'credentials'],
@@ -1283,7 +1285,7 @@ async function mintDrive(minted, slices) {
                                                   computedType: '', refusal: null, urlList: ['https://a.test/api'] }; };
   const valid = { url: '/api', method: 'GET', credentials: 'same-origin', mode: 'cors', referrerPolicy: '',
                   referrer: 'https://a.test/', useCorsPreflight: false, provenance: 'derived', pinned: 'unpinned',
-                  driven: 'undriven', headers: [] };
+                  driven: 'undriven', address: 'concrete', headers: [] };
   for (const [label, rec, refused] of [['the valid record', JSON.stringify(valid), false],
                                        ['mode no-cors', JSON.stringify(Object.assign({}, valid, { mode: 'no-cors' })), true],
                                        ['text that is not JSON', '{"url":', true]]) {

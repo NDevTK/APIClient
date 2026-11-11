@@ -183,6 +183,8 @@ function _chokepointGetFn(tab, who) {
     const r = await safeFetch(url, {
       pageOrigin: tab.origin,
       provenance: "derived",
+      /* This sweep composed the address from bytes it holds. */
+      address: "concrete",
       /* AND HOW THE DOCUMENT THIS SWEEP IS RUN FROM WAS REACHED, WHICH IS `observed` AND IS A FACT ABOUT THE
          BROWSER RATHER THAN ABOUT THIS SWEEP. `tab.url` is a page the PERSON navigated to — a content script
          ran in it, which is the whole reason this function has a principal at all — so the context these

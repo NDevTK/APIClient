@@ -78,7 +78,7 @@ async function ask(page, url, docKey, { provenance = 'observed', pinned = 'unpin
   const credentials = credentialed ? 'include' : 'same-origin';
   return ZONE.safeFetch(url, {
     pageOrigin: origin, destination: '', mode: 'cors', provenance, pinned, driven: 'undriven',
-    actor: 'page', credentialed, credentials, useCorsPreflight: false, headers, signal,
+    address: 'concrete', actor: 'page', credentialed, credentials, useCorsPreflight: false, headers, signal,
     doc: ZONE.docRecord('observed', 'undriven', 'unpinned', NAVIGABLE_NOTICE.sandbox.none,
                         ZONE.safeFetchDocumentAddressSpace(page, null)),
     identity: await ZONE.pageRequestIdentity(origin, page, docKey, url, credentials, 'cors',

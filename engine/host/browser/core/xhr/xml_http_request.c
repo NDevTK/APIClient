@@ -2440,6 +2440,9 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
     json_buf_str(&b, engine_pinned_token(xhr_request_pinned(d)));
     json_buf_raw(&b, ","); json_buf_key(&b, "driven");
     json_buf_str(&b, engine_driven_token(xhr_request_driven(d)));
+    /* The address class open() placed (core/fetch/fetch.h), which the zone shows as the `address` signal. */
+    json_buf_raw(&b, ","); json_buf_key(&b, "address");
+    json_buf_str(&b, fetch_address_token(d->url_address));
     json_buf_raw(&b, ","); json_buf_key(&b, "headers"); json_buf_raw(&b, "[");
     for (i = 0; i < n; i++) {
         JSValue pair = JS_GetPropertyUint32(ctx, d->author_headers, i);

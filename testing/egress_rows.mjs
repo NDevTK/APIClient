@@ -57,10 +57,11 @@ const docOf = (page, reach, driven = 'undriven', pinned = 'unpinned') =>
 
 /* A page request as engine/trusted.mjs's workFetch states it, from the document `docKey` at `page`. */
 async function ask(page, url, docKey, { destination = '', mode = 'cors', provenance = 'derived', pinned = 'unpinned',
-                                        driven = 'undriven', reach = 'observed', headers, address } = {}) {
+                                        driven = 'undriven', reach = 'observed', headers,
+                                        address = 'concrete' } = {}) {
   const origin = new URL(page).origin;
   return ZONE.safeFetch(url, {
-    pageOrigin: origin, destination, mode, provenance, pinned, driven, ...(address === undefined ? {} : { address }),
+    pageOrigin: origin, destination, mode, provenance, pinned, driven, address,
     actor: 'page', credentialed: false, credentials: 'same-origin', useCorsPreflight: false, headers,
     doc: docOf(page, reach),
     identity: await ZONE.pageRequestIdentity(origin, page, docKey, url, 'same-origin', mode,
@@ -69,20 +70,21 @@ async function ask(page, url, docKey, { destination = '', mode = 'cors', provena
 /* A navigation as engine/trusted.mjs's navigate states it, started by the document at `page`. */
 const navigate = (page, url, { provenance = 'derived', pinned = 'unpinned', driven = 'undriven', reach = 'observed' } = {}) =>
   ZONE.safeFetch(url, { destination: 'document', mode: 'navigate', provenance, pinned, driven, actor: 'page',
-                        doc: docOf(page, reach), credentialed: false });
+                        address: 'unstated', doc: docOf(page, reach), credentialed: false });
 /* A load this zone composes: the seed as engine/trusted.mjs states it, or (derived) a probe as
    lib/discovery-probe.js states one. */
 const toolAsk = (page, url, provenance) =>
   ZONE.safeFetch(url, { pageOrigin: new URL(page).origin, destination: provenance === 'observed' ? 'document' : '',
                         mode: provenance === 'observed' ? 'navigate' : 'cors', provenance,
                         pinned: provenance === 'observed' ? 'unpinned' : 'unstated', actor: 'tool', driven: 'unstated',
+                        address: 'concrete',
                         doc: docOf(page, 'observed'), credentialed: false, credentials: 'omit', useCorsPreflight: false });
 const text = (r) => new TextDecoder().decode(r.body);
 const refusalOf = (r) => r.refusal ? r.refusal.reason : 'sent';
 /* The firing question alone, for an act that sends nothing here. */
 const firing = (url, facts) => ZONE.safeFetchFiringRefusal(Object.assign(
   { url, destination: '', provenance: 'derived', pinned: 'unpinned', actor: 'page', driven: 'undriven',
-    doc: docOf(PAGE_A, 'observed'), credentialed: false, headers: null }, facts));
+    address: 'concrete', doc: docOf(PAGE_A, 'observed'), credentialed: false, headers: null }, facts));
 const SIGNAL_NAMES = ZONE.safeFetchSignals().map((s) => s.name).sort().join(',');
 /* The one entry of a reply record's `egress` list, or a word saying why there is not exactly one. */
 const only = (r) => !Array.isArray(r.egress) ? 'no-egress-list' : r.egress.length !== 1 ? `entries=${r.egress.length}` : r.egress[0];

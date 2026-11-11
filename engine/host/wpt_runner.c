@@ -1327,7 +1327,7 @@ static int wpt_issue_pending(void)
     for (p = list; *p; ) {
         char *end = strchr(p, '\n');
         const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
-        const char *referrer_policy, *referrer, *askers;
+        const char *referrer_policy, *referrer, *address, *askers;
         FetchRequest req = {0};   /* §2.2.5 metadata stated as "nothing yet": these are the runner's own
                                      HTTP client requests and reach no park, so a zero is the named abort a
                                      future reader gets rather than a stack address it would compare bytes at */
@@ -1343,7 +1343,7 @@ static int wpt_issue_pending(void)
            is the vocabulary assert, since a runner reading a field it never checked would see the producer drift
            first. */
         engine_pending_split(p, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
-                             &mode, &referrer_policy, &referrer, &askers, &url);
+                             &mode, &referrer_policy, &referrer, &address, &askers, &url);
         DCHECK(!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO),
                "the pending join stated a drive mark that is neither token engine.h declares");
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),

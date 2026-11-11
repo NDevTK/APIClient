@@ -2301,7 +2301,7 @@ async function _frontierRederive(e, held) {
                                                   doc: docRecordOfArrival(frontierArrival(e), frontierSandbox(e),
                                                                           frontierAddressSpace(e)),
                                                   actor: "tool", driven: "unstated",
-                                                  pinned: "unstated",
+                                                  pinned: "unstated", address: "unstated",
                                                   credentials: "include",
                                                   credentialed: navigationCarriesSession(e.sourceUrl, e.origin),
                                                   /* A parked document is one only this zone holds. */
@@ -3022,7 +3022,7 @@ function navigationCredentialed(abs, principalOrigin, readerOpaque) {
    credential carries, or null when it has none, which loads without the session. Every answer states
    `credentialed`, whether this load carried the session, which the loaded document's record keeps. */
 async function navigationLoad(u, base, principalOrigin, provenance, fromDoc,
-                              actor, driven, pinned, request, speakerOf, readerOpaque, onBodyRead) {
+                              actor, driven, pinned, address, request, speakerOf, readerOpaque, onBodyRead) {
   DCHECK(!!request && NAVIGATION_DESTINATIONS.indexOf(request.destination) >= 0 &&
          (request.referrerPolicy === null || request.referrerPolicy === "" ||
           REFERRER_POLICIES.indexOf(request.referrerPolicy) >= 0),
@@ -3130,7 +3130,7 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc,
                                           destination: request.destination, mode: "navigate",
                                           provenance: provenance,
                                           doc: fromDoc, actor: actor, driven: driven,
-                                          pinned: pinned, onBodyRead,
+                                          pinned: pinned, address: address, onBodyRead,
                                           credentials: "include", credentialed, identity });
     /* The load's fired-send list rides every answer below, for the instance that asked to take (`egress`: the
        list, `[]` for a data: URL, which asks no egress question, and null where the fetch threw). */
@@ -3820,8 +3820,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      error of XHR §3 "Interface XMLHttpRequest", and a decline as `{declined}`, which goes to `hostDecline`. */
   /* The request's destination travels with it (Fetch §2.2.5 Requests): safe-fetch.js decides the CORB class
      from §2.2.5's script-like predicate over it, so it is passed through, not reduced to a boolean. */
-  const fetched = async (method, u, destination, provenance, pinned, driven, credentials, mode, referrerPolicy,
-                         referrer, asked, signal, onBodyRead, onHead, onChunk) => {
+  const fetched = async (method, u, destination, provenance, pinned, driven, address, credentials, mode,
+                         referrerPolicy, referrer, asked, signal, onBodyRead, onHead, onChunk) => {
     DCHECK(signal instanceof AbortSignal,
            "a pending request reached the fetch relay with no abort signal — engineIssue owns one per send, and " +
            "a `fetch.cancel` notice ends the send through it");
@@ -3906,8 +3906,9 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          and a request on this seam is a GET, which §5.4 refuses a body. */
       /* `driven` is the engine's drive mark off the same line (solver/engine.h's PENDING_DRIVEN_*), relayed:
          the chokepoint's `actor` row reads it. */
+      /* `address` is the line's address class (core/fetch/fetch.h), relayed for the `address` row. */
       const opts = { pageOrigin: eng.origin, destination, mode, provenance, pinned,
-                     driven, credentials, actor: "page", useCorsPreflight: false,
+                     driven, address, credentials, actor: "page", useCorsPreflight: false,
                      doc, credentialed: false, signal, onBodyRead, onHead, onChunk,
                      identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, "engine:" + eng.docId, abs, credentials, mode,
                                                    referrerPolicy, referrer) };
@@ -4000,7 +4001,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
        issuer's for a swap or a navigation (askerRecord). */
     DCHECK(docRecordIs(doc), "a §7.4 document load was asked for with no issuing document's record");
     const r = await navigationLoad(u, msg.sourceUrl, msg.origin, provenance, doc,
-                                   /*actor*/"page", driven, pinned, request,
+                                   /*actor*/"page", driven, pinned, /*address*/"unstated", request,
                                    documentSpeaker(msg, "engine:" + eng.docId),
                                    readerOpaque, onBodyRead);
     /* `unavailable` does not cross, since nothing here reads it. */
@@ -4438,6 +4439,8 @@ function xhrRecordRefusal(q, raw) {
     return f + " states the witness mark " + JSON.stringify(q.pinned) + ", neither pinned nor unpinned";
   if (q.driven !== DRIVEN_YES && q.driven !== DRIVEN_NO)
     return f + " states the drive mark " + JSON.stringify(q.driven) + ", neither driven nor undriven";
+  if (q.address !== "concrete" && q.address !== "example")
+    return f + " states the address class " + JSON.stringify(q.address) + ", neither concrete nor example";
   return null;
 }
 /* The XMLHttpRequest fetch (XHR §3.5.6 The send() method) of instance `eng` through the chokepoint. `rec` is
@@ -4497,7 +4500,7 @@ async function engineFetchXhr(eng, rec, doc, signal, onBodyRead) {
        CHECKs that a `page` request states one. */
     const r = await self.safeFetch(abs, { pageOrigin: eng.origin, destination: "",
                                           mode: q.mode, provenance: q.provenance, pinned: _xhrPinned,
-                                          driven: q.driven,
+                                          driven: q.driven, address: q.address,
                                           doc, actor: "page",
                                           credentialed: false, useCorsPreflight: q.useCorsPreflight,
                                           credentials: q.credentials, headers: q.headers, signal, onBodyRead,
@@ -4569,8 +4572,8 @@ function pendingRequest(line) {
      are relayed for the `Referer` this zone composes. The askers are the documents whose parks the line folds;
      the caller checks each names a document of the asking instance. */
   return { method: f[0], destination: f[1], initiator: f[2], provenance: f[3], pinned: f[4], driven: f[5],
-           credentials: f[6], mode: f[7], referrerPolicy: f[8], referrer: f[9], askers: f[10].split(","),
-           url: f[11] };
+           credentials: f[6], mode: f[7], referrerPolicy: f[8], referrer: f[9], address: f[10],
+           askers: f[11].split(","), url: f[12] };
 }
 /* Referrer Policy §3 "Referrer Policies", the empty string included. */
 const _REFERRER_POLICIES = ["", "no-referrer", "no-referrer-when-downgrade", "same-origin", "origin",
@@ -4588,18 +4591,20 @@ const PENDING_TOKENS = Object.freeze([
   [4, "witness mark", ["pinned", "unpinned"]],
   [5, "drive mark", ["driven", "undriven"]],
   [7, "mode", ["same-origin", "cors", "no-cors"]],
-  [8, "referrer policy", _REFERRER_POLICIES]]);
+  [8, "referrer policy", _REFERRER_POLICIES],
+  /* core/fetch/fetch.h's address class; an address with no bytes is never listed. */
+  [10, "address class", ["concrete", "example"]]]);
 /* The line's shape, or what breaks it, worded to follow "whose". */
 function pendingLineRefusal(f) {
-  if (!(f.length === 12 && f[0] !== "" && f[7] !== "" && f[9] !== "" && f[10] !== "" && f[11] !== ""))
+  if (!(f.length === 13 && f[0] !== "" && f[7] !== "" && f[9] !== "" && f[11] !== "" && f[12] !== ""))
     return "fields are not METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>" +
-           "CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL";
+           "CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL";
   for (const [k, name, words] of PENDING_TOKENS)
     if (words.indexOf(f[k]) < 0) return name + " `" + f[k] + "` is none of " + words.join(", ");
   if (f[9] !== "no-referrer" && !URL.canParse(f[9])) return "referrer `" + f[9] + "` is neither no-referrer nor a URL";
-  const askers = f[10].split(",");
+  const askers = f[11].split(",");
   if (!askers.every((a, n) => a !== "" && askers.indexOf(a) === n))
-    return "asker set `" + f[10] + "` is not a comma-joined set of document names";
+    return "asker set `" + f[11] + "` is not a comma-joined set of document names";
   return null;
 }
 /* The door every send is issued through without waiting: its answer is due a latency of engine work later
@@ -4826,8 +4831,8 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
     const req = pendingRequest(line);
     /* A refused line retires the instance; nothing more of this list is issued. */
     if (typeof req === "string") { engineRefuse(eng, req); return; }
-    const { method, destination, provenance, pinned, driven, credentials, mode, referrerPolicy, referrer, askers,
-            url } = req;
+    const { method, destination, provenance, pinned, driven, credentials, mode, referrerPolicy, referrer, address,
+            askers, url } = req;
     /* The ask is counted at the call, before the gate, so the census separates a request nobody made from one
        the gate refused: `declined: {}` beside a nonzero `asked` says the policy refused nothing (an empty
        surface is then about the driving), while `asked: 0` says this loop never ran. */
@@ -4849,8 +4854,8 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
     const reach = asker.doc === null ? null : asker.doc.reach;
     engineIssue(eng, key,
       (signal, onBodyRead, onHead, onChunk) => { eng._egress.asked++;
-                    return eng.fetched(method, url, destination, provenance, pinned, driven, credentials, mode,
-                                       referrerPolicy, referrer, asker, signal,
+                    return eng.fetched(method, url, destination, provenance, pinned, driven, address, credentials,
+                                       mode, referrerPolicy, referrer, asker, signal,
                                        onBodyRead, onHead, onChunk); },
       (answer) => engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer, reach),
       destination === "" ? [method, mode, referrerPolicy, referrer, url] : null, reach);
@@ -5676,7 +5681,7 @@ async function hostNotice(eng, line) {
     /* `actor: "tool"`: the load this asks about is this zone's act, as the load states (the seed arm says why). */
     const _seedRefusal = self.safeFetchFiringRefusal({
       url: f[1], destination: "document", provenance: f[2], pinned: f[4],
-      doc: _seedFrom.issuerDoc, actor: "tool", driven: f[3],
+      doc: _seedFrom.issuerDoc, actor: "tool", driven: f[3], address: "unstated",
       credentialed: navigationCarriesSession(f[1], eng.origin), headers: null });
     if (_seedRefusal) {
       console.warn("[bridge] a route declaration for `" + f[1] + "` is refused by this origin's egress " +
@@ -7231,7 +7236,8 @@ const _hostOps = {
                                               refuses any other address), and judged by the one egress rule
                                               as any request this tool composes. The declaration's drive
                                               mark travels as the engine stated it. */
-                                           /*actor*/"tool", seed.driven, seed.pinned, DOCUMENT_REQUEST_UNSTATED,
+                                           /*actor*/"tool", seed.driven, seed.pinned, /*address*/"unstated",
+                                           DOCUMENT_REQUEST_UNSTATED,
                                            /* A declared route is a document only this zone holds. */
                                            async () => ({ identity: await engineIdentity(stampOrigin(seed.principalOrigin),
                                                                                    seed.principalUrl, held),
@@ -7832,7 +7838,7 @@ self.astDispatch = async function astDispatch(msg) {
                        /* `public`: no document makes it, so its container would be a new one. */
                        doc: docRecord(PROVENANCE_FORCED, DRIVEN_NO, "unpinned", NAVIGABLE_NOTICE.sandbox.none,
                                       "public"),
-                       actor: "tool", driven: "unstated",
+                       actor: "tool", driven: "unstated", address: "concrete",
                        credentialed: false, headers: null };
       return { success: true, result: {
         origins: self.safeFetchWidenedOrigins(),
@@ -7917,6 +7923,8 @@ self.astDispatch = async function astDispatch(msg) {
                                                   NAVIGABLE_NOTICE.sandbox.none,
                                                   self.safeFetchDocumentAddressSpace(msg.sourceUrl, null)),
                                         /*actor*/"tool", /*driven*/"unstated", /*pinned*/"unstated",
+                                        /* the address the browser navigated to; no engine path composed it */
+                                        /*address*/"concrete",
                                         DOCUMENT_REQUEST_UNSTATED, seedSpeaker(msg),
                                         /* a document the person's browser loaded states no zone flags */ false);
     bootSpanMark(String(msg.documentId), "loaded");

@@ -189,8 +189,8 @@ const SCRIPT_LIKE = scriptLikeDestinations();
    and not here trips the check LOUDLY, and a field added here and not to the join trips it too. Neither can
    quietly re-point the address. */
 const PENDING_LINE_FIELDS = ["method", "destination", "initiator", "provenance",
-                             "pinned", "driven", "credentials", "mode", "referrerPolicy", "referrer", "askers",
-                             "url"];
+                             "pinned", "driven", "credentials", "mode", "referrerPolicy", "referrer", "address",
+                             "askers", "url"];
 
 /* THE SCHEDULES, AND EACH ONE IS A PAIR RATHER THAN A NAME. Every knob is one the production host already has
    and uses, so none of them is a test hook grown into the engine for this gate's benefit. A schedule declares
@@ -384,7 +384,7 @@ async function child(docPath, schedName) {
        written as source text here, so this is an ENCODE. */
     /* THE REQUEST THIS ANSWERS IS THE PAIR the engine listed — `qjs_pending` answers
        `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>
-       REFERRER<TAB>ASKERS<TAB>URL` and the reply is delivered against its five-field identity, so a GET and a
+       REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL` and the reply is delivered against its five-field identity, so a GET and a
        POST to one address are two questions here. */
     const provide = (method, mode, referrerPolicy, referrer, u, reply, body) => {
       const b = new TextEncoder().encode(body);

@@ -377,7 +377,7 @@ async function main() {
                                        provenance: 'derived', pinned: 'unpinned',
                                        /* This gate composed the address, so the act is this tool's
                                           (safe-fetch.js's `_actorOf`). */
-                                       actor: 'tool', driven: 'unstated',
+                                       actor: 'tool', driven: 'unstated', address: 'concrete',
                                        doc: ZONE.docRecord('observed', 'undriven', 'unpinned', 'none',
                                                            ZONE.safeFetchDocumentAddressSpace(seedUrl, null)),
                                        credentialed: false });

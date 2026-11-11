@@ -594,7 +594,7 @@ async function main() {
      document is what safe-fetch.js's seed arm admits; the page rule requires `page`. */
   const seed = await ZONE.safeFetch(target, { destination: 'document', mode: 'navigate',
                                               provenance: 'observed', pinned: 'unpinned',
-                                              actor: 'tool', driven: 'unstated',
+                                              actor: 'tool', driven: 'unstated', address: 'concrete',
                                               doc: observedDoc(target), credentialed: false });
   sayEgress('seed', 'GET', seed);
   const seeded = replyRecord(seed, 'the seed document');
@@ -1228,7 +1228,7 @@ async function main() {
        Stated on the hypothetical as well as on the load below, because a permission question answered from
        fewer facts than the real request states is a question about a different request. */
     const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination: 'document', provenance,
-                                                  pinned, doc: fromDoc, actor: 'page',
+                                                  pinned, doc: fromDoc, actor: 'page', address: 'unstated',
                                                   driven, credentialed: false, headers: null });
     if (refusal)
       return { declined: `${what} ${abs} — a DOCUMENT LOAD this origin's egress policy refuses on ` +
@@ -1252,7 +1252,7 @@ async function main() {
        question about a document that does not exist yet. */
     const raw = await ZONE.safeFetch(abs, { destination: 'document', mode: 'navigate',
                                             provenance, pinned, doc: fromDoc, actor: 'page', driven,
-                                            credentialed: false, onBodyRead });
+                                            address: 'unstated', credentialed: false, onBodyRead });
     sayEgress(what, 'GET', raw);
     /* A decline after the policy above (the wire went silent, `wire-idle`) loads nothing either. */
     if (raw.refusal && raw.refusal.kind === 'decline') return { declined: `${what} ${abs} — ${raw.refusal.reason}` };
@@ -1280,7 +1280,7 @@ async function main() {
       answerOwed(send.entry, rec);
     };
     const q = JSON.parse(record);
-    for (const k of ['method', 'url', 'credentials', 'mode', 'provenance', 'pinned', 'driven'])
+    for (const k of ['method', 'url', 'credentials', 'mode', 'provenance', 'pinned', 'driven', 'address'])
       if (typeof q[k] !== 'string' || q[k] === '')
         throw new Error(`the engine's xhr.send record states no \`${k}\` — xhr_request_op writes every field`);
     if (!Array.isArray(q.headers))
@@ -1302,7 +1302,7 @@ async function main() {
     try {
       raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, destination: '',
                                         mode: q.mode, provenance: q.provenance, pinned: q.pinned, driven: q.driven,
-                                        actor: 'page', doc, credentialed: false, signal: send.controller.signal,
+                                        address: q.address, actor: 'page', doc, credentialed: false, signal: send.controller.signal,
                                         onBodyRead: bodyRead(e, send.entry),
                                         credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
                                         headers: q.headers.length ? q.headers : undefined,
@@ -1326,7 +1326,7 @@ async function main() {
   };
 
   const workFetch = async (e, method, destination, initiator, provenance, pinned, driven, credentials, mode,
-                           referrerPolicy, referrer, askers, url, send) => {
+                           referrerPolicy, referrer, address, askers, url, send) => {
     const abs = new URL(url, e.docUrl).href;
     /* Every answer this function has leaves through one door into the send's owed entry: a method refusal,
        the two shapes of a firing refusal, and the reply. The key is released when a read writes the entry
@@ -1449,7 +1449,7 @@ async function main() {
     let raw;
     try {
       raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, destination, mode,
-                                        provenance, pinned, driven, credentials, useCorsPreflight: false,
+                                        provenance, pinned, driven, address, credentials, useCorsPreflight: false,
                                         actor: 'page', signal: send.controller.signal,
                                         onBodyRead: streamed ? undefined : bodyRead(e, entry),
                                         onHead: streamed
@@ -1489,7 +1489,7 @@ async function main() {
          passes and `headers: null` is what a park carries here. */
       if (streamed) entry.end = { state: 'decline', reason: raw.refusal.reason };
       const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination, provenance, pinned,
-                                                    actor: 'page', driven,
+                                                    actor: 'page', driven, address,
                                                     doc, credentialed: false, headers: null });
       if (!refusal) {
         settle(declineRequest(method, mode, referrerPolicy, referrer, url,
@@ -2439,15 +2439,15 @@ async function main() {
     }
     const f = line.split('\t');
     if (f[0] === 'fetch') {
-      if (f.length !== 13)
+      if (f.length !== 14)
         throw new Error('the host announced a fetch that is not ' +
                         '`fetch<TAB>METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>' +
-                        'MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL`: ' +
+                        'MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL`: ' +
                         `${line} — the bill is ` +
                         'the pending line verbatim and this zone splits it where the engine joined it, so a ' +
                         'short record is the two grammars having parted');
       const [, method, destination, initiator, provenance, pinned, driven, credentials, mode, referrerPolicy,
-             referrer, askerSet, url] = f;
+             referrer, address, askerSet, url] = f;
       /* The asking documents (solver/engine.h's ASKERS), each named once; workFetch judges the line by them. */
       const askers = askerSet.split(',');
       if (askers.some((a, i) => a === '' || askers.indexOf(a) !== i))
@@ -2476,7 +2476,8 @@ async function main() {
       const send = { controller: new AbortController(), cancelled: false, entry: owe(e, key) };
       e.sends.set(key, send);
       send.entry.done = track(e, key, workFetch(e, method, destination, initiator, provenance, pinned, driven,
-                                                credentials, mode, referrerPolicy, referrer, askers, url, send));
+                                                credentials, mode, referrerPolicy, referrer, address, askers, url,
+                                                send));
     } else if (f[0] === 'request') {
       /* `request<TAB>id<TAB>asker<TAB>op` (solver/engine.h's engine_host_requests). */
       if (f.length < 4 || !f[2])

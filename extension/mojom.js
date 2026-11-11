@@ -493,7 +493,7 @@
           { name: "requests", type: "string",
             why: "the REQUESTS flows are parked on — one " +
                  "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>" +
-                 "REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL` line each (ASKERS the comma-joined " +
+                 "REFERRER_POLICY<TAB>REFERRER<TAB>ADDRESS<TAB>ASKERS<TAB>URL` line each (ASKERS the comma-joined " +
                  "names of the documents whose parks it folds, which this zone judges it by), " +
                  "newline-joined, \"\" for none, deduped by the PAIR. The field was `urls` and the list was addresses alone, which is a " +
                  "request named by half of itself: a page that issues a GET and a POST to one address parks " +

@@ -209,8 +209,8 @@ async function drive(gluePath, html, steps) {
     code = M.ccall('qjs_step', 'number', [], []);
     for (const line of str('qjs_pending').split('\n').filter(Boolean)) {
       const t = line.split('\t');
-      if (t.length !== 12) fail('a pending line is not the ABI\'s twelve tab-separated fields: ' + line);
-      if (!seen.has(t[11])) seen.set(t[11], t[0]);
+      if (t.length !== 13) fail('a pending line is not the ABI\'s thirteen tab-separated fields: ' + line);
+      if (!seen.has(t[12])) seen.set(t[12], t[0]);
     }
     if (code === 0) break;
   }
