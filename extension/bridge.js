@@ -4452,6 +4452,8 @@ function xhrRecordRefusal(q, raw) {
     return f + " states the address class " + JSON.stringify(q.address) + ", neither concrete nor example";
   if (!self.safeFetchHeaderListIs(q.headers))
     return f + " carries no header list of [name, value, class] entries";
+  const body = requestBodyOf(q);
+  if (typeof body === "string") return f + " carries " + body;
   return null;
 }
 /* The XMLHttpRequest fetch (XHR §3.5.6 The send() method) of instance `eng` through the chokepoint. `rec` is
@@ -4464,21 +4466,19 @@ async function engineFetchXhr(eng, rec, doc, signal, onBodyRead) {
          "and a `fetch.cancel` notice naming its rendezvous ends the send through it");
   /* The request record is the engine's, crossing as JSON so it carries its types, and so input: a record
      xhrRecordRefusal refuses retires the instance and is never sent. The method arrives normalized (Fetch
-     §2.2.1 Methods; XHR §3.5.1 The open() method runs "normalize a method"), so GET, HEAD included, is
-     exactly what this zone can perform; another is refused below, never downgraded, because safeFetch is GET
-     only (SECURITY.md) and a POST answered with a GET's reply is a response the server never gave. */
+     §2.2.1 Methods; XHR §3.5.1 The open() method runs "normalize a method"). */
   let q;
   try { q = JSON.parse(rec); } catch (_) { q = undefined; }
   const _xhrRefusal = xhrRecordRefusal(q, rec);
+  /* A refused record retires the instance, whose answers are never delivered (engineDeliverDue), so it is
+     no decline: a rendezvous decline carries the refusing party's bare token and nothing refused this. */
   if (_xhrRefusal !== null) {
     if (!eng._crashed) engineRefuse(eng, _xhrRefusal);
-    return { declined: _xhrRefusal };
+    return { refused: _xhrRefusal };
   }
-  /* The refusal is the chokepoint's grade (`safeFetchMethodRefusal`), shared with engine/trusted.mjs's
-     workXhr. It is a decline: no browser refuses a POST, so the rendezvous is declined and the
-     engine forks a waiting arm and a failure arm, as for a refused document load. */
-  const _xhrMethodRefusal = self.safeFetchMethodRefusal(q.method);
-  if (_xhrMethodRefusal) return { declined: _xhrMethodRefusal.reason };
+  /* The method, header list and body are the page's own (XHR §3.5.6 step 6's request), judged by the
+     chokepoint as a fetch()'s are; a null body states no class. */
+  const body = requestBodyOf(q);
   try {
     const abs = new URL(q.url, eng.msg.sourceUrl).href;
     /* The credentials mode (XHR §3.5.6 The send() method: `include` if cross-origin credentials is true,
@@ -4509,7 +4509,8 @@ async function engineFetchXhr(eng, rec, doc, signal, onBodyRead) {
        permitted for that row, and one whose path pinned a witness is refused, as such a `fetch()` is. */
     /* The drive mark is relayed off the record (`xhr_request_op` writes it beside the grade); the chokepoint
        CHECKs that a `page` request states one. */
-    const r = await self.safeFetch(abs, { pageOrigin: eng.origin, method: q.method, body: null, destination: "",
+    const r = await self.safeFetch(abs, { pageOrigin: eng.origin, method: q.method, body: body.body, destination: "",
+                                          ...(body.body === null ? {} : { bodyClass: body.bodyClass }),
                                           mode: q.mode, provenance: q.provenance, pinned: _xhrPinned,
                                           driven: q.driven, address: q.address,
                                           doc, actor: "page",
@@ -4933,6 +4934,19 @@ async function engineDeliverReply(eng, id, answer, reach) {
    nothing is read. The record is the instance's statement and so input: answers the content, or the reason
    it is refused. */
 const _PENDING_BODY_CLASSES = ["none", "concrete", "example", "unknown"];
+/* A request record's body as the engine states it (`body`: RFC 4648 §4 base64 or null, `bodyClass`: one of the
+   four words, `none` exactly for a null body), the encoding a fetch()'s content read and an xhr.send record
+   share: answers `{body: Uint8Array | null, bodyClass}`, or the clause that refuses it. */
+function requestBodyOf(q) {
+  if (_PENDING_BODY_CLASSES.indexOf(q.bodyClass) < 0) return "the body class `" + String(q.bodyClass) + "`";
+  if ((q.body === null) !== (q.bodyClass === "none")) return "a body its own class contradicts";
+  if (q.body === null) return { body: null, bodyClass: "none" };
+  if (typeof q.body !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(q.body))
+    return "a body that is not base64";
+  const bin = atob(q.body), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return { body: bytes, bodyClass: q.bodyClass };
+}
 async function pendingRequestContent(eng, id) {
   const [method, mode, referrerPolicy, referrer, headers, requestBody, url] = id;
   if (headers === "-" && requestBody === "-") return { headers: [], body: null, bodyClass: "none" };
@@ -4944,16 +4958,10 @@ async function pendingRequestContent(eng, id) {
   if (!q || typeof q !== "object" || !self.safeFetchHeaderListIs(q.headers))
     return head + "no header list of [name, value, class] entries";
   if ((q.headers.length === 0) !== (headers === "-")) return head + "a header list its line's digest word contradicts";
-  if (_PENDING_BODY_CLASSES.indexOf(q.bodyClass) < 0) return head + "the body class `" + String(q.bodyClass) + "`";
-  if ((q.body === null) !== (requestBody === "-") || (q.body === null) !== (q.bodyClass === "none"))
-    return head + "a body its line's digest word or its own class contradicts";
-  if (q.body === null) return { headers: q.headers, body: null, bodyClass: "none" };
-  /* RFC 4648 §4 base64, the engine's transport encoding of the bytes (solver/engine.h). */
-  if (typeof q.body !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(q.body))
-    return head + "a body that is not base64";
-  const bin = atob(q.body), bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return { headers: q.headers, body: bytes, bodyClass: q.bodyClass };
+  if ((q.body === null) !== (requestBody === "-")) return head + "a body its line's digest word contradicts";
+  const body = requestBodyOf(q);
+  if (typeof body === "string") return head + body;
+  return { headers: q.headers, body: body.body, bodyClass: body.bodyClass };
 }
 /* Every owed list crosses the same way, newline-joined records or "" for none, and is split here. The caller
    names the mojom method and mojom declares the reply's type, so a NULL cannot become the text "null" and one
@@ -6022,7 +6030,11 @@ async function engineServiceHostRequests(eng) {
         // Completion 0 is normal (ECMA-262 §6.2.4 The Completion Record Specification Type): this zone fetched
         // bytes and ran no program that could throw. A relayed cross-agent operation answers 1 with the thrown
         // value, so the asking page's `try`/`catch` runs.
-        (r) => r.declined ? engineDeclineRendezvous(eng, id, r.declined) : engineAnswer(eng, id, r.meta, r.bytes),
+        (r) => {
+          DCHECK(!r.refused, "a retired instance's XMLHttpRequest answer was delivered — engineDeliverDue reads " +
+                             "the crashed mark before every delivery");
+          return r.declined ? engineDeclineRendezvous(eng, id, r.declined) : engineAnswer(eng, id, r.meta, r.bytes);
+        },
         null);
       continue;
     }

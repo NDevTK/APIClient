@@ -128,11 +128,8 @@ const ROWS = [
     url: 'data:text/html', want: 'REFUSE:network', ask: (Z, row) => Z.safeFetchSchemeData(row.url) },
   { label: 'safeFetch asked for a data: URL (the scheme is refused, not declined)',
     url: 'data:text/html,<p>x', want: 'REFUSE:network' },
-  /* Two producers no navigation caller can reach, asked so the census holds all seven: navigationLoad sends a
-     GET and passes no `onChunk`. */
-  { label: 'METHOD, a POST (not a navigation caller\'s: navigationLoad sends GET)',
-    url: 'https://app.example.com/api', want: 'DECLINE', reason: 'blocked-method:',
-    ask: (Z) => ({ refusal: Z.safeFetchMethodRefusal('POST') }) },
+  /* A producer no navigation caller can reach, asked so the census holds all six: navigationLoad passes no
+     `onChunk`. */
   { label: 'STREAM, a streamed script (not a navigation caller\'s: navigationLoad passes no onChunk)',
     url: 'https://app.example.com/app.js', want: 'DECLINE', reason: 'blocked-stream-body-gated:',
     over: { destination: 'script', mode: 'no-cors', credentials: 'same-origin', credentialed: false,
@@ -454,7 +451,7 @@ try {
 }
 console.log('');
 /* The decline producers safe-fetch.js holds, each counted by the token it writes. */
-const PRODUCERS = ['blocked-method:', 'blocked-stream-body-gated:', 'blocked-signal:', 'blocked-destructive:',
+const PRODUCERS = ['blocked-stream-body-gated:', 'blocked-signal:', 'blocked-destructive:',
                    'blocked-destructive-redirect:', 'blocked-signal-redirect:', 'wire-idle'];
 for (const p of PRODUCERS) console.log(`  census ${p.padEnd(30)} ${census.get(p) || 0}`);
 for (const p of census.keys()) if (!PRODUCERS.includes(p)) { console.log(`  census UNLISTED ${p}`); bad++; }

@@ -124,15 +124,14 @@ typedef struct {
        unknown's delivery root, the first one a combine kept; `example` is the value on the examples of every
        unknown combined into it. `root` and `example` are undefined where there is none. */
     JSValue author_headers;
-    JSValue request_body;      /* request body — a JS string, or JS_NULL */
+    /* §3.5.6 step 4's request body: an ArrayBuffer of the bytes §5.2 extracted, or JS_NULL for a null body. For
+       a body built out of unknown external input those bytes are core/fetch/body.h's display shape, which
+       `request_body_is_shape` says and `request_body_class` (core/fetch/fetch.h's FetchBodyClass) grades, so
+       a host is told what the bytes are and never sends a shape. */
+    JSValue request_body;
     /* the delivery root of the unknown a shape body (`request_body_is_shape`) spells, a JS string, else JS_NULL */
     JSValue request_body_root;
-    /* …AND WHETHER THOSE CHARACTERS ARE THE BODY OR A SPELLING OF ONE. The slot above is declared a JS string
-       because §3.5.6 step 4's extraction is resolved to bytes here, and for a body built out of unknown
-       external input there are no bytes: what lands in it is core/fetch/body.h's DISPLAY SHAPE. The two are
-       indistinguishable once stored — that is the residual at the store site — so the ARM is kept beside them,
-       because the @H surface must refuse to publish a shape as bytes the request sent and this is the only
-       place that still knows. It is not a second copy of a fact the slot holds; the slot cannot hold it. */
+    uint8_t  request_body_class;
     uint8_t  request_body_is_shape;
     JSValue override_mime;     /* override MIME type — a JS string, or JS_NULL */
     JSValue response_headers;  /* the response's header list — an Array of [name, value] */
@@ -800,6 +799,7 @@ static void xhr_reset_request(JSContext *ctx, XhrData *d)
     xhr_set(ctx, d, &d->request_body, JS_NULL);
     xhr_set(ctx, d, &d->request_body_root, JS_NULL);
     d->request_body_is_shape = 0;   /* the arm goes with the body it describes */
+    d->request_body_class = FETCH_BODY_NONE;
     d->request_prov = -1;           /* …and the grade goes with the request it is about */
     d->request_pinned = -1;         /* …as does the witness mark composed beside it */
     d->request_driven = -1;         /* …and the drive mark */
@@ -2518,14 +2518,30 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
         hl_entry_release(ctx, &e);
         JS_FreeValue(ctx, pair);
     }
+    /* The body as a fetch()'s content read states it: RFC 4648 §4 base64 of the extracted bytes, and their
+       class (core/fetch/fetch.h). */
     json_buf_raw(&b, "],"); json_buf_key(&b, "body");
+    DCHECKF(JS_IsNull(d->request_body) == (d->request_body_class == FETCH_BODY_NONE),
+            "an XMLHttpRequest's body slot and its class disagree (%s body, class %d) — §3.5.6 step 4's store "
+            "writes both", JS_IsNull(d->request_body) ? "no" : "a", (int)d->request_body_class);
     if (JS_IsNull(d->request_body)) {
         json_buf_raw(&b, "null");
     } else {
-        const char *body = JS_ToCString(ctx, d->request_body);
-        json_buf_str(&b, body ? body : "");
-        if (body) JS_FreeCString(ctx, body);
+        size_t bn = 0, cap, wrote;
+        const uint8_t *bp = JS_GetArrayBuffer(ctx, &bn, d->request_body);
+        char *text;
+
+        if (bp == NULL) bn = 0;   /* an empty body's buffer may hold no storage */
+        cap = JS_Base64EncodedSize(bn) + 1;
+        text = lexbor_malloc(cap);
+        CHECK(text != NULL, "XMLHttpRequest: OOM encoding a request body for the host");
+        wrote = JS_Base64Encode(text, cap, bp, bn);
+        text[wrote] = 0;
+        json_buf_str(&b, text);
+        free(text);
     }
+    json_buf_raw(&b, ","); json_buf_key(&b, "bodyClass");
+    json_buf_str(&b, fetch_body_class_token((FetchBodyClass)d->request_body_class));
     json_buf_raw(&b, "}");
     JS_FreeCString(ctx, m);
     JS_FreeCString(ctx, u);
@@ -2568,7 +2584,7 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
     const EndpointBody *ebp = NULL;
     const char *method;
     char *body_ct = NULL;
-    const char *body = NULL;
+    const char *body = NULL;   /* borrowed from the body's ArrayBuffer */
     size_t body_len = 0;
 
     DCHECK(!JS_IsNull(d->url), "an XMLHttpRequest reached §3.5.6's request record with no URL — send() runs "
@@ -2607,20 +2623,9 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
         }
     }
     if (!JS_IsNull(d->request_body)) {
-        /* THIS READ CANNOT MEET UNKNOWN EXTERNAL INPUT, AND THE REASON IS A LOSS RATHER THAN A GUARANTEE —
-           recorded here because a reader who asks the obvious question about this line gets the answer
-           backwards, and the two answers take OPPOSITE work.
-           The obvious question is what happens if `request_body` holds a concolic: JS_ToCStringLen would reach
-           js_force_tostring, which aborts by name over one. It never does. §3.5.6 step 4's extraction resolves
-           the body to CHARACTERS at the store site below and puts a real String in this slot, so by the time
-           this line runs the taint is already gone — a DE-TAINTING, not an abort, which is the silent
-           direction and is exactly why it reads as the safe one. What lands here for an unknown body is that
-           body's DISPLAY SHAPE, indistinguishable from a page that literally wrote those characters.
-           SO THE ARM IS CARRIED BESIDE THE SLOT and is what the @H surface is told, because it cannot be
-           recovered from these bytes: an abort would be a capability to build, and a de-tainting is a fact
-           that must travel. The store site's own residual names what is still missing — the VALUE, not the
-           arm — and nothing here may be read as having closed that. */
-        body = JS_ToCStringLen(ctx, &body_len, d->request_body);
+        /* The extracted bytes; for an unknown body they spell its display shape, which the arm says. */
+        body = (const char *)JS_GetArrayBuffer(ctx, &body_len, d->request_body);
+        if (!body) body = "";   /* an empty body's buffer may hold no storage */
         body_ct = hl_get(ctx, d->author_headers, "content-type");
         if (body) {
             eb.mime = body_ct; eb.bytes = body; eb.len = body_len;
@@ -2635,23 +2640,11 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
                half-record solver/endpoint.c's own assert refuses. This is a POSITIVE statement and not a
                default: this producer does not know which bytes of its payload are unknown input, and cannot.
 
-               NAMED RESIDUAL — the same slot, and the same loss one layer deeper than the one above.
-               WHAT IS NOT COVERED: `request_body` is a JS STRING, and core/fetch/body.c's span record names
-               BYTE OFFSETS into the bytes §5.2's extraction produced. Those bytes are gone by this line for a
-               reason sharper than the de-tainting above: JS_NewStringLen at the store site runs them through
-               utf8_scan/utf8_decode (read at quickjs.c's js_new_string_len_or_null), so a BINARY payload — the
-               gRPC-Web and protobuf bodies this whole capability exists for — is UTF-8-decoded on the way into
-               the slot and re-encoded on the way out. A span offset into the result names a different byte
-               than the one the page wrote, so carrying the record here without fixing the slot would be worse
-               than not carrying it: a provenance row pointing at the wrong bytes.
-               WHAT THE NEXT DIFF BUILDS: the slot carrying the extraction's BYTES and its BodyState rather
-               than a String of them — which is the same repair the residual at §3.5.6 step 4's store site
-               already asks for (it names the VALUE; this names the BYTES and the SPANS, and one change to the
-               slot answers all three), with this line then projecting body_state_spans exactly as
-               core/fetch/fetch.c and core/frame/navigator_beacon.c do.
-               HOW ITS ABSENCE WOULD SHOW: one serializer's output posted through `fetch` and through
-               `xhr.send` reported with a full set of body byte-range fields and with none — and the XHR
-               record's `bodyBase64` differing from the fetch record's for byte-identical payloads. */
+               Named residual. Not covered: core/fetch/body.c's span record, which names which byte ranges of
+               the payload entered from which unknown; the store site frees the BodyState that holds it. Next
+               diff: the store site keeps the spans beside the bytes and this line projects body_state_spans as
+               core/fetch/fetch.c does. Absence shows as one serializer's output posted through `fetch` and
+               through `xhr.send` reported with byte-range fields and with none. */
             eb.span = NULL;
             eb.nspan = 0;
             ebp = &eb;
@@ -2673,7 +2666,7 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
        question about one exchange. See the `request_prov` field. */
     endpoint_record(ctx, method, xhr_request_address(d), eh, (int)n, ebp,
                     xhr_request_prov(d), xhr_request_driven(d), EPD_XHR, xhr_credentials_mode(d));
-    if (body) JS_FreeCString(ctx, body);
+    body = NULL;
     if (ebp && ebp->root) JS_FreeCString(ctx, ebp->root);
     free(body_ct);
     if (owned) {
@@ -3076,10 +3069,10 @@ wait:
            requestBodyTransmitted therefore equals requestBodyLength exactly once. */
         {
             size_t blen = 0;
-            const char *b = JS_IsNull(d->request_body) ? NULL : JS_ToCStringLen(ctx, &blen, d->request_body);
-            s->length = b ? (double)blen : 0;
+
+            if (!JS_IsNull(d->request_body)) JS_GetArrayBuffer(ctx, &blen, d->request_body);
+            s->length = (double)blen;
             s->transmitted = s->length;
-            if (b) JS_FreeCString(ctx, b);
         }
         if (d->synchronous) {
             /* §3.5.6's synchronous arm runs "handle response end-of-body" and NOTHING ELSE — no
@@ -3620,6 +3613,7 @@ static int js_xhr_send_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         xhr_set(ctx, d, &d->request_body, JS_NULL);
         xhr_set(ctx, d, &d->request_body_root, JS_NULL);
         d->request_body_is_shape = 0;   /* the arm goes with the body it describes */
+        d->request_body_class = FETCH_BODY_NONE;
         s->body_len = 0;
         if (!JS_IsNull(s->body) && !JS_IsUndefined(s->body)) {
             BodyState b = { 0 };
@@ -3633,24 +3627,18 @@ static int js_xhr_send_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
             const char *bbytes = NULL;
             size_t blen = 0;
             if (body_extract(ctx, &b, s->body, /*keepalive*/ false, &mime) < 0) { free(mime); return -1; }
-            /* WHAT THE BODY IS, ASKED OF THE UNION RATHER THAN OF `bytes == NULL`. `b.bytes ? b.bytes : ""`
-               stood here and answered a body built out of UNKNOWN EXTERNAL INPUT as the EMPTY STRING, so
-               `xhr.send(cfg.payload)` recorded a POST this engine reported as bodyless.
-               NAMED RESIDUAL — the taint does not survive this slot. WHAT IS NOT COVERED: `request_body` is
-               declared "a JS string, or JS_NULL" and three sites downstream `JS_ToCString` it (the host's
-               request JSON, §3.5.6's endpoint record, and the upload progress lengths), so an unknown body
-               reaches them as its DISPLAY SHAPE and its LENGTH is that shape's — a spelling of a hole, not the
-               body's length, which is what `loadstart`/`progress` then report. WHAT THE NEXT DIFF BUILDS: this
-               slot carrying the VALUE, with each of those three asking core/fetch/body.h's question the way
-               core/fetch/fetch.c's host edge now does, and §3.5.6's requestBodyLength stating UNKNOWN rather
-               than a number. HOW ITS ABSENCE SHOWS: an `xhr.send(unknown)` whose progress events carry the
-               character count of "{cfg.payload}", and a re-fire that cannot substitute the hole because the
-               value's identity was dropped here. */
-            /* THE ARM IS KEPT, WHICH IS THE HALF THE RESIDUAL ABOVE COULD NOT DO FROM HERE. It cannot carry
-               the VALUE — that is the next diff it names — but the one fact the @H surface must not guess is
-               whether these characters are the body or a spelling of it, and this is where that is known. */
+            /* What the body is, asked of the union rather than of `bytes == NULL`: an unknown body's bytes are
+               its display shape, so the slot keeps the arm and the class beside the bytes, and a host never
+               sends a shape.
+               Named residual. Not covered: an unknown body's length is its display shape's, so `loadstart` and
+               `progress` report that length where §3.5.6's requestBodyLength is unknown. Next diff: the slot
+               states an unknown length and the upload events carry it. Absence shows as an `xhr.send(unknown)`
+               whose progress events carry the byte count of a display shape. */
             d->request_body_is_shape = (body_state_content(&b, &bbytes, &blen) == BODY_SHAPE);
-            xhr_set(ctx, d, &d->request_body, JS_NewStringLen(ctx, bbytes ? bbytes : "", blen));
+            d->request_body_class = (uint8_t)fetch_body_class_of(&b);
+            xhr_set(ctx, d, &d->request_body,
+                    JS_NewArrayBufferCopy(ctx, (const uint8_t *)(bbytes ? bbytes : ""), blen));
+            CHECK(!JS_IsException(d->request_body), "XMLHttpRequest: OOM holding a request body's bytes");
             {
                 const char *root = d->request_body_is_shape ? concolic_root_c(b.unknown) : NULL;
 

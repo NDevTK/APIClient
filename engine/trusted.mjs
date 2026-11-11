@@ -219,9 +219,6 @@ export function trustedZone() {
      reading as though it had, and `navigate`/`workFetch` would take an `undefined` refusal as permission.
      That is the defaulted-read defect standing on a security decision, so it is a load-time abort rather than
      a TypeError three calls into a request. */
-  /* `safeFetchMethodRefusal` is on this list for the same reason: workXhr asks it before sending an
-     XMLHttpRequest, and a zone that obtained the chokepoint without it would take an `undefined` refusal as
-     permission. */
   /* `safeFetchEgressStated` IS ON THIS LIST AND ITS ABSENCE IS THE SHARPEST OF THEM. Without it this
      host cannot SPEAK its (empty) table at all, so `_firingRefusal` would assert on the first request of
      every run the default arms do not admit — and in a release build, where that assert is compiled out, it
@@ -236,7 +233,7 @@ export function trustedZone() {
      `_docOf` refuses on the first request rather than here at assembly. */
   for (const n of ['safeFetchWiden', 'safeFetchPermit', 'safeFetchWidenable', 'safeFetchSignalUsable',
                    'safeFetchEgressStated', 'safeFetchFiringRefusal', 'safeFetchCrossDocumentRefusal',
-                   'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'safeFetchHeaderListIs', 'docRecord',
+                   'safeFetchWidenedOrigins', 'safeFetchHeaderListIs', 'docRecord',
                    'docRecordJoin',
                    'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque',
                    'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordWorldDocument', 'docRecordAskerRefusal',
@@ -386,7 +383,7 @@ function decline(reason) { return `decline\t${b64(reason)}`; }
    wrote on the pending line; `abs` is this zone resolving that address against the document in order to apply
    a policy to it, and a refusal that named the resolved form would refuse a request no register holds.
    The reason is the refusing party's own token, whole and unprefixed (`blocked-signal:<name>=<value>`,
-   `blocked-method:<verb>`, `blocked-asker:<role>-<reason>`): the engine counts refusals by the rule the token
+   `blocked-asker:<role>-<reason>`): the engine counts refusals by the rule the token
    names (solver/pending_index.h's PEND_DECLINE_RULES) and aborts on a reason that names none. The method and
    address are the record's own key, so the reason repeats neither. It travels base64 as `provide`'s does. */
 /* A fetch record's content field: base64 of the engine's `{headers, body, bodyClass}` text (qjs_request), or
@@ -408,12 +405,21 @@ function fetchContent(headersKey, bodyKey, field, line) {
   if (!q || typeof q !== 'object' || !ZONE.safeFetchHeaderListIs(q.headers))
     throw bad('content holds no header list of [name, value, class] entries');
   if ((q.headers.length === 0) !== (headersKey === '-')) throw bad('header list contradicts its digest word');
-  if (!BODY_CLASSES.includes(q.bodyClass)) throw bad(`body class is \`${q.bodyClass}\``);
-  if ((q.body === null) !== (bodyKey === '-') || (q.body === null) !== (q.bodyClass === 'none'))
-    throw bad('body contradicts its digest word or its own class');
-  if (q.body !== null && typeof q.body !== 'string') throw bad('body is not base64 text');
-  return { headers: q.headers, body: q.body === null ? null : new ZONE_BYTES(Buffer.from(q.body, 'base64')),
-           bodyClass: q.bodyClass };
+  if ((q.body === null) !== (bodyKey === '-')) throw bad('body contradicts its digest word');
+  const body = requestBodyOf(q);
+  if (typeof body === 'string') throw bad(body);
+  return { headers: q.headers, body: body.body, bodyClass: body.bodyClass };
+}
+/* A request record's body as the engine states it (`body`: base64 or null, `bodyClass`: one of the four words,
+   `none` exactly for a null body), the encoding a fetch's content and an xhr.send record share: answers
+   `{body, bodyClass}` or the clause that refuses it. */
+function requestBodyOf(q) {
+  if (!BODY_CLASSES.includes(q.bodyClass)) return `body class is \`${q.bodyClass}\``;
+  if ((q.body === null) !== (q.bodyClass === 'none')) return 'body contradicts its own class';
+  if (q.body === null) return { body: null, bodyClass: 'none' };
+  if (typeof q.body !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(q.body))
+    return 'body is not base64 text';
+  return { body: new ZONE_BYTES(Buffer.from(q.body, 'base64')), bodyClass: q.bodyClass };
 }
 
 function declineRequest(id, reason) {
@@ -1327,13 +1333,14 @@ async function main() {
     if (q.mode !== 'cors')
       throw new Error(`the engine's xhr.send record states the mode \`${q.mode}\` — XHR §3.5.6 "The send() ` +
                       'method" builds every request in cors mode');
-    const methodRefusal = ZONE.safeFetchMethodRefusal(q.method);
-    if (methodRefusal) { settle(declineAnswer(id, methodRefusal.reason)); return; }
+    const body = requestBodyOf(q);
+    if (typeof body === 'string') throw new Error(`the engine's xhr.send record's ${body} — xhr_request_op writes it`);
     const abs = new URL(q.url, e.docUrl).href;
     /* A send the engine withdrew mid-body throws out of safeFetch's body read; nobody is owed that answer. */
     let raw;
     try {
-      raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, method: q.method, body: null, destination: '',
+      raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, method: q.method, body: body.body, destination: '',
+                                        ...(body.body === null ? {} : { bodyClass: body.bodyClass }),
                                         mode: q.mode, provenance: q.provenance, pinned: q.pinned, driven: q.driven,
                                         address: q.address, actor: 'page', doc, credentialed: false, signal: send.controller.signal,
                                         onBodyRead: bodyRead(e, send.entry),

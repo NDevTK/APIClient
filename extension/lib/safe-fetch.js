@@ -285,20 +285,6 @@ function _refused(kind, reason, urlList, headers) {
   return { ok: false, status: 0, statusText: reason, headers: headers, body: _NO_BYTES(),
            urlList: urlList, computedType: "", refusal: { kind: kind, reason: reason } };
 }
-/* The method question for a host that holds no byte-exact body of the request it relays: it declines a
-   non-GET before the fetch, since sending the verb without the page's body would change the request.
-   Named residual. Not covered: an XMLHttpRequest's own non-GET on its unforced run. A `fetch()`'s reaches
-   `safeFetch` with its method, header list and body; the XHR record's body is text, so both hosts still ask
-   this for an XHR. Next diff: the XHR record carries the extracted body's bytes and class, the hosts pass
-   them, and this function is deleted. Its absence shows as every unforced XHR non-GET declined
-   `blocked-method:`. */
-function safeFetchMethodRefusal(method) {
-  CHECK(typeof method === "string" && method !== "",
-        "safeFetchMethodRefusal was asked about " + JSON.stringify(method) + ", which is not a Fetch §2.2.1 " +
-        "\"Methods\" method — the caller is deciding whether this zone can perform a request at all, and an " +
-        "absent method would take the arm `GET` takes, which is the arm that spends the network");
-  return method === "GET" ? null : { kind: "decline", reason: "blocked-method:" + method };
-}
 // HTML's JavaScript MIME type list and Chromium's CORB-protected set: the two tables the CORB rule is stated
 // over.
 function _jsMime(m) {
@@ -2945,8 +2931,8 @@ async function safeFetchAttackerSiteCheck(site) {
    host persists, in the shape the restore takes. For a surface: `safeFetchWidenable` and
    `safeFetchSignalUsable` (the tests `safeFetchPermit` aborts on, so a surface can refuse with the reason),
    `safeFetchSignals`, `safeFetchPermitted`, `safeFetchSignalVector`, `safeFetchDefaultArms` and
-   `safeFetchWidenedOrigins`. `safeFetchFiringRefusal` and `safeFetchMethodRefusal` answer for an act that is
-   not a fetch, in the reply record's refusal vocabulary. Every one resolves to `_firingRefusal`,
+   `safeFetchWidenedOrigins`. `safeFetchFiringRefusal` answers for an act that is not a fetch, in the reply
+   record's refusal vocabulary. Every one resolves to `_firingRefusal`,
    `_signalVector` or a predicate they compare against, so none is a second policy.
    There is no exported destructive-path check: the deny list is a floor under requests this file composes
    and fires on its own, and never overrules an operator's explicit act (`safeFetchOperator`). */
@@ -2959,7 +2945,6 @@ if (typeof self !== "undefined") {
   self.safeFetchStatedRefusal = safeFetchStatedRefusal;
   self.safeFetchStatedShape = safeFetchStatedShape;
   self.fetchForbiddenRequestHeader = fetchForbiddenRequestHeader;
-  self.safeFetchMethodRefusal = safeFetchMethodRefusal;
   self.safeFetchHeaderListIs = safeFetchHeaderListIs;
   self.safeFetchWiden = safeFetchWiden;
   self.safeFetchEgressUnnamed = safeFetchEgressUnnamed;
