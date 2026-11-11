@@ -1,7 +1,8 @@
 /* Comment-size gate (CLAUDE.md "Comments").
  *
  * Refuses a diff that adds a comment block longer than LIMIT lines, or grows one that already is, and any added
- * comment line that cites a CLAUDE.md section by its section sign. It judges only what the diff ADDS, so standing blocks are untouched
+ * comment line that cites a CLAUDE.md section by its section sign or emphasizes by a run of words in capital
+ * letters. It judges only what the diff ADDS, so standing blocks are untouched
  * until someone edits them; editing one that is over the limit is allowed as long as the edit does not make it
  * longer, and moving one unchanged, within its file or into another file of the same diff, is not adding it.
  *
@@ -91,6 +92,30 @@ function jsComments(src) {
   return out;
 }
 
+/* Emphasis by capital letters: the first run in a comment line of RUN or more consecutive words written wholly
+   in capitals, or null. A word is two or more letters, with inner hyphens or apostrophes; a lone A or I inside a
+   run neither counts nor ends it. A token holding an underscore, a digit or a sigil is an identifier and ends the
+   run, and a run whose words are all separated by a comma, bar or slash is a list of names, not prose. */
+const RUN = 4;
+function emphasisRun(line) {
+  let run = [], joints = 0, listed = 0, sep = false;
+  const verdict = () => (run.length >= RUN && listed < joints ? run.join(" ") : null);
+  for (const tok of line.split(/\s+/)) {
+    const word = tok.replace(/^[^A-Za-z0-9_$#%@&]+|[^A-Za-z0-9_$#%@&]+$/g, "");
+    const lists = /[,|\/]$/.test(tok);
+    if (/^[A-Z]{2,}(?:[-'’][A-Z]+)*$/.test(word)) {
+      if (run.length) { joints++; if (sep) listed++; }
+      run.push(word); sep = lists;
+      continue;
+    }
+    if (run.length && (word === "" || word === "A" || word === "I")) { sep = sep || (word === "" && lists); continue; }
+    const v = verdict();
+    if (v) return v;
+    run = []; joints = 0; listed = 0; sep = false;
+  }
+  return verdict();
+}
+
 /* Added new-side lines, and each hunk's deletion count keyed by its new-side position. */
 function hunks(path) {
   const diff = git(["diff", "-U0", "--no-color", ...range, "--", path]);
@@ -178,6 +203,9 @@ for (const f of files) {
     lines.forEach((t, k) => {
       if (added.has(b.start + k) && t.includes("CLAUDE.md §"))
         refusals.push(`${f}:${b.start + k}  an added comment line cites \`CLAUDE.md §\`; state the rule's content instead`);
+      const run = added.has(b.start + k) ? emphasisRun(t) : null;
+      if (run)
+        refusals.push(`${f}:${b.start + k}  an added comment line emphasizes by capital letters ("${run}"); write it in sentence case`);
     });
   }
 }
