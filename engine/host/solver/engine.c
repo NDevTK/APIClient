@@ -5414,10 +5414,12 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
     if (account == SIB_ARRIVES) flow_arrive_on_snapshot(sib, parent, marks);
     else                        flow_fork_inherit(sib, parent, marks);
     /* The arm's coordinate is the parent's at the branch: its coordinate at the open step's entry, which the
-       inheritance copied, and what that step retired before the fork. A parent not holding the thread rests
-       at its coordinate. */
+       inheritance copied, and what that step ran before the fork, its compile work left out as the step's
+       closing charge leaves it out (flow_age_running). A parent not holding the thread rests at its
+       coordinate. */
     if (parent == flow_running() && g_in_step > 0)
-        sib->path_work += g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work;
+        sib->path_work += g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
+                          - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile);
     sib->started = 1;                 /* hot: resume from the blobs (and the cloned frame, when there is one) */
     /* The clone is of the parent's selected agent's base, so the arm selects that agent; every other agent's
        base and parks are the parent's state too, cloned onto the arm. */
