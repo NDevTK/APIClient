@@ -264,6 +264,13 @@ typedef struct JSGCCycle {
        the program's own crossing: only such a collection moves the threshold, so where the next one is owed is a
        function of the program's path and not of what the embedder's residency released. */
     bool owed, owed_host, path;
+    /* What owes a path collection, as functions of the program's path: its JS object births since the last one,
+       births inside a residency span left out (JS_GCResidencyBegin), against `births_owe`, which that collection
+       set from its survivors, the live objects with those the embedder holds written out (`absent`, JS_GCAbsent).
+       `price` is the work a standing path collection is priced at. */
+    uint64_t births, births_owe, survivors, price, residency_births;
+    int64_t absent;
+    uint32_t residency;
     /* Which collection the trial counts belong to; raised at every begin and restart, never 0. */
     uint32_t serial;
     /* gc_mut_reading when the trial began: any change since then restarts it (JS_GCStep). */
@@ -609,8 +616,6 @@ struct JSRuntime {
     /* How many drains are on the C stack (JS_FREE_DRAIN_DEPTH_MAX). */
     uint8_t gc_drain_depth;
     JSGCPhaseEnum gc_phase : 8;
-    /* A whole-heap collection is owed when `js_obj_live` reaches this (js_trigger_gc). */
-    uint64_t gc_obj_threshold;
 #ifdef ENABLE_DUMPS // JS_DUMP_LEAKS
     struct list_head string_list; /* list of JSString.link */
 #endif
@@ -3265,26 +3270,37 @@ JSValue JS_DupValueRT(JSRuntime *rt, JSValueConst v)
 /* The fewest live JS objects a whole-heap collection is owed at. A heuristic placeholder, not a measured value:
    upstream QuickJS's first threshold of 256 KiB, read at 64 bytes an object. */
 #define JS_GC_OBJ_THRESHOLD_MIN 4096
+/* The collector work (JS_GCStep's unit) a path collection is priced at per object of its path population. A
+   placeholder, not a value: the `gcchurn` fixture's @GCSTEP line read 25509 units over 4000 objects freed (6.4 each,
+   three visits apiece), and a survivor is visited twice. What sets it is the same quotient over real sites' path
+   collections, the census's gcWork over the population their trials began with. */
+#define JS_GC_WORK_PER_OBJECT 4
 
-/* Asked before a JS object is born. Whether a collection is owed is a function of the flow's path: it counts the JS
-   objects the program holds (`js_obj_live`), never the allocator's bytes, which differ between builds whose
-   structures differ and between hosts. Memory pressure is the embedder's other signal (JS_GCOwe). A birth inside
-   an unpriced span (an assert's condition) owes nothing, since a release build has no such birth. */
+/* Asked before a JS object is born. Whether a collection is owed is a function of the flow's path: it counts the
+   program's own births since the last path collection, never the live objects or the allocator's bytes, which move
+   with what the embedder's residency released and rebuilt and differ between builds and hosts. Memory pressure is
+   the embedder's other signal (JS_GCOwe). A birth inside an unpriced span (an assert's condition) owes nothing,
+   since a release build has no such birth, and one inside a residency span is the embedder's rebuild. */
 static void js_trigger_gc(JSRuntime *rt)
 {
     bool force_gc;
 
     if (APICLIENT_UNPRICED_OPEN())
         return;
+    if (rt->gc_cycle.residency != 0) {
+        rt->gc_cycle.residency_births++;
+        return;
+    }
+    rt->gc_cycle.births++;
 #ifdef FORCE_GC_AT_MALLOC
     force_gc = true;
 #else
-    force_gc = (uint64_t)rt->js_obj_live >= rt->gc_obj_threshold;
+    force_gc = rt->gc_cycle.births >= rt->gc_cycle.births_owe;
 #endif
     if (force_gc) {
 #ifdef ENABLE_DUMPS // JS_DUMP_GC
         if (check_dump_flag(rt, JS_DUMP_GC)) {
-            printf("GC: objects=%lld\n", (long long)rt->js_obj_live);
+            printf("GC: births=%llu\n", (unsigned long long)rt->gc_cycle.births);
         }
 #endif
         /* Crossed by a finalizer of the collection that is freeing its cycles: that collection answers it,
@@ -3302,16 +3318,24 @@ static void js_trigger_gc(JSRuntime *rt)
     }
 }
 
-/* A collection finished: the next one is owed at half again the JS objects that survived it, and a crossing the
-   host made while this one stood is answered by it. */
+/* A path collection finished: the next one is owed once the program has borne half again the JS objects that
+   survived this one (up to JS_GC_OBJ_THRESHOLD_MIN while they are few), and a crossing the host made while this
+   one stood is answered by it. The survivors are the live objects with those the embedder holds written out of the
+   heap, which a run that wrote none holds live, so the count is the path's. */
 static void gc_cycle_finished(JSRuntime *rt)
 {
-    uint64_t live = (uint64_t)rt->js_obj_live;
+    JSGCCycle *c = &rt->gc_cycle;
+    uint64_t s;
 
-    DCHECKF(rt->js_obj_live >= 0, "a collection finished with %lld live JS objects", (long long)rt->js_obj_live);
-    rt->gc_cycle.collections++;
-    rt->gc_cycle.owed = false;
-    rt->gc_obj_threshold = live + (live >> 1) > JS_GC_OBJ_THRESHOLD_MIN ? live + (live >> 1) : JS_GC_OBJ_THRESHOLD_MIN;
+    DCHECKF(rt->js_obj_live >= 0 && c->absent >= 0, "a collection finished with %lld live JS objects and %lld "
+            "absent ones", (long long)rt->js_obj_live, (long long)c->absent);
+    s = (uint64_t)rt->js_obj_live + (uint64_t)c->absent;
+    c->collections++;
+    c->owed = false;
+    c->survivors = s;
+    c->births = 0;
+    if (c->births_owe != UINT64_MAX)
+        c->births_owe = s + (s >> 1) > JS_GC_OBJ_THRESHOLD_MIN ? s >> 1 : JS_GC_OBJ_THRESHOLD_MIN - s;
 }
 
 /* max overhead for size >= 64: 12.5% */
@@ -4054,7 +4078,7 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     ms.malloc_size += sizeof(JSRuntime) + MALLOC_OVERHEAD;
     rt->malloc_state = ms;
     js_arena_init(rt);
-    rt->gc_obj_threshold = JS_GC_OBJ_THRESHOLD_MIN;
+    rt->gc_cycle.births_owe = JS_GC_OBJ_THRESHOLD_MIN;
 
     init_list_head(&rt->context_list);
     init_list_head(&rt->agent_list);
@@ -4193,14 +4217,14 @@ uint64_t JS_GetDumpFlags(JSRuntime *rt)
 #endif
 }
 
+/* The births since the last path collection that owe the next one; -1 disables automatic collection. */
 size_t JS_GetGCThreshold(JSRuntime *rt) {
-    return (size_t)rt->gc_obj_threshold;
+    return (size_t)rt->gc_cycle.births_owe;
 }
 
-/* use -1 to disable automatic GC */
 void JS_SetGCThreshold(JSRuntime *rt, size_t gc_threshold)
 {
-    rt->gc_obj_threshold = gc_threshold;
+    rt->gc_cycle.births_owe = gc_threshold == (size_t)-1 ? UINT64_MAX : (uint64_t)gc_threshold;
 }
 
 #define malloc(s) malloc_is_forbidden(s)
@@ -11192,6 +11216,7 @@ static void gc_trial_begin(JSRuntime *rt, bool whole)
     c->step = JS_GC_CYCLE_DECREF;
     c->scoped = !whole;
     c->path = whole && c->owed;
+    c->price = c->path ? (c->survivors + c->births) * JS_GC_WORK_PER_OBJECT : 0;
     c->work_begin = c->work;
     if (whole)
         c->owed = c->owed_host = false;
@@ -11533,6 +11558,21 @@ void JS_SetGCDriven(JSRuntime *rt, bool driven)
     rt->gc_driven = driven;
 }
 
+void JS_GCResidencyBegin(JSRuntime *rt) { rt->gc_cycle.residency++; }
+
+void JS_GCResidencyEnd(JSRuntime *rt)
+{
+    DCHECK(rt->gc_cycle.residency > 0, "a residency span ended with none open");
+    rt->gc_cycle.residency--;
+}
+
+void JS_GCAbsent(JSRuntime *rt, int64_t objects)
+{
+    rt->gc_cycle.absent += objects;
+    DCHECKF(rt->gc_cycle.absent >= 0, "the embedder's absent JS objects fell to %lld; a restore rebuilds no more "
+            "than its sale wrote", (long long)rt->gc_cycle.absent);
+}
+
 void JS_GCOwe(JSRuntime *rt)
 {
     DCHECK(rt->gc_driven, "a collection was owed in a runtime whose embedder does not drive its steps — nothing would "
@@ -11634,6 +11674,13 @@ void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out)
     out->object_work_max = rt->gc_cycle.object_work_max;
     out->scoped = rt->gc_cycle.scoped_done;
     out->scoped_work = rt->gc_cycle.scoped_work;
+    out->births = rt->gc_cycle.births;
+    out->births_owe = rt->gc_cycle.births_owe;
+    out->survivors = rt->gc_cycle.survivors;
+    out->absent = rt->gc_cycle.absent;
+    out->residency_births = rt->gc_cycle.residency_births;
+    out->cycle_work = rt->gc_cycle.work - rt->gc_cycle.work_begin;
+    out->price = rt->gc_cycle.price;
 }
 
 /* The collection driven to its end in one call, for a host with no scheduler and for teardown. A scoped trial

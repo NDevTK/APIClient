@@ -686,6 +686,14 @@ JS_EXTERN bool JS_GCOwed(JSRuntime *rt);
 /* Owe a collection in a driven runtime now, whatever the threshold says: the embedder has a reason of its own (RAM
    pressure). The next step it drives begins it. */
 JS_EXTERN void JS_GCOwe(JSRuntime *rt);
+/* A residency span, for an embedder moving a holder of its own out of the heap and back (a sold flow's release and
+   its restore): a JS object born inside one is the embedder's rebuild, not the program's, so it counts toward no
+   threshold crossing (JSGCCycleStats' `residency_births`). Spans nest. */
+JS_EXTERN void JS_GCResidencyBegin(JSRuntime *rt);
+JS_EXTERN void JS_GCResidencyEnd(JSRuntime *rt);
+/* The JS objects the embedder holds written out of the heap moved by `objects`: up by what a sale wrote, down by
+   what its restore rebuilt. A path collection counts them among its survivors, as a run that wrote none would. */
+JS_EXTERN void JS_GCAbsent(JSRuntime *rt, int64_t objects);
 JS_EXTERN void JS_GCBegin(JSRuntime *rt);
 /* A release scope, for an embedder tearing down a holder of its own (a sold flow). Between the two calls, a
    release that leaves a GC object's count positive notes the object when it was born after fork generation
@@ -712,6 +720,15 @@ typedef struct JSGCCycleStats {
        crossing was owed. A scoped one, or one only JS_GCOwe owed, answers the embedder's residency. */
     bool path;
     uint64_t host;         /* lifetime: whole-heap collections only JS_GCOwe owed, finished */
+    /* The program's JS object births since the last path collection and the count that owes the next one, the
+       survivors that collection left (live and absent objects), the objects absent now (JS_GCAbsent), and the
+       births inside residency spans (lifetime). */
+    uint64_t births, births_owe, survivors;
+    int64_t absent;
+    uint64_t residency_births;
+    /* The work the standing (or last) collection did so far, and the work a path collection is priced at: its
+       path population (the last survivors and the births since) at JS_GC_WORK_PER_OBJECT, 0 for any other. */
+    uint64_t cycle_work, price;
 } JSGCCycleStats;
 JS_EXTERN void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out);
 JS_EXTERN bool JS_IsLiveObject(JSRuntime *rt, JSValueConst obj);

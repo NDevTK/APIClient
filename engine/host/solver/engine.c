@@ -12954,6 +12954,10 @@ static void engine_sale_restore(JSContext *ctx, Flow *f) {
     FlowSold *s = f->sold;
     JSValue *vals, *frames[1] = { NULL };
     JSValue stand_ins = f->pending;
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    JSGCCycleStats st;
+    uint64_t born0;
+    uint32_t written = JS_FlowGraphObjects(s->g);
     int used;
 
     DCHECK(f->cold && s != NULL && s->n_vals >= SALE_WRITE_FIXED && f->n_agents == 1 && f->delta != NULL &&
@@ -12961,7 +12965,17 @@ static void engine_sale_restore(JSContext *ctx, Flow *f) {
            "a restore was asked of a member that is not a written stub holding no bulk");
     vals = malloc(sizeof *vals * (size_t)s->n_vals);
     CHECK(vals != NULL, "engine: OOM reading a sold member back");
+    /* A restore is residency: its births owe no collection, and the objects it rebuilds are absent no more. */
+    JS_GCResidencyBegin(rt);
+    JS_GCCycleStats(rt, &st);
+    born0 = st.residency_births;
     CHECK(JS_FlowGraphReadFlow(ctx, s->g, vals, frames) == 0, "engine: a sold member's graph did not read back");
+    JS_GCCycleStats(rt, &st);
+    DCHECKF(st.residency_births - born0 == written,
+            "a sold member's restore rebuilt %llu JS objects where its write wrote %u; a path collection counts "
+            "the written ones among its survivors while the member is sold, so the two must be one population",
+            (unsigned long long)(st.residency_births - born0), written);
+    JS_GCAbsent(rt, -(int64_t)written);
     f->fn = vals[0];
     f->pending = vals[1];
     f->orphan_claim_fn = vals[2];
@@ -12978,6 +12992,7 @@ static void engine_sale_restore(JSContext *ctx, Flow *f) {
     f->sold = NULL;
     g_restored++;
     flow_restore_end(f);
+    JS_GCResidencyEnd(rt);
 }
 
 /* A sale: the member stays in the registry as a cold-resident stub (flow.h's `cold`) and gives back what its
@@ -12998,6 +13013,8 @@ static void engine_sale_release(Flow *tail) {
     size_t head_n = 0;
     JSValue stand_ins;
 
+    /* A sale is residency: what it bears (the register's stand-ins) owes no collection. */
+    JS_GCResidencyBegin(JS_GetRuntime(g_sess_ctx));
     if (funded) engine_sale_census_take(tail);
     else g_sale_unfunded++;
     if (funded) {
@@ -13025,6 +13042,9 @@ static void engine_sale_release(Flow *tail) {
         tail->sold = sale_write(tail, &vals, head, head_n);
         head = NULL;
         g_sold_restores++;
+        /* Absent until its restore rebuilds them. A member that waits is not counted: it leaves the pick until
+           the session's park, which the sale writers' residual above names. */
+        JS_GCAbsent(JS_GetRuntime(g_sess_ctx), (int64_t)JS_FlowGraphObjects(tail->sold->g));
     }
     sale_vals_free(&vals);
     free(head);
@@ -13048,6 +13068,7 @@ static void engine_sale_release(Flow *tail) {
             "the sale outcomes (%ld restores, %ld unfunded, %ld gap, %ld other) do not sum to %ld sold — each sale "
             "takes exactly one", g_sold_restores, g_sold_waits_unfunded, g_sold_waits_gap, g_sold_waits_other,
             g_flows_sold);
+    JS_GCResidencyEnd(JS_GetRuntime(g_sess_ctx));
 }
 
 static void engine_shed_standby(JSContext *ctx, Flow *s);
@@ -14803,11 +14824,12 @@ int64_t engine_residency_work(void) { return g_residency_work + (int64_t)thread_
 /* A slice the collector holds: it begins an owed collection, then takes steps of rest_unit_items(REST_UNIT_GC_WORK)
    units until nothing is owed or the slice's collector work reaches the quantum, going on from one finished
    collection to the next owed, and handing the host its turn between two steps (ENGINE_STEP_HOST, resumed as the
-   same slice). No flow runs in it, so nothing separates two steps but the host's own time between slices. Each
-   step's work is priced at THREAD_WORK_UNITS_PER_KI_GC: a collection that answers the program's own threshold
-   crossing is banked in the instance's currency, so Level 1 sees it as service; one residency owed is banked as
-   residency work (g_residency_work). It answers YIELD: every flow is where it was. `resume` is a slice a host turn
-   interrupted, which is not counted again. */
+   same slice). No flow runs in it, so nothing separates two steps but the host's own time between slices. Work is
+   priced at THREAD_WORK_UNITS_PER_KI_GC. A collection that answers the program's own crossing (a path one) is
+   banked in the instance's currency at its price, a function of the path (JSGCCycleStats' `price`), rounded once
+   at its finish, so Level 1 sees the same service whatever is resident; its work past the price, which the
+   resident population caused, is residency work (g_residency_work), as all of a collection residency owed is. It answers YIELD: every flow is where it was.
+   `resume` is a slice a host turn interrupted, which is not counted again. */
 static int engine_collect_slice(JSRuntime *rt, int resume) {
     const uint64_t budget = rest_unit_items(REST_UNIT_GC_WORK);
     int64_t t0 = quantum_thread_us();
@@ -14825,22 +14847,35 @@ static int engine_collect_slice(JSRuntime *rt, int resume) {
         JS_GCBegin(rt);
     w0 = st.work;
     do {
-        uint64_t units;
-        int64_t *bank;
+        uint64_t units, within0, within1, price;
+        bool path;
 
         /* Whose this step is, read while the collection stands: the step that finishes it leaves it idle. */
         JS_GCCycleStats(rt, &st);
         DCHECK(st.step != 0, "a collector step was about to be taken with no collection standing");
-        bank = st.path ? &g_service_work : &g_residency_work;
+        path = st.path;
+        price = st.price;
+        within0 = st.cycle_work < price ? st.cycle_work : price;
         done = JS_GCStep(rt, budget);
         JS_GCCycleStats(rt, &st);
         DCHECKF(st.work >= w0, "the collector's lifetime work fell from %llu to %llu across one step",
                 (unsigned long long)w0, (unsigned long long)st.work);
+        within1 = st.cycle_work < price ? st.cycle_work : price;
         units = ((st.work - w0) * THREAD_WORK_UNITS_PER_KI_GC + 1023) / 1024;
-        DCHECKF(units <= (uint64_t)(INT64_MAX - *bank) && units <= (uint64_t)(INT64_MAX - g_collect_slice_units),
-                "banking %llu collector units would overflow a work counter (bank %lld, slice %lld)",
-                (unsigned long long)units, (long long)*bank, (long long)g_collect_slice_units);
-        *bank += (int64_t)units;
+        {
+            /* The step's work past the price is residency's; a path collection's price is service, at its finish. */
+            uint64_t svc = path && done ? (price * THREAD_WORK_UNITS_PER_KI_GC + 1023) / 1024 : 0;
+            uint64_t past = st.work - w0 - (path ? within1 - within0 : 0);
+            uint64_t res = (past * THREAD_WORK_UNITS_PER_KI_GC + 1023) / 1024;
+
+            DCHECKF(svc <= (uint64_t)(INT64_MAX - g_service_work) && res <= (uint64_t)(INT64_MAX - g_residency_work) &&
+                        units <= (uint64_t)(INT64_MAX - g_collect_slice_units),
+                    "banking %llu collector units would overflow a work counter (service %lld, residency %lld, "
+                    "slice %lld)", (unsigned long long)units, (long long)g_service_work, (long long)g_residency_work,
+                    (long long)g_collect_slice_units);
+            g_service_work += (int64_t)svc;
+            g_residency_work += (int64_t)res;
+        }
         g_collect_slice_units += (int64_t)units;
         if (g_pressure_batch > 0) g_gc_sale_work += st.work - w0;   /* a sold batch awaits this collection */
         w0 = st.work;
