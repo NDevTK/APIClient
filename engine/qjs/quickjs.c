@@ -64587,6 +64587,8 @@ typedef struct JSCodegen {
     struct list_head order;    /* every other definition, parents before children */
     struct list_head *pre;     /* the next definition whose prologue runs, &order once all have */
     bool root_pre_done;
+    JSFunctionDef *pre_fd;     /* the definition whose prologue is in flight, NULL between two */
+    int pre_k;                 /* ...and its unit cursor (js_create_function_pre) */
     bool bodies;               /* every prologue has run */
     bool failed;
     JSFunctionDef *cur;        /* the definition whose passes are in flight, NULL between two */
@@ -67130,35 +67132,54 @@ static int add_module_variables(JSContext *ctx, JSFunctionDef *fd)
    variable by walking UP to this level, so the scope relinking, the eval-call closure ordering and the module
    globals all have to be in place first. That ordering is the whole reason the tree walk below is two-phase and
    not a reverse traversal. Returns 0 / -1; on failure the caller owns every definition, including this one. */
-static int js_create_function_pre(JSContext *ctx, JSFunctionDef *fd)
+/* The prologue of `fd`: its scope linkage, one unit per scope and variable on the cursor cg->pre_k across four
+   walks (clear each scope's first variable, the argument scope's end marker as one unit, link each variable
+   into its scope, let an empty scope inherit its parent's chain, link each block variable to the enclosing
+   scope's), charged and resting between units as a pass does; 0 done, -1 failed, CG_RESTED parked at the
+   cursor. Named residual. Not covered: add_eval_variables and add_module_variables run whole after the walks
+   and charge nothing. Next diff builds: each as a fifth and sixth walk on the cursor, charged per closure or
+   module variable. Absence shows as: a module with many top-level bindings whose compile stint's host CPU is
+   large against the work it charged. */
+static int js_create_function_pre(JSContext *ctx, JSFunctionDef *fd, JSCodegen *cg)
 {
-    int scope, idx;
+    const int n1 = fd->scope_count, n2 = n1 + 1 + fd->var_count;
+    const int n3 = n2 + (fd->scope_count > 2 ? fd->scope_count - 2 : 0), n4 = n3 + fd->var_count;
+    int k, scope;
+    JSVarDef *vd;
 
-    /* recompute scope linkage */
-    for (scope = 0; scope < fd->scope_count; scope++) {
-        fd->scopes[scope].first = -1;
-    }
-    if (fd->has_parameter_expressions) {
-        /* special end of variable list marker for the argument scope */
-        fd->scopes[ARG_SCOPE_INDEX].first = ARG_SCOPE_END;
-    }
-    for (idx = 0; idx < fd->var_count; idx++) {
-        JSVarDef *vd = &fd->vars[idx];
-        vd->scope_next = fd->scopes[vd->scope_level].first;
-        fd->scopes[vd->scope_level].first = idx;
-    }
-    for (scope = 2; scope < fd->scope_count; scope++) {
-        JSVarScope *sd = &fd->scopes[scope];
-        if (sd->first < 0)
-            sd->first = fd->scopes[sd->parent].first;
-    }
-    for (idx = 0; idx < fd->var_count; idx++) {
-        JSVarDef *vd = &fd->vars[idx];
-        if (vd->scope_next < 0 && vd->scope_level > 1) {
-            scope = fd->scopes[vd->scope_level].parent;
-            vd->scope_next = fd->scopes[scope].first;
+    DCHECK(cg->pre_fd == fd && cg->pre_k >= 0 && cg->pre_k <= n4,
+           "a prologue was stepped for a definition that is not the one in flight, or past its last unit");
+    cg->from = cg->pre_k;
+    for (k = cg->pre_k; k < n4; k++) {
+        if (js_codegen_rest(cg, k)) {
+            cg->pre_k = k;
+            return CG_RESTED;
+        }
+        js_codegen_charge(1);
+        if (k < n1) {
+            /* recompute scope linkage */
+            fd->scopes[k].first = -1;
+        } else if (k == n1) {
+            /* special end of variable list marker for the argument scope */
+            if (fd->has_parameter_expressions)
+                fd->scopes[ARG_SCOPE_INDEX].first = ARG_SCOPE_END;
+        } else if (k < n2) {
+            vd = &fd->vars[k - n1 - 1];
+            vd->scope_next = fd->scopes[vd->scope_level].first;
+            fd->scopes[vd->scope_level].first = k - n1 - 1;
+        } else if (k < n3) {
+            JSVarScope *sd = &fd->scopes[2 + k - n2];
+            if (sd->first < 0)
+                sd->first = fd->scopes[sd->parent].first;
+        } else {
+            vd = &fd->vars[k - n3];
+            if (vd->scope_next < 0 && vd->scope_level > 1) {
+                scope = fd->scopes[vd->scope_level].parent;
+                vd->scope_next = fd->scopes[scope].first;
+            }
         }
     }
+    cg->pre_k = n4;
 
     /* if the function contains an eval call, the closure variables
        are used to compile the eval and they must be ordered by scope,
@@ -67172,12 +67193,9 @@ static int js_create_function_pre(JSContext *ctx, JSFunctionDef *fd)
     /* add the module global variables in the closure */
     if (fd->module) {
         if (add_module_variables(ctx, fd))
-            goto fail;
+            return -1;
     }
-
     return 0;
- fail:
-    return -1;
 }
 
 /* Whether the OP_get_var at `p` of final bytecode `buf` reads a spelling this body's resolution reported:
@@ -67550,30 +67568,39 @@ static int js_create_function_step(JSContext *ctx, JSCodegen *cg)
     JSFunctionDef *cur;
     int done = 0, r;
 
-    /* prologues, parents first */
+    /* prologues, parents first; a prologue in flight resumes at its cursor */
     while (!cg->bodies) {
-        if (!cg->root_pre_done) {
-            cur = cg->root;
-        } else if (cg->pre->next == &cg->order) {
-            cg->bodies = true;
-            break;
-        } else {
-            cur = list_entry(cg->pre->next, JSFunctionDef, link);
+        if (cg->pre_fd == NULL) {
+            if (!cg->root_pre_done) {
+                cur = cg->root;
+            } else if (cg->pre->next == &cg->order) {
+                cg->bodies = true;
+                break;
+            } else {
+                cur = list_entry(cg->pre->next, JSFunctionDef, link);
+            }
+            if (!cg->failed && done > 0 && js_parse_want_yield(cg->ps)) {
+                g_codegen_rests++;
+                return CG_RESTED;
+            }
+            if (cg->root_pre_done)
+                cg->pre = cg->pre->next;
+            cg->root_pre_done = true;
+            js_codegen_charge(1);
+            list_for_each_safe(el, el1, &cur->child_list) {
+                JSFunctionDef *kid = list_entry(el, JSFunctionDef, link);
+                list_del(&kid->link);
+                list_add_tail(&kid->link, &cg->order);
+            }
+            cg->pre_fd = cur;
+            cg->pre_k = 0;
         }
-        if (!cg->failed && done > 0 && js_parse_want_yield(cg->ps)) {
-            g_codegen_rests++;
+        /* A failed walk runs no prologue, and one a drop abandoned mid-way owns nothing to release. */
+        r = cg->failed ? 0 : js_create_function_pre(ctx, cg->pre_fd, cg);
+        if (r == CG_RESTED)
             return CG_RESTED;
-        }
-        if (cg->root_pre_done)
-            cg->pre = cg->pre->next;
-        cg->root_pre_done = true;
-        js_codegen_charge(1 + (uint64_t)cur->var_count + (uint64_t)cur->scope_count);
-        list_for_each_safe(el, el1, &cur->child_list) {
-            JSFunctionDef *kid = list_entry(el, JSFunctionDef, link);
-            list_del(&kid->link);
-            list_add_tail(&kid->link, &cg->order);
-        }
-        if (!cg->failed && js_create_function_pre(ctx, cur) < 0)
+        cg->pre_fd = NULL;
+        if (r < 0)
             cg->failed = true;
         done++;
     }
