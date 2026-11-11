@@ -39,6 +39,8 @@ struct PendIndexNode {
     PendIndexMember **mem;
     int               n_mem, cap_mem;
     long              answered;
+    char            **lines;   /* the join's lines for it since it last had no member; owned */
+    int               n_lines, cap_lines;
     PendIndexNode    *hnext;   /* the by-pair chain */
     PendIndexNode    *anext;   /* every node, in creation order — the join's walk */
 };
@@ -259,6 +261,12 @@ static PendIndexMember *pend_member(JSValueConst rec)
 
 /* TAKE THE RECORD OUT OF ITS PAIR — the members array is a SET, so the hole is filled by the last one, exactly
    as pending_remove's swap-remove is and for the same reason. */
+static void pend_node_lines_clear(PendIndexNode *n)
+{
+    for (int i = 0; i < n->n_lines; i++) free(n->lines[i]);
+    n->n_lines = 0;
+}
+
 static void pend_unkey(PendIndexMember *m)
 {
     PendIndexNode *n = m->node;
@@ -269,6 +277,8 @@ static void pend_unkey(PendIndexMember *m)
             n->mem[i] = n->mem[n->n_mem - 1];
             n->n_mem--;
             m->node = NULL;
+            /* With no member left nothing is owed an answer, so no line listed for it can be answered. */
+            if (n->n_mem == 0) pend_node_lines_clear(n);
             /* THE GAUGE FALLS HERE AND NOWHERE ELSE, which is what makes it the count of records the host may
                still be shown rather than a fourth thing that has to be kept in step by hand: this is the one
                line a record's membership of a pair ever ends on, and every end above it — answered, declined,
@@ -563,6 +573,29 @@ JSValue pending_index_node_member(const PendIndexNode *n, int i)
            "an outstanding request's member was asked for past the end of its list");
     return JS_DupValue(pending_ctx(), n->mem[i]->rec);
 }
+void pending_index_node_note_line(PendIndexNode *n, const char *line, size_t len)
+{
+    DCHECK(n != NULL && n->n_mem > 0, "a line was noted for a request with no outstanding park");
+    for (int i = 0; i < n->n_lines; i++)
+        if (strlen(n->lines[i]) == len && !memcmp(n->lines[i], line, len)) return;
+    if (n->n_lines == n->cap_lines) {
+        int nc = n->cap_lines ? n->cap_lines * 2 : 2;
+        char **ll = realloc(n->lines, (size_t)nc * sizeof *ll);
+        CHECK(ll != NULL, "engine: OOM noting a listed line");
+        n->lines = ll;
+        n->cap_lines = nc;
+    }
+    n->lines[n->n_lines] = strndup(line, len);
+    CHECK(n->lines[n->n_lines] != NULL, "engine: OOM noting a listed line");
+    n->n_lines++;
+}
+int pending_index_node_listed(const PendIndexNode *n, const char *line)
+{
+    DCHECK(n != NULL, "a listed line was asked of no node");
+    for (int i = 0; i < n->n_lines; i++)
+        if (!strcmp(n->lines[i], line)) return 1;
+    return 0;
+}
 long pending_index_node_answered(const PendIndexNode *n)
 {
     DCHECK(n != NULL, "a request's answered count was read off no node");
@@ -631,6 +664,8 @@ void pending_index_reset(JSContext *ctx)
         free(n->body);
         free(n->url);
         free(n->mem);
+        pend_node_lines_clear(n);
+        free(n->lines);
         free(n);
         n = next;
     }

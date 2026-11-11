@@ -160,6 +160,12 @@ int          pending_index_node_count(const PendIndexNode *n);
 /* Member `i`, OWNED by the caller. */
 JSValue      pending_index_node_member(const PendIndexNode *n, int i);
 
+/* The lines engine_pending_fetches has listed for this request since it last had no member: the join notes each
+   line it writes (`len` bytes, no newline), and engine_decline asks whether the line a refusal names is one, since
+   a zone answers only a line it was shown. Emptied when the last member leaves. */
+void         pending_index_node_note_line(PendIndexNode *n, const char *line, size_t len);
+int          pending_index_node_listed(const PendIndexNode *n, const char *line);
+
 /* THE PAIR A REPLY ANSWERS, or NULL for one this frontier never parked on. */
 PendIndexNode *pending_index_find(const PendRequestKey *k);
 /* How many of this pair's records have been answered, across every park of it. A lifetime count: it cannot say

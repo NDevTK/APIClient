@@ -4043,6 +4043,7 @@ const char *engine_pending_fetches(void) {
         }
         listed += n_mem;
         {
+            size_t at = n_out;
             const char *ini = fold.parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT;
             const char *f[14];
             f[0] = m; f[1] = NULL; f[2] = ini; f[3] = engine_provenance_token(fold.prov);
@@ -4056,6 +4057,8 @@ const char *engine_pending_fetches(void) {
                 join_put(&join, &n_out, &cap, "\t", 1);
             }
             join_put(&join, &n_out, &cap, u, strlen(u));
+            /* The line as written, so a refusal naming it can be told from one this join never wrote. */
+            pending_index_node_note_line(node, join + at, n_out - at);
             join_put(&join, &n_out, &cap, "\n", 1);
         }
     }
@@ -4591,6 +4594,11 @@ int engine_decline(JSContext *ctx, const char *line, const char *reason) {
     pend_line_fold_of_line(&judged, destination, initiator, provenance, pinned, driven, credentials, address);
     node = pending_index_find(&key);
     matched = node ? pending_index_node_count(node) : 0;
+    /* The zone answers only a line it was shown, so the line is one this join wrote while the request had
+       parks; a line it never wrote would decide which parks are refused from fields no park stated. */
+    DCHECKF(matched == 0 || pending_index_node_listed(node, line),
+            "a refusal names a line the pending join never wrote for its request — the zone echoes the line it "
+            "judged verbatim, so this one was composed elsewhere or altered. line=%s", line);
     rv = JS_NewString(ctx, reason);
     CHECK(!JS_IsException(rv), "engine: OOM recording the trusted zone's refusal of a request");
     /* The members are read before any is marked: a mark removes its record from the node (pend_unkey fills the

@@ -1355,7 +1355,7 @@ static struct {
     int refusal_due;    /* a bill showed the pair since with a vector other than `forced` */
     int refusals;       /* refusals written for the pair */
     int unforced_shown; /* bills that showed the pair with a vector other than `forced` */
-    int answered;       /* replies written for TF_DK_URL */
+    int answered;       /* replies written for a TF_DK_URL line not stating `forced` */
     char *replied;      /* the line whose reply is owed for TF_DKREV_URL, or NULL */
     int rev_pre_at;     /* the payment that answered TF_DKREV_PRE_URL, or -1 */
     int rev_answered;   /* replies written for TF_DKREV_URL */
@@ -1692,7 +1692,7 @@ static int fixture_provide(JSContext *ctx) {
             JS_FreeValue(ctx, reply);
             if (!strcmp(abs, TF_REPLYTWICE_URL)) g_tf_r2.answered++;
             if (!strncmp(abs, TF_REPLYTWICE_DUE, strlen(TF_REPLYTWICE_DUE))) g_tf_r2.due = g_tf_payments;
-            if (!strcmp(abs, TF_DK_URL)) g_tf_dk.answered++;
+            if (!strcmp(abs, TF_DK_URL) && strcmp(provenance, PENDING_PROVENANCE_FORCED)) g_tf_dk.answered++;
             if (!strcmp(abs, TF_DKREV_URL)) g_tf_dk.rev_answered++;
             if (!strcmp(abs, TF_DKREV_PRE_URL)) g_tf_dk.rev_pre_at = g_tf_payments;
         }
@@ -28528,7 +28528,8 @@ TF_UNIT void probes_declinekey(const char *js, Probe *tab, int *n) {
              "run's park, whose vector that line never stated, so the own run became a forced failure arm and "
              "a waiting arm");
     fold_row(&own_tt, &own_why, g_tf_dk.answered == 1,
-             "the own run's /api/dkey park was not sent exactly once after the refusal");
+             "the own run's /api/dkey park was not listed again on an unforced line of its own and sent exactly "
+             "once after the refusal");
     fold_row(&forced_tt, &forced_why, emitted_record_graded_has(js, "/api/dkey-forced-fail", "forced", ""),
              "no forced /api/dkey-forced-fail: the assumed arm's refused park forked no failure arm");
     fold_row(&forced_tt, &forced_why,
