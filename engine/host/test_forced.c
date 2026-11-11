@@ -1962,6 +1962,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/compilererest.h"
 #include "fixture/compilelabelrest.h"
 #include "fixture/compileparenrest.h"
+#include "fixture/compilearrayrest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2785,6 +2786,7 @@ TF_DOCS[] = {
     { "compilererest", HTML_COMPILERE_REST },
     { "compilelabelrest", HTML_COMPILELABELREST },
     { "compileparenrest", HTML_COMPILEPARENREST },
+    { "compilearrayrest", HTML_COMPILEARRAYREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -19689,10 +19691,11 @@ TF_UNIT void probes_htmlbytesrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the four compile-rest documents (fixture/compilestrrest.h, compilererest.h, compilelabelrest.h,
-   compileparenrest.h): the indirect eval's answer reached its record, and no turn of the document held the
-   thread for a quantum between two offers (`sliceOverrunGapWork`), so the compile rested inside the stint the
-   document makes long. A row's key is its own document's record address, so each document selects one row. */
+/* The rows of the five compile-rest documents (fixture/compilestrrest.h, compilererest.h, compilelabelrest.h,
+   compileparenrest.h, compilearrayrest.h): the indirect eval's answer reached its record, and no turn of the
+   document held the thread for a quantum between two offers (`sliceOverrunGapWork`), so the compile rested
+   inside the stint the document makes long. A row's key is its own document's record address, so each
+   document selects one row. */
 TF_UNIT void probes_compilerest(const char *js, Probe *tab, int *n) {
     static const struct { const char *row, *url, *key, *val, *gapwhy; } R[] = {
         { "compile-string-rest", "/api/cmp-str", "n", "1000000",
@@ -19707,6 +19710,9 @@ TF_UNIT void probes_compilerest(const char *js, Probe *tab, int *n) {
         { "compile-paren-rest", "/api/cmp-paren", "r", "50000",
           "a turn held the thread for a quantum or more between two offers: the compile of a parenthesized "
           "function of 50,000 statements ran a stint that offered no suspend point" },
+        { "compile-array-rest", "/api/cmp-array", "n", "100000",
+          "a turn held the thread for a quantum or more between two offers: the compile of an array literal "
+          "of 100,000 elements ran a stint that offered no suspend point" },
     };
     const char *at = strstr(js, "\"sliceOverrunGapWork\":");
     long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;

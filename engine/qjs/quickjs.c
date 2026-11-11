@@ -54355,7 +54355,7 @@ enum {
     PDS_EXPORT, PDS_EXP_01, PDS_EXP_02, PDS_EXP_03, PDS_EXP_04,
     PDS_FDECL, PDS_FD_01, PDS_FD_02, PDS_FD_03, PDS_FD_04,
     /* the thirteen places a function body is descended into */
-    PDS_ASGN_ARROW1, PDS_ASGN_ARROW2, PDS_ASGN_ARROW3, PDS_ASGN_SKIP,
+    PDS_ASGN_ARROW1, PDS_ASGN_ARROW2, PDS_ASGN_ARROW3, PDS_ASGN_SKIP, PDS_ASGN_PATTERN,
     PDS_PFX_FUNC, PDS_PFX_ASYNCFUNC, PDS_OBJ_METHOD, PDS_SOD_FUNCVAR,
     PDS_CLS_SINIT, PDS_CLS_ACCESSOR, PDS_CLS_METHOD,
     PDS_SE_FUNC, PDS_EXP_FUNC, PDS_EXP_DEFFUNC, PDS_CLS_KEY, PDS_DE_KEY,
@@ -54727,10 +54727,11 @@ static int js_parse_skip_step(JSParseState *s, bool can_rest, int *pbits, bool *
 }
 
 /* The lookahead whole, for a site that cannot park inside it. Named residual. Not covered: every caller but
-   assign_entry (the async arrow head, destructuring patterns, a for statement's head, a
-   function's parameter list) runs the scan to its answer inside one production step. Next diff builds: each such site begun and
-   stepped as assign_entry does, with a resume state of its own. Absence shows as: `sliceOverrunGapWork` near
-   the bytes between a bracket and its match, at an async arrow or a destructuring pattern spanning a body. */
+   AssignmentExpression's arrow and pattern tests (the async arrow head, declaration and nested destructuring
+   targets, a for statement's head, a function's parameter list) runs the scan to its answer inside one
+   production step. Next diff builds: each such site begun and stepped as assign_entry does, with a resume
+   state of its own. Absence shows as: `sliceOverrunGapWork` near the bytes between a bracket and its match, at
+   a declaration's pattern or a parameter list spanning a body. */
 static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_terminator)
 {
     bool rested;
@@ -55912,6 +55913,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     case PDS_FD_04:           goto fd2_04;
     case PDS_ASGN_ARROW1:     goto asgn_arrow1_done;
     case PDS_ASGN_SKIP:       goto asgn_skip_step;
+    case PDS_ASGN_PATTERN:    goto asgn_pattern_step;
     case PDS_ASGN_ARROW2:     goto asgn_arrow2_done;
     case PDS_ASGN_ARROW3:     goto asgn_arrow3_done;
     case PDS_PFX_FUNC:        goto pfx_func_done;
@@ -56544,8 +56546,20 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     }
  assign_next:
     if (s->token.val == '[' || s->token.val == '{') {
-        int skip_bits;
-        if (js_parse_skip_parens_token(s, &skip_bits, false) == '=') {
+        int skip_bits, pattern_tok;
+        bool rested;
+
+        /* Is this literal an AssignmentPattern: the lookahead to its close rests inside the scan, as the
+           arrow test's does, so a literal as long as a data table is not one step. */
+        js_parse_skip_begin(s, false);
+ asgn_pattern_step:
+        pattern_tok = js_parse_skip_step(s, s->pd_can_yield, &skip_bits, &rested);
+        if (rested) {
+            s->pd_rest_owed = true;
+            f->state = PDS_ASGN_PATTERN;
+            goto dispatch;
+        }
+        if (pattern_tok == '=') {
             /* 13.15 AssignmentExpression : ObjectLiteral|ArrayLiteral = AssignmentExpression — the literal is
                REPARSED through the AssignmentPattern cover grammar. That production exists only at
                AssignmentExpression level, so the test belongs HERE. Doing it in the primary-expression parser
