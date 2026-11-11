@@ -210,8 +210,8 @@ static JSValue rb_whole(JSContext *ctx, JSValueConst src, const char *computed_t
 int reply_body_append(JSContext *ctx, const char *token, const char *state, const uint8_t *bytes, size_t n,
                       const char *meta)
 {
-    int at = rb_open_find(token), terminal, declined = 0, woke = 0;
-    JSValue src, items, waiters, kept;
+    int at = rb_open_find(token), terminal, declined = 0, nwake = 0;
+    JSValue src, items, waiters, kept, *wake;
     uint32_t i, wn;
 
     if (at < 0) return 0;
@@ -258,21 +258,29 @@ int reply_body_append(JSContext *ctx, const char *token, const char *state, cons
     kept = JS_NewArray(ctx);
     CHECK(!JS_IsException(kept), "reply_body: OOM listing a body's waiting parks");
     wn = rb_len(ctx, waiters);
+    wake = malloc((wn ? wn : 1) * sizeof *wake);
+    CHECK(wake != NULL, "reply_body: OOM listing the parks a body record answers");
     for (i = 0; i < wn; i++) {
         JSValue e = JS_GetPropertyUint32(ctx, waiters, i);
         uint32_t item = (uint32_t)pending_get_int(e, PEND_ITEM);
 
         if (item < rb_len(ctx, items)) {
             rb_answer(ctx, e, items, item);
-            woke++;
+            wake[nwake++] = JS_DupValue(ctx, e);
         } else {
-            if (declined) pending_set(e, PEND_DECLINED, JS_NewString(ctx, meta));
+            if (declined) {
+                pending_set(e, PEND_DECLINED, JS_NewString(ctx, meta));
+                wake[nwake++] = JS_DupValue(ctx, e);
+            }
             rb_push(ctx, kept, JS_DupValue(ctx, e));
         }
         JS_FreeValue(ctx, e);
     }
     rb_put(ctx, src, "waiters", kept);
-    if (woke || declined) flow_clear_host_owed_all();
+    /* The members whose registers hold an answered or refused park, and no other, are askable again. */
+    if (nwake) flow_wake_owed_holding(wake, nwake);
+    for (i = 0; i < (uint32_t)nwake; i++) JS_FreeValue(ctx, wake[i]);
+    free(wake);
     if (terminal) {
         free(g_open[at].token);
         JS_FreeValue(ctx, g_open[at].source);

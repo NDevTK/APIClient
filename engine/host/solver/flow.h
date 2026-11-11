@@ -483,15 +483,14 @@ typedef struct Flow {
        left belongs to the host (an unanswered fetch, a document script whose text has not arrived, an
        unresolved synchronous cross-instance read), and it must not get the thread again until something could
        have changed. Recorded per flow, because the WFQ re-picks the same top flow and a count of consecutive owed
-       answers would declare the frontier stalled while runnable siblings were never asked.
-       A generation stamp, not a flag, so clearing every mark is one increment (flow_clear_host_owed). */
-    unsigned owed_gen;
+       answers would declare the frontier stalled while runnable siblings were never asked. Cleared only by an
+       event on this member's own register or timeline (flow_clear_host_owed, flow_wake_owed_holding). */
+    unsigned char owed;
 
     /* Does this member owe the host an image of its own world? Each flow is a distinct appearance of the
        document, and its pixels exist only while it is switched in with its deltas applied, so the host asks for
        the moment instead of rendering whichever timeline is standing at a slice boundary (main.c's `qjs_paint`).
-       A plain flag, unlike `owed_gen`: a generation would read every member born after the stamp moved as
-       marked, while this mark must be laid deliberately, by the frontier walk or by the mint. With the
+       A plain flag laid deliberately, by the frontier walk or by the mint. With the
        every-world mode on, flow_new marks a newborn; a fork never inherits it (`reclaim_calloc` zeroes a Flow).
        The marked set grows with the frontier, which is the point; nothing waits for an ask to close, since a
        mark is spent at its member's end or at any yield it stands for, so the cost is one return per member.
@@ -823,7 +822,7 @@ typedef struct Flow {
     unsigned char held;
     /* Its links in two populations the index re-keys or re-admits as a whole: its family's away list (members
        whose own silence is non-zero in the current window, the ones an emission re-keys) and the host-owed list
-       (members out of the index, re-admitted by flow_clear_host_owed_all). NULL-linked, owned by flow.c. */
+       (members out of the index, re-admitted by flow_wake_owed_holding). NULL-linked, owned by flow.c. */
     struct Flow *away_prev, *away_next;
     struct Flow *owed_prev, *owed_next;
     /* …and the written list (stubs whose sale wrote them, flow.c's g_rest_head), which the pick weighs. */
@@ -1852,9 +1851,13 @@ int   flow_host_owed(const Flow *f);
  * and clearing per slice would make "every member waits on the host" unreachable. */
 void  flow_clear_host_owed(Flow *f);
 
-/* The one event that names no flow: an external document script's text is the document's, so its reply fills a
-   slot every flow parked on that script was waiting for. The only unblocking inside a slice. */
-void  flow_clear_host_owed_all(void);
+/* A reply or a refusal was written onto the records `recs` (`n` of them, borrowed): re-admit exactly the host-owed
+   members whose register holds one of them, and clear the mark of each written stub whose stand-ins do, which
+   makes its restore's pick due. A record is shared by every register that forked while it was in flight, so the
+   event names the records and the registers name their members; a member whose register holds none is owed
+   nothing by this event and stays out of the pick. Asserts each record carries the answer or the refusal that
+   wakes it. */
+void  flow_wake_owed_holding(const JSValue *recs, int n);
 
 /* Take a just-assembled member out of the pick for the rest of its life: a snapshot other flows are forked from
    (solver/source_cut.h), which no host event and no other flow re-admits. It keeps its weight and every work item

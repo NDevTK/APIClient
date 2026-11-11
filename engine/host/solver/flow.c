@@ -14,6 +14,7 @@
 #include "solver/world.h"    /* …and whether two sending timelines it committed to can both be true */
 #include "solver/source_cut.h" /* …and the time-travel points its history holds */
 #include "solver/pick_ledger.h" /* the observer told when a code site is first served */
+#include "solver/pending.h"   /* a host-owed member's register, read at a wake */
 #include "check.h"
 #include <stdlib.h>
 #include <math.h>      /* INFINITY: the `nmax` of a treap subtree holding no never-dispatched member */
@@ -94,7 +95,7 @@ uint64_t flow_work_seq_next(void) {
  * say whether the order is deciding anything. `g_rank_changes` is not this count: frontier_rank_changed is called
  * at the clock write (frontier_vt_serve), the fitness observations (flow_observe_replay/_survival/_rung), a site's
  * repricing and a member's move between sites (flow_age_running, flow_stand_at), the host-owed transitions (flow_set_host_owed, flow_clear_host_owed,
- * flow_clear_host_owed_all), the arrival (flow_new) and the departure (flow_remove), and only the last two change
+ * flow_wake_owed_holding), the arrival (flow_new) and the departure (flow_remove), and only the last two change
  * membership; on a page that emits nothing and never moves the clock it happens to track arrivals closely, which
  * is the agreement that never gets checked.
  *
@@ -2715,7 +2716,7 @@ void flow_stub_unwrite(JSContext *ctx, Flow *f) {
            "a stub's bytes were given back on a member that is not a written stub, or inside a sale");
     flow_rest_unlink(f);
     flow_sold_free(ctx, f->sold); f->sold = NULL;
-    f->owed_gen = 0;   /* a stub its bytes left waits for its recipe, unmarked, as an unwritten one does */
+    f->owed = 0;   /* a stub its bytes left waits for its recipe, unmarked, as an unwritten one does */
     cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
     dom_base_release(f->dom_base); f->dom_base = NULL;
     concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
@@ -2801,8 +2802,9 @@ void flow_sale_begin(Flow *f) {
     flow_sale_key_read(f, &g_sale_key);
 #endif
     if (f->ix_in) flow_ix_remove(f);
-    else { flow_owed_unlink(f); if (!f->sold) f->owed_gen = 0; }
-    /* A written stub keeps its mark, so a clear of it is the event that makes its pick due. */
+    else { flow_owed_unlink(f); if (!f->sold) f->owed = 0; }
+    /* A written stub keeps its mark, so the wake of a record its stand-ins hold is the event that makes its pick
+       due (flow_wake_owed_holding). */
     if (f->sold) flow_rest_link(f);
     f->cold = 1;
     g_cold_n++;
@@ -5407,18 +5409,14 @@ static inline int64_t flow_silence_us_to_sink(const Flow *f, double floor) {
     return (int64_t)((acct_family_val(f) + (1.0 - floor)) * (double)FLOW_SILENCE_WORK) + FLOW_SERVICE_WORK;
 }
 
-/* Host-owed marks (flow.h says what a mark means and why the flow carries one). A generation rather than a per-flow
- * flag, so clearing every mark is one increment rather than a walk of a frontier tens of thousands strong: a flow is
- * marked by stamping the current generation, and every stamp ages out when the generation moves. */
-static unsigned g_owed_gen = 1;   /* NEVER 0: a fresh (calloc'd) flow must read as RUNNABLE, not as marked */
 
 /* Published because it is flow_pick's own filter, the one place a member is kept out of the runnable order, and
    engine.c's yield decision asks the same question of the incumbent; a second spelling there would drift the day a
    second site learns to mark. */
-int flow_host_owed(const Flow *f) { return f->owed_gen == g_owed_gen; }
+int flow_host_owed(const Flow *f) { return f->owed; }
 
-/* The members out of the order's index because they are host-owed (`g_owed_head`), linked so a clear of every mark
-   re-admits them without a walk of the frontier. A member is on this list exactly when flow_host_owed says so. */
+/* The members out of the order's index because they are host-owed (`g_owed_head`), linked so a wake reads the marked
+   members and not the frontier. A member is on this list exactly when flow_host_owed says so. */
 static void flow_owed_link(Flow *f) {
     f->owed_prev = NULL; f->owed_next = g_owed_head;
     if (g_owed_head) g_owed_head->owed_prev = f;
@@ -5456,7 +5454,7 @@ void flow_set_host_owed(Flow *f) {
     /* Out of the order's index, which holds the runnable members, and onto the list a clear re-admits from. */
     flow_ix_remove(f);
     flow_owed_link(f);
-    f->owed_gen = g_owed_gen;
+    f->owed = 1;
     /* And the ranking changed: the value yield fires "the moment a parked flow outranks", and the WFQ's answer is
        the best eligible flow, so the eligible set is a term of that answer. A mark takes a member out of the pick
        and a clear puts one back. The preempt hook caches its rival on this generation, and the value-yield
@@ -5473,7 +5471,7 @@ void flow_clear_host_owed(Flow *f) {
        comes back into the order's index. A stub is on neither list: a written one's clear makes it pickable. */
     int was_owed = flow_host_owed(f) && !f->cold;
     if (was_owed) flow_owed_unlink(f);
-    f->owed_gen = 0;   /* never equal to g_owed_gen, which starts at 1 and only ever moves forward */
+    f->owed = 0;
     if (was_owed) flow_ix_insert(f);
     /* And this direction needs it as much: a clear makes eligible a flow the scheduler's last pick could not
        consider, and the pick and the preempt hook do not run at the same instant. A clear landing during the picked
@@ -5484,24 +5482,54 @@ void flow_clear_host_owed(Flow *f) {
     frontier_rank_changed();
 }
 
-void flow_clear_host_owed_all(void) {
-    /* The wrap is handled: four billion clears is not impossible, and a stamp aliasing the new generation would read
-       as owed on a runnable flow, excluding it until the next clear. Resetting the stamps costs one walk per wrap. */
-    if (++g_owed_gen == 0) {
-        for (int i = 0; i < g_flows_n; i++) g_flows[i]->owed_gen = 0;
-        g_owed_gen = 1;
+/* Does `f`'s register hold one of `recs`? A record is a JS object shared by the registers that name it, so
+   identity is the question; the registers are the scheduler's, read from outside any flow's delta (pending.h). */
+static int flow_register_holds(const Flow *f, const JSValue *recs, int n) {
+    int hit = 0, m = pending_count(f->pending);
+
+    for (int i = 0; i < m && !hit; i++) {
+        JSValue e = pending_entry(f->pending, i);
+
+        for (int k = 0; k < n && !hit; k++) {
+            if (JS_VALUE_GET_PTR(e) != JS_VALUE_GET_PTR(recs[k])) continue;
+            DCHECK(pending_get_int(e, PEND_HAVE_VALUE) || pending_entry_declined(e),
+                   "a host-owed member was woken by a record that carries neither an answer nor a refusal — the "
+                   "wake is the write's own edge, so the record must already hold what it delivers");
+            hit = 1;
+        }
+        JS_FreeValue(pending_ctx(), e);
     }
-    /* And every member the marks kept out of the order's index comes back into it, read off the list rather than
-       the frontier, so the clear costs what it re-admits. */
-    while (g_owed_head) {
-        Flow *m = g_owed_head;
+    return hit;
+}
+
+void flow_wake_owed_holding(const JSValue *recs, int n) {
+    Flow *m = g_owed_head, *next;
+    int woke = 0;
+
+    DCHECK(n > 0 && recs != NULL, "a wake named no record — the writers call it only after writing at least one");
+    for (; m; m = next) {
+        next = m->owed_next;
+        if (!flow_register_holds(m, recs, n)) continue;
         flow_owed_unlink(m);
+        m->owed = 0;
         flow_ix_insert(m);
+        woke++;
     }
-    /* The whole-frontier form: every member just became eligible, the largest ranking change one call makes. The
-       host reaches this between slices (the provider's own edges), so the yield request is
-       read at the first opcode of the next slice, when the new set first matters. */
-    frontier_rank_changed();
+    /* And the written stubs that kept their mark: a stub's register is its stand-ins (pending_stand_ins), keyed
+       under their pairs, so a fill or a refusal writes them as it writes every resident record. A woken stub
+       stays on the written list, which the pick weighs once it is not owed; its restore moves each stand-in's
+       answer onto the register it reads back (pending_restore). */
+    for (m = g_rest_head; m; m = m->rest_next) {
+        DCHECK(m->cold && m->sold != NULL && !m->ix_in && m->owed_prev == NULL && m->owed_next == NULL &&
+                   g_owed_head != m,
+               "a member on the written list is not a written stub, or stands in the order's index or on the "
+               "host-owed list");
+        if (!m->owed || !flow_register_holds(m, recs, n)) continue;
+        m->owed = 0;
+        woke++;
+    }
+    /* A re-admission changes the eligible set, the ranking change the preempt hook's rival cache keys on. */
+    if (woke) frontier_rank_changed();
 }
 
 /* Held members (flow.h): out of the index for good and on no list, so neither a host event nor the pager reaches

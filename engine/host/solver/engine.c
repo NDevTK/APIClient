@@ -4236,6 +4236,7 @@ int engine_provide(JSContext *ctx, const PendRequestKey *key, const char *how, c
     const char *referrer = key->referrer, *url = key->url;
     PendIndexNode *node;
     int n = 0, i, m;
+    JSValue *filled;   /* the records this reply fills, held for the wake that follows the fills */
     /* The zone's two statements about its answer, through the mappings that own the words; both are fatal on
        an absent or undefined one. */
     ReplyHow reply_how = reply_how_of_token(how);
@@ -4320,6 +4321,8 @@ int engine_provide(JSContext *ctx, const PendRequestKey *key, const char *how, c
     /* Bounded by the count above and always taking the head, because each fill removes its own record (the
        `haveValue` write reaches pending.c, which tells the index): one per iteration, so the loop visits each
        member once whatever the writes do. The closing assert checks that assumption. */
+    filled = malloc((size_t)m * sizeof *filled);
+    CHECK(filled != NULL, "engine: OOM listing the records a reply fills");
     for (i = 0; i < m; i++) {
         JSValue p = pending_index_node_member(node, 0);
         /* The record's half of the fill: the park is stamped with the record's id, and the send's credentials
@@ -4415,21 +4418,17 @@ int engine_provide(JSContext *ctx, const PendRequestKey *key, const char *how, c
                 (int)pending_get_int(p, PEND_KIND), method, url);
         pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
         reply_arrived(NULL, p);
-        n++;
-        JS_FreeValue(ctx, p);
+        filled[n++] = p;
     }
     DCHECK(!node || pending_index_node_count(node) == 0,
            "a reply filled every record the frontier's outstanding set held for its request and the set still "
            "holds one — the fill is what removes a record, so a survivor is a member whose `haveValue` write "
            "did not reach this index, and the host would be shown this request again for ever");
-    /* Every flow waiting on this address is askable again: the reply is on its register, the event its
-       host-owed mark waits for (flow.h). The whole frontier, because the mark is per flow and the fill per
-       record: N arms share one record and all observe one write, and the index is a set of requests that does
-       not say which flows hold a record. flow_clear_host_owed_all is O(1) on a generation stamp. An early clear
-       is the only possible error and is bounded: a flow still owed something else is picked once, reports
-       host-owed again and is re-marked, with nothing dropped or reordered; a mark kept past its fact would cost
-       the flow its whole timeline. */
-    if (n) flow_clear_host_owed_all();
+    /* Every member whose register holds a filled record is askable again, and no other: the reply is the event
+       its host-owed mark waits for (flow.h), and a member owed only other records gains nothing by a step. */
+    flow_wake_owed_holding(filled, n);
+    for (i = 0; i < n; i++) JS_FreeValue(ctx, filled[i]);
+    free(filled);
     /* Learning from replies: this is the one point every fetched reply crosses once (a URL two flows parked on
        is answered once), so learning happens here rather than per waiter. What the body says about addresses
        the page will fetch (solver/reply_decode.h) is a fact about the server, not a flow's world, so it takes
@@ -4581,7 +4580,7 @@ int engine_decline(JSContext *ctx, const char *line, const char *reason) {
     PendRequestKey key;
     PendLineFold judged;
     PendIndexNode *node;
-    JSValue *members = NULL, rv;
+    JSValue *members = NULL, *refused = NULL, rv;
     int matched, marked = 0, i;
 
     DCHECK(line != NULL,
@@ -4617,7 +4616,8 @@ int engine_decline(JSContext *ctx, const char *line, const char *reason) {
        hole with the last member), while a park the line does not absorb stays in it. */
     if (matched) {
         members = malloc((size_t)matched * sizeof *members);
-        CHECK(members != NULL, "engine: OOM reading a refused request's parks");
+        refused = malloc((size_t)matched * sizeof *refused);
+        CHECK(members != NULL && refused != NULL, "engine: OOM reading a refused request's parks");
         for (i = 0; i < matched; i++) members[i] = pending_index_node_member(node, i);
     }
     for (i = 0; i < matched; i++) {
@@ -4647,7 +4647,7 @@ int engine_decline(JSContext *ctx, const char *line, const char *reason) {
                     engine_driven_token(judged.driven), engine_provenance_token(m_prov),
                     engine_pinned_token(m_pinned), engine_driven_token(m_driven), method, url);
             pending_set(p, PEND_DECLINED, JS_DupValue(ctx, rv));
-            marked++;
+            refused[marked++] = JS_DupValue(ctx, p);
         }
         JS_FreeValue(ctx, p);
     }
@@ -4660,7 +4660,10 @@ int engine_decline(JSContext *ctx, const char *line, const char *reason) {
             "set now holds %d — the refusal is what removes a record, so a marked member's `declined` write did "
             "not reach the index, and the host will be shown it again and refuse it again, one failure arm per "
             "round", marked, matched, node ? pending_index_node_count(node) : 0);
-    if (marked) flow_clear_host_owed_all();
+    /* The members whose registers hold a refused record have a failure arm to fork, and no other has anything new. */
+    if (marked) flow_wake_owed_holding(refused, marked);
+    for (i = 0; i < marked; i++) JS_FreeValue(ctx, refused[i]);
+    free(refused);
     /* Nobody is parked on it, engine_provide's assert for refusals: every park on the pair was answered, refused
        or withdrawn (`fetch.cancel`) before it, or none was made. A refusal that absorbs none of the parks
        outstanding is not this: the parks it judged left and others joined while it was owed. */
