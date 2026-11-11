@@ -85322,6 +85322,53 @@ static void fg_mw_array(JSContext *ctx, void **slot, size_t size, int n, int cap
 }
 static const JSStepVisit fg_step_write = { .val = fg_mw_val, .array = fg_mw_array };
 
+/* Whether fg_machine writes `h`: plain past its header, resting, and every declared field a value or an array of
+   values. The answer fg_frame_machine's survey reaches by noting gaps, asked without noting any. */
+static bool g_fg_mcheck_ok;
+static const JSStepVisit fg_step_check;
+static void fg_mc_no(void) { g_fg_mcheck_ok = false; }
+static void fg_mc_val(JSContext *ctx, JSValue *slot) { (void)ctx; (void)slot; }
+static void fg_mc_strbuf(JSContext *ctx, StringBuffer *slot) { (void)ctx; (void)slot; fg_mc_no(); }
+static void fg_mc_props(JSContext *ctx, JSPropertyEnum **slot, uint32_t n) {
+    (void)ctx; (void)slot; (void)n; fg_mc_no();
+}
+static void fg_mc_slots(JSContext *ctx, ValueSlot **slot, int64_t cap, int64_t from, int64_t to) {
+    (void)ctx; (void)slot; (void)cap; (void)from; (void)to; fg_mc_no();
+}
+static void fg_mc_buf(JSContext *ctx, void **slot, size_t bytes) { (void)ctx; (void)slot; (void)bytes; fg_mc_no(); }
+static void fg_mc_atom(JSContext *ctx, JSAtom *slot) { (void)ctx; (void)slot; fg_mc_no(); }
+static void fg_mc_machine(JSContext *ctx, void **slot) { (void)ctx; if (*slot) fg_mc_no(); }
+static void fg_mc_array(JSContext *ctx, void **slot, size_t size, int n, int cap,
+                        void (*each)(JSContext *, void *, JSStepVisit *)) {
+    (void)ctx; (void)slot; (void)n; (void)cap;
+    if (each != js_step_visit_value_elem || size != sizeof(JSValue)) fg_mc_no();
+}
+static void fg_mc_shared(JSContext *ctx, void **slot, int *refs, void (*destroy)(JSContext *, void *)) {
+    (void)ctx; (void)slot; (void)refs; (void)destroy; fg_mc_no();
+}
+static void fg_mc_maprec(JSContext *ctx, struct JSMapRecord **slot) { (void)ctx; (void)slot; fg_mc_no(); }
+static void fg_mc_reexec(JSContext *ctx, REExecContext *ec, uint8_t **capture) {
+    (void)ctx; (void)ec; (void)capture; fg_mc_no();
+}
+static void fg_mc_tree(JSContext *ctx, void **root, void **cursors[], int ncursors, const JSStepTreeOps *ops) {
+    (void)ctx; (void)root; (void)cursors; (void)ncursors; (void)ops; fg_mc_no();
+}
+static void fg_mc_cache(JSContext *ctx, void **slot, void (*destroy)(JSContext *, void *)) {
+    (void)ctx; (void)slot; (void)destroy; fg_mc_no();
+}
+static const JSStepVisit fg_step_check = {
+    .val = fg_mc_val, .strbuf = fg_mc_strbuf, .props = fg_mc_props, .slots = fg_mc_slots, .buf = fg_mc_buf,
+    .atom = fg_mc_atom, .machine = fg_mc_machine, .array = fg_mc_array, .shared = fg_mc_shared,
+    .maprec = fg_mc_maprec, .reexec = fg_mc_reexec, .tree = fg_mc_tree, .cache = fg_mc_cache
+};
+static bool fg_machine_writable(JSContext *ctx, JSStepHdr *h)
+{
+    if (!h->def->plain_rest || !fg_step_at_rest(h)) return false;
+    g_fg_mcheck_ok = true;
+    h->def->visit(ctx, h, (JSStepVisit *)&fg_step_check);
+    return g_fg_mcheck_ok;
+}
+
 /* A resting machine (fg_step_at_rest) whose undeclared bytes are plain (plain_rest): its definition and its
    argument count, the state's bytes as tramp_step_state_clone's byte copy reads them, then every value the
    clone takes a second reference to (its arguments and the header's owned values, in the clone's order) and its
@@ -85331,8 +85378,8 @@ static void fg_machine(FGWriter *w, FGBuf *out, JSStepHdr *h)
     const size_t sz = STEP_ARGV_OFFSET(h->def->size);
     FGBuf *saved = g_fg_mout;
 
-    DCHECK(h->def->plain_rest && fg_step_at_rest(h) && h->argc >= 0 && g_fg_frames == w,
-           "flow graph: a strict write reached a machine fg_frame_machine refuses");
+    DCHECK(fg_machine_writable(w->ctx, h) && h->argc >= 0 && g_fg_frames == w,
+           "flow graph: a write reached a machine fg_machine_writable refuses");
     fg_put(out, &h->def, sizeof h->def);
     fg_u32(out, (uint32_t)h->argc);
     fg_put(out, h, sz);
@@ -85365,12 +85412,16 @@ static void fg_links(FGWriter *w, FGBuf *out, void *st, uint8_t kind)
         void *next;
 
         DCHECK(st != NULL, "flow graph: a continuation of a recorded kind holds no record");
-        if (kind == CONT_STEP) fg_machine(w, out, st);
-        else {
-            DCHECKF(cont_kind_declared(kind) && fg_rec_writable(kind, st),
-                    "flow graph: a strict write reached continuation kind %d, which has no record writer", (int)kind);
-            fg_rec_fields(kind, st, &fg_recw, &o);
+        if (kind == CONT_STEP ? !fg_machine_writable(w->ctx, st)
+                              : !cont_kind_declared(kind) || !fg_rec_writable(kind, st)) {
+            /* fg_frame_links has recorded this link's gap; a survey's bytes stop here and are never read */
+            DCHECKF(w->survey, "flow graph: a strict write reached continuation kind %d, which has no writer",
+                    (int)kind);
+            fg_u8(out, 'X');
+            return;
         }
+        if (kind == CONT_STEP) fg_machine(w, out, st);
+        else fg_rec_fields(kind, st, &fg_recw, &o);
         next = cont_outer_get(st, kind, &next_kind);
         fg_u8(out, next_kind);
         st = next; kind = next_kind;
