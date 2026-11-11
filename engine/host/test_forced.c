@@ -17840,6 +17840,24 @@ TF_UNIT void probes_fontload(const char *js, Probe *tab, int *n) {
         { "font-load-painted", "fl-paint.woff2",
           "css-fonts-4 §5.2: a face used by text no script measures was not requested, so update the "
           "rendering's layout did not start the load" },
+        { "font-weight-normal", "fl-w-400.woff2",
+          "css-fonts-4 §5.2: of a family's 400 and 700 faces, the 400 one was not requested for normal text" },
+        { "font-weight-600", "fl-b-700.woff2",
+          "css-fonts-4 §5.2: a desired weight over 500 checks heavier weights first, and the 700 face was not "
+          "requested for weight 600" },
+        { "font-style-italic", "fl-i-italic.woff2",
+          "css-fonts-4 §5.2: the italic face was not requested for italic text" },
+        { "font-same-style-later", "fl-o-second.woff2",
+          "css-fonts-4 §5.2: of two rules of one style, the later one was not requested (reverse order of "
+          "rule definition)" },
+        { "font-weight-range", "fl-v-range.woff2",
+          "css-fonts-4 §4.4: a face whose font-weight descriptor is the range `100 900` was not requested for "
+          "weight 700" },
+        { "font-width-condensed", "fl-s-condensed.woff2",
+          "css-fonts-4 §5.2: the 75% face was not requested for `font-stretch: condensed` text" },
+        { "font-weight-auto-bold", "fl-a-700.woff2",
+          "css-fonts-4 §5.2: the 700 face was not requested for bold text beside a face with no weight "
+          "descriptor" },
     };
     static const struct { const char *row, *path, *why; } NEVER[] = {
         { "font-unused", "fl-unused.woff2",
@@ -17856,6 +17874,21 @@ TF_UNIT void probes_fontload(const char *js, Probe *tab, int *n) {
           "css-fonts-4 §4.3.3: a src item whose format hint is unknown was requested" },
         { "font-space-only", "fl-space.woff2",
           "a face was requested for an element whose text is white space only, which Chrome 153 does not load" },
+        { "font-weight-normal-other", "fl-w-700.woff2",
+          "css-fonts-4 §5.2: the 700 face was requested for normal text whose family has a 400 face" },
+        { "font-weight-600-other", "fl-b-400.woff2",
+          "css-fonts-4 §5.2: the 400 face was requested for weight 600 text whose family has a 700 face" },
+        { "font-style-italic-other", "fl-i-normal.woff2",
+          "css-fonts-4 §5.2: the normal face was requested for italic text whose family has an italic face" },
+        { "font-same-style-earlier", "fl-o-first.woff2",
+          "css-fonts-4 §5.2: the earlier of two rules of one style was requested though the later one has "
+          "the character" },
+        { "font-width-condensed-other", "fl-s-normal.woff2",
+          "css-fonts-4 §5.2: the normal-width face was requested for condensed text whose family has a 75% "
+          "face" },
+        { "font-weight-auto-other", "fl-a-auto.woff2",
+          "css-fonts-4 §5.2: the face with no weight descriptor was requested for bold text whose family "
+          "has a 700 face" },
     };
     enum { NL = COUNTOF(LOADS), NN = COUNTOF(NEVER) };
     Probe rows[1 + NL + NN];
