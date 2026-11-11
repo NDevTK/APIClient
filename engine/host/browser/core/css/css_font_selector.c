@@ -396,6 +396,9 @@ void css_font_selector_walk_character(CssFontSelectorWalk *w, uint32_t cp)
     DCHECK(w != NULL, "css-fonts-4 §5.2 was asked for a character through no walk");
     DCHECK(cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF),
            "css-fonts-4 §5.2 was asked for a face for something that is not a Unicode scalar value");
+    /* A load is the page's own act: it parks on the flow whose layout needs the face. A layout the host
+       drives between steps is the tool's read of the tree and starts none; the page's next layout does. */
+    if (flow_running() == NULL) return;
     for (i = 0; i < w->nfamilies; i++) {
         const SelFamily *fam = &w->families[i];
         SelFace *face = NULL;
