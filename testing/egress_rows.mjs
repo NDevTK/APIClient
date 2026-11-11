@@ -5,6 +5,11 @@
 // own count. The control runs first: an unforced page request reaches the server, so a count of zero in a later
 // row is the policy and not a server that counts nothing.
 //
+// The default the second group scores: a request leaves an unwidened origin only as the page's own act on its own
+// unforced run (provenance not forced, the asking document's reach not forced, witness unpinned, actor page),
+// whatever its destination; the seed is the one load this zone composes that leaves; and a refusal names the
+// fact that decided it.
+//
 //   node testing/egress_rows.mjs
 "use strict";
 import { createServer } from 'node:http';
@@ -37,6 +42,9 @@ const ZONE = trustedZone();
 ZONE.httpCacheStated(null, null);
 ZONE.safeFetchEgressStated({});
 ZONE.safeFetchWiden(W);
+/* An origin whose person permitted forced paths and no other row; nothing is sent to it. */
+const PART = 'http://partial.test';
+ZONE.safeFetchPermit(PART, 'provenance', 'forced', true);
 ZONE.swRpc = async (api, arg) => {
   if (api === 'site.registrableDomains') return siteRegistrableDomains(arg);
   throw new Error('this test serves no rpc ' + JSON.stringify(api));
@@ -56,6 +64,22 @@ async function ask(page, url, docKey, { destination = '', mode = 'cors', provena
     identity: await ZONE.pageRequestIdentity(origin, page, docKey, url, 'same-origin', mode,
                                              'strict-origin-when-cross-origin', page) });
 }
+/* A navigation as engine/trusted.mjs's navigate states it, started by the document at `page`. */
+const navigate = (page, url, { provenance = 'derived', pinned = 'unpinned', driven = 'undriven', reach = 'observed' } = {}) =>
+  ZONE.safeFetch(url, { destination: 'document', mode: 'navigate', provenance, pinned, driven, actor: 'page',
+                        doc: docOf(page, reach), credentialed: false });
+/* A load this zone composes: the seed as engine/trusted.mjs states it, or (derived) a probe as
+   lib/discovery-probe.js states one. */
+const toolAsk = (page, url, provenance) =>
+  ZONE.safeFetch(url, { pageOrigin: new URL(page).origin, destination: provenance === 'observed' ? 'document' : '',
+                        mode: provenance === 'observed' ? 'navigate' : 'cors', provenance,
+                        pinned: provenance === 'observed' ? 'unpinned' : 'unstated', actor: 'tool', driven: 'unstated',
+                        doc: docOf(page, 'observed'), credentialed: false, credentials: 'omit', useCorsPreflight: false });
+const refusalOf = (r) => r.refusal ? r.refusal.reason : 'sent';
+/* The firing question alone, for an act that sends nothing here. */
+const firing = (url, facts) => ZONE.safeFetchFiringRefusal(Object.assign(
+  { url, destination: '', provenance: 'derived', pinned: 'unpinned', actor: 'page', driven: 'undriven',
+    doc: docOf(PAGE_A, 'observed'), credentialed: false, headers: null }, facts));
 const SIGNAL_NAMES = ZONE.safeFetchSignals().map((s) => s.name).sort().join(',');
 /* The one entry of a reply record's `egress` list, or a word saying why there is not exactly one. */
 const only = (r) => !Array.isArray(r.egress) ? 'no-egress-list' : r.egress.length !== 1 ? `entries=${r.egress.length}` : r.egress[0];
@@ -96,12 +120,59 @@ const ROWS = [
   { label: 'a request no gate let as far as the firing question records no send', run: async () => {
       const r = await ask(PAGE_A, 'ftp://127.0.0.1/x', 'engine:scheme');
       return [['grade', r.refusal && r.refusal.kind, 'network'], ['entries', hows(r), '']]; } },
+  { label: 'an unpinned value request on a forced path is declined, and its record is still written', run: async () => {
+      const r = await ask(PAGE_A, `${A}/forced-value`, 'engine:fv', { provenance: 'forced' }), e = only(r);
+      return [['GET /forced-value', count('GET', '/forced-value'), 0], ['refusal', refusalOf(r), 'blocked-signal:provenance=forced'],
+              ['how', e.how, 'not-sent'], ['the vector is written whole', names(e), SIGNAL_NAMES]]; } },
+  { label: 'a program load from a document reached on an assumed navigation is declined', run: async () => {
+      const r = await ask(PAGE_A, `${A}/assumed.js`, 'engine:assumed', { destination: 'script', reach: 'forced' });
+      return [['GET /assumed.js', count('GET', '/assumed.js'), 0], ['refusal', refusalOf(r), 'blocked-signal:doc-reach=forced']]; } },
+  { label: 'the same program load in the unforced run fires', run: async () => {
+      const r = await ask(PAGE_A, `${A}/own.js`, 'engine:ownjs', { destination: 'script', provenance: 'observed' });
+      return [['GET /own.js', count('GET', '/own.js'), 1], ['refusal', refusalOf(r), 'sent'], ['admitted by', arm(only(r)), 'default']]; } },
+  { label: 'a document the unforced run itself navigated to loads its resources', run: async () => {
+      const js = await ask(PAGE_A, `${A}/reached.js`, 'engine:reached', { destination: 'script', reach: 'derived' });
+      const css = await ask(PAGE_A, `${A}/reached.css`, 'engine:reached', { destination: 'style', reach: 'derived' });
+      return [['GET /reached.js', count('GET', '/reached.js'), 1], ['GET /reached.css', count('GET', '/reached.css'), 1],
+              ['script', refusalOf(js), 'sent'], ['style', refusalOf(css), 'sent']]; } },
+  { label: 'a widened origin fires the forced load', run: async () => {
+      const r = await ask(PAGE_W, `${W}/wide.js`, 'engine:widejs', { destination: 'script', provenance: 'forced', reach: 'forced' });
+      return [['GET /wide.js', count('GET', '/wide.js'), 1], ['admitted by', arm(only(r)), 'widened']]; } },
+  { label: 'a subresource and a navigation are judged as a value request is: forced declined, unforced sent', run: async () => {
+      const img = await ask(PAGE_A, `${A}/forced.png`, 'engine:kinds', { destination: 'image', mode: 'no-cors', provenance: 'forced' });
+      const nav = await navigate(PAGE_A, `${A}/forced-nav`, { provenance: 'forced' });
+      const own = await navigate(PAGE_A, `${A}/own-nav`);
+      return [['GET /forced.png', count('GET', '/forced.png'), 0], ['image', refusalOf(img), 'blocked-signal:provenance=forced'],
+              ['GET /forced-nav', count('GET', '/forced-nav'), 0], ['navigation', refusalOf(nav), 'blocked-signal:provenance=forced'],
+              ['GET /own-nav', count('GET', '/own-nav'), 1], ['the page\'s own navigation', refusalOf(own), 'sent']]; } },
+  { label: 'a post to another document is judged by the same rule', run: async () => {
+      const post = (marks) => ZONE.safeFetchCrossDocumentRefusal({ targetOrigin: A, marks, doc: docOf(PAGE_A, 'observed') });
+      return [['on a forced path', post('forced,undriven,unpinned'), 'provenance=forced'],
+              ['on the unforced run', post('derived,undriven,unpinned'), null],
+              ['from a document reached by forcing', ZONE.safeFetchCrossDocumentRefusal(
+                 { targetOrigin: A, marks: 'derived,undriven,unpinned', doc: docOf(PAGE_A, 'forced') }), 'doc-reach=forced']]; } },
+  { label: 'the seed leaves; a probe this tool composed and a request its drive minted do not', run: async () => {
+      const seed = await toolAsk(PAGE_A, `${A}/seed`, 'observed');
+      const probe = await toolAsk(PAGE_A, `${A}/probe`, 'derived');
+      const driven = await ask(PAGE_A, `${A}/driven.js`, 'engine:driven', { destination: 'script', provenance: 'observed', driven: 'driven' });
+      return [['GET /seed', count('GET', '/seed'), 1], ['seed', refusalOf(seed), 'sent'],
+              ['GET /probe', count('GET', '/probe'), 0], ['probe', refusalOf(probe), 'blocked-signal:actor=tool'],
+              ['GET /driven.js', count('GET', '/driven.js'), 0], ['driven', refusalOf(driven), 'blocked-signal:actor=drive']]; } },
+  { label: 'a refusal names the fact that decided it', run: async () => {
+      return [['a pinned address', firing(`${A}/x`, { pinned: 'pinned' }), 'witness=pinned'],
+              ['forced and pinned', firing(`${A}/x`, { provenance: 'forced', pinned: 'pinned' }), 'provenance=forced'],
+              ['forced where the person permitted forced paths and no other row',
+               firing(`${PART}/x`, { provenance: 'forced' }), 'destination=value'],
+              ['pinned at that origin', firing(`${PART}/x`, { provenance: 'forced', pinned: 'pinned' }), 'witness=pinned'],
+              ['the unforced run at that origin', firing(`${PART}/x`, {}), null]]; } },
   { label: 'the zone counts its sends by how each left and what admitted it', run: async () => {
       const c = typeof ZONE.safeFetchEgressCensus === 'function' ? ZONE.safeFetchEgressCensus() : null;
       const sum = c === null ? -1 : Object.values(c).reduce((a, n) => a + n, 0);
-      /* own, wide, twice, hop and landed were sent; pin was not; twice's second ask was answered locally. */
-      return [['entries counted', sum, 7], ['sent by a default arm', c && c['sent default'], 4],
-              ['sent at a widened origin', c && c['sent widened'], 1], ['not sent', c && c['not-sent none'], 1],
+      /* Sent by a default arm: own, twice, hop, landed, own.js, reached.js, reached.css, own-nav, seed. Sent
+         widened: wide, wide.js. Not sent: pin, forced-value, assumed.js, forced.png, forced-nav, probe,
+         driven.js. Twice's second ask was answered locally. */
+      return [['entries counted', sum, 19], ['sent by a default arm', c && c['sent default'], 9],
+              ['sent at a widened origin', c && c['sent widened'], 2], ['not sent', c && c['not-sent none'], 7],
               ['answered locally', c && c['answered-locally default'], 1]]; } },
 ];
 
