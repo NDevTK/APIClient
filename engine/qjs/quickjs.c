@@ -30184,7 +30184,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 nsf->eval_hold = NULL;
                 ntf->owns_func = 0;   /* atab holds the ARGUMENTS; the callee is the caller's own operand */
                 nsf->cur_func = unsafe_unconst(nfunc);
-                narg_buf = nlb;
+                /* a frame with no argument slots holds no argument buffer, as do_tramp_call's: arg_allocated
+                   0 then says the frame owns none (fg_chain_calls reads the two together) */
+                narg_buf = narg_alloc ? nlb : NULL;
                 for (k = 0; k < eff_argc; k++) narg_buf[k] = js_dup(atab[k]);
                 for (; k < narg_alloc; k++) narg_buf[k] = JS_UNDEFINED;
                 nsf->arg_count = narg_alloc;
