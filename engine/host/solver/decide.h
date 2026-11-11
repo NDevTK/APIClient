@@ -482,6 +482,10 @@ int decide_completion(const char *why, void **sib_blob);
 /* decide_completion for a host arrival (a refusal) the caller holds while decide_completion_ahead answers 1: a
    replaying flow takes such an arrival only where its record took it, so the record is never left here. */
 int decide_completion_held(const char *why, void **sib_blob);
+/* An arrival that forks nothing (a reply taken by the timeline) lands: one arrival slot keyed by `why` and
+   `what`, consumed where the record holds it and appended past the record. The caller holds the arrival while
+   decide_arrival_ahead answers 1, so the record is never left here, which is asserted. */
+void decide_arrival_landed(const char *why, uint64_t what);
 /* A fork over a value that arrived and that this flow can name (`what`, e.g. an orphan body's locator), recorded as
    decide_completion records a completion: one arrival slot keyed by `why` and `what`, this flow on arm 0 and the
    sibling standing past it on arm 1. A replay that recorded it returns the recorded arm with `*sib_blob` NULL and
@@ -527,6 +531,8 @@ void  decide_history_name(uint64_t *identity, int *ordinal);
    owed behind the cursor (passed over for a later question) is due, not ahead, and so is one with only slots
    over a source the running candidate delivers between the cursor and that point, which no question reaches. */
 int   decide_completion_ahead(const char *why);
+/* The same question of an arrival this flow can name (`why` and `what`, decide_arrival_landed's key). */
+int   decide_arrival_ahead(const char *why, uint64_t what);
 void *decide_suspend(void);
 void  decide_resume(void *blob, JSValueConst fn);
 void  decide_blob_free(void *blob);

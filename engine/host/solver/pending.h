@@ -713,8 +713,9 @@ int  pending_host_outstanding(JSValueConst reg);
 int  pending_declined_outstanding(JSValueConst reg);
 
 /* Can anything still arrive on this register in its flow's own timeline: an entry the host can still be asked
-   about (pending_entry_host_owed), or a refusal whose arms this register has not forked
-   (pending_entry_decline_fork_owed). The event loop's clock asks it (core/timing/event_loop.h's
+   about (pending_entry_host_owed), a refusal whose arms this register has not forked
+   (pending_entry_decline_fork_owed), or an answered reply the timeline has not taken (a replay holds one until
+   its recorded point, and the delivery arm's own race stands before one). The event loop's clock asks it (core/timing/event_loop.h's
    event_loop_may_advance). It answers 0 for the waiting arm's own copy of a refusal, which stays outstanding
    to its flow (pending_outstanding) while no reply is coming and no arm is left to build. One walk asks both
    entry predicates, so a register holding a refusal beside a request in flight answers 1. */

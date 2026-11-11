@@ -4710,6 +4710,25 @@ static uint64_t flow_pending_ready_next_seq(const Flow *f) {
     return pending_ready_next_seq(f->pending);
 }
 
+/* A clock-driven source queued its task while this flow held a reply (the idle half of a race the deadline won,
+   or a deadline no reply was raced against): the held replies arrive after that task. */
+static void flow_held_reply_follows(Flow *f) {
+    if (flow_pending_ready(f)) pending_restamp_answered(f->pending, flow_work_seq_next);
+}
+
+/* The arrival slot a reply taken by a timeline lands in (decide_arrival_landed), keyed with its ordinal. */
+static const char REPLY_ARRIVES[] = "(a reply arrives)";
+
+/* Whether the switched-in flow holds its next answered reply: a replay takes an arrival where its record took
+   it, and a host that answers sooner than in the recording session (a record's replies are answered at once)
+   would otherwise deliver before questions the recorded run asked first. Held, the reply is in flight to this
+   timeline, as it was over the same stretch of the recording. flow_step's resting arm ends a hold nothing can
+   reach the end of. A read. */
+static int flow_reply_held(const Flow *f) {
+    DCHECK(flow_running() == f, "a reply's hold was read while another flow's decision state was loaded");
+    return f->replies_landed == f->replies_taken && decide_arrival_ahead(REPLY_ARRIVES, f->replies_taken + 1);
+}
+
 /* HTML §8.1.4.2's processResponseConsumeBody step that makes source text from a fetched byte sequence. Undecoded
    bytes would turn one invalid UTF-8 byte into a SyntaxError for a whole bundle, where Encoding's decoder
    answers U+FFFD. Which algorithm runs is §8.1.4.2's split: a classic script decodes with the response's
@@ -4889,6 +4908,9 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
         JSValue pv;
         int kind;
 
+        DCHECK(f->replies_landed == f->replies_taken + 1,
+               "a reply was delivered whose arrival this timeline has not recorded — the delivery arm lands it "
+               "(decide_arrival_landed) before its race and its delivery");
         f->replies_taken++;
         /* No entry is delivered while a settle of this register is still parked: its reactions are not queued
            yet (27.5.1.4 FulfillPromise step 7), and anything delivered first would enqueue ahead of them. Both
@@ -5618,6 +5640,7 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
     sib->imm_at = parent->imm_at; sib->imm_next = parent->imm_next;
     sib->spin_row = parent->spin_row;
     sib->replies_taken = parent->replies_taken;
+    sib->replies_landed = parent->replies_landed;
     sib->timers_at_step_end = parent->timers_at_step_end;
     sib->unit_seq = parent->unit_seq;
     sib->delta = cow_delta_fork(ctx, (CowDelta *)parent->delta);   /* O(1) shared base segment, then diverges */
@@ -6635,6 +6658,9 @@ static int engine_outstanding_runs_page_code(JSContext *ctx, Flow *f, int seq_aw
         }
         JS_FreeValue(ctx, e);
     }
+    /* An answered reply still on the register here is one a replay holds (flow_reply_held): in flight to this
+       timeline, and uninspected as any other kind is. */
+    if (arm == GATE_NONE && flow_pending_ready(f)) arm = GATE_UNINSPECTED;
     g_gate_arm[arm]++;
     return arm;
 }
@@ -10001,7 +10027,7 @@ static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry
     if (stack_empty && g_parse_end_due && g_parse_end_due(ctx)) { nu.arm = NEXT_PARSE_END; return nu; }
     deliv_seq = stack_empty ? flow_pending_ready_next_seq(f) : 0;
     timer_seq = stack_empty && g_timer_due_hook ? g_timer_due_hook(ctx) : 0;
-    if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq)) {
+    if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq) && !flow_reply_held(f)) {
         nu.arm = engine_timer_turn_due(f, timer_seq, deliv_seq) ? NEXT_TIMER_ARRIVED
                : !flow_blocked(f) && g_deadline_pending_hook && g_deadline_pending_hook(ctx) ? NEXT_DEADLINE_RACE
                : NEXT_DELIVER_REPLY;
@@ -10094,6 +10120,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
        the two disagreeing is what makes that assert a check. In release it is only type-checked inside `sizeof`. */
     /* The rest point between two steps, where the scheduler names the agent this step runs. */
     FlowNextUnit nu = flow_next_unit(ctx, f);
+    /* A reply held for the replay has not arrived in this timeline: its arrival is the moment the hold ends, so
+       it is stamped after everything queued while it was held. */
+    if (f->cur_agent == 0 && flow_pending_ready(f) && flow_reply_held(f))
+        pending_restamp_answered(f->pending, flow_work_seq_next);
     if (nu.arm == NEXT_AGENT) {
         flow_select_agent(ctx, f);
         if (f->cur_agent != 0) return flow_step_agent(ctx, f);
@@ -10340,6 +10370,13 @@ static int flow_step(JSContext *ctx, Flow *f) {
             /* The deadline race before this arrival, one ask over the earliest deadline any clock-driven source
                holds: where a timer or a frame ahead of the clock comes first, its task is queued and every
                answered reply arrives after it (pending_restamp_answered), so the next step runs it. */
+            /* The arrival lands first, once: its slot is where a replay takes this reply, and the race's
+               questions over it follow the slot. */
+            if ((nu.arm == NEXT_DEADLINE_RACE || nu.arm == NEXT_DELIVER_REPLY) &&
+                f->replies_landed == f->replies_taken) {
+                decide_arrival_landed(REPLY_ARRIVES, f->replies_taken + 1);
+                f->replies_landed++;
+            }
             if (nu.arm == NEXT_DEADLINE_RACE) {
                 EngineDeadlineRace raced = g_deadline_race_hook(ctx);
 
@@ -10398,7 +10435,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                            create one, so an immediate row cannot be how this line was reached. */
                         int ready = flow_pending_ready(f);
                         int behind = ready && flow_task_precedes(f, flow_pending_ready_next_seq(f));
-                        DCHECK(flow_stack_empty(f) && (!ready || behind),
+                        DCHECK(flow_stack_empty(f) && (!ready || behind || flow_reply_held(f)),
                                "a flow reached an external script row holding an answered reply with no older "
                                "task queued — the networking arm above delivers every reply no task precedes, so "
                                "that arm's guard and this row's have stopped being the same question, and this "
@@ -10650,10 +10687,13 @@ static int flow_step(JSContext *ctx, Flow *f) {
                is no requestAnimationFrame, ResizeObserver or IntersectionObserver delivery, no
                scroll/resize/pagereveal and no Web Animations microtask checkpoint. */
             else if (engine_clock_render_asked(ctx)) {
+                flow_held_reply_follows(f);
                 g_step_unit = STEP_UNIT_RENDERING; return 0; }
             /* The timer task source: §8.7 Timers' timer initialization steps end by queueing "a global task on the
                timer task source given global to run task", so a due timer is a runnable task (§8.1.7.3 step 2). */
-            else if (engine_clock_timer_asked(ctx)) { g_step_unit = STEP_UNIT_TIMER; return 0; }
+            else if (engine_clock_timer_asked(ctx)) {
+                flow_held_reply_follows(f);
+                g_step_unit = STEP_UNIT_TIMER; return 0; }
             /* The idle rung: Cooperative Scheduling of Background Tasks §5.1 Start an idle period algorithm,
                "called by the event loop processing model when it determines that the event loop is otherwise idle".
                Here every source above has answered no, so the loop is otherwise idle by construction. One step per
@@ -10696,19 +10736,24 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * predicate, so the state is impossible in release too, where the exit's no-held-work DCHECK is
              * compiled out and reads `jobs` rather than `dyn`. It also decides the name, being a fact about the
              * flow's own sequence. */
+            /* An arrival held for the replay (flow_decline_fork_at, flow_reply_held), with nothing in flight and
+               nothing left to run: it is due on the next step. Where the record still takes it ahead of the
+               cursor, nothing this timeline can run reaches that point, so the replay has gone off its recorded
+               path and leaves it here, as the held delivery below does. A reply so released arrives now. */
+            else if (!pending_host_outstanding(f->pending) &&
+                     (flow_decline_owed_at(ctx, f) >= 0 || flow_pending_ready(f))) {
+                int declined = flow_decline_owed_at(ctx, f) >= 0, ready = flow_pending_ready(f);
+
+                DCHECK(flow_fork_homes_open(ctx, f, 0),
+                       "a flow rests with an arrival held and a suspension that cannot be cloned — the resting "
+                       "arm is reached with no frame, no parked continuation and no compile in flight");
+                if ((declined && decide_completion_ahead(DECLINE_WAITS)) || (ready && flow_reply_held(f)))
+                    decide_leave_path();
+                if (ready) pending_restamp_answered(f->pending, flow_work_seq_next);
+                g_step_unit = STEP_UNIT_HELD_ARRIVAL;
+                return 0;
+            }
             else if (seq_awaits || pending_outstanding(f->pending)) {
-                /* A refusal held for the replay (flow_decline_fork_at), with no reply in flight and nothing left
-                   to run: the fork is due on the next step. Where the record still takes it ahead of the cursor,
-                   nothing this timeline can run reaches that point, so the replay has gone off its recorded path
-                   and leaves it here, as the held delivery below does. */
-                if (!pending_host_outstanding(f->pending) && flow_decline_owed_at(ctx, f) >= 0) {
-                    DCHECK(flow_fork_homes_open(ctx, f, 0),
-                           "a flow rests with a refusal's fork owed and a suspension that cannot be cloned — the "
-                           "resting arm is reached with no frame, no parked continuation and no compile in flight");
-                    if (decide_completion_ahead(DECLINE_WAITS)) decide_leave_path();
-                    g_step_unit = STEP_UNIT_HELD_DECLINE;
-                    return 0;
-                }
                 /* Every task source is empty and a row or a reply is not; the three names answer what the flow is
                    waiting for, asked of the cursor and then of the register. */
                 g_step_unit = seq_awaits

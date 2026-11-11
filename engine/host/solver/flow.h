@@ -629,6 +629,10 @@ typedef struct Flow {
        names the unknown a timer's deadline is raced against (event_loop_deadline_first). A fork carries it; a
        replay re-derives it. */
     uint32_t replies_taken;
+    /* How many arrivals this timeline has recorded as landed (decide_arrival_landed): `replies_taken`, or one
+       more while the next reply has landed and a deadline its race put first runs before the delivery. A fork
+       carries it; a replay re-derives it. */
+    uint32_t replies_landed;
     /* How many timers stood in the maps of active timers when this timeline's last step ended (the timer
        component's count through engine_set_timer_active_hook), or -1 while no step of it has ended in this
        session. A fork carries the parent's reading, which the arm's own first step replaces. */

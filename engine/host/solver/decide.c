@@ -1249,12 +1249,12 @@ void decide_history_name(uint64_t *identity, int *ordinal) {
                        "minted");
 }
 
-/* See decide.h. */
-int decide_completion_ahead(const char *why) {
-    uint32_t asked = dec_arrival_hash(why, NULL, 0), k, r;
+/* Whether the point at which the running flow's record took the arrival slot `asked` is ahead of its cursor. */
+static int dec_arrival_ahead(uint32_t asked) {
+    uint32_t k, r;
     int i, between = 0;
 
-    DCHECK(g_running, "a completion's recorded slot was asked while no flow's decision state was loaded");
+    DCHECK(g_running, "an arrival's recorded slot was asked while no flow's decision state was loaded");
     for (i = 0; i < g_owed_n; i++) {
         (void)dec_at(g_owed[i], &k, &r);
         if (k == asked) return 0;
@@ -1267,6 +1267,14 @@ int decide_completion_ahead(const char *why) {
         if (concolic_root_sig_delivered(r) != CONCOLIC_ROOT_SIG_DELIVERED) between++;
     }
     return between > 0;
+}
+
+/* See decide.h. */
+int decide_completion_ahead(const char *why) { return dec_arrival_ahead(dec_arrival_hash(why, NULL, 0)); }
+
+/* See decide.h. */
+int decide_arrival_ahead(const char *why, uint64_t what) {
+    return dec_arrival_ahead(dec_arrival_hash(why, &what, sizeof what));
 }
 
 void decide_live_stats(long *entries, long *bytes) {
@@ -1376,6 +1384,23 @@ int decide_completion_held(const char *why, void **sib_blob) {
 /* See decide.h. */
 int decide_fork_arrival(const char *why, uint64_t what, void **sib_blob) {
     return dec_arrival_fork(why, dec_arrival_hash(why, &what, sizeof what), /*held*/ 0, sib_blob);
+}
+
+/* See decide.h. */
+void decide_arrival_landed(const char *why, uint64_t what) {
+    uint32_t asked = dec_arrival_hash(why, &what, sizeof what);
+
+    DCHECK(g_running, "an arrival landed while no flow's decision state was loaded");
+    if (dec_owed_take(asked) >= 0) return;
+    if (g_c < dec_total()) {
+        if (dec_replay(asked) >= 0) return;
+        DCHECKF(g_c == dec_total(),
+                "the held arrival %s landed at slot %d of a record of %d slot(s) that does not take it there — "
+                "its caller holds it while decide_arrival_ahead answers 1, or leaves the path itself "
+                "(decide_leave_path) once nothing can reach the recorded slot", why, g_c, dec_total());
+        if (g_c < dec_total()) dec_leave_path();
+    }
+    dec_append(1, asked, 0); g_c++;
 }
 
 /* See decide.h. The arrivals owed behind the cursor first, then dec_replay's scan of the run at it: arrivals

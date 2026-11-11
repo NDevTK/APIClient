@@ -700,12 +700,13 @@ int pending_arrival_outstanding(JSValueConst reg)
         JSValue e = pending_entry(reg, i);
 
         hit = pending_entry_host_owed(e) || pending_entry_decline_fork_owed(e);
+        DCHECK(!hit || pend_owed(e),
+               "an arrival is outstanding on an entry its flow does not wait on — an entry the host can still "
+               "answer and a refusal whose arms are not forked both carry no value, so a refused record took a "
+               "reply before flow_decline_fork marked its copy");
+        hit = hit || pend_deliverable(e);
         JS_FreeValue(pend_ctx(), e);
     }
-    DCHECK(!hit || pending_outstanding(reg),
-           "an arrival is outstanding on a register whose flow waits on nothing — an entry the host can still "
-           "answer and a refusal whose arms are not forked both carry no value, so a refused record took a "
-           "reply before flow_decline_fork marked its copy");
     return hit;
 }
 

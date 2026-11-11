@@ -530,7 +530,9 @@ int event_loop_race_arrival(JSContext *ctx)
     if (event_loop_before(ctx, now, best)) first = event_loop_deadline_before_arrival(ctx, best);
     JS_FreeValue(ctx, now);
     JS_FreeValue(ctx, best);
-    if (!first) return 0;
+    /* A candidate whose delivery contradicted its recorded path at that ask has no timeline from here: the
+       source's step would ask again, and nothing more is asked of it (solver/decide.c's decide_arm). */
+    if (!first || flow_running()->delivery_contradicted) return 0;
     ran = g_deadline_ops[src]->run(ctx);
     DCHECK(ran, "the source whose deadline the race put before the next arrival did not run its task — its "
                 "deadline answer and its idle step walked to different entries, or read the race differently");
