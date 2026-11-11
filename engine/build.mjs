@@ -141,7 +141,7 @@ const coldFields = sourceFact(() => censusDefRowSet(["cold"],
    "stepUnitOverrunAskArms", "stepUnitOverrunGapArms",
    "outOfProgramsAtTheLadderUnits", "programCursors",
    "programsAhead", "epDoors", "epAddressClass", "epWitnessClass",
-   "ramLimitSource", "saleCensus"],
+   "ramLimitSource", "saleCensus", "parkCrossGaps"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer's declaration rather than from a list beside it"));
 /* Checks that `parts` sum to `total` within one census, before any reading quotes them. The engine asserts
@@ -3448,6 +3448,13 @@ function censusReading(out) {
                         `is one arm counting 1 of wasm-heap-max, rlimit-as, memcg or none, none exactly when the limit is 0, and every ` +
                         `pressure sale is one of the sales`);
     }
+    /* The parked members' cross-session gaps (solver/cold.h's ColdParkCross): each kind counts replaying members
+       once, so every count is a positive integer no larger than `parkCrossReplays`. */
+    for (const x of [c.a, c.b])
+      for (const [kind, n] of Object.entries(x.parkCrossGaps))
+        if (!Number.isInteger(n) || n < 1 || n > x.parkCrossReplays)
+          throw new Error(`[build] the @COLD census counts ${n} replaying member(s) with the cross-session gap ` +
+                          `\`${kind}\` against ${x.parkCrossReplays} replaying in all — each member counts a kind once`);
     /* THE MEMBER-SIDE SUBSET CHAIN, CHECKED HERE FOR THE REASON THE @WFQ PAIRS ARE CHECKED IN THEIR OWN
        READER: solver/result.c asserts `can_deliver <= stack_empty <= flows` in a DCHECK that is compiled out
        of a release build, and this reader still runs on that build's bytes. The three rows are one walk of one
