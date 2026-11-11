@@ -501,6 +501,13 @@ bool css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *
    `calc(1px + 1s)` are not. FALSE for a `<percentage>`, for a keyword, and for anything else. */
 bool css_length_is_length(const char *value);
 
+/* The cascade's answer to core/css/css_math.h's CssMathResolver `length_px` question: a math function's `<length>`
+   leaf absolutized as `css_length_parse` absolutizes a dimension, over the element's realm and font. Every
+   cascade consumer of `css_math_eval` passes it with a CssLengthMathLeaves as `ctx`, whatever production it
+   asks for, so a `<number>`, an `<angle>` and a `<length>` that divide or multiply lengths resolve them alike. */
+typedef struct { JSContext *realm; const CssFontMetrics *font; } CssLengthMathLeaves;
+CssPx css_length_math_leaf(void *leaves, double n, const char *unit, size_t unit_len);
+
 /* A math function `text` whose css-values-4 §10.9 type matches `<number>` or `<percentage>`, as a number (a
    percentage divided by 100), its `<length>` leaves absolutized as `css_length_parse` absolutizes a dimension.
    False for text that is neither. */

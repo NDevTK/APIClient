@@ -155,35 +155,37 @@ static bool css_tf_number(const char *s, const char *e, double *out)
     return true;
 }
 
-/* A MATH FUNCTION IN A POSITION THIS FILE CANNOT EVALUATE, TOLD APART FROM AN AUTHORING MISTAKE BEFORE EITHER
-   IS ANSWERED. css-values-4 §10 "Mathematical Expressions" admits a math function wherever a `<number>` or an
-   `<angle>` is accepted, so `scale(calc(1 + 1))` is a valid declaration this engine does not yet compute — a
-   capability and not a mistake — while `scale(rgb(1,2,3))` is a mistake. core/css/css_math.h answers which,
-   and `css_math_eval` would answer the VALUE; what is missing is only its `CssMathResolver`, whose `length_px`
-   arm already exists as a static in core/css/css_length.c for exactly these two productions.
-   THE QUESTION IS §10.9'S TYPE AND NOT §10.8'S SYNTAX, and the two are different populations: `scale(calc(1px
-   + 1s))` IS one math function by §10.8's grammar and its type is §4.3.2's FAILURE, so it is an authoring
-   mistake and must take the dropped declaration rather than this crash — which is why the productions this
-   file would evaluate are named here rather than asking whether the text is a math function at all. The two
-   named are the two the DFAIL's own remedy names, and they are the two css-transforms-1 §7.1 writes. */
-static void css_tf_reject_math(const char *s, const char *e)
+/* A math function argument as css-values-4 §10.11 "Computed Value" computes it: its calculation tree simplified,
+   which for `want` of `<number>` or `<angle>` is one number, an angle in css-values-4 §7.1's canonical deg, its
+   `<length>` leaves absolutized by the cascade's one resolver (core/css/css_length.h). `absolutize` false asks
+   §10.9 "Type Checking"'s type alone and writes nothing. False is a type that does not match `want`. */
+static bool css_tf_math(JSContext *realm, const CssFontMetrics *font, bool absolutize, const char *s,
+                        const char *e, CssMathProduction want, double *out)
 {
-    size_t n;
+    CssLengthMathLeaves leaves = { realm, font };
+    CssMathResolver res = { css_length_math_leaf, &leaves, realm };
+    CssMathValue v;
 
-    if (memchr(s, '(', (size_t)(e - s)) == NULL) return;
-    n = (size_t)(e - s);
-    if (!css_math_matches(s, n, CSS_MATH_PROD_NUMBER) && !css_math_matches(s, n, CSS_MATH_PROD_ANGLE)) return;
-    DFAIL("css-values-4 §10 \"Mathematical Expressions\" admits a math function wherever a <number> or an "
-          "<angle> is accepted, and css-transforms-1 §7.1 \"2D Transform Functions\" writes both productions — "
-          "so this is a VALID declaration this engine cannot yet compute rather than an authoring mistake, and "
-          "answering CSS Syntax §2.2 \"Error Handling\"'s dropped declaration for it would report a transform "
-          "the author did not write. WHAT TO BUILD: core/css/css_math.h's `css_math_eval` already answers this "
-          "for CSS_MATH_PROD_NUMBER and CSS_MATH_PROD_ANGLE; what it needs is a `CssMathResolver`, and the "
-          "`length_px` arm of one already exists as `css_len_math_length` in core/css/css_length.c, reached "
-          "there through `css_length_parse`'s own function branch. EXPOSE that resolver from "
-          "core/css/css_length.h rather than writing a second one here — two resolvers for one question is the "
-          "copy that drifts — and this file then evaluates both productions through it. The <length-percentage> "
-          "arguments need none of this: `css_length_parse` already routes a math function for them");
+    DCHECK(want == CSS_MATH_PROD_NUMBER || want == CSS_MATH_PROD_PERCENTAGE || want == CSS_MATH_PROD_ANGLE,
+           "a transform argument asked a math function for a production css-transforms-2 §12 writes for none");
+    if (!absolutize) return css_math_matches(s, (size_t)(e - s), want);
+    if (!css_math_eval(s, (size_t)(e - s), &res, want, &v)) return false;
+    DCHECK(v.tree == NULL, "a <number>, <percentage> or <angle> math function kept a calculation tree, which only "
+                           "a percentage resolved against another type needs");
+    *out = want == CSS_MATH_PROD_PERCENTAGE && v.pct_term ? v.pct : v.num.px;
+    if (v.num.env != CSS_ENV_NONE)
+        DFAIL("a transform's <number> or <angle> math function derives from an environment fact (a viewport or "
+              "font length divided out), and CssTransformFunction carries a plain double, so the fact would be "
+              "dropped. WHAT TO BUILD: CssPx-typed number and angle slots, read through css_transform_matrix.c");
+    /* §10.12 "Range Checking" clamps an infinity to the context's range, and §5.1 "Range Restrictions and Range
+       Definition Notation" makes an unstated range [−∞,∞] within an implementation's "finite capacity". */
+    if (*out * 0.0 != 0.0) {
+        DFAIL("a transform argument's math function is infinite, and css-values-4 §10.12 \"Range Checking\" "
+              "clamps it to the finite capacity §5.1 leaves to the implementation. WHAT TO BUILD: that clamp, "
+              "measured in real Chrome, before css_transform_matrix.c multiplies by it");
+        return false;
+    }
+    return true;
 }
 
 /* `[ <angle> | <zero> ]` over a whole span. §7 states the second arm in its own words — "a <zero> behaves the
@@ -200,7 +202,6 @@ static bool css_tf_angle(const char *s, const char *e, double *num, char unit[CS
     const char *p = s;
     size_t i, ulen;
 
-    css_tf_reject_math(s, e);
     /* The unit is an ident sequence and therefore starts at the first code point that cannot continue a
        number; every §7.1 unit is ASCII alphabetic, so the split is where the digits, sign, dot and exponent
        stop. The exponent's own `e` is why this scans for the LAST such boundary rather than the first letter:
@@ -281,18 +282,14 @@ static bool css_tf_length_valid(const char *s, const char *e)
 
 /* `[ <number> | <percentage> ]`: css-transforms-2 §12 "The Transform Functions" makes a percentage in a scale
    "equivalent to a number", and it "serializes as a number in specified values", so it is stored as one. */
-static bool css_tf_number_percentage(bool absolutize, const char *s, const char *e, double *out)
+static bool css_tf_number_percentage(JSContext *realm, const CssFontMetrics *font, bool absolutize,
+                                     const char *s, const char *e, double *out)
 {
     if (memchr(s, '(', (size_t)(e - s)) != NULL) {
-        size_t n = (size_t)(e - s);
-
-        if (!absolutize)
-            return css_math_matches(s, n, CSS_MATH_PROD_NUMBER) || css_math_matches(s, n, CSS_MATH_PROD_PERCENTAGE);
-        css_tf_reject_math(s, e);
-        if (css_math_matches(s, n, CSS_MATH_PROD_PERCENTAGE))
-            DFAIL("css-values-4 §10 admits a math function for a scale's <percentage>, and this file evaluates "
-                  "none; build it with the <number> arm css_tf_reject_math names");
-        return false;
+        if (css_tf_math(realm, font, absolutize, s, e, CSS_MATH_PROD_NUMBER, out)) return true;
+        if (!css_tf_math(realm, font, absolutize, s, e, CSS_MATH_PROD_PERCENTAGE, out)) return false;
+        if (absolutize) *out /= 100.0;
+        return true;
     }
     if (e > s && e[-1] == '%') {
         if (!css_tf_number(s, e - 1, out)) return false;
@@ -357,18 +354,15 @@ static bool css_tf_args(JSContext *realm, const CssFontMetrics *font, bool absol
         switch (css_tf_arg_type(g, fn->argc)) {
         case CSS_TF_ARG_NUMBER:
             DCHECK(n_num < CSS_TF_ARG_MAX, "a grammar row admits more numbers than CssTransformFunction holds");
-            /* The grammar alone asks a math function its §10.9 type; only a value has to evaluate one. */
-            if (!absolutize && memchr(as, '(', (size_t)(ae - as)) != NULL) {
-                if (!css_math_matches(as, (size_t)(ae - as), CSS_MATH_PROD_NUMBER)) return false;
-                n_num++;
-                break;
-            }
-            css_tf_reject_math(as, ae);
-            if (!css_tf_number(as, ae, &fn->number[n_num++])) return false;
+            if (memchr(as, '(', (size_t)(ae - as)) != NULL
+                    ? !css_tf_math(realm, font, absolutize, as, ae, CSS_MATH_PROD_NUMBER, &fn->number[n_num])
+                    : !css_tf_number(as, ae, &fn->number[n_num]))
+                return false;
+            n_num++;
             break;
         case CSS_TF_ARG_NUMBER_PERCENTAGE:
             DCHECK(n_num < CSS_TF_ARG_MAX, "a grammar row admits more numbers than CssTransformFunction holds");
-            if (!css_tf_number_percentage(absolutize, as, ae, &fn->number[n_num++])) return false;
+            if (!css_tf_number_percentage(realm, font, absolutize, as, ae, &fn->number[n_num++])) return false;
             break;
         case CSS_TF_ARG_LENGTH_PERCENTAGE:
             DCHECK(n_len < CSS_TF_LENGTH_MAX, "a grammar row admits more lengths than CssTransformFunction holds");
@@ -393,12 +387,14 @@ static bool css_tf_args(JSContext *realm, const CssFontMetrics *font, bool absol
             break;
         case CSS_TF_ARG_ANGLE:
             DCHECK(n_ang < CSS_TF_ANGLE_MAX, "a grammar row admits more angles than CssTransformFunction holds");
-            if (!absolutize && memchr(as, '(', (size_t)(ae - as)) != NULL) {
-                if (!css_math_matches(as, (size_t)(ae - as), CSS_MATH_PROD_ANGLE)) return false;
-                n_ang++;
-                break;
+            /* A math function computes to its canonical unit; a literal angle keeps the unit written. */
+            if (memchr(as, '(', (size_t)(ae - as)) != NULL) {
+                if (!css_tf_math(realm, font, absolutize, as, ae, CSS_MATH_PROD_ANGLE, &fn->angle[n_ang]))
+                    return false;
+                memcpy(fn->angle_unit[n_ang], "deg", sizeof "deg");
             }
-            if (!css_tf_angle(as, ae, &fn->angle[n_ang], fn->angle_unit[n_ang])) return false;
+            else if (!css_tf_angle(as, ae, &fn->angle[n_ang], fn->angle_unit[n_ang]))
+                return false;
             n_ang++;
             break;
         }

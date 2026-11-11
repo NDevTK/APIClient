@@ -2257,6 +2257,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/svgtransformattr.h"
 #include "fixture/transform3d.h"
 #include "fixture/indivtransform.h"
+#include "fixture/transformmath.h"
 #include "fixture/perspective.h"
 #include "fixture/perspectivew.h"
 #include "fixture/dommatrix.h"
@@ -3118,6 +3119,7 @@ TF_DOCS[] = {
     { "svgtransformattr", HTML_SVGTRANSFORMATTR },
     { "transform3d", HTML_TRANSFORM3D },
     { "indivtransform", HTML_INDIVTRANSFORM },
+    { "transformmath", HTML_TRANSFORMMATH },
     { "perspective", HTML_PERSPECTIVE },
     { "perspectivew", HTML_PERSPECTIVEW },
     { "dommatrix", HTML_DOMMATRIX },
@@ -26814,6 +26816,44 @@ TF_UNIT void probes_indivtransform(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `transformmath` document (fixture/transformmath.h): css-values-4 §10's math functions in
+   every transform argument type and in css-transforms-2 §5's individual properties. */
+TF_UNIT void probes_transformmath(const char *js, Probe *tab, int *n) {
+    const char *tm_why = NULL; int tm_tt = 1;
+    const char *tw_why = NULL; int tw_tt = 1;
+#define TM_IS(k, v) param_value_is(js, "/api/transformmath", k, v)
+    int reached = !!strstr(js, "\"/api/transformmath\"");
+    const char *nr = "NOT REACHED: no /api/transformmath record, so the document aborted before its fetch";
+    fold_row(&tm_tt, &tm_why, reached, nr);
+    fold_row(&tw_tt, &tw_why, reached, nr);
+    fold_row(&tm_tt, &tm_why, TM_IS("r", "110") && TM_IS("rt", "90") && TM_IS("rw", "20") &&
+                              TM_IS("rc", "matrix(0,_-1,_1,_0,_0,_0)"),
+             "css-values-4 §10.11: rotate(calc(-10deg - 40deg * var(--s))) with --s 2 does not compute to -90deg");
+    fold_row(&tm_tt, &tm_why, TM_IS("s", "195") && TM_IS("sw", "20") && TM_IS("sh", "20"),
+             "css-transforms-2 §12.1: scale(calc(1 + 1), calc(150% + 50%)) is not a scale of 2 on both axes");
+    fold_row(&tm_tt, &tm_why, TM_IS("m", "10") && TM_IS("mt", "320") && TM_IS("mw", "20") && TM_IS("mh", "30"),
+             "css-values-4 §10.9: matrix(calc(4 / 2), 0, 0, calc(6px / 2px), 10, 20) is not matrix(2, 0, 0, 3, 10, 20)");
+    fold_row(&tm_tt, &tm_why, TM_IS("e", "290") && TM_IS("ew", "30"),
+             "css-values-4 §10.10.1: an `em` leaf of a transform <number> does not resolve against the element's "
+             "own 10px font size");
+    fold_row(&tm_tt, &tm_why, TM_IS("k", "390") && TM_IS("kw", "40"),
+             "css-transforms-1 §7.1: skewX(calc(90deg / 2)) is not skewX(45deg)");
+    fold_row(&tm_tt, &tm_why, TM_IS("a", "510") && TM_IS("at", "90") && TM_IS("aw", "20"),
+             "css-transforms-2 §12.2: rotate3d(0, 0, calc(2 - 1), calc(0.25turn)) is not a quarter turn about z");
+    fold_row(&tm_tt, &tm_why, TM_IS("ir", "-90deg") && TM_IS("is", "2"),
+             "css-transforms-2 §5: rotate: calc(0.25turn - 180deg) and scale: calc(1 + 1) do not compute to "
+             "-90deg and 2");
+    fold_row(&tw_tt, &tw_why, TM_IS("x", "none") && TM_IS("y", "none"),
+             "css-values-4 §10.9: a math function whose type is not the argument's (calc(1px + 1deg) in rotate(), "
+             "calc(1deg) in scale()) does not drop the declaration to `none`");
+#undef TM_IS
+    const Probe rows[] = {
+        { "transform-math-args", tm_tt, "/api/transformmath", SESS_EXPLORE, tm_why },
+        { "transform-math-type-mismatch", tw_tt, "/api/transformmath", SESS_EXPLORE, tw_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `perspective` document (fixture/perspective.h): css-transforms-2 §8's perspective and §9's
    perspective-origin, through §4.1.1's perspective matrix. */
 TF_UNIT void probes_perspective(const char *js, Probe *tab, int *n) {
@@ -34233,6 +34273,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_svgtransformattr(js, probes, &np);
     probes_transform3d(js, probes, &np);
     probes_indivtransform(js, probes, &np);
+    probes_transformmath(js, probes, &np);
     probes_perspective(js, probes, &np);
     probes_perspectivew(js, probes, &np);
     probes_dommatrix(js, probes, &np);

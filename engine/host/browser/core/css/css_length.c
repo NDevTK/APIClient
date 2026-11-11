@@ -1342,11 +1342,9 @@ static CssPx css_len_unit_px(JSContext *realm, const CssFontMetrics *font, const
 /* css-values-4 §10's MATH FUNCTIONS, answered over the table above. `css_math_eval` calls this only for a unit
    `css_length_is_length_unit` already admitted, so there is no "not a length" answer to give — the crash for a
    unit that cannot be absolutized is the same one a bare dimension reaches, in the same place. */
-typedef struct { JSContext *realm; const CssFontMetrics *font; } CssLenMathCtx;
-
-static CssPx css_len_math_length(void *ctx, double n, const char *unit, size_t unit_len)
+CssPx css_length_math_leaf(void *leaves, double n, const char *unit, size_t unit_len)
 {
-    CssLenMathCtx *c = (CssLenMathCtx *)ctx;
+    CssLengthMathLeaves *c = (CssLengthMathLeaves *)leaves;
     char lower[CSS_LEN_UNIT_MAX];
     size_t i;
 
@@ -1363,8 +1361,8 @@ static CssPx css_len_math_length(void *ctx, double n, const char *unit, size_t u
 
 bool css_length_math_number(JSContext *realm, const CssFontMetrics *font, const char *text, double *out)
 {
-    CssLenMathCtx mc = { realm, font };
-    CssMathResolver res = { css_len_math_length, &mc, realm };
+    CssLengthMathLeaves mc = { realm, font };
+    CssMathResolver res = { css_length_math_leaf, &mc, realm };
     CssMathValue v;
     size_t n;
 
@@ -1407,13 +1405,13 @@ bool css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *
        them in CSS Syntax's own tokenizer. */
     if (end == p) {
         if (strchr(p, '(') != NULL) {
-            CssLenMathCtx mc;
+            CssLengthMathLeaves mc;
             CssMathResolver res;
             CssMathValue v;
 
             mc.realm = realm;
             mc.font = font;
-            res.length_px = css_len_math_length;
+            res.length_px = css_length_math_leaf;
             res.ctx = &mc;
             res.realm = realm;
             /* §10.9.1 "Calculation Contexts": "Math functions always inherit the calculation context from

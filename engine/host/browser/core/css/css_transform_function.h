@@ -34,7 +34,7 @@
  *   from the parse is that answer, and the caller falls to §3's `Initial:` value of `none`. It is also the
  *   only answer CLAUDE.md's rule about foreign bytes permits: a stylesheet is a STRANGER'S text, so a
  *   `DCHECK` standing on its shape would hand any page an abort switch for this engine.
- *   A CAPABILITY THIS ENGINE HAS NOT BUILT CRASHES BY NAME (an escape, a math function it cannot evaluate):
+ *   A capability this engine has not built crashes by name (an escape, a math result it cannot carry):
  *   answering `none` for valid CSS would report a WRONG transform rather than an absent one. Both levels'
  *   functions are parsed: css-transforms-1 §7.1 "2D Transform Functions" and css-transforms-2 §12.2 "3D
  *   Transform Functions", with §12.1's percentages in the scales.
@@ -45,8 +45,8 @@
  * "The transform Property" absolutizes; an angle and a number are carried AS SPECIFIED, because that section's
  * own words are "as specified, but with lengths made absolute", which says
  * precisely which one moves. That is why `angle_unit` exists: `rotate(1turn)` computes to `rotate(1turn)` and
- * not to `rotate(360deg)`, and a component that stored only the canonical degrees would have thrown away the
- * half of §3's sentence that does NOT change.
+ * not to `rotate(360deg)`. A math function is the exception css-values-4 §10.11 "Computed Value" makes: its
+ * computed value is its simplified tree, so `rotate(calc(0.5turn))` computes to `rotate(180deg)`.
  *
  * A PERCENTAGE IS NOT A GAP AT COMPUTED-VALUE TIME. §7 says "A percentage for horizontal translations is
  * relative to the width of the reference box", and §5 "Transform reference box: the transform-box property"
