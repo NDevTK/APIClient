@@ -432,6 +432,7 @@ size_t layout_job_shed(LayoutJob *job)
     for (i = 0; i < job->memo_cap; i++)
         if (job->memo[i].gen == job->gen) job->memo[i].a = NULL;
     lj_answers_free(job);
+    css_cascade_record_shed(&job->cascade);
     freed = live - c_alloc_live();
     job->shed_at = job->held;
     job->held -= (int64_t)freed;

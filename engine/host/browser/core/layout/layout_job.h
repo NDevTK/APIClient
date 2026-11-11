@@ -161,16 +161,18 @@ typedef struct {
 } LayoutJobResting;
 LayoutJobResting *layout_job_resting(size_t *n);
 
-/* Releases a resting job's memoized answers, the re-derivable state State isolation sheds, and keeps what its
-   path paid for: each answered question's key, its suspended questions with their staged walks, its grid row
-   contexts and its records. An ask of a paid key whose answer was released re-derives it in a residency span
-   (core/timing/thread_work.h) and answers as the hit the job's no-pressure twin saw, so the job's control flow,
-   allowances and rest points are the twin's. Asserts the job rests (not entered, no drive open, every entry
-   suspended, no grid row context) and holds no decline. Returns the C heap bytes the release gave back, measured.
-   Named residual. Not covered: the records (cascade, line boxes, intrinsic sizes, placement) are kept whole.
-   Next: each record's completed entries released and re-derived in a residency span at the ask that finds them
-   paid, its in-progress entries kept. Absence shows as: `layoutShedKiB` per shed far below the `layoutJobKiB`
-   per job it came out of. */
+/* Releases a resting job's memoized answers and its cascade record's completed answers
+   (css_cascade_record_shed), the re-derivable state State isolation sheds, and keeps what its path paid for:
+   each answered question's key, its suspended questions with their staged walks, its grid row contexts, the
+   cascade's parked builds and its other records. An ask of a paid key whose answer was released re-derives it in
+   a residency span (core/timing/thread_work.h) and answers as the hit the job's no-pressure twin saw, so the
+   job's control flow, allowances and rest points are the twin's. Asserts the job rests (not entered, no drive
+   open, every entry suspended, no grid row context) and holds no decline. Returns the C heap bytes the release
+   gave back, measured.
+   Named residual. Not covered: the line box, intrinsic size and placement records are kept whole. Next: their
+   completed entries released and re-derived in a residency span at the ask that finds them paid, their
+   in-progress entries kept. Absence shows as: `layoutShedKiB` per shed far below the `layoutJobKiB` per job it
+   came out of. */
 size_t layout_job_shed(LayoutJob *job);
 
 /* The placement record (core/layout/flow_placement.h) of the job that holds it now: a driven job's while it

@@ -39,6 +39,8 @@ struct CssComputedStyle;
 typedef struct {
     struct CssAuthorSheets **author;      /* one per root resolved under, owned */
     size_t                   author_n, author_cap;
+    const lxb_dom_node_t   **paid;        /* the roots whose sheet set was sealed in this record, owned */
+    size_t                   paid_n, paid_cap;
     struct CpElement        *elem;        /* one slot per element asked about, owned */
     size_t                   elem_cap, elem_used;
     const void              *flow;        /* the running flow at the first ask, and its generation then */
@@ -46,6 +48,18 @@ typedef struct {
     bool                     stamped;
 } CssCascadeRecord;
 void css_cascade_record_release(CssCascadeRecord *r);
+
+/* Releases the record's completed answers, which RAM pressure sheds (core/layout/layout_job.h's layout_job_shed):
+   every sealed sheet set no parked match borrows, every closed match result, cascaded style and computed style.
+   A parked build stays, so a resting build goes on where it stopped. What was completed stays paid: the asks
+   below answer a paid one as the hit after re-deriving it in a residency span (core/timing/thread_work.h). */
+void css_cascade_record_shed(CssCascadeRecord *r);
+
+/* Whether the held record sealed `root`'s sheet set, closed `el`'s match result or held `el`'s cascaded style
+   (the job's path paid for it), whatever a shed has released since. */
+bool css_cascade_pass_author_paid(const lxb_dom_node_t *root);
+bool css_cascade_pass_match_paid(const lxb_dom_element_t *el);
+bool css_cascade_pass_cascaded_paid(const lxb_dom_element_t *el);
 
 /* Whether the current job holds a record. Read by the write chokepoints of every cascade input, which
    assert it is not, and by the asks below, which require it. */

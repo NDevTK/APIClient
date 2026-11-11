@@ -3568,6 +3568,16 @@ static CssAuthorSheets *cssd_author_sheets(lxb_dom_node_t *root, bool rests)
     CssAuthorSheets *sheets;
 
     if (css_cascade_pass_author_ask(root, &sheets)) return sheets;
+    if (sheets == NULL && css_cascade_pass_author_paid(root)) {
+        /* A set a shed released: re-derived whole in a residency span, so the asker sees the hit. */
+        thread_work_residency_begin();
+        sheets = css_author_sheets_open(root);
+        if (!css_author_sheets_run(sheets, false))
+            DFAIL("an author origin emission re-derived with no resting drive stopped before the last sheet");
+        css_cascade_pass_author_hold(sheets);
+        thread_work_residency_end();
+        return sheets;
+    }
     if (sheets == NULL) sheets = css_author_sheets_open(root);
     if (!css_author_sheets_run(sheets, rests)) {
         DCHECK(rests, "an author origin emission built with no resting drive stopped before the last sheet — "
@@ -3577,6 +3587,20 @@ static CssAuthorSheets *cssd_author_sheets(lxb_dom_node_t *root, bool rests)
     }
     css_cascade_pass_author_hold(sheets);
     return sheets;
+}
+
+/* `el`'s match result a shed released, re-derived whole in a residency span and held. The caller asks again, so
+   the asker pays the hit's price. */
+static void cssd_match_rederive(lxb_dom_element_t *el, CssAuthorSheets *sheets)
+{
+    CssMatchResult *match;
+
+    thread_work_residency_begin();
+    match = css_match_result_create(el, sheets);
+    if (!cssd_match_result_run(match, false))
+        DFAIL("an author match re-derived with no resting drive stopped before the set's end");
+    css_cascade_pass_match_hold(match);
+    thread_work_residency_end();
 }
 
 /* `el`'s cascaded style: every origin's declarations collected into one list and resolved once, which
@@ -3606,7 +3630,12 @@ static CssCascadedStyle *cssd_cascaded_style_build(lxb_dom_element_t *el)
     g_collecting_sheets = true;
     sheets = cssd_author_sheets(node_root(lxb_dom_interface_node(el)), false);
     order = css_author_sheets_order(sheets);
-    if (!css_cascade_pass_match_ask(el, sheets, &match)) {
+    if (!css_cascade_pass_match_ask(el, sheets, &match) && match == NULL && css_cascade_pass_match_paid(el)) {
+        cssd_match_rederive(el, sheets);
+        if (!css_cascade_pass_match_ask(el, sheets, &match))
+            DFAIL("a paid match result re-derived in a residency span did not answer as the hit");
+    }
+    if (match == NULL || !css_match_result_closed(match)) {
         /* A build a resting ask parked is finished here: this reader cannot rest.
            Named residual. Not covered: an element whose style no cssom_style_ask reached first is matched whole
            by its first read, which is the general case of the styles layout walks read under a resting drive.
@@ -3661,6 +3690,11 @@ bool cssom_style_ask(lxb_dom_element_t *el)
         return false;
     }
     closed = css_cascade_pass_match_ask(el, sheets, &match);
+    if (!closed && match == NULL && css_cascade_pass_match_paid(el)) {
+        cssd_match_rederive(el, sheets);
+        closed = css_cascade_pass_match_ask(el, sheets, &match);
+        DCHECK(closed, "a paid match result re-derived in a residency span did not answer as the hit");
+    }
     if (!closed) {
         if (match == NULL) match = css_match_result_create(el, sheets);
         closed = cssd_match_result_run(match, true);
@@ -3692,7 +3726,14 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
            "can be asked for one run it BEFORE reaching here; a third caller must run it too");
     css_computed_style_require_record();
     s = css_cascade_pass_cascaded_ask(el);
-    if (s == NULL) s = cssd_cascaded_style_build(el);
+    if (s == NULL && css_cascade_pass_cascaded_paid(el)) {
+        /* A style a shed released: its collection, and any match or sheet set it re-derives, is residency work. */
+        thread_work_residency_begin();
+        s = cssd_cascaded_style_build(el);
+        thread_work_residency_end();
+    } else if (s == NULL) {
+        s = cssd_cascaded_style_build(el);
+    }
     v = css_cascaded_style_value(s, name);
     out = v != NULL ? cssd_strdup(v) : NULL;
     return out;

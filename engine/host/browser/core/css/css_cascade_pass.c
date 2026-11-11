@@ -24,6 +24,7 @@ typedef struct CpElement {
     struct CssMatchResult    *match;      /* closed, or open where a resting build parked */
     struct CssCascadedStyle  *cascaded;
     struct CssComputedStyle  *style;
+    bool                      match_paid, cascaded_paid;   /* held closed or held once, whatever a shed released */
 } CpElement;
 
 /* The census: lifetime counters of this agent, raised at the question and at its one outcome. */
@@ -137,9 +138,68 @@ void css_cascade_record_release(CssCascadeRecord *r)
     r->author = NULL;
     r->author_n = 0;
     r->author_cap = 0;
+    free(r->paid);
+    r->paid = NULL;
+    r->paid_n = r->paid_cap = 0;
     r->flow = NULL;
     r->writes = 0;
     r->stamped = false;
+}
+
+void css_cascade_record_shed(CssCascadeRecord *r)
+{
+    size_t i, k = 0;
+
+    /* In the release order: a cascaded style borrows its match result's declarations and a sheet set's layer
+       order, and a match result borrows a sheet set. A sheet set a parked match borrows is kept with it. */
+    for (i = 0; i < r->elem_cap; i++) {
+        CpElement *e = &r->elem[i];
+
+        if (e->el == NULL) continue;
+        if (e->cascaded != NULL) css_cascaded_style_free(e->cascaded);
+        if (e->style != NULL) css_computed_style_free(e->style);
+        e->cascaded = NULL;
+        e->style = NULL;
+        if (e->match != NULL && css_match_result_closed(e->match)) {
+            css_match_result_free(e->match);
+            e->match = NULL;
+        }
+    }
+    for (i = 0; i < r->author_n; i++) {
+        bool borrowed = !css_author_sheets_sealed(r->author[i]);
+        size_t j;
+
+        for (j = 0; j < r->elem_cap && !borrowed; j++)
+            borrowed = r->elem[j].el != NULL && r->elem[j].match != NULL &&
+                       css_match_result_sheets(r->elem[j].match) == r->author[i];
+        if (borrowed) r->author[k++] = r->author[i];
+        else css_author_sheets_free(r->author[i]);
+    }
+    r->author_n = k;
+}
+
+bool css_cascade_pass_author_paid(const lxb_dom_node_t *root)
+{
+    const CssCascadeRecord *r = cp_held();
+    size_t i;
+
+    for (i = 0; i < r->paid_n; i++)
+        if (r->paid[i] == root) return true;
+    return false;
+}
+
+bool css_cascade_pass_match_paid(const lxb_dom_element_t *el)
+{
+    CssCascadeRecord *r = cp_held();
+
+    return r->elem_cap != 0 && r->elem[cp_probe(r->elem, r->elem_cap, el)].match_paid;
+}
+
+bool css_cascade_pass_cascaded_paid(const lxb_dom_element_t *el)
+{
+    CssCascadeRecord *r = cp_held();
+
+    return r->elem_cap != 0 && r->elem[cp_probe(r->elem, r->elem_cap, el)].cascaded_paid;
 }
 
 bool css_cascade_record_is_held(void) { return layout_job_cascade() != NULL; }
@@ -210,6 +270,19 @@ void css_cascade_pass_author_hold(struct CssAuthorSheets *sheets)
     DCHECK(sheets != NULL && css_author_sheets_sealed(sheets),
            "an author sheet set was offered to the record as nothing or open");
     cp_author_add(r, sheets);
+    if (thread_work_residency_open() && css_cascade_pass_author_paid(css_author_sheets_root(sheets))) return;
+    DCHECK(!css_cascade_pass_author_paid(css_author_sheets_root(sheets)),
+           "a sheet set the record sealed before was sealed again outside a residency span; only a shed's "
+           "re-derivation builds a paid set twice");
+    if (r->paid_n == r->paid_cap) {
+        size_t cap = r->paid_cap ? r->paid_cap * 2 : 4;
+        const lxb_dom_node_t **grown = lexbor_realloc((void *)r->paid, cap * sizeof *grown);
+
+        CHECK(grown != NULL, "css-cascade-pass-oom: the record's paid roots could not be grown");
+        r->paid = grown;
+        r->paid_cap = cap;
+    }
+    r->paid[r->paid_n++] = css_author_sheets_root(sheets);
 }
 
 static bool cp_sheets_held(const CssCascadeRecord *r, const struct CssAuthorSheets *sheets)
@@ -263,7 +336,11 @@ void css_cascade_pass_match_hold(struct CssMatchResult *m)
     slot = cp_slot(r, css_match_result_element(m));
     DCHECK(slot->match == NULL, "a second match result was offered for an element the record already holds one "
                                 "for — its one caller asks before it builds");
+    DCHECK(slot->match_paid == thread_work_residency_open(),
+           "a match result was closed for an element whose closed result the record had released outside a "
+           "residency span, or for an unpaid element inside one; a span re-derives only what the path paid for");
     slot->match = m;
+    slot->match_paid = true;
     g_match_built++;
 }
 
@@ -301,7 +378,11 @@ void css_cascade_pass_cascaded_hold(struct CssCascadedStyle *s)
     slot = cp_slot(cp_held(), css_cascaded_style_element(s));
     DCHECK(slot->cascaded == NULL, "a second cascaded style was offered for an element the record already holds "
                                    "one for — its one caller asks before it collects");
+    DCHECK(!slot->cascaded_paid || thread_work_residency_open(),
+           "a cascaded style the record had released was collected again outside a residency span; a shed's "
+           "paid style is re-derived in one");
     slot->cascaded = s;
+    slot->cascaded_paid = true;
     g_resolved++;
 }
 
