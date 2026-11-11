@@ -26072,7 +26072,18 @@ TF_UNIT void probes_tt_eval(const char *js, Probe *tab, int *n) {
     tt_eval_row(js, "/api/te-fn", "s", "TrustedScript:Function", &d_tt, &d_why);
     const char *t_why = NULL; int t_tt = 1;
     tt_eval_row(js, "/api/te-timer", "s", "TrustedScript:Window_setTimeout", &t_tt, &t_why);
+    /* tt-eval-turn-gap: no turn of this document holds the thread for a quantum between two offers
+       (`sliceOverrunGapWork`). Its work is the eval'd source's parse and regexp-literal compiles. */
+    const char *g_why = NULL, *g_at = strstr(js, "\"sliceOverrunGapWork\":");
+    long g_gap = g_at ? strtol(g_at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int g_tt = 1;
+    fold_row(&g_tt, &g_why, g_gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&g_tt, &g_why, g_gap >= 0 && g_gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: an eval'd source's compile ran a "
+             "30,002-byte literal's scan and regexp compile with no suspend point offered before the quantum was "
+             "spent, so its first offer came the length of the page's tokens late");
     const Probe rows[] = {
+        { "tt-eval-turn-gap", g_tt, "/api/te-rest", SESS_EXPLORE, g_why },
         { "tt-eval-rest", r_tt, "/api/te-rest", SESS_EXPLORE, r_why },
         { "tt-eval-indirect", i_tt, "/api/te-ind", SESS_EXPLORE, i_why },
         { "tt-eval-rests", p_tt, "/api/te-rest", SESS_EXPLORE, p_why },
@@ -29914,7 +29925,18 @@ TF_UNIT void probes_platform(const char *js, Probe *tab, int *n) {
              "`synmove` is in `pageErrorsExplored` — the page's own throw was filed as this engine's "
              "exploration, so solver/result.c read every occurrence of it as raised on a forced path; read "
              "result_page_error's provenance read and engine_prov_of_running_path");
+    /* platform-turn-gap: no turn of this document holds the thread for a quantum between two offers
+       (`sliceOverrunGapWork`). Its first turn is the classic program's compile. */
+    const char *gap_why = NULL, *gap_at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = gap_at ? strtol(gap_at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int gap_tt = 1;
+    fold_row(&gap_tt, &gap_why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&gap_tt, &gap_why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: a classic program's compile "
+             "offers its first suspend point when its budget poll finds the quantum already spent, so a compile "
+             "stint's stretch is the quantum plus the poll's period");
     const Probe rows[] = {
+        { "platform-turn-gap", gap_tt, "/api/docnode", SESS_EXPLORE, gap_why },
         { "platform-algo", platalgo_tt, "/api/docnode", SESS_EXPLORE, platalgo_why },
         /* THE UNSTAGED ONE, AND ITS ADDRESS COLUMN IS THE DOCUMENT'S BECAUSE THAT IS WHERE IT IS RAISED —
            the five rows above name a chunk, and naming one here would be the relocation this row exists to
