@@ -189,9 +189,11 @@ char *url_percent_decode(const char *s, size_t len, size_t *out_n);
    serializedQuery": `query` (owned, NULL for null) becomes the query of a copy of `url`'s record, which this
    flow's delta then holds. `url` must be a URL wrapper whose record is known. */
 void url_query_assign(JSContext *ctx, JSValueConst url, char *query);
-/* The same step where the serialized query is the unknown `query` (borrowed): `url`'s record becomes the
-   unknown record derived from its record and `query`. */
+/* The same step where the serialized query `query` (borrowed) is unknown or `url`'s record is: `url`'s record
+   becomes the unknown record derived from its record and `query`. */
 void url_query_assign_unknown(JSContext *ctx, JSValueConst url, JSValueConst query);
+/* Whether the URL wrapper `url`'s record is unknown. */
+bool url_record_is_unknown(JSValueConst url);
 /* §6.1 URL class's getter steps for URL_* `member` over the unknown URL record `unknown` (borrowed), as
    url_construct_unknown composes one: the derivation named by the getter, its example the getter run on the
    record's example. `href` is a serialization that url_construct_unknown parses back to `unknown`. Owned. */
@@ -220,22 +222,10 @@ enum { URL_SET_C0 = 0, URL_SET_FRAGMENT, URL_SET_QUERY, URL_SET_SPECIAL_QUERY, U
    the spec that defines it.
    A pair carries its LENGTHS because a name or a value may contain U+0000: `?a=b%00c` is one pair whose value
    is three characters, and a strlen would make it one.
-   AND EACH HALF CARRIES WHETHER IT IS A HOLE RATHER THAN DATA. §6.2's members take USVStrings and this list
-   holds their BYTES, so an unknown reaches it as its display SHAPE — a NAME for a value the code did not
-   compute, never bytes the page produced. §5.2 application/x-www-form-urlencoded serializing runs every half
-   through §1.3 Percent-encoded bytes' urlencoded set, and the shape's own punctuation is IN that set: `{` and
-   `}` enter at the path set and are inherited by the component and urlencoded sets, while `(`, `)`, `!`, `'`
-   and `~` are the urlencoded set's own additions. So a shape serialized as data is spelled out of existence in
-   BOTH of the two forms a shape comes in, and they lose different things:
-     - a DECLARED attacker source is BRACED (`{location.hash}` — concolic_source_wrap requires that spelling
-       exactly where concolic_source_encodes answers), and encoding gives `%7Blocation.hash%7D`. The brace is
-       the only thing an emission has to read a hole by (solver/concolic.c's concolic_hole_key returns NULL
-       without one), so the parameter loses its DOMAIN as well as its provenance.
-     - an UNDECLARED source is minted with a bare dotted path (`navigator.language`) and a derivation composes
-       on that, so `navigator.language.toLowerCase()` encodes to `navigator.language.toLowerCase%28%29` —
-       provenance still legible to a human, and mangled.
-   Either way the surface reports a parameter value no run computed, which is a plausible datum and not a
-   measurement. A hole half is therefore emitted verbatim; see the serializer. */
+   Each half carries whether it is a hole: §6.2's members take USVStrings and this list holds their bytes, so
+   a half that is unknown input is held as its display shape, a name for a value the run did not compute.
+   A hole's bytes are never data: no comparison reads them and §5.2's serializer refuses a list holding one,
+   because its output is a request's address or body. */
 typedef struct { char *name, *value; size_t nlen, vlen; unsigned nhole : 1, vhole : 1; } UrlEncodedPair;
 typedef struct { UrlEncodedPair *e; int n, cap; } UrlEncodedList;
 
@@ -248,8 +238,10 @@ void  url_encoded_list_append(UrlEncodedList *l, const char *name, size_t nn, in
    into a space in BOTH halves and only then percent-decode — the other order would decode a `%2B` into a `+`
    and then into a space. */
 void  url_encoded_parse(UrlEncodedList *out, const char *s, size_t len);
-/* §5.2 application/x-www-form-urlencoded serializing: `name=value` joined by `&`, each DATA half through the
-   urlencoded encode set and each HOLE half verbatim. */
+/* Whether any half of `l` is a hole. */
+bool  url_encoded_list_has_hole(const UrlEncodedList *l);
+/* §5.2 application/x-www-form-urlencoded serializing: `name=value` joined by `&`, each half through the
+   urlencoded encode set. `l` holds no hole (a CHECK). Owned. */
 char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n);
 char *url_encoded_strdup(const char *s, size_t n);
 

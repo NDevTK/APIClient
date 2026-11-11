@@ -37,8 +37,8 @@ void    usp_reset_unknown(JSContext *ctx, JSValueConst usp, JSValue query);
    from. (§5.1 stood here and is "Headers class", which declares no union.) */
 const UrlEncodedList *usp_list_of(JSValueConst v);
 /* §5.2's application/x-www-form-urlencoded serialization of `v`'s list when that list derives from unknown
-   input: the same derived unknown its stringification answers, owned. JS_UNDEFINED when the list is known
-   values, whose bytes usp_list_of serializes. `v` must be a URLSearchParams. */
+   input or holds an unknown half: the same derived unknown its stringification answers, owned. JS_UNDEFINED
+   when the list is known values, whose bytes usp_list_of serializes. `v` must be a URLSearchParams. */
 JSValue usp_unknown_serialization(JSContext *ctx, JSValueConst v);
 
 #endif

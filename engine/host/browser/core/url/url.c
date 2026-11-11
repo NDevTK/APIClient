@@ -1551,16 +1551,17 @@ void url_encoded_parse(UrlEncodedList *out, const char *s, size_t len)
     }
 }
 
-/* §5.2 application/x-www-form-urlencoded serializing. `name=value` joined by `&`, each DATA half through the
-   urlencoded encode set — whose own rule writes SPACE as `+`, which is why that is in the set and not here.
- *
- * A HOLE HALF IS NOT ENCODED, and that is a statement about what a hole IS rather than an exception to §5.2.
- * The steps run over a tuple of USVStrings the page produced; a hole is this engine's display SHAPE for a
- * value the code did not compute, put into the list by §6.2's members because a `const char *` cannot carry a
- * concolic. Percent-encoding it spells the shape's own punctuation away — the braces of a declared source, the
- * call parentheses of a derivation over an undeclared one — and the result reaches the @H surface as a
- * parameter value nothing constrained, which §Solver-half calls a wrong report and not a partial one. See
- * UrlEncodedPair for which shape loses what. */
+bool url_encoded_list_has_hole(const UrlEncodedList *l)
+{
+    int i;
+
+    for (i = 0; i < l->n; i++)
+        if (l->e[i].nhole || l->e[i].vhole) return true;
+    return false;
+}
+
+/* §5.2 application/x-www-form-urlencoded serializing: `name=value` joined by `&`, each half through the
+   urlencoded encode set, whose own rule writes SPACE as `+`. */
 char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n)
 {
     char *out = NULL;
@@ -1575,17 +1576,18 @@ char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n)
            It is the serializer's assert and it is about its PRODUCERS — every one of them has to make it hold,
            which §5.1's parser does by running UTF-8 decode without BOM and §6.2's members do by taking
            USVString. It could not be written while the parser stored the raw percent-decoded bytes, because
-           the bytes of `a=%FF` are not a scalar value string and this is the line that would have said so.
-           A HOLE IS ASSERTED TOO: a display shape is ASCII, so it is a scalar value string like any other and
-           there is nothing here for the hole bit to exempt. */
+           the bytes of `a=%FF` are not a scalar value string and this is the line that would have said so. */
         DCHECK(encoding_is_scalar_value_string(l->e[i].name, l->e[i].nlen) &&
                encoding_is_scalar_value_string(l->e[i].value, l->e[i].vlen),
                "§5.2's assert: an urlencoded tuple's name or value is not a scalar value string — the producer "
                "of this list skipped UTF-8 decode without BOM");
-        en = l->e[i].nhole ? url_encoded_strdup(l->e[i].name,  l->e[i].nlen)
-                           : url_percent_encode(l->e[i].name,  l->e[i].nlen, URL_SET_URLENCODED);
-        ev = l->e[i].vhole ? url_encoded_strdup(l->e[i].value, l->e[i].vlen)
-                           : url_percent_encode(l->e[i].value, l->e[i].vlen, URL_SET_URLENCODED);
+        /* A hole's bytes are a display shape. Fatal in release too: the output is a request's address or
+           body, so a shape serialized here leaves the machine as bytes no run computed. */
+        CHECK(!l->e[i].nhole && !l->e[i].vhole,
+              "§5.2's serializer was handed a tuple whose name or value is unknown input, held as its display "
+              "shape. Serialize the halves' examples, or answer the unknown the list's serialization derives");
+        en = url_percent_encode(l->e[i].name,  l->e[i].nlen, URL_SET_URLENCODED);
+        ev = url_percent_encode(l->e[i].value, l->e[i].vlen, URL_SET_URLENCODED);
         need = strlen(en) + strlen(ev) + 3;
         if (n + need > cap) {
             cap = (n + need) * 2;
@@ -1714,8 +1716,8 @@ void url_query_assign(JSContext *ctx, JSValueConst url, char *query)
     UrlRecord *r;
 
     DCHECK(u != NULL, "a URLSearchParams' associated URL stopped being one");
-    DCHECK(JS_IsUndefined(u->unknown), "a URLSearchParams wrote known bytes onto a URL whose record is unknown — "
-                                       "its list derives from that record, so its update is url_query_assign_unknown");
+    DCHECK(JS_IsUndefined(u->unknown), "a URLSearchParams wrote known bytes onto a URL whose record is unknown: "
+                                       "that update is url_query_assign_unknown");
     r = url_rec_edit(ctx, u);
     free(r->query);
     r->query = query;
@@ -2699,8 +2701,17 @@ void url_query_assign_unknown(JSContext *ctx, JSValueConst url, JSValueConst que
 {
     UrlObj *u = url_obj_of(url);
 
-    DCHECK(u != NULL && concolic_is(query), "a URLSearchParams' unknown update reached no URL, or a known query");
+    DCHECK(u != NULL && (concolic_is(query) || !JS_IsUndefined(u->unknown)),
+           "a URLSearchParams' unknown update reached no URL, or wrote a known query onto a known record");
     url_set_unknown(ctx, u, "query=", 0, query, url_query_set);
+}
+
+bool url_record_is_unknown(JSValueConst url)
+{
+    UrlObj *u = url_obj_of(url);
+
+    DCHECK(u != NULL, "a URLSearchParams' associated URL stopped being one");
+    return !JS_IsUndefined(u->unknown);
 }
 
 static JSValue js_url_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)

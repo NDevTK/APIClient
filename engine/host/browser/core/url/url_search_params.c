@@ -236,22 +236,18 @@ const UrlEncodedList *usp_list_of(JSValueConst v)
     return u ? u->list : NULL;
 }
 
-/* Declared below beside the reads it serves. */
+/* Declared below beside the reads they serve. */
 static JSValue usp_derive(JSContext *ctx, UspObj *u, const char *op, JSValue r, int argc, JSValueConst *argv);
+static JSValue usp_stringification(JSContext *ctx, UspObj *u);
+static JSValue usp_list_bytes(JSContext *ctx, UspObj *u);
 
 JSValue usp_unknown_serialization(JSContext *ctx, JSValueConst v)
 {
     UspObj *u = usp_rec(v);
-    char *q;
 
     DCHECK(u != NULL, "a body asked for the serialization of something that is not a URLSearchParams");
-    if (JS_IsUndefined(u->unknown)) return JS_UNDEFINED;
-    q = usp_serialize(u->list, NULL);
-    {
-        JSValue r = JS_NewString(ctx, q);
-        free(q);
-        return usp_derive(ctx, u, "URLSearchParams.toString", r, 0, NULL);
-    }
+    if (JS_IsUndefined(u->unknown) && !url_encoded_list_has_hole(u->list)) return JS_UNDEFINED;
+    return usp_stringification(ctx, u);
 }
 
 static UspObj *usp_of(JSContext *ctx, JSValueConst v)
@@ -271,6 +267,15 @@ static void usp_update(JSContext *ctx, UspObj *u)
 
     /* A list derived from unknown input writes its update as a derivation (usp_rederive). */
     if (JS_IsUndefined(u->owner) || !JS_IsUndefined(u->unknown)) return;
+    /* A list holding an unknown half serializes to an unknown, so the URL's record becomes one; a record that
+       is unknown takes every later query as a derivation. */
+    if (url_encoded_list_has_hole(u->list) || url_record_is_unknown(u->owner)) {
+        JSValue ser = usp_stringification(ctx, u);
+
+        url_query_assign_unknown(ctx, u->owner, ser);
+        JS_FreeValue(ctx, ser);
+        return;
+    }
     q = usp_serialize(u->list, &n);
     if (!n) { free(q); q = NULL; }
     url_query_assign(ctx, u->owner, q);
@@ -415,11 +420,7 @@ static void usp_rederive(JSContext *ctx, UspObj *u, const char *op, int argc, JS
 
     ops[0] = u->unknown;
     for (i = 0; i < argc && n < 3; i++) if (!JS_IsUndefined(argv[i])) ops[n++] = argv[i];
-    if (u->unknown_example) {
-        char *q = usp_serialize(u->list, NULL);
-        ex = JS_NewString(ctx, q);
-        free(q);
-    }
+    if (u->unknown_example) ex = usp_list_bytes(ctx, u);
     d = concolic_new_derived(ctx, op, ops, n, ex);
     DCHECK(concolic_is(d),
            "a mutation of a URLSearchParams list parsed from an unknown derived no unknown list — the field it "
@@ -428,23 +429,11 @@ static void usp_rederive(JSContext *ctx, UspObj *u, const char *op, int argc, JS
     cow_record_set(ctx, u, &USP_REC, &u->unknown, d);
     u->mutated = 1;   /* a POD field of the record usp_rec captured */
     if (!JS_IsUndefined(u->owner)) {
-        char *q = usp_serialize(u->list, NULL);
-        JSValue ser = usp_derive(ctx, u, "URLSearchParams.toString", JS_NewString(ctx, q), 0, NULL);
+        JSValue ser = usp_stringification(ctx, u);
 
-        free(q);
         url_query_assign_unknown(ctx, u->owner, ser);
         JS_FreeValue(ctx, ser);
     }
-}
-
-/* Whether any half of the projected list `l` is unknown input. */
-static bool usp_any_hole(const UspList *l)
-{
-    int i;
-
-    for (i = 0; i < l->n; i++)
-        if (l->e[i].nhole || l->e[i].vhole) return true;
-    return false;
 }
 
 /* §5.2's serialization of `vals` run on its halves' examples: each unknown half's example in its place, or
@@ -481,16 +470,32 @@ static JSValue usp_example_serialization(JSContext *ctx, JSValueConst vals)
     return r;
 }
 
-/* §6.2's stringification of a list holding unknown halves: §5.2's serialization is a function of every half,
-   so it is the unknown they derive, with the serialization run on their examples as its example. `r` (the
-   projection's serialization, consumed) is the answer when no half is unknown. */
-static JSValue usp_derive_halves(JSContext *ctx, UspObj *u, const char *op, JSValue r)
+/* §5.2's serialization of the record's list as bytes a run holds: the list's own where no half is unknown, else
+   the serialization run on the halves' examples, JS_UNDEFINED where one has none. Owned. */
+static JSValue usp_list_bytes(JSContext *ctx, UspObj *u)
+{
+    char *q;
+    JSValue r;
+
+    if (url_encoded_list_has_hole(u->list)) return usp_example_serialization(ctx, u->vals);
+    q = usp_serialize(u->list, NULL);
+    r = JS_NewString(ctx, q);
+    free(q);
+    CHECK(!JS_IsException(r), "urlsearchparams: OOM serializing a list");
+    return r;
+}
+
+/* §6.2's stringification behavior: §5.2's serialization of the list. It is the unknown the list derives where
+   the list was parsed from an unknown string, the unknown its halves derive where one of them is unknown, and
+   bytes otherwise; an unknown's example is usp_list_bytes. Owned. */
+static JSValue usp_stringification(JSContext *ctx, UspObj *u)
 {
     JSValue d;
 
-    if (!usp_any_hole(u->list)) return r;
-    JS_FreeValue(ctx, r);
-    d = concolic_new_derived_list(ctx, op, u->vals, usp_example_serialization(ctx, u->vals));
+    if (!JS_IsUndefined(u->unknown))
+        return usp_derive(ctx, u, "URLSearchParams.toString", usp_list_bytes(ctx, u), 0, NULL);
+    if (!url_encoded_list_has_hole(u->list)) return usp_list_bytes(ctx, u);
+    d = concolic_new_derived_list(ctx, "URLSearchParams.toString", u->vals, usp_list_bytes(ctx, u));
     DCHECK(concolic_is(d), "a URLSearchParams list holding an unknown half derived no unknown serialization");
     return d;
 }
@@ -499,24 +504,17 @@ static JSValue usp_derive_halves(JSContext *ctx, UspObj *u, const char *op, JSVa
 static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     UspObj *u = usp_of(ctx, this_val);
-    JSValue vals, r;
+    JSValue vals;
     int i, n;
 
     if (!u) return JS_EXCEPTION;
     DCHECKF(magic == USP_APPEND || magic == USP_TOSTRING,
             "URL §6.2's member %d, which walks the list comparing tuples, was declared on the body that walks none",
             magic);
-    if (magic == USP_TOSTRING) {
-        char *q = usp_serialize(u->list, NULL);
-        r = JS_NewString(ctx, q);
-        free(q);
-        CHECK(!JS_IsException(r), "urlsearchparams: OOM serializing a list");
-        return JS_IsUndefined(u->unknown) ? usp_derive_halves(ctx, u, "URLSearchParams.toString", r)
-                                          : usp_derive(ctx, u, "URLSearchParams.toString", r, 0, NULL);
-    }
+    if (magic == USP_TOSTRING) return usp_stringification(ctx, u);
     /* §6.2's members take USVStrings, and the Web IDL declaration passes unknown external input through as
        itself (§7.1.19 ToString over an unknown is the identity), so append stores an unknown half as itself and
-       §6.2's update steps serialize its shape. */
+       §6.2's update steps write the unknown the list's serialization derives. */
     DCHECK(argc >= 2 && (JS_IsString(argv[0]) || concolic_is(argv[0])) &&
                (JS_IsString(argv[1]) || concolic_is(argv[1])),
            "URLSearchParams append() was handed an argument its USVString declaration did not convert");
