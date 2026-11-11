@@ -401,9 +401,11 @@ static bool sr_valid_host_name(const char *name, size_t len)
    shadow root. JS_NULL means the spec's null (a shadow tree that looks a definition up in nothing), and it is
    NOT the same as "use the document's": attachShadow resolves that default at its step 1 before calling, and a
    default resolved HERE would give a declaratively-parsed root a registry §13.2.6.4.4 did not ask for. */
+/* `*take_over` is set where step 4.2 passes: the return is then currentShadowRoot, and steps 4.3-4.5 are the
+   caller's (attachShadow's machine removes the children one per rest). */
 static JSValue sr_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode, bool delegates_focus,
                          const char *slot_assignment, bool clonable, bool serializable,
-                         JSValueConst registry)
+                         JSValueConst registry, bool *take_over)
 {
     lxb_dom_node_t *n = node_of(el_wrap);
     lxb_dom_element_t *el;
@@ -460,20 +462,8 @@ static JSValue sr_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode,
             return JS_ThrowDOMException(ctx, "NotSupportedError",
                                         "attachShadow on an element that already has a shadow root");
         }
-        {   /* step 4.3: remove all of currentShadowRoot's children, in tree order */
-            lxb_dom_node_t *root = node_of(current), *c, *next;
-
-            for (c = root->first_child; c; c = next) {
-                next = c->next;
-                dom_cow_remove_child(c);
-            }
-        }
-        {   /* step 4.4 */
-            JSValue rec = sr_slots(ctx, current);
-            JS_SetPropertyStr(ctx, rec, SR_FIELD[SR_DECLARATIVE], JS_FALSE);
-            JS_FreeValue(ctx, rec);
-        }
-        return current;                                                              /* step 4.5 */
+        *take_over = true;
+        return current;
     }
     JS_FreeValue(ctx, current);
     /* Step 5: "create a node that implements ShadowRoot, given element's node document". */
@@ -545,7 +535,14 @@ JSValue shadow_root_attach(JSContext *ctx, JSValueConst el_wrap, const char *mod
                            const char *slot_assignment, bool clonable, bool serializable,
                            JSValueConst registry)
 {
-    return sr_attach(ctx, el_wrap, mode, delegates_focus, slot_assignment, clonable, serializable, registry);
+    bool take_over = false;
+    JSValue sr = sr_attach(ctx, el_wrap, mode, delegates_focus, slot_assignment, clonable, serializable, registry,
+                           &take_over);
+
+    DCHECK(!take_over, "attach a shadow root was asked, outside attachShadow, for an element that is a shadow "
+                       "host with a declarative shadow root: the parser's caller and clone's step 6.1 each "
+                       "establish that it is not one, and step 4.3's removals need attachShadow's machine");
+    return sr;
 }
 
 /* DOM §4.4 "clone a node" STEP 6, its own steps 6.1-6.7. The standard runs it AFTER step 5 has cloned the light
@@ -559,7 +556,7 @@ JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_nod
 {
     JSValueConst el_wrap;
     JSValue src, copy_wrap, current, sr, rec, src_reg;
-    bool declarative, keep_null;
+    bool declarative, keep_null, take_over = false;
 
     DCHECK(g_ready, "§4.4 step 6 ran before shadow_root_init");
     DCHECK(node != NULL && copy != NULL, "§4.4 step 6 was asked about no node");
@@ -592,7 +589,8 @@ JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_nod
     sr = sr_attach(ctx, copy_wrap, shadow_root_is_open(node_of(src)) ? "open" : "closed",
                    sr_flag(ctx, src, SR_DELEGATES_FOCUS),
                    shadow_root_slot_assignment_is_manual(ctx, node_of(src)) ? "manual" : "named",
-                   true, sr_flag(ctx, src, SR_SERIALIZABLE), src_reg);
+                   true, sr_flag(ctx, src, SR_SERIALIZABLE), src_reg, &take_over);
+    DCHECK(!take_over, "DOM §4.4 clone a node step 6.1 asserts copy is not a shadow host, and it is one");
     JS_FreeValue(ctx, src_reg);
     /* Step 6.5: "Set copy's shadow root's declarative to node's shadow root's declarative." NOT
        shadow_root_mark_declarative, which is HTML §13.2.6.4.4's pair of writes: that one also sets `available
@@ -696,14 +694,15 @@ static const IdlDictMember SHADOW_ROOT_INIT[] = {
     { "slotAssignment", IDL_ENUM,    false, SR_SLOT_VALUES, 0 },
 };
 
-static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                   int magic)
+/* DOM §4.9 attachShadow(init)'s steps, up to attach a shadow root's step 4.2 or through its step 15; sr_attach
+   states `take_over`. */
+static JSValue sr_attach_shadow_steps(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      bool *take_over)
 {
     JSValueConst init = argc > 0 ? argv[0] : JS_UNDEFINED;
     JSValue mode_v, slot_v, reg_v, registry, result;
     const char *mode, *slot_assignment;
 
-    (void)magic;
     if (!node_of(this_val) || node_of(this_val)->type != LXB_DOM_NODE_TYPE_ELEMENT)
         return JS_ThrowTypeError(ctx, "attachShadow called on something that is not an element");
     /* STEPS 1-3, THE REGISTRY CHECK. Step 1's default is this document's registry; step 2 replaces it with
@@ -804,7 +803,7 @@ static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int ar
     result = sr_attach(ctx, this_val, mode ? mode : "open", idl_dict_bool(ctx, init, "delegatesFocus"),
                        slot_assignment ? slot_assignment : "named",
                        idl_dict_bool(ctx, init, "clonable"), idl_dict_bool(ctx, init, "serializable"),
-                       registry);
+                       registry, take_over);
     JS_FreeValue(ctx, registry);
     if (mode) JS_FreeCString(ctx, mode);
     if (slot_assignment) JS_FreeCString(ctx, slot_assignment);
@@ -812,6 +811,86 @@ static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int ar
     JS_FreeValue(ctx, slot_v);
     return result;
 }
+
+/* attachShadow as a machine: attach a shadow root's step 4.3 removes every child of a declarative shadow root,
+   which is the page's size, so each removal is core/dom/node_remove.h's and rests per node. */
+#define SR_ATTACH_STAGES(X) \
+    X(SRA_START, "DOM §4.9 attachShadow(init) steps 1-4 → attach a shadow root steps 1-4.2, or steps 5-15") \
+    X(SRA_NEXT,  "DOM §4.9 attach a shadow root step 4.3 (currentShadowRoot's next child, in tree order)") \
+    NODE_REMOVE_ALGO_STAGES(X, SRA_RM, "DOM §4.9 attach a shadow root step 4.3") \
+    X(SRA_DONE,  "DOM §4.9 attach a shadow root steps 4.4-4.5 (declarative to false; return)")
+enum { IDL_STEP_STAGE_BASE(SR_ATTACH_STAGES) SR_ATTACH_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const SR_ATTACH_STEPS[] = { SR_ATTACH_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSValue root;         /* currentShadowRoot's wrapper; owned */
+    NodeRemoveState rm;
+} SrAttachState;
+
+static void sr_attach_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    SrAttachState *s = st;
+
+    v->val(ctx, &s->root);
+}
+
+static int js_el_attach_shadow(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                               JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    SrAttachState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    STEP_DISPATCH(SR_ATTACH_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(SRA_START);
+    {
+        bool take_over = false;
+        JSValue r;
+
+        s->root = JS_UNDEFINED;
+        r = sr_attach_shadow_steps(ctx, hdr->this_val, argc, argv, &take_over);
+        if (JS_IsException(r)) return JS_STEP_ABRUPT;
+        if (!take_over) {
+            *presult = r;
+            return JS_STEP_DONE;
+        }
+        s->root = r;
+        hdr->stage = SRA_NEXT;
+        return JS_STEP_YIELD;
+    }
+
+    STEP_ARM(SRA_NEXT);
+    {
+        lxb_dom_node_t *c = node_of(s->root)->first_child;
+
+        if (c) {
+            node_remove_start(hdr, &s->rm, c, /*suppress_observers*/ false, SRA_RM_RANGES, SRA_NEXT);
+            return JS_STEP_YIELD;
+        }
+        hdr->stage = SRA_DONE;
+        return JS_STEP_YIELD;
+    }
+
+    NODE_REMOVE_ALGO_STAGES(JS_STEP_STAGE_ARM, SRA_RM, "")
+    return node_remove_run(ctx, hdr, &s->rm, SRA_RM_RANGES);
+
+    STEP_ARM(SRA_DONE);
+    {
+        JSValue rec = sr_slots(ctx, s->root);                                        /* step 4.4 */
+
+        JS_SetPropertyStr(ctx, rec, SR_FIELD[SR_DECLARATIVE], JS_FALSE);
+        JS_FreeValue(ctx, rec);
+        *presult = JS_DupValue(ctx, s->root);                                        /* step 4.5 */
+        return JS_STEP_DONE;
+    }
+}
+
+static const IdlStepDecl SR_ATTACH_DECL = {
+    js_el_attach_shadow, sizeof(SrAttachState), sr_attach_visit, NULL,
+    "DOM §4.9 attachShadow(init)", SR_ATTACH_STEPS
+};
 
 /* §4.9's `shadowRoot` getter: "Let shadow be this's shadow root. If shadow is null or its mode is 'closed',
    then return null. Return shadow." A CLOSED root is unreachable from script — that is the whole of what the
@@ -845,9 +924,9 @@ void shadow_root_init(JSContext *ctx)
     g_shadow_key = JS_NewSymbol(ctx, "Element shadow root", true);
     CHECK(JS_IsSymbol(g_shadow_key), "§4.9's shadow-root association key could not be minted");
     g_atom_shadow = JS_ValueToAtom(ctx, g_shadow_key);
-    g_id_attach = idl_method_id_dict(ctx, ATTACH_ARGS, 1, SHADOW_ROOT_INIT,
+    g_id_attach = idl_method_id_step(ctx, ATTACH_ARGS, 1, SHADOW_ROOT_INIT,
                                      (int)(sizeof(SHADOW_ROOT_INIT) / sizeof(SHADOW_ROOT_INIT[0])),
-                                     js_el_attach_shadow, 0);
+                                     &SR_ATTACH_DECL, 0);
     /* HTML §8.5's THREE MARKUP MEMBERS ON THIS INTERFACE, and each is the SAME algorithm Element's is — which
        is why not one of them is implemented here. §8.5.4's `innerHTML` getter is §13.3's serializer with the
        shadow options false and « » (the component that owns §13.3); its setter and §8.5.2's `setHTMLUnsafe`
