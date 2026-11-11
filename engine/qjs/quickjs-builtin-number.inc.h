@@ -163,8 +163,11 @@ static const JSCFunctionListEntry js_number_funcs[] = {
     JS_PROP_U2D_DEF("POSITIVE_INFINITY", 0x7FF0ull<<48, 0 ),
 };
 
+/* §21.1.3.7.1 ThisNumberValue ( arg ). Over an unknown carrier the Number is unknown too. */
 static JSValue js_thisNumberValue(JSContext *ctx, JSValueConst this_val)
 {
+    if (js_value_is_concolic(this_val))
+        return js_slot_check_unknown(ctx, this_val, JS_SLOT_NUMBER_DATA);
     if (JS_IsNumber(this_val))
         return js_dup(this_val);
 
@@ -181,8 +184,6 @@ static JSValue js_thisNumberValue(JSContext *ctx, JSValueConst this_val)
 static JSValue js_number_valueOf(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
 {
-    if (js_value_is_concolic(this_val))
-        return js_dup(this_val);   /* §21.1.3.7: ThisNumberValue of an unknown is the unknown */
     return js_thisNumberValue(ctx, this_val);
 }
 
@@ -320,7 +321,7 @@ static int js_number_fmt_format(JSContext *ctx, JSNumberFmt *s)
     return JS_IsException(s->result) ? -1 : 0;
 }
 
-/* The five formatters where the this value is an unknown, whose ThisNumberValue (step 1) is the unknown's own:
+/* The five formatters where ThisNumberValue (step 1) answered an unknown Number:
    the String is an unknown derived from the receiver and the coerced argument, whose example is the real
    formatter run on the receiver's example where that is a Number. A range error over the argument holds in
    every world, so it is thrown as the stated receiver's is. */
@@ -360,10 +361,14 @@ static int js_number_fmt_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
     if (s->hdr.stage == NUMFMT_RECV) {
         JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
         s->result = JS_UNDEFINED;
-        /* an unknown receiver is held as itself: its formatting derives (js_number_fmt_unknown) */
-        s->val = js_value_is_concolic(s->hdr.this_val) ? js_dup(s->hdr.this_val)
-                                                       : js_thisNumberValue(ctx, s->hdr.this_val);
-        if (JS_IsException(s->val)) { s->val = JS_UNDEFINED; return -1; }
+        /* over an unknown carrier the Number is unknown, and its formatting derives (js_number_fmt_unknown) */
+        if (js_value_is_concolic(s->hdr.this_val)) {
+            r = js_step_slot_check(ctx, &s->hdr, s->hdr.this_val, JS_SLOT_NUMBER_DATA, &s->val);
+            if (r) return r;
+        } else {
+            s->val = js_thisNumberValue(ctx, s->hdr.this_val);
+            if (JS_IsException(s->val)) { s->val = JS_UNDEFINED; return -1; }
+        }
         s->hdr.stage = NUMFMT_ARG;
     }
     if (s->hdr.stage == NUMFMT_ARG) {

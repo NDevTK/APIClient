@@ -24901,6 +24901,7 @@ static double time_clip(double t);
 static double set_date_fields(double fields[], int is_local);
 static JSValue js_Date_parse(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSValue get_date_string(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
+static JSValue get_date_string_of(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
 
 /* 21.4.4.36 Date.prototype.toISOString step 4 and 21.4.4.37 Date.prototype.toJSON step 3 ask one question of a time
    value, whether it is a Number that is not finite, so both fork under one name and a flow that answered it in
@@ -25156,10 +25157,11 @@ typedef struct JSDateToJSON {
     JSValue cb[2];        /* [obj, its toISOString] — the CALL request */
 } JSDateToJSON;
 
-/* 21.4.4.36 Date.prototype.toISOString. A machine because step 4's RangeError over an unknown [[DateValue]] is
-   one completion of a fork, and a C function cannot fork. */
+/* 21.4.4.36 Date.prototype.toISOString. A machine because step 2's TypeError over an unknown carrier and step 4's
+   RangeError over an unknown [[DateValue]] are each one completion of a fork, and a C function cannot fork. */
 typedef struct JSDateToISO {
     JSStepHdr hdr;        /* MUST be first: the generic step driver casts the state to JSStepHdr * */
+    JSValue tv;           /* an unknown carrier's [[DateValue]], from step 2 (owned); undefined for a Date */
     JSValue result;       /* DONE (owned) */
 } JSDateToISO;
 
@@ -62436,6 +62438,8 @@ static void set_eval_ret_undefined(JSParseState *s)
    digit now names an unrelated feature rather than nothing.) */
 #endif // QJS_DISABLE_PARSER
 
+#include "quickjs-internal-slot.inc.h"
+
 #include "quickjs-module-record.inc.h"
 #include "quickjs-module-link.inc.h"
 #include "quickjs-module-load.inc.h"
@@ -72437,30 +72441,62 @@ static int js_date_tv_real(JSContext *ctx, JSValueConst tv)
 }
 
 #define DATETOISO_STAGES(X) \
-    X(DATETOISO_ENTRY, "21.4.4.36 steps 1-6 (RequireInternalSlot; tv is dateObj.[[DateValue]]; a NaN tv throws " \
-                       "a RangeError; tv in the Date Time String Format)")
+    X(DATETOISO_SLOT,  "21.4.4.36 steps 1-2 (RequireInternalSlot ( dateObj, [[DateValue]] ))") \
+    X(DATETOISO_ENTRY, "21.4.4.36 steps 3-6 (tv is dateObj.[[DateValue]]; a NaN tv throws a RangeError; tv in " \
+                       "the Date Time String Format)")
 enum { DATETOISO_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_date_toISO_steps[] = { DATETOISO_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* Over an unknown [[DateValue]] step 4 forks: the RangeError, or the String derived from tv (get_date_string). */
+/* Over an unknown carrier step 2 forks: the TypeError, or the unknown time value it holds. Over an unknown
+   [[DateValue]] step 4 forks: the RangeError, or the String derived from tv. */
 static int js_date_toiso_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSDateToISO *s = st;
-    JSValueConst this_val = s->hdr.this_val;
+    JSValueConst this_val = s->hdr.this_val, tv;
     int arm, r;
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
-    s->result = JS_UNDEFINED;
-    if (JS_IsDate(this_val) && js_value_is_concolic(JS_VALUE_GET_OBJ(this_val)->u.object_data)) {
-        JSValueConst tv = JS_VALUE_GET_OBJ(this_val)->u.object_data;
-
+    if (s->hdr.stage == DATETOISO_SLOT) {
+        s->result = JS_UNDEFINED;
+        s->tv = JS_UNDEFINED;
+        if (js_value_is_concolic(this_val)) {
+            r = js_step_slot_check(ctx, &s->hdr, this_val, JS_SLOT_DATE_VALUE, &s->tv);
+            if (r) return r;
+        } else if (!JS_IsDate(this_val)) {
+            JS_ThrowTypeError(ctx, "not a Date object");
+            return -1;
+        }
+        s->hdr.stage = DATETOISO_ENTRY;
+    }
+    DCHECK(s->hdr.stage == DATETOISO_ENTRY, "Date.prototype.toISOString resumed in no stage");
+    tv = js_value_is_concolic(this_val) ? s->tv : JS_VALUE_GET_OBJ(this_val)->u.object_data;
+    if (js_value_is_concolic(tv)) {
         r = step_fork_run(ctx, &s->hdr, tv, DATE_TV_NONFINITE_OP, 2, js_date_tv_real(ctx, tv), &arm);
         if (r) return r;
         if (arm == DATE_TV_NONFINITE) {
             JS_ThrowRangeError(ctx, "Date value is NaN");
             return -1;
         }
+    }
+    if (js_value_is_concolic(this_val)) {
+        /* the String derives from tv, with the real step 6 over a Date holding its example as the example */
+        JSValue ex = js_concolic_operand(ctx, tv), real = JS_UNDEFINED;
+
+        if (js_concolic_held(tv) && JS_IsNumber(ex)) {
+            double d;
+            JSValue date;
+
+            CHECK(JS_ToFloat64(ctx, &d, ex) == 0, "a Number example did not convert to a double");
+            date = JS_NewDate(ctx, d);
+            if (JS_IsException(date)) { JS_FreeValue(ctx, ex); return -1; }
+            real = get_date_string_of(ctx, date, 0, NULL, 0x23);
+            JS_FreeValue(ctx, date);
+        }
+        JS_FreeValue(ctx, ex);
+        s->result = js_concolic_derive(ctx, tv, "21.4.4.36 Date.prototype.toISOString", real);
+        DCHECK(js_value_is_concolic(s->result), "toISOString's String over an unknown time value is not unknown");
+        return 0;
     }
     s->result = get_date_string(ctx, this_val, 0, NULL, 0x23);
     if (JS_IsException(s->result)) {
@@ -72473,6 +72509,7 @@ static int js_date_toiso_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
 static void js_date_toiso_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSDateToISO *s = st;
+    v->val(ctx, &s->tv);
     v->val(ctx, &s->result);
 }
 

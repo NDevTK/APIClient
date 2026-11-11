@@ -56,8 +56,11 @@ static JSValue js_boolean_ctor_body(JSContext *ctx, JSValueConst obj_, int argc,
     return obj;
 }
 
+/* §20.3.3.3.1 ThisBooleanValue ( arg ). Over an unknown carrier the Boolean is unknown too. */
 static JSValue js_thisBooleanValue(JSContext *ctx, JSValueConst this_val)
 {
+    if (js_value_is_concolic(this_val))
+        return js_slot_check_unknown(ctx, this_val, JS_SLOT_BOOLEAN_DATA);
     if (JS_VALUE_GET_TAG(this_val) == JS_TAG_BOOL)
         return js_dup(this_val);
 
@@ -77,6 +80,19 @@ static JSValue js_boolean_toString(JSContext *ctx, JSValueConst this_val,
     JSValue val = js_thisBooleanValue(ctx, this_val);
     if (JS_IsException(val))
         return val;
+    if (js_value_is_concolic(val)) {
+        JSValue ex = js_concolic_operand(ctx, val), r;
+
+        r = js_concolic_derive(ctx, val, "20.3.3.2 Boolean.prototype.toString",
+                               js_concolic_held(val) && JS_IsBool(ex)
+                               ? JS_AtomToString(ctx, JS_VALUE_GET_BOOL(ex) ? JS_ATOM_true : JS_ATOM_false)
+                               : JS_UNDEFINED);
+        JS_FreeValue(ctx, ex);
+        JS_FreeValue(ctx, val);
+        DCHECK(js_value_is_concolic(r), "a Boolean's string derived from an unknown Boolean is not unknown");
+        g_concolic.type_fix(ctx, r, JS_LANG_TYPE_STRING);
+        return r;
+    }
     return JS_AtomToString(ctx, JS_VALUE_GET_BOOL(val) ?
                        JS_ATOM_true : JS_ATOM_false);
 }

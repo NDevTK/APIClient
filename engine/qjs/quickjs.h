@@ -2214,6 +2214,9 @@ typedef struct JSFlowControlHooks {
        argument-list chains and `op` separates the machines from each other. Both are printed. */
     int  (*outcome)(JSContext *ctx, JSValueConst over, const char *op, int n, int real,
                     const char *site);
+    /* The completion `outcome` already settled for (`over`, `op`) on the running flow, or -1 where none is: what
+       a C body with no resume point reads where a step machine asked the same question earlier. */
+    int  (*outcome_settled)(JSValueConst over, const char *op, int n);
     void (*fork)(JSContext *ctx, JSValue *clone);       /* BASE-activation fork: build the hot sibling from a frame clone.
                                                            (The deleted `replay` hook re-ran a nested/deep flow from its
                                                            start — BANNED, not byte-identical; that fork now DFAILs until a
@@ -3162,6 +3165,9 @@ typedef struct JSConcolicHooks {
        be `undefined`, 0 when it has none. `example` spends JS_UNDEFINED on both, so an operation over a value
        whose example is `undefined` — a member the served record holds as `undefined` — asks this first. */
     int (*example_held)(JSValueConst v);
+    /* The JS_LANG_TYPE_* set the unknown `v` may take on the running flow: its stated set narrowed by its type
+       facet, every bit where neither states one. */
+    unsigned (*lang_types)(JSValueConst v);
     /* THE FIRST CHARACTER THE BROWSER'S DELIVERY OF THIS SOURCE GUARANTEES, or 0 when it guarantees none.
        This is DOMAIN, not example: `location.hash` is either the empty string or `#` followed by the fragment
        — the component that owns the source declares that prefix — so a builtin can rule an outcome INFEASIBLE

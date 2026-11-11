@@ -223,8 +223,11 @@ static JSValue js_str_ctor_fini(JSContext *ctx, void *st, bool take_result)
     return r;
 }
 
+/* §22.1.3.35.1 ThisStringValue ( arg ). Over an unknown carrier the String is unknown too. */
 static JSValue js_thisStringValue(JSContext *ctx, JSValueConst this_val)
 {
+    if (js_value_is_concolic(this_val))
+        return js_slot_check_unknown(ctx, this_val, JS_SLOT_STRING_DATA);
     if (tag_is_string(JS_VALUE_GET_TAG(this_val)))
         return js_dup(this_val);
 

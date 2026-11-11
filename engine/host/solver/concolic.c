@@ -10580,6 +10580,7 @@ static JSConcolicHooks g_hooks = {
     .type_fix = concolic_type_fix_hook,
     .result_types = concolic_result_types_hook,
     .example_held = concolic_example_present,
+    .lang_types = concolic_operand_types,
     /* The ordinal half of a page-created value's name. With the member NULL the engine stamps 0,
        JS_CreationName answers absent for every value, and literal_ident's creation-name arm returns NULL: a host
        declining the edge, byte-identical to a build without the seam. */

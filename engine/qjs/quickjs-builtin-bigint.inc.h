@@ -60,8 +60,11 @@ static JSValue js_bigint_constructor(JSContext *ctx,
     return js_bigint_of_primitive(ctx, js_dup(argv[0]));
 }
 
+/* §21.2.3.4.1 ThisBigIntValue ( arg ). Over an unknown carrier the BigInt is unknown too. */
 static JSValue js_thisBigIntValue(JSContext *ctx, JSValueConst this_val)
 {
+    if (js_value_is_concolic(this_val))
+        return js_slot_check_unknown(ctx, this_val, JS_SLOT_BIGINT_DATA);
     if (JS_IsBigInt(this_val))
         return js_dup(this_val);
 
@@ -91,6 +94,21 @@ static JSValue js_bigint_toString(JSContext *ctx, JSValueConst this_val,
         base = js_get_radix(ctx, argv[0]);
         if (base < 0)
             goto fail;
+    }
+    if (js_value_is_concolic(val)) {
+        /* steps 3-4 over an unknown BigInt: the String derives from it and the radix, with the real
+           conversion of its example as the example */
+        JSValueConst ops[2] = { val, argc > 0 ? argv[0] : JS_UNDEFINED };
+        JSValue ex = js_concolic_operand(ctx, val);
+
+        ret = g_concolic.derived(ctx, "21.2.3.3 BigInt.prototype.toString", ops, argc > 0 ? 2 : 1,
+                                 js_concolic_real(ctx, js_concolic_held(val) && JS_IsBigInt(ex)
+                                                       ? js_bigint_to_string1(ctx, ex, base) : JS_UNDEFINED));
+        JS_FreeValue(ctx, ex);
+        JS_FreeValue(ctx, val);
+        DCHECK(js_value_is_concolic(ret), "a BigInt's string derived from an unknown BigInt is not unknown");
+        g_concolic.type_fix(ctx, ret, JS_LANG_TYPE_STRING);
+        return ret;
     }
     ret = js_bigint_to_string1(ctx, val, base);
     JS_FreeValue(ctx, val);

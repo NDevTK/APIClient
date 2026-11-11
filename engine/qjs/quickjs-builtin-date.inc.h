@@ -25,12 +25,20 @@ static JSValueConst js_date_value_unknown(JSValueConst this_val)
     return js_value_is_concolic(p->u.object_data) ? p->u.object_data : JS_UNINITIALIZED;
 }
 
-/* thisTimeValue: the [[DateValue]] of a Date, or a TypeError. For an unknown [[DateValue]] it is the example time
-   value (NaN where there is none), which only the example world's computations may read; a caller that answers
-   the page asks js_date_value_unknown first. */
+/* RequireInternalSlot ( dateObj, [[DateValue]] ) and the slot's value, or a TypeError. For an unknown
+   [[DateValue]] it is the example time value (NaN where there is none), which only the example world's
+   computations may read; a caller that answers the page asks js_date_value_unknown first. */
 static __exception int JS_ThisTimeValue(JSContext *ctx, double *valp,
                                         JSValueConst this_val)
 {
+    if (js_value_is_concolic(this_val)) {
+        if (js_slot_partition(this_val, JS_SLOT_DATE_VALUE) != JS_SLOT_ABSENT)
+            DFAIL("a Date method over an unknown carrier that may hold [[DateValue]], from a C body: build the "
+                  "method over js_step_slot_check's time value in a step machine, as Date.prototype.toISOString's "
+                  "is");
+        JS_ThrowTypeError(ctx, "not a Date object");
+        return -1;
+    }
     if (JS_VALUE_GET_TAG(this_val) == JS_TAG_OBJECT) {
         JSObject *p = JS_VALUE_GET_OBJ(this_val);
         if (p->class_id == JS_CLASS_DATE && JS_IsNumber(p->u.object_data))

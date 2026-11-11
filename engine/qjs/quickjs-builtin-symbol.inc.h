@@ -41,8 +41,11 @@ static JSValue js_symbol_constructor(JSContext *ctx, JSValueConst new_target,
     return JS_NewSymbolInternal(ctx, p, JS_ATOM_TYPE_SYMBOL);
 }
 
+/* §20.4.3.4.1 ThisSymbolValue ( arg ). Over an unknown carrier the Symbol is unknown too. */
 static JSValue js_thisSymbolValue(JSContext *ctx, JSValueConst this_val)
 {
+    if (js_value_is_concolic(this_val))
+        return js_slot_check_unknown(ctx, this_val, JS_SLOT_SYMBOL_DATA);
     if (JS_VALUE_GET_TAG(this_val) == JS_TAG_SYMBOL)
         return js_dup(this_val);
 
@@ -56,6 +59,31 @@ static JSValue js_thisSymbolValue(JSContext *ctx, JSValueConst this_val)
     return JS_ThrowTypeError(ctx, "not a symbol");
 }
 
+/* §20.4.3.3.1 SymbolDescriptiveString ( symbol ) over an unknown Symbol: derived from it, with the example's
+   string as its example. */
+static JSValue js_symbol_derive_string(JSContext *ctx, JSValue sym, const char *op, bool description)
+{
+    JSValue ex = js_concolic_operand(ctx, sym), real = JS_UNDEFINED, r;
+
+    if (js_concolic_held(sym) && JS_IsSymbol(ex)) {
+        JSAtomStruct *p = JS_VALUE_GET_PTR(ex);
+
+        real = JS_AtomToString(ctx, js_get_atom_index(ctx->rt, p));
+        if (description && p->len == 0 && p->is_wide_char != 0) {
+            JS_FreeValue(ctx, real);
+            real = JS_UNDEFINED;
+        } else if (!description) {
+            real = JS_ConcatString3(ctx, "Symbol(", real, ")");
+        }
+    }
+    JS_FreeValue(ctx, ex);
+    r = js_concolic_derive(ctx, sym, op, real);
+    DCHECK(js_value_is_concolic(r), "a Symbol's string derived from an unknown Symbol is not unknown");
+    g_concolic.type_fix(ctx, r, description ? JS_LANG_TYPE_STRING | JS_LANG_TYPE_UNDEFINED : JS_LANG_TYPE_STRING);
+    JS_FreeValue(ctx, sym);
+    return r;
+}
+
 static JSValue js_symbol_toString(JSContext *ctx, JSValueConst this_val,
                                   int argc, JSValueConst *argv)
 {
@@ -63,6 +91,8 @@ static JSValue js_symbol_toString(JSContext *ctx, JSValueConst this_val,
     val = js_thisSymbolValue(ctx, this_val);
     if (JS_IsException(val))
         return val;
+    if (js_value_is_concolic(val))
+        return js_symbol_derive_string(ctx, val, "20.4.3.3 Symbol.prototype.toString", false);
     /* String(sym)'s description branch, inlined: the argument is a SYMBOL, so there is no coercion and nothing
        to suspend — the String constructor is a step machine now and calling it from here would be an unrouted
        call shape for no benefit. */
@@ -86,6 +116,8 @@ static JSValue js_symbol_get_description(JSContext *ctx, JSValueConst this_val)
     val = js_thisSymbolValue(ctx, this_val);
     if (JS_IsException(val))
         return val;
+    if (js_value_is_concolic(val))
+        return js_symbol_derive_string(ctx, val, "20.4.3.2 get Symbol.prototype.description", true);
     p = JS_VALUE_GET_PTR(val);
     if (p->len == 0 && p->is_wide_char != 0) {
         ret = JS_UNDEFINED;

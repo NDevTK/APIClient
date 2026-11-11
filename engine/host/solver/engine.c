@@ -12286,6 +12286,7 @@ static void engine_work_hook(JSContext *ctx, uint64_t units) { engine_work_bank(
    itself there. */
 static int engine_budget_hook(void) { return engine_quantum_spent(); }
 static const JSFlowControlHooks FC_EXPLORE = { .branch = engine_branch_hook, .outcome = engine_outcome_hook,
+                                               .outcome_settled = solver_outcome_settled,
                                                .fork = engine_fork_finalize, .preempt = preempt_hook,
                                                .budget = engine_budget_hook,
                                                .budget_period = ENGINE_QUANTUM_ASK_EVERY,
