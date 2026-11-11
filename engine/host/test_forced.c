@@ -19489,12 +19489,9 @@ static long tf_hist_above(const char *js, const char *key, int from) {
    sale-async-returns: as sale-forced-returns, for a member whose delta holds a pre-fork promise's settlement,
    and its report reads the value the restored settlement carries.
    sale-keep-same-record: a member whose owed record a holder outside it names (g_tf_keep) gets that record back
-   (`soldNamed`), answered. sale-ctor-busy-returns and sale-catch-busy-returns: a member sold in a constructor's
-   body, or inside a `try`, waits on no gap of that kind, returns and reports its count. sale-pexec-record,
-   sale-pexec-machine and sale-pexec-link: a member sold in a promise executor two Reflect.construct calls reached
-   waits on no `cont PROMISE_EXEC`, no Reflect.construct machine or its `array` field, and no `cont CONSTRUCT`;
-   sale-pexec-returns: it returns and reports its count. sale-asyncfn-written and sale-asyncfn-returns: a member
-   sold in an async function's body before its first await waits on no `frame async`, returns and reports. */
+   (`soldNamed`), answered. sale-ctor-busy-returns, sale-catch-busy-returns, sale-pexec-* and sale-asyncfn-*: a
+   member sold in a constructor's body, inside a `try`, in a promise executor two Reflect.construct calls reached,
+   or in an async body before its first await, waits on no gap of the kinds each row names, returns and reports. */
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
     const char *cat = strstr(js, "\"saleCensus\":{\"n\":");
