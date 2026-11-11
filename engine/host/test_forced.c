@@ -18995,10 +18995,12 @@ TF_UNIT void probes_rangerest(const char *js, Probe *tab, int *n) {
    owing the request was sold at the act and its report is in the result, so it returned within the session.
    sale-forced-stays-listed and sale-own-stays-listed: the bill taken after the sale still lists the request the
    sold member owes. sale-control-reaches: the same shape with no act reports with no member sold.
-   sale-floor-sells: with every allocation refused at the act, the members were sold and the run went on to the
-   sold member's report. */
+   sale-floor-sells: with every allocation refused at the act, the members were sold, a sale took its census on
+   storage it funded, and the bill after the sale still lists the request the sold member owes. */
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
+    const char *cat = strstr(js, "\"saleCensus\":{\"n\":");
+    long censused = cat ? strtol(cat + strlen("\"saleCensus\":{\"n\":"), NULL, 10) : -1;
     int xt = 1;
     long sold = at ? strtol(at + strlen("\"sold\":"), NULL, 10) : -1;
     int ft = 1, ot = 1, ct = 1, lt = 1;
@@ -19032,9 +19034,12 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
              "sale was not asked to fund its own storage");
     fold_row(&xt, &xwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
              "the act sold nothing with the allocator at its floor");
-    fold_row(&xt, &xwhy, param_value_is(js, "/api/sl-floor-done", "b", "22"),
-             "NOT REACHED: no /api/sl-floor-done?b=22 record, so the member sold at the floor did not return "
-             "within the session");
+    fold_row(&xt, &xwhy, censused > 0,
+             "no sale took its census: every sale at the floor ran unfunded, so the sale's storage was not held "
+             "before the pressure that refused it");
+    fold_row(&xt, &xwhy, g_tf_sale.relisted,
+             "the bill taken after the sale at the floor no longer lists the owed request, so the sale withdrew a "
+             "request its sold member still owes");
     const Probe rows[] = {
         { "sale-floor-sells", xt, "slFloor", SESS_EXPLORE, xwhy },
         { "sale-forced-returns", ft, "slForced", SESS_EXPLORE, fwhy },
