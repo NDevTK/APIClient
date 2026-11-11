@@ -14,6 +14,7 @@
 #include "core/css/css_transform.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
+#include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/containment.h"
 #include "core/layout/table_box.h"
@@ -30,15 +31,6 @@ static char *so_computed(lxb_dom_element_t *el, const char *name)
     DCHECK(v != NULL, "the cascade produced no computed value for a property this engine models — every one of "
                       "them is in lexbor's registry with an initial value, so the last layer always answers");
     return v;
-}
-
-static bool so_computed_is(lxb_dom_element_t *el, const char *name, const char *want)
-{
-    char *v = so_computed(el, name);
-    bool hit = strcmp(v, want) == 0;
-
-    free(v);
-    return hit;
 }
 
 /* "THE ROOT ELEMENT" — the element whose parent is the Document itself, which is the same question
@@ -399,11 +391,9 @@ StackingLayer stacking_layer_of(lxb_dom_element_t *el)
        positioned elements with stack level 0", which the other effect properties share. */
     if (so_effect_forms(el)) return STACKING_LAYER_LEVEL_ZERO;
 
-    /* Layer 4 — "the non-positioned floats". The `position` test above is what makes the adjective true here
-       rather than a second read: §9.7's own table sets the computed `float` to `none` for an absolutely
-       positioned box, so a box that is still floating at this point is one no positioning scheme took out of
-       flow. */
-    if (!so_computed_is(el, "float", "none")) return STACKING_LAYER_FLOAT;
+    /* Layer 4 — "the non-positioned floats", which the `position` test above makes every box layout floats
+       (core/layout/block_flow.h, which also leaves a flex or grid item unfloated). */
+    if (block_flow_is_floated(el)) return STACKING_LAYER_FLOAT;
 
     /* Layers 3 and 5 — the in-flow half, which the two tests above have already established. `display` is read
        here and not at the top because the two layers are the only readers of it and §9.7's order puts it

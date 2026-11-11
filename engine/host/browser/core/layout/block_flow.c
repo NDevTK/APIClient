@@ -171,10 +171,27 @@ static bool bf_is_absolutely_positioned(lxb_dom_element_t *el)
            css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED);
 }
 
+/* Whether `el`'s box is a flex or grid item: its box parent is a flex or grid container. */
+static bool bf_is_flex_or_grid_item(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *parent = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
+    CssDisplay pd;
+
+    if (parent == NULL) return false;
+    pd = css_computed_display(parent);
+    return flex_item_display_is_flex_container(pd) || css_display_spells(pd, CSS_KEYWORD_GRID) ||
+           css_display_spells(pd, CSS_KEYWORD_INLINE_GRID);
+}
+
 bool block_flow_is_floated(lxb_dom_element_t *el)
 {
     DCHECK(el != NULL, "CSS 2 §9.5.1's float question was asked of no element");
     if (bf_is_absolutely_positioned(el)) return false;
+    /* css-flexbox-1 §3 "Flex Containers: the flex and inline-flex display values": "float and clear do not
+       create floating or clearance of flex item, and do not take it out-of-flow"; css-grid-1 §5.1
+       "Establishing Grid Containers: the grid and inline-grid display values": "float and clear have no effect
+       on a grid item". The computed `float` stands: it has already blockified the item's `display`. */
+    if (bf_is_flex_or_grid_item(el)) return false;
     return !bf_computed_is(el, "float", "none");
 }
 
@@ -189,18 +206,6 @@ bool block_flow_float_is_right(lxb_dom_element_t *f)
     DCHECKF(right || bf_computed_is(f, "float", "left"), "%s floats and its computed `float` is neither `left` nor "
             "`right`", box_subject(f, fbuf, sizeof fbuf));
     return right;
-}
-
-/* Whether `el`'s box is a flex or grid item: its box parent is a flex or grid container. */
-static bool bf_is_flex_or_grid_item(lxb_dom_element_t *el)
-{
-    lxb_dom_element_t *parent = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
-    CssDisplay pd;
-
-    if (parent == NULL) return false;
-    pd = css_computed_display(parent);
-    return flex_item_display_is_flex_container(pd) || css_display_spells(pd, CSS_KEYWORD_GRID) ||
-           css_display_spells(pd, CSS_KEYWORD_INLINE_GRID);
 }
 
 static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)

@@ -503,8 +503,9 @@ size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
 
 /* Whether `el`'s box is floated: CSS 2 §9.5.1 "Positioning the float: the float property" "only applies to
    elements that generate boxes that are not absolutely positioned", and this engine's cascade does not apply
-   §9.7's computed `float: none` for those. The root is floated like any element: §9.5.1 permits treating
-   `float` as `none` on it, and Chrome floats it. Every layout reader of the question asks here. */
+   §9.7's computed `float: none` for those. A flex or grid item does not float (css-flexbox-1 §3, css-grid-1
+   §5.1). The root is floated like any element: §9.5.1 permits treating `float` as `none` on it, and Chrome
+   floats it. Every layout reader of the question asks here. */
 bool block_flow_is_floated(lxb_dom_element_t *el);
 /* Whether float `f` sits in one of §9.2.1.1's runs that generates line boxes, where core/layout/line_box.c's fill
    places it at the line it falls on; otherwise it starts where §9.4.1's stack stands (`block_flow_float_top_ask`). */
