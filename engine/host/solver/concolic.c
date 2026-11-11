@@ -1134,18 +1134,19 @@ void concolic_chain_stats(long *segs, long *entries, long *bytes) {
 static Cons    *g_pins = NULL;  static int g_pins_n = 0, g_pins_cap = 0;   /* the running flow's head */
 static int     *g_pins_hash = NULL; static int g_pins_hash_cap = 0;        /* …and its index (key -> idx+1) */
 static ConsSeg *g_pins_base = NULL;                                        /* the frozen chain under it */
-/* Whether any flow in this agent has ever contradicted an example: a one-way latch, never cleared while the
-   agent lives. It can only make the lookup below run when it need not, never skip it when needed, so it is a
-   fast path that cannot become a correctness question; a per-flow version would have to be inherited at every
-   fork, carried across a freeze and rebuilt by the cold tier. It spares every example read (two per `+` over
-   an unknown) a cons_lookup, which probes the head and every frozen segment under it. */
+/* Whether the running flow's path has contradicted an example: a one-way latch over the path, inherited at a fork
+   and carried by the blob like `mint_ord` (cold.c's empty blob clears it and the replay raises it again). It
+   spares every example read (two per `+` over an unknown) a cons_lookup, which probes the head and every frozen
+   segment under it and is charged as work, so it answers for this path only: an agent-wide latch would charge a
+   flow for what another flow did, at whatever point the schedule interleaved the two. */
 static int g_ex_contra_any;
-/* Whether any flow in this agent has ever pinned a value: the sibling latch, for the same cost. concolic_example
-   asks concretize-on-pin of every value whose `src` names it. Set at the one line that writes a pin value and
-   cleared only with the agent; a pin chain never arrives from outside the agent (cold.c restores a resumed
-   flow with `concolic_pins_blob_empty` and it re-derives by replaying its decision vector), so a set entry
-   under a clear latch cannot exist. */
+/* Whether the running flow's path has pinned a value: the sibling latch, for the same cost and carried the same
+   way. concolic_example asks concretize-on-pin of every value whose `src` names it. Set at the one line that
+   writes a pin value; every entry this flow can read was written on its path, so a set entry under a clear latch
+   cannot exist. */
 static int g_pin_any;
+/* …and the type facet latch (tyf_out_of). */
+static int g_type_facet_any;
 
 /* FNV-1a over a constraint key, priced by its bytes: the probe is the store's one primitive and its cost is the
    key's length, which grows with the path that spelled it. */
@@ -1884,6 +1885,7 @@ void concolic_clear_pins(void) {
     /* The mint counter too: left set, a flow would mint an ordinal a sibling already spent and put two values
        under one name. A fresh flow has created nothing. */
     g_mint_ord = 0;
+    g_ex_contra_any = g_pin_any = g_type_facet_any = 0;
 }
 
 /* Per-flow constraint state is swappable so interleaved flows keep their own narrowing: suspend freezes the
@@ -1894,7 +1896,7 @@ void concolic_clear_pins(void) {
    is named after flow.h's `pin_blob` slot; its content is this component's. `head` is a parked flow's head
    (NULL in a fork's blob), with its `head_bytes` as the census counts them. */
 typedef struct {
-    ConsSeg *seg; int delivered; uint32_t mint_ord;
+    ConsSeg *seg; int delivered; uint32_t mint_ord; uint8_t ex_contra_any, pin_any, type_facet_any;
     Cons *head; int head_n, head_cap; int *head_hash; int head_hash_cap; long head_bytes;
 } PinBlob;
 void *concolic_pins_suspend(void) {
@@ -1905,6 +1907,8 @@ void *concolic_pins_suspend(void) {
     b->head = NULL; b->head_n = b->head_cap = b->head_hash_cap = 0; b->head_hash = NULL; b->head_bytes = 0;
     b->delivered = g_cand_delivered;
     b->mint_ord = g_mint_ord;   /* taken, not moved, for the same reason */
+    b->ex_contra_any = (uint8_t)g_ex_contra_any; b->pin_any = (uint8_t)g_pin_any;
+    b->type_facet_any = (uint8_t)g_type_facet_any;
     if (g_pins_n == 0) {
         /* Nothing learned since the last freeze: the blob is one more reference on the chain the flow
            already stands on, so two forks with no write between push no empty segment. */
@@ -1943,6 +1947,8 @@ void *concolic_pins_park(void) {
              "flow whose constraint is lost would re-fork every branch it has already decided");
     b->delivered = g_cand_delivered;
     b->mint_ord = g_mint_ord;
+    b->ex_contra_any = (uint8_t)g_ex_contra_any; b->pin_any = (uint8_t)g_pin_any;
+    b->type_facet_any = (uint8_t)g_type_facet_any;
     DCHECK(g_pins != NULL || (g_pins_n == 0 && g_pins_hash == NULL),
            "the running flow's constraint head holds entries or an index with no entry array");
     b->seg = g_pins_base;                      /* the flow's reference on its chain, moved */
@@ -1972,6 +1978,7 @@ void concolic_pins_resume(void *blob) {
        before it. */
     g_cand_delivered = b->delivered;
     g_mint_ord = b->mint_ord;
+    g_ex_contra_any = b->ex_contra_any; g_pin_any = b->pin_any; g_type_facet_any = b->type_facet_any;
 }
 /* A constraint that has learned nothing, for a flow that resumes without having run in this session (the cold
    tier's). Such a flow is not fresh (it stands on a recorded decision chain, so it is resumed, not entered)
@@ -1985,6 +1992,7 @@ void *concolic_pins_blob_empty(void) {
     /* Nothing delivered either: the flow replays from the baseline and the substitution happens again in this
        session. */
     b->delivered = 0;
+    b->ex_contra_any = b->pin_any = b->type_facet_any = 0;   /* the replay raises them again */
     /* Nothing minted: the replay re-creates every value it named in the same order, so a carried count would
        shift every name off the one it recorded and every replayed question would miss its key. */
     b->mint_ord = 0;
@@ -2536,7 +2544,7 @@ static void cons_each_entry(const Cons *seg, int i, const int *hash, int cap, Co
     DCHECKF(e->valkind != (signed char)CONCOLIC_LIT_BIGINT,
             "the store holds a BigInt pin under `%s`, a kind concolic_pin refuses because pin_mint cannot mint "
             "it back", e->key);
-    DCHECK(!e->val || g_pin_any, "a pin is stored while the agent's pin latch says no flow ever pinned one");
+    DCHECK(!e->val || g_pin_any, "a pin is stored while the flow's pin latch says its path never pinned one");
     DCHECKF(!e->adec == (e->adec_what == (signed char)CONCOLIC_DECISION_NONE),
             "the assumed decision under `%s` and its kind disagree about whether one is recorded — the note "
             "writes both", e->key);
@@ -5138,9 +5146,8 @@ static unsigned cty_of_tyf(unsigned tyf)
     return ty;
 }
 
-/* Has any flow filed a type facet? A gate on the lookup below only: a facet is per flow and lives in the
-   constraint, so this answers "may one exist", never which. */
-static int g_type_facet_any;
+/* Has the running flow's path filed a type facet? A gate on the lookup below only, carried with the pin latch
+   (concolic_pins_suspend): a facet lives in the constraint, so this answers "may one exist", never which. */
 
 /* The types this flow proved `c`'s source does not take: its type facet (Cons.types_out). Only a value that owns
    its `src` is that source; a derivation carries its operand's `src` and is not it. */
@@ -9113,13 +9120,8 @@ void concolic_free(void)
     }
     free(g_keynames);      g_keynames = NULL;      g_keynames_n = g_keynames_cap = 0;
     free(g_keynames_hash); g_keynames_hash = NULL; g_keynames_hash_cap = 0;
-    /* The contradicted-example latch, agent state like the two above: left set, it would make the next agent
-       probe a chain in which nothing has been contradicted. A cost, not a wrong answer. */
-    g_ex_contra_any = 0;
-    /* …and the pin latch, for the same reason. */
-    g_pin_any = 0;
-    /* …and the type facet latch. */
-    g_type_facet_any = 0;
+    /* The running flow's three latches, which no flow holds once the agent ends. */
+    g_ex_contra_any = g_pin_any = g_type_facet_any = 0;
     /* The value class is deliberately not given back here, and that is asserted (core/dom/document.c says the
        same of its realm-mark hook). Every live Concolic outlives this call: JS_FreeRuntime's finalizer reaches
        each record through this id, and the collection before it marks each example through it. A cleared id
