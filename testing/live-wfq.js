@@ -432,21 +432,31 @@ function heapScope() {
   return named;
 }
 
-/* THE CEILING, DERIVED FROM THE LINK FLAG THAT SETS IT RATHER THAN COPIED AS A NUMBER. A restated constant
-   is a second copy, and the copy that drifts is the one nobody runs against reality: a build that raises or
-   lowers `-sMAXIMUM_MEMORY` must move this fraction's denominator with it, and a hardcoded 4 GiB would go
-   on reporting a share of a ceiling the artifact no longer has. Exactly one occurrence is required — two
-   would mean the link line this reader is about is no longer the only one, and a share composed against
-   whichever matched first would be a fraction of a ceiling some other target was linked with. */
+/* The ceiling the sampled artifact was linked with, derived from engine/build.mjs rather than restated: the
+   link line spells the flag as `"-sMAXIMUM_MEMORY=" + WASM_ADDRESS_BYTES`, and that constant is defined once as
+   a product of two integer literals (pages times bytes per page). Both spellings are required exactly once: a
+   second link line carrying the flag, or a flag fed from another expression, is a ceiling this reader cannot
+   name, and so is a constant no longer written as that product. */
 const BUILD_MJS = path.join(__dirname, "..", "engine", "build.mjs");
 function wasmCeilingKiB() {
-  const hits = [...fs.readFileSync(BUILD_MJS, "utf8").matchAll(/"-sMAXIMUM_MEMORY=(\d+)"/g)];
-  if (hits.length !== 1)
-    throw new Error("[live-wfq] engine/build.mjs carries " + hits.length + " `-sMAXIMUM_MEMORY=` flag(s) " +
-                    "and this reader composes a share of the ONE ceiling the sampled artifact was linked " +
-                    "with. Zero means the flag was renamed and the share would have no denominator; more " +
-                    "than one means it is no longer one ceiling and a reader cannot tell which was used.");
-  return Number(hits[0][1]) / 1024;
+  const src = fs.readFileSync(BUILD_MJS, "utf8");
+  const flags = [...src.matchAll(/"-sMAXIMUM_MEMORY="\s*\+\s*([A-Za-z_$][\w$]*)/g)];
+  const every = [...src.matchAll(/-sMAXIMUM_MEMORY=/g)];
+  if (flags.length !== 1 || every.length !== 1 || flags[0][1] !== "WASM_ADDRESS_BYTES")
+    throw new Error("[live-wfq] engine/build.mjs spells `-sMAXIMUM_MEMORY=` " + every.length + " time(s), " +
+                    flags.length + " of them fed from a named constant" +
+                    (flags.length ? " (" + flags.map((m) => m[1]).join(", ") + ")" : "") +
+                    "; this reader composes a share of the one ceiling the link line takes from " +
+                    "WASM_ADDRESS_BYTES and cannot name any other.");
+  const defs = [...src.matchAll(/^const WASM_ADDRESS_BYTES = (\d+) \* (\d+);$/gm)];
+  if (defs.length !== 1)
+    throw new Error("[live-wfq] engine/build.mjs defines WASM_ADDRESS_BYTES as a product of two integer " +
+                    "literals " + defs.length + " time(s); exactly one such definition is what this reader " +
+                    "evaluates, so a changed spelling needs a changed reader.");
+  const bytes = Number(defs[0][1]) * Number(defs[0][2]);
+  if (!Number.isSafeInteger(bytes) || bytes <= 0 || bytes % 1024 !== 0)
+    throw new Error("[live-wfq] WASM_ADDRESS_BYTES evaluates to " + bytes + ", which is not a whole number of KiB");
+  return bytes / 1024;
 }
 
 /* AND THE NUMERATOR THAT ANSWERS THAT CEILING, WHICH IS NOT THE ENGINE'S TO EMIT AND SO IS NOT DERIVED FROM
