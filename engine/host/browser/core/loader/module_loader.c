@@ -283,15 +283,18 @@ static char *ml_module_type(JSContext *ctx, JSValueConst attributes)
    ECMAScript §13.3.10.3 ContinueDynamicImport passes to the page's `catch`. */
 static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *opaque, JSValueConst attributes)
 {
-    JSValue promise, settle;
+    JSValue promise, fetch;
     char *type = ml_module_type(ctx, attributes);
 
     (void)opaque;
     CHECK(type != NULL, "OOM naming a module request's module type");
-    if (module_map_ask(ctx, module_name, type, &promise, &settle) == MODULE_MAP_FETCH) {
+    if (module_map_ask(ctx, module_name, type, &promise, &fetch) == MODULE_MAP_FETCH) {
+        JSValue settle = module_map_settle_function(ctx, fetch);
+
         engine_pending_module_url(ctx, settle, module_name);
         JS_FreeValue(ctx, settle);
     }
+    JS_FreeValue(ctx, fetch);
     free(type);
     JS_ModuleLoadPending(ctx, promise);   /* ownership transfers */
     return NULL;
