@@ -25,8 +25,8 @@
  * distance to the branch, for render_geometry_probe.mjs's reason: a stale artifact is an oracle only for paths
  * byte-identical across that span, per path, and the number a reader needs beside any figure is the distance.
  *
- * usage:  node testing/render_engine.mjs collect <out.json> --glue <qjs.mjs> --doc <file.html> [--world <w>]
- *         node testing/render_engine.mjs dump --glue <qjs.mjs> --doc <file.html>
+ * usage:  node --experimental-wasm-jspi testing/render_engine.mjs collect <out.json> --glue <qjs.mjs> --doc <file.html> [--world <w>]
+ *         node --experimental-wasm-jspi testing/render_engine.mjs dump --glue <qjs.mjs> --doc <file.html>
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -124,9 +124,10 @@ async function drive(gluePath, html, steps) {
   const records = [];
   let code = -1;
   for (let i = 0; i < steps; i++) {
-    code = await M.ccall('qjs_step', 'number', [], [], { async: true });
+    const step = await M.ccall('qjs_step', 'number', [], [], { async: true });
+    code = step;
     for (const line of str('qjs_dumps').split('\n').filter(Boolean)) records.push(line);
-    if (code === 0) break;
+    if (step === 0) break;
   }
   const res = JSON.parse(str('qjs_result'));
   /* THE FRONTIER IS PARKED BEFORE TEARDOWN, AND THAT IS THE ONLY HONEST EXIT THIS DRIVER HAS. It answers no
@@ -249,7 +250,7 @@ async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const fn = cmd && Object.prototype.hasOwnProperty.call(CMDS, cmd) ? CMDS[cmd] : null;
   if (!fn) {
-    console.error('usage: node testing/render_engine.mjs <collect | dump> [args…]');
+    console.error('usage: node --experimental-wasm-jspi testing/render_engine.mjs <collect | dump> [args…]');
     process.exit(2);
   }
   const { flags, positional } = parseArgs(rest);

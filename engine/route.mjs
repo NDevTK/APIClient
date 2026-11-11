@@ -1,5 +1,5 @@
 /* THE CROSS-INSTANCE SEAM'S DRIVER — a STAGE of `node engine/build.mjs`, which runs it against the ABI program
- * it just linked and reports it beside the smoke. Standalone: `node engine/route.mjs`, after any build. (The
+ * it just linked and reports it beside the smoke. Standalone: `node --experimental-wasm-jspi engine/route.mjs`, after any build. (The
  * `abi` argument this line used to name is gone — a build produces both programs, so nothing selects one.)
  *
  * IT IS IN THE REPOSITORY BECAUSE IT IS THE ONLY THING THAT PROVISIONS A SECOND INSTANCE. §SECURITY's rule is
@@ -1089,7 +1089,7 @@ console.log(`[route] OK — two instances, ${posts.length} record(s) routed into
             `${residue.length} bytes of residue`);
 
 /* ── VARIANT A: PARK THE ANSWERING INSTANCE, AS A PROBE AND NOT A GATE ──────────────────────────────────────
- * `node engine/route.mjs park-probe`. Opt-in, and deliberately NOT part of the drive above, for the reason the
+ * `node --experimental-wasm-jspi engine/route.mjs park-probe`. Opt-in, and deliberately NOT part of the drive above, for the reason the
  * capability it probes is missing: it is EXPECTED to abort today, and a gate that requires an abort
  * institutionalises the gap and breaks on the day someone closes it. It also cannot share a process with the
  * drive — a DCHECK is a `abort()`, so an in-line probe would take the green run down with it.

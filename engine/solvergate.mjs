@@ -116,7 +116,7 @@
  * else is compared BY DEFAULT — a field added to the result document is a field this gate holds invariant
  * until someone argues it into the list above, which is the direction that fails loud rather than quietly.
  *
- * Usage:  node engine/solvergate.mjs [document-name]
+ * Usage:  node --experimental-wasm-jspi engine/solvergate.mjs [document-name]
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -1676,7 +1676,7 @@ function runChild(doc, sched) {
   const cpu0 = childCpuSeconds();
   const r = spawnSync("/bin/sh",
     ["-c", `ulimit -H -t ${CPU_BUDGET_S + 10} 2>/dev/null; ulimit -S -t ${CPU_BUDGET_S}; exec "$@"`, "sh",
-     process.execPath, SELF, "--run", join(CORPUS, doc), sched],
+     process.execPath, ...process.execArgv, SELF, "--run", join(CORPUS, doc), sched],
     { encoding: "utf8", maxBuffer: 1 << 28, timeout: WALL_BACKSTOP_MS });
   const cpuUsed = childCpuDelta(cpu0, childCpuSeconds());
   const out = (r.stdout || "") + (r.stderr || "");

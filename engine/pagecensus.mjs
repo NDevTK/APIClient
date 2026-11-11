@@ -158,13 +158,13 @@
  * `abiOperands` and two of them now import the document's facts. HOW ITS ABSENCE WOULD SHOW: a field added to the reply record makes one
  * driver abort at its first park while the other keeps running.
  *
- * Usage:  node engine/pagecensus.mjs <document-url> [transcript.jsonl]
+ * Usage:  node --experimental-wasm-jspi engine/pagecensus.mjs <document-url> [transcript.jsonl]
  *   e.g.  node testing/corpus/serve-faithful.mjs gitlab 8977 &       <-- DELETED at e36d41d2; see above
  *         FIX_PORT=8973 node testing/fixtures_server.cjs &   <-- a tracked subject that exists, served by the
  *                                                            ONE server its documents need; it resolves the
  *                                                            directory from its own path, so there is no `cd`
  *                                                            in it. See the http.server paragraph above.
- *         `timeout 400 sh -c "ulimit -S -t 300; node engine/pagecensus.mjs http://127.0.0.1:8977/ /tmp/gl.jsonl"`
+ *         `timeout 400 sh -c "ulimit -S -t 300; node --experimental-wasm-jspi engine/pagecensus.mjs http://127.0.0.1:8977/ /tmp/gl.jsonl"`
  */
 import { appendFileSync, existsSync } from "node:fs";
 import { GLUE_PATH as WASM, abiOperands } from "./renderer_abi.mjs";
@@ -193,7 +193,8 @@ function fail(msg) { console.log("pagecensus: " + msg); process.exit(1); }
 
 const docUrl = process.argv[2];
 const transcript = process.argv[3] || null;
-if (!docUrl) fail("usage: node engine/pagecensus.mjs <document-url> [transcript.jsonl] — this driver answers " +
+if (!docUrl) fail("usage: node --experimental-wasm-jspi engine/pagecensus.mjs <document-url> [transcript.jsonl] — " +
+                  "this driver answers " +
                   "every park by fetching that park's own URL from the origin the document came from, so the " +
                   "URL is the whole of its configuration and there is nothing to default it to");
 if (!existsSync(WASM))

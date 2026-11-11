@@ -48,8 +48,8 @@
  * else is `qjs_decline`d BY NAME — which is not a failure but the other half of paying, and the engine forks
  * the arm that runs the page's failure path so the `catch` is explored without the wait being spent.
  *
- * usage: node testing/render_raster.mjs paint --doc <file.html> --url <addr> --out <dir> [--serve] [--steps N]
- *        node testing/render_raster.mjs paint --doc f.html --url u --out d --glue <qjs.mjs>
+ * usage: node --experimental-wasm-jspi testing/render_raster.mjs paint --doc <file.html> --url <addr> --out <dir> [--serve] [--steps N]
+ *        node --experimental-wasm-jspi testing/render_raster.mjs paint --doc f.html --url u --out d --glue <qjs.mjs>
  */
 
 import { readFileSync, writeFileSync, mkdirSync, openSync, writeSync, closeSync } from 'node:fs';
@@ -451,7 +451,8 @@ async function drive(opts) {
   paintNow('pre-step (no flow running — the document as no flow has written it)');
 
   for (let i = 0; i < opts.steps; i++) {
-    code = await M.ccall('qjs_step', 'number', [], [], { async: true });
+    const step = await M.ccall('qjs_step', 'number', [], [], { async: true });
+    code = step;
     /* THE PAINT STANDS BEFORE THE PAYMENT, for test_forced.c's reason: the walk is over the world the
        scheduler has just handed back, and answering a request first would step the engine past it. */
     paintNow('round ' + i + ' (qjs_step=' + code + ')');
@@ -459,7 +460,7 @@ async function drive(opts) {
       const pend = String(M.ccall('qjs_pending', 'string', [], []) ?? '').split('\n').filter(Boolean);
       for (const line of pend) await serveOne(M, cs, splitPending(line), docOrigin, served);
     }
-    if (code === 0) break;
+    if (step === 0) break;
   }
   let result = null;
   try { result = JSON.parse(String(M.ccall('qjs_result', 'string', [], []) ?? '{}')); }
@@ -577,7 +578,8 @@ async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const fn = cmd && Object.prototype.hasOwnProperty.call(CMDS, cmd) ? CMDS[cmd] : null;
   if (!fn) {
-    console.error('usage: node testing/render_raster.mjs paint --doc <f.html> --url <addr> --out <dir> ' +
+    console.error('usage: node --experimental-wasm-jspi testing/render_raster.mjs paint --doc <f.html> --url <addr> ' +
+                  '--out <dir> ' +
                   '[--serve] [--steps N] [--doc-id N] [--glue <qjs.mjs>]');
     process.exit(2);
   }

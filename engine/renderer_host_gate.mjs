@@ -1,4 +1,4 @@
-/* renderer_host_gate.mjs — THE BROWSER-PROCESS LAYER, DRIVEN. `node engine/renderer_host_gate.mjs`, after any
+/* renderer_host_gate.mjs — The browser-process layer, driven. `node --experimental-wasm-jspi engine/renderer_host_gate.mjs`, after any
  * build: it imports `extension/lib/qjs/qjs.mjs` off disk exactly as route.mjs does, so a run against a stale
  * artifact measures a program no revision of this tree contains (§Testing) — which is why build.mjs owns it as
  * a stage that SKIPS when the ABI program did not link, rather than a thing anyone runs by hand after a build

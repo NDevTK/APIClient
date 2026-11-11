@@ -37,8 +37,8 @@
  * the machine derives a String with no text behind it. Both halves are in this case's own output: `_flows` 2,
  * a `_forkAt` entry naming that site by its operands, and `validValues` `[]` for the stringified artifact.
  *
- * usage:  node testing/render_geometry_probe.mjs --glue <path/to/qjs.mjs> [--case <name> | --doc <file.html>]
- *         node testing/render_geometry_probe.mjs --glue <…> --list
+ * usage:  node --experimental-wasm-jspi testing/render_geometry_probe.mjs --glue <path/to/qjs.mjs> [--case <name> | --doc <file.html>]
+ *         node --experimental-wasm-jspi testing/render_geometry_probe.mjs --glue <…> --list
  */
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -206,13 +206,14 @@ async function drive(gluePath, html, steps) {
   const seen = new Map();
   let code = -1;
   for (let i = 0; i < steps; i++) {
-    code = await M.ccall('qjs_step', 'number', [], [], { async: true });
+    const step = await M.ccall('qjs_step', 'number', [], [], { async: true });
+    code = step;
     for (const line of str('qjs_pending').split('\n').filter(Boolean)) {
       const t = line.split('\t');
       if (t.length !== 15) fail('a pending line is not the ABI\'s fifteen tab-separated fields: ' + line);
       if (!seen.has(t[14])) seen.set(t[14], t[0]);
     }
-    if (code === 0) break;
+    if (step === 0) break;
   }
   const res = JSON.parse(str('qjs_result'));
   /* THE FRONTIER IS PARKED BEFORE TEARDOWN, AND THAT IS NOT TIDINESS — IT IS THE ONLY HONEST EXIT THIS DRIVER
