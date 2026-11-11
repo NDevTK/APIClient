@@ -1569,6 +1569,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/platform.h"
 #include "fixture/windowclose.h"
 #include "fixture/realmsell.h"
+#include "fixture/gcsale.h"
 #include "fixture/replytwice.h"
 #include "fixture/realmsellclose.h"
 #include "fixture/adoptexpando.h"
@@ -2363,6 +2364,7 @@ TF_DOCS[] = {
     { "platform", HTML_PLATFORM },
     { "windowclose", HTML_WINDOWCLOSE },
     { "realmsell", HTML_REALMSELL, OPENER_POLICY_UNSAFE_NONE, 1 },
+    { "gcsale", HTML_GCSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "replytwice", HTML_REPLYTWICE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "realmsellclose", HTML_REALMSELLCLOSE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "adoptexpando", HTML_ADOPTEXPANDO },
@@ -27351,6 +27353,31 @@ TF_UNIT void probes_realmsell(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `gcsale` document (fixture/gcsale.h). */
+TF_UNIT void probes_gcsale(const char *js, Probe *tab, int *n) {
+    /* The collections a sale owes cost the sold member's neighbourhood: less collector work than one visit of
+       each JS object live at each batch's sale, which a trial over the whole runtime exceeds twice over. Ladder:
+       the realm existed, pressure sold its holder, the sale's collection freed it, and its work. */
+    const char *gs_why = NULL;
+    int gs_tt = 1;
+    fold_row(&gs_tt, &gs_why, navigable_realm_made() >= 1,
+             "NOT REACHED: no child realm was made, so the holder arm never opened its popup");
+    fold_row(&gs_tt, &gs_why,
+             tf_census_row(js, "_cold", "soldFlows") >= 1 && tf_census_row(js, "_heap", "gcSaleBatches") >= 1,
+             "NOT REACHED: RAM pressure sold no batch in the census this row reads, so the holder was never sold");
+    fold_row(&gs_tt, &gs_why, tf_census_row(js, "_heap", "childRealms") == 0,
+             "pressure sold the holder and the realm is still live: the collection the sale owes did not free "
+             "the cycle the sold member alone held");
+    fold_row(&gs_tt, &gs_why,
+             tf_census_row(js, "_heap", "gcSaleWork") < tf_census_row(js, "_heap", "gcSaleObjects"),
+             "`_heap.gcSaleWork` is at least `_heap.gcSaleObjects`: a sale's collection walked the whole "
+             "runtime, every resident flow's heap, to free what one sold member held");
+    const Probe rows[] = {
+        { "sale-collection-costs-its-neighbourhood", gs_tt, "/api/gcsale", SESS_EXPLORE, gs_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `replytwice` document. RAM pressure sells the one arm parked on a fresh park of a pair the
    zone answered once, while the zone still owes that park's answer: the drop of the pair's last park withdraws
    the request (`fetch.cancel`), so the owed answer is taken back and never written for a request nobody is
@@ -31795,6 +31822,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_visualupdate(js, probes, &np);
     probes_windowclose(js, probes, &np);
     probes_realmsell(js, probes, &np);
+    probes_gcsale(js, probes, &np);
     probes_replytwice(js, probes, &np);
     probes_realmsellclose(js, probes, &np);
     probes_adoptexpando(js, probes, &np);

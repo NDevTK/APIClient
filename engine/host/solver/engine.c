@@ -1162,6 +1162,10 @@ static uint64_t g_pressure_sold_at_collections = UINT64_MAX;
 /* The last batch of pressure's sales (engine_relocate_under_pressure): how many members it sold, the live bytes
    before it, and its yield, the bytes per member it and its collection gave back (0 before one is measured). */
 static long g_pressure_batch, g_pressure_last;
+/* The collector's work while a sold batch awaited its collections, the batches, and the JS objects live at each
+   batch's sale, summed (engine.h's engine_gc_sale_work). Lifetime. */
+static uint64_t  g_gc_sale_work;
+static long long g_gc_sale_batches, g_gc_sale_objects;
 static uint64_t g_pressure_batch_live;
 static uint64_t g_pressure_yield;
 
@@ -12794,6 +12798,13 @@ static void engine_relocate_under_pressure(JSRuntime *rt) {
     }
     if (sold == 0) return;
     g_pressure_batch = sold;
+    {
+        JSLiveCounts lc;
+
+        JS_GetLiveCounts(rt, &lc);
+        g_gc_sale_batches++;
+        g_gc_sale_objects += (long long)lc.objects;
+    }
     g_pressure_sold_at_collections = st.collections;
     JS_GCOwe(rt);
     g_pressure_collects++;
@@ -14149,6 +14160,9 @@ static int64_t   g_gc_us;
 static int64_t   g_gc_slice_work_max;
 long long engine_gc_slices(void) { return g_gc_slices; }
 long long engine_gc_slice_work_max(void) { return (long long)g_gc_slice_work_max; }
+unsigned long long engine_gc_sale_work(void) { return (unsigned long long)g_gc_sale_work; }
+long long engine_gc_sale_batches(void) { return g_gc_sale_batches; }
+long long engine_gc_sale_objects(void) { return g_gc_sale_objects; }
 static long long g_host_turns;
 long long engine_host_turns(void) { return g_host_turns; }
 long long engine_gc_us(void) { return (long long)g_gc_us; }
@@ -14185,6 +14199,7 @@ static int engine_collect_slice(JSRuntime *rt, int resume) {
                 "banking %llu collector units would overflow the instance's work counter (%lld)",
                 (unsigned long long)units, (long long)g_service_work);
         g_service_work += (int64_t)units;
+        if (g_pressure_batch > 0) g_gc_sale_work += st.work - w0;   /* a sold batch awaits this collection */
         w0 = st.work;
         if (!done && engine_slice_work() < ENGINE_QUANTUM_WORK && quantum_host_wants_thread()) {
             g_gc_us += quantum_thread_us() - t0;

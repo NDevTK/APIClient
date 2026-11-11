@@ -1339,6 +1339,12 @@ long long engine_gc_us(void);
 /* The most engine work one collector slice banked, host turns inside it included (lifetime). A slice ends at the
    first step boundary at or past the quantum, so this exceeds ENGINE_QUANTUM_WORK by at most one step's work. */
 long long engine_gc_slice_work_max(void);
+/* The collector's work, in its own unit, done while a batch RAM pressure sold awaited its collections; the
+   batches sold; and the JS objects live at each batch's sale, summed (lifetime). Work under the objects is
+   collections that cost less than one visit of each live object. */
+unsigned long long engine_gc_sale_work(void);
+long long engine_gc_sale_batches(void);
+long long engine_gc_sale_objects(void);
 /* The host turns this instance answered (ENGINE_STEP_HOST), lifetime. A function of elapsed time, so no census
    carries it: a census row is a function of the paths. */
 long long engine_host_turns(void);

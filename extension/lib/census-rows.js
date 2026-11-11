@@ -11,7 +11,7 @@ const CENSUS_ROWS = Object.freeze({
     object: Object.freeze(["candTerms","curDeepTerms","neverPickedTerms","observedTerms","observedOldest","assumedTerms","neverTopSites","picksFreshLife"]),
   }),
   _heap: Object.freeze({
-    numeric: Object.freeze(["allocations","mallocBytes","atoms","objects","shapes","childRealms","childRealmsMade","childRealmsPeak","destroyStep9Releases","childRealmRefsMin","childRealmRefsMax","childRealmRefsTotal","childRealmRefsReleased","childRealmHoldersMin","childRealmHoldersMax","childRealmHoldersTotal","childRealmsUnheld","childRealmsUnheldRooted","childRealmUnheldOutsideRefs","stepMachines","trampFrames","cLiveKiB","arenaKiB","gcWork","gcSteps","gcRestarts","gcCollections","gcFreed","gcSlices","gcUs","gcOwed","gcObjectWorkMax","gcDecrefStepMax","gcScanStepMax","gcFreeStepMax","gcSliceWorkMax"]),
+    numeric: Object.freeze(["allocations","mallocBytes","atoms","objects","shapes","childRealms","childRealmsMade","childRealmsPeak","destroyStep9Releases","childRealmRefsMin","childRealmRefsMax","childRealmRefsTotal","childRealmRefsReleased","childRealmHoldersMin","childRealmHoldersMax","childRealmHoldersTotal","childRealmsUnheld","childRealmsUnheldRooted","childRealmUnheldOutsideRefs","stepMachines","trampFrames","cLiveKiB","arenaKiB","gcWork","gcSteps","gcRestarts","gcCollections","gcFreed","gcSlices","gcUs","gcOwed","gcObjectWorkMax","gcDecrefStepMax","gcScanStepMax","gcFreeStepMax","gcSliceWorkMax","gcSaleWork","gcSaleBatches","gcSaleObjects"]),
     object: Object.freeze(["childRealmRefSites","cResidueBytes"]),
   }),
   _swap: Object.freeze({

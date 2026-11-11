@@ -1945,7 +1945,8 @@ char *result_heap_json(JSContext *ctx) {
        thread time on the pricing clock; `gcOwed` is 1 while a collection is owed or standing. The three `StepMax`
        rows are the largest step of each phase in the collector's unit, `gcObjectWorkMax` the largest visit of
        one object, which a step can exceed its budget by, and `gcSliceWorkMax` the largest slice in
-       engine work. */
+       engine work. `gcSaleWork` is the collector's work while a sold batch awaited its collections, over
+       `gcSaleBatches` batches, and `gcSaleObjects` the JS objects live at each batch's sale, summed. */
     JS_GCCycleStats(rt, &gc);
     navigable_realm_refs(NULL, &rmin, &rmax, &rtotal);   /* `live` is navigable_realm_count() one line down */
     if (!realm_holders_census(&hold))
@@ -1990,7 +1991,8 @@ char *result_heap_json(JSContext *ctx) {
                  "\"gcFreed\":%llu,\"gcSlices\":%lld,\"gcUs\":%lld,\"gcOwed\":%d,"
                  "\"gcObjectWorkMax\":%llu,"
                  "\"gcDecrefStepMax\":%llu,\"gcScanStepMax\":%llu,\"gcFreeStepMax\":%llu,"
-                 "\"gcSliceWorkMax\":%lld}",
+                 "\"gcSliceWorkMax\":%lld,\"gcSaleWork\":%llu,\"gcSaleBatches\":%lld,"
+                 "\"gcSaleObjects\":%lld}",
                  (long long)live.malloc_count, (long long)live.malloc_size, (long long)live.atoms,
                  (long long)live.objects, (long long)live.hashed_shapes,
                  navigable_realm_count(), navigable_realm_made(), navigable_realm_peak(),
@@ -2005,7 +2007,8 @@ char *result_heap_json(JSContext *ctx) {
                  engine_gc_us(), (int)JS_GCOwed(rt),
                  (unsigned long long)gc.object_work_max,
                  (unsigned long long)gc.decref_step_max, (unsigned long long)gc.scan_step_max,
-                 (unsigned long long)gc.free_step_max, engine_gc_slice_work_max());
+                 (unsigned long long)gc.free_step_max, engine_gc_slice_work_max(),
+                 engine_gc_sale_work(), engine_gc_sale_batches(), engine_gc_sale_objects());
     free(rsites_json);
     return heap;
 }
