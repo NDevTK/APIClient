@@ -13163,7 +13163,8 @@ static void engine_sale_restore(JSContext *ctx, Flow *f) {
                JS_IsUndefined(f->fn) && JS_IsUndefined(f->agents[0].jobs) && f->agents[0].frame == NULL,
            "a restore was asked of a member that is not a written stub holding no bulk");
     if (s->spill_key) engine_sale_fill(s);
-    vals = malloc(sizeof *vals * (size_t)s->n_vals);
+    /* Through the refusal edge, armed across the switch-in with this member kept out of the sale. */
+    vals = reclaim_malloc(sizeof *vals * (size_t)s->n_vals);
     CHECK(vals != NULL, "engine: OOM reading a sold member back");
     /* A restore is residency: its births owe no collection (JS_FlowGraphReadFlow). */
     JS_GCResidencyBegin(rt);
