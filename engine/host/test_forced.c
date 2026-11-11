@@ -18963,12 +18963,14 @@ TF_UNIT void probes_rangedelrest(const char *js, Probe *tab, int *n) {
 /* The rows of the `openrest` document (fixture/openrest.h). open-rests: the opening arm's open() of a document
    holding the box of 100,002 elements rests inside the call (`sliceOverrunGapWork` under one quantum), and the arm
    then reads the document returned and empty, the box whole and disconnected, both names absent, no listener
-   left on the document, the box or the Window, and the written `<p>` in the new tree. open-sibling-tree: the
-   sibling arm reads the box in place, both names present and all three listeners firing. */
+   left on the document, the box or the Window, and the written `<p>` as the new body's first child.
+   open-written-id: getElementById finds that `<p>`. open-sibling-tree: the sibling arm reads the box in place,
+   the document's named `<img>` and all three listeners firing. open-frame-window-named: the sibling arm reads
+   the box's `<i id>` as a named property of the frame's Window (HTML §7.2.2.3). */
 TF_UNIT void probes_openrest(const char *js, Probe *tab, int *n) {
-    const char *why = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    const char *why = NULL, *kwhy = NULL, *pwhy = NULL, *wwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
     long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
-    int tt = 1, kt = 1;
+    int tt = 1, kt = 1, pt = 1, wt = 1;
 
     fold_row(&tt, &why, param_value_is(js, "/api/or-done", "e", "1-0-1"),
              "NOT REACHED: no /api/or-done?e=1-0-1 record, so open() did not return its document with no child and "
@@ -18980,8 +18982,11 @@ TF_UNIT void probes_openrest(const char *js, Probe *tab, int *n) {
              "out of the document tree");
     fold_row(&tt, &why, param_value_is(js, "/api/or-done", "l", "0"),
              "HTML §8.4.1 steps 9-10: a listener on the document, a descendant or the Window survived open()");
-    fold_row(&tt, &why, param_value_is(js, "/api/or-done", "p", "1"),
-             "HTML §8.4.1 steps 16-17: the `<p>` written after open() is not in the document");
+    fold_row(&tt, &why, param_value_is(js, "/api/or-done", "q", "1"),
+             "HTML §8.4.1 steps 16-17: the `<p>` written after open() is not the new body's first child");
+    fold_row(&pt, &pwhy, param_value_is(js, "/api/or-done", "p", "1"),
+             "DOM §4.2.4 getElementById did not find the `<p id>` a script-created parser inserted after open(): "
+             "the name index of a document opened by another realm's script misses the written element");
     fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
     fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
              "a turn held the thread for a quantum or more between two offers: an open() of a document of 100,002 "
@@ -18989,15 +18994,20 @@ TF_UNIT void probes_openrest(const char *js, Probe *tab, int *n) {
     fold_row(&kt, &kwhy, param_value_is(js, "/api/or-kept", "p", "1") && param_value_is(js, "/api/or-kept", "c", "100002"),
              "NOT REACHED: no /api/or-kept?p=1&c=100002 record, so the sibling arm did not read the box in place "
              "with its children");
-    fold_row(&kt, &kwhy, param_value_is(js, "/api/or-kept", "n", "1") && param_value_is(js, "/api/or-kept", "w", "1"),
-             "the sibling arm did not find the box's named elements: the opening arm's name-index upkeep reached a "
-             "flow whose tree still holds them");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/or-kept", "n", "1"),
+             "the sibling arm did not find the box's named `<img>`: the opening arm's name-index upkeep reached a "
+             "flow whose tree still holds it");
+    fold_row(&wt, &wwhy, param_value_is(js, "/api/or-kept", "w", "1"),
+             "HTML §7.2.2.3 Named access on the Window object: the frame's Window, read from its parent's realm, "
+             "did not answer the id of an element in its document's tree");
     fold_row(&kt, &kwhy, param_value_is(js, "/api/or-kept", "l", "111"),
              "the sibling arm's listeners did not all fire: the opening arm's HTML §8.4.1 step 9 erased a listener "
              "in a flow that never opened the document");
     const Probe rows[] = {
         { "open-rests", tt, "orBox", SESS_EXPLORE, why },
+        { "open-written-id", pt, "orBox", SESS_EXPLORE, pwhy },
         { "open-sibling-tree", kt, "orBox", SESS_EXPLORE, kwhy },
+        { "open-frame-window-named", wt, "orBox", SESS_EXPLORE, wwhy },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

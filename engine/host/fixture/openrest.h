@@ -40,7 +40,8 @@ static const char HTML_OPENREST[] =
     "  orD.write('<p id=orP>x</p>'); orD.close();"
     "  fetch('/api/or-done?e=' + orE + '&c=' + orBox.childNodes.length + '&k=' + (orBox.isConnected ? 1 : 0) +"
     "        '&n=' + (orD.orNamed === undefined ? 1 : 0) + '&w=' + (orW.orInner === undefined ? 1 : 0) +"
-    "        '&l=' + orL + '&p=' + (orD.getElementById('orP') !== null ? 1 : 0));"
+    "        '&l=' + orL + '&q=' + (orD.body && orD.body.firstChild && orD.body.firstChild.id === 'orP' ? 1 : 0) +"
+    "        '&p=' + (orD.getElementById('orP') !== null ? 1 : 0));"
     "}"
     "</script>"
     TF_CANVAS_INK
