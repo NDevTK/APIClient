@@ -12949,11 +12949,6 @@ static void engine_sale_release(Flow *tail) {
     }
     sale_vals_free(&vals);
     free(head);
-    /* Named residual. Not covered: the sold member's return within this session. A stub is out of the pick, so its
-       work waits for the session's park and the next session's cold_resume. Next diff builds: the stub in the
-       order's index and, at the pick, a replaying body built from its recipe and served its prefix's replies from
-       its reply trail, which takes the stub's standing at the recorded coordinate. Absence shows as: `sold` above
-       zero with every sold member still `cold` when the session parks. */
     flow_sale_begin(tail);
     /* The stand-ins before the bulk release frees the register, so no pair loses its last naming and no
        `fetch.cancel` is sent for a request the stub still owes its replay. */

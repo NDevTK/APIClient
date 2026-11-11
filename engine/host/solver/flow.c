@@ -2780,7 +2780,8 @@ void flow_sale_begin(Flow *f) {
     if (f->sold) flow_rest_link(f);
     f->cold = 1;
     g_cold_n++;
-    /* The eligible set lost a member, as when one is held: a stub is out of the pick while it is cold. */
+    /* The eligible set lost a member, as when one is held: a stub is out of the index while it is cold, and a
+       written one is weighed by the pick off its own list. */
     frontier_rank_changed();
 }
 
@@ -5601,7 +5602,7 @@ static Flow *flow_pick_walk(FlowScan why) {
                "relation have come apart, and flow_remove will swap-remove at the handle's slot and drop "
                "whichever member is standing there");
         /* A held member is out of the order for good (flow_set_held): a front no dispatch can reach is not the
-           order's front. A stub is out of the pick while it is cold (flow_sale_begin). */
+           order's front. A stub is out of this walk while it is cold (flow_sale_begin). */
         if (g_flows[i]->held || g_flows[i]->cold) continue;
         /* Counted where the weight is taken, so the count is what the scan cost. */
         w = flow_weight(g_flows[i]); g_scan_weights[why]++;
