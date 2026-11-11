@@ -1974,7 +1974,7 @@ static int flow_observed_class(const Flow *f) {
 /* A family's list of indexed observed-class members. flow_ix_insert links a member of the class and flow_ix_remove
    unlinks it; a priced count that moves re-files the member through both, and a forced mark written on an indexed
    member unlinks it here. The other two facts are written only on a member outside the index, which
-   flow_family_observed asserts of every member it walks. */
+   flow_family_observed_walk asserts of every member it walks at a census. */
 static void flow_obs_link(Flow *f) {
     FlowSite *st = f->at;
     DCHECK(!f->obs_in && f->ix_in && f->family != NULL && flow_observed_class(f) && st != NULL &&
