@@ -22132,28 +22132,20 @@ enum { FOU_FOROF = 0,      /* OP_for_of_next: value at sp[0], done at sp[1]; a d
                                   (the native resolving function's `then` read on a thenable), and it is placed
                                   here for the same reason — with everything the drive still owes riding the
                                   state, because a parked flow keeps no interpreter locals. */
-/* The async generator DRIVE's own outcome, deferred across whatever the head of its queue needs — which is now
-   always the one await machine. `post` and `s` went with the CONT_AGEN_SETTLE path: the machine registers its
-   own continuation and reaches the generator through its closure, so neither is anyone's business here. */
-typedef struct JSAgenSettle {
-    JSValue prom, hold;            /* the drive's own outcome, deferred across the machine (owned) */
-    int caller_depth;              /* where the drive's finish restores sp to, as a DEPTH: a park rebuilds the
-                                      frame, so a raw pointer would be stale on resume */
-    void *cont; uint8_t ck;         /* where the finish delivers the promise (the drive's own continuation) */
-    uint8_t is_tail;
-    /* WHERE THE DRIVE GOES NEXT, which is a fact about the caller and not about the machine. An
-       AsyncGeneratorAwaitReturn finishes the drive; a §27.9.3.5 AsyncGeneratorCompleteStep settle reached from
-       `post` has a body outcome consumed and a queue that may hold more, so it re-enters the pump. It rides
-       the record because interpreter locals do not survive a park, and the settle is a suspension point — that
-       is the whole reason it stopped being a JS_Call. */
-    uint8_t after_drive;            /* 0 = finish the drive, 1 = ask the pump again */
-    struct JSAsyncGeneratorData *agen;   /* the machine the pump is driving; BORROWED, kept alive by `hold` */
-    /* NAMED RESIDUAL. Not covered: a fork while this record is in flight (an AwaitReturn or CompleteStep
-       settle running page code) — tramp_cont_clone_one has no CONT_AGEN_DEFER arm. Next diff: the generated
-       record walk gives this record its clone, which re-derives `agen` from `hold` through
-       js_async_generator_resume_isolate instead of copying the pointer. Absence shows as tramp_cont_clone_one's
-       refusal naming this kind on a fork inside an async generator's settle. */
-} JSAgenSettle;
+/* The async generator drive's own outcome, deferred across the machine the head of its queue needs. `prom` and
+   `hold` (the generator object) are owned; `cont` is where the finish delivers `prom`; `caller_depth` is where
+   it restores sp, as a depth because a park rebuilds the frame. `after_drive` is 0 when the drive finishes
+   (§27.9.3.9 AsyncGeneratorAwaitReturn) and 1 when it asks the pump again (§27.9.3.5
+   AsyncGeneratorCompleteStep's settle, with a queue that may hold more). The generator's record is not kept
+   here: a fork during the machine can leave each flow its own, so the finish reads it from `hold`. */
+#define JS_AGEN_SETTLE_FIELDS(F)                                                                               \
+    F(OWN_VAL, JSValue, prom)                                                                                  \
+    F(OWN_VAL, JSValue, hold)                                                                                  \
+    F(POD, int, caller_depth)                                                                                  \
+    F(OUTER, void *, cont)                                                                                     \
+    F(POD, uint8_t, is_tail)                                                                                   \
+    F(POD, uint8_t, after_drive)
+CONT_RECORD_DEFINE(JSAgenSettle, js_agen_settle, JS_AGEN_SETTLE_FIELDS)
 /* The async call's own outcome, deferred across whatever its completion still owes: the settle CALL, or Await's
    machine. `promise` is the async function's own promise (the call's result is discarded, this is not), and
    the settled label hands it on rather than releasing it. `cont` is the machine that asked for the async call,
@@ -31081,10 +31073,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                "an async-generator deferral records operands ending below where they start");
                         for (i = cfirst3; i < cargc3; i++) JS_FreeValue(ctx, acargv[i]);
                         sp += cfirst3 - cargc3;
-                        JS_FreeValue(ctx, ags0->prom);
-                        JS_FreeValue(ctx, ags0->hold);
-                        if (ags0->ck != CONT_NONE)
-                            js_create_requester_abandon(ctx, ags0->cont, ags0->ck);
+                        js_agen_settle_release(ctx, ags0);
+                        if (ags0->cont_kind != CONT_NONE)
+                            js_create_requester_abandon(ctx, ags0->cont, ags0->cont_kind);
                         js_free_rt(rt, ags0);
                         goto exception;
                     }
@@ -38125,18 +38116,18 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 void *ar_stt;
                 agen_await_is_await = 0;
                 if (unlikely(JS_IsException(arfn))) goto do_agen_await_ret_fail;
-                ars = js_malloc_rt(rt, sizeof(*ars));
+                ars = js_mallocz_rt(rt, sizeof(*ars));
                 if (unlikely(!ars)) { JS_FreeValue(ctx, arfn); JS_ThrowOutOfMemory(ctx); goto do_agen_await_ret_fail; }
+                js_agen_settle_init(ars);
                 ar_stt = tramp_step_state_new(ctx, tramp_step_def_of(arfn), JS_UNDEFINED, 1, &ar_arg, arfn);
                 JS_FreeValue(ctx, arfn);
                 JS_FreeValue(ctx, agen_await_val); agen_await_val = JS_UNDEFINED;
                 if (unlikely(!ar_stt)) { js_free_rt(rt, ars); goto do_agen_await_ret_fail; }
-                ars->prom = agen_prom; agen_prom = JS_UNDEFINED;
-                ars->hold = agen_hold; agen_hold = JS_UNDEFINED;
-                ars->cont = agen_cont; ars->ck = agen_ck; ars->is_tail = agen_tail;
+                CONT_OWN_MOVE(&ars->prom, agen_prom); agen_prom = JS_UNDEFINED;
+                CONT_OWN_MOVE(&ars->hold, agen_hold); agen_hold = JS_UNDEFINED;
+                ars->cont = agen_cont; ars->cont_kind = agen_ck; ars->is_tail = agen_tail;
                 ars->caller_depth = (int)(agen_caller_sp - stack_buf);
                 ars->after_drive = 0;   /* AwaitReturn finishes the drive */
-                ars->agen = agen_s;
                 ((JSStepHdr *)ar_stt)->outer = ars;
                 ((JSStepHdr *)ar_stt)->outer_kind = CONT_AGEN_DEFER;
                 ((JSStepHdr *)ar_stt)->orig_cfirst = 0;
@@ -38164,19 +38155,19 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                nor the receiver may sit in one across it. */
             {
                 JSAgenSettle *ass;
-                ass = js_malloc_rt(rt, sizeof(*ass));
+                ass = js_mallocz_rt(rt, sizeof(*ass));
                 if (unlikely(!ass)) {
                     JS_FreeValue(ctx, agen_settle_fn); agen_settle_fn = JS_UNDEFINED;
                     JS_FreeValue(ctx, agen_settle_val); agen_settle_val = JS_UNDEFINED;
                     JS_ThrowOutOfMemory(ctx);
                     goto do_agen_await_ret_fail;
                 }
-                ass->prom = agen_prom; agen_prom = JS_UNDEFINED;
-                ass->hold = agen_hold; agen_hold = JS_UNDEFINED;
-                ass->cont = agen_cont; ass->ck = agen_ck; ass->is_tail = agen_tail;
+                js_agen_settle_init(ass);
+                CONT_OWN_MOVE(&ass->prom, agen_prom); agen_prom = JS_UNDEFINED;
+                CONT_OWN_MOVE(&ass->hold, agen_hold); agen_hold = JS_UNDEFINED;
+                ass->cont = agen_cont; ass->cont_kind = agen_ck; ass->is_tail = agen_tail;
                 ass->caller_depth = (int)(agen_caller_sp - stack_buf);
                 ass->after_drive = agen_settle_after; agen_settle_after = 0;
-                ass->agen = agen_s;
                 DCHECK(sp + 3 <= TRAMP_SP_LIMIT(sf),
                        "async-generator settle: operand push exceeds the frame's compiled stack_size");
                 *sp++ = JS_UNDEFINED;                                    /* this */
@@ -38199,14 +38190,29 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JSAgenSettle *ars = cont_st;
                 uint8_t after;
                 cont_st = NULL;
-                agen_prom = ars->prom; agen_hold = ars->hold;
-                agen_cont = ars->cont; agen_ck = ars->ck; agen_tail = ars->is_tail;
+                agen_prom = CONT_OWN_TAKE(&ars->prom); agen_hold = CONT_OWN_TAKE(&ars->hold);
+                agen_cont = ars->cont; agen_ck = ars->cont_kind; agen_tail = ars->is_tail;
                 agen_caller_sp = stack_buf + ars->caller_depth;
-                agen_s = ars->agen;
                 after = ars->after_drive;
                 js_free_rt(rt, ars);
-                if (after)
+                DCHECK(JS_VALUE_GET_TAG(agen_hold) == JS_TAG_OBJECT
+                       && JS_VALUE_GET_OBJ(agen_hold)->class_id == JS_CLASS_ASYNC_GENERATOR,
+                       "an async-generator deferral holds something other than its generator object");
+                if (after) {
+                    /* §27.9.3.10 AsyncGeneratorDrainQueue writes the record, and the record this flow writes is
+                       the one its object names now: a fork during the machine gave each flow its own. */
+                    agen_s = js_async_generator_resume_isolate(ctx, agen_hold,
+                                                               JS_VALUE_GET_OBJ(agen_hold)->u.async_generator_data);
+                    if (unlikely(!agen_s)) {
+                        JS_FreeValue(ctx, agen_prom); agen_prom = JS_UNDEFINED;
+                        JS_FreeValue(ctx, agen_hold); agen_hold = JS_UNDEFINED;
+                        if (agen_ck != CONT_NONE)
+                            js_create_requester_abandon(ctx, agen_cont, agen_ck);
+                        agen_cont = NULL; agen_ck = CONT_NONE;
+                        goto exception;
+                    }
                     goto do_agen_drive_enter;
+                }
             }
             goto do_agen_drive_finish;
 
@@ -46074,6 +46080,7 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_GETPROP, JSGetProp, js_getprop, LINK)                                                               \
     X(CONT_ASYNC_SETTLE, JSAsyncSettle, js_async_settle, LINK)                                                 \
     X(CONT_ASYNC_AWAIT, JSAsyncSettle, js_async_settle, LINK)                                                  \
+    X(CONT_AGEN_DEFER, JSAgenSettle, js_agen_settle, LINK)                                                     \
     X(CONT_PROMISE_EXEC, JSPromiseExec, js_promise_exec, ANCHOR)                                               \
     X(CONT_CONSTRUCT, JSConstruct, js_construct, ANCHOR)                                                       \
     X(CONT_CTOR_PROTO, JSCtorProto, js_ctor_proto, LINK)                                                       \
@@ -46200,7 +46207,7 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS:
-    case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
+    case CONT_PROMISE_ALL_SETTLE:
         break;
     }
     {
@@ -46239,7 +46246,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS:
-    case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
+    case CONT_PROMISE_ALL_SETTLE:
         break;
     }
     DFAIL("cont_outer_set: a kind cont_outer_get answered with a link has no way to write one back — the two "
@@ -46276,7 +46283,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     case CONT_FOROF_ENUMREC_WRAP: case CONT_ITER_FROM_NEXT_GET:
     case CONT_FOR_IN_HAS:
     case CONT_PROMISE_ALL_SETTLE:
-    case CONT_AGEN_DEFER:
     CONT_RECORD_KINDS(CONT_REC_CASE_ANCHOR)
         break;
     }
@@ -49195,7 +49201,7 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS:
-    case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
+    case CONT_PROMISE_ALL_SETTLE:
         break;
     }
     {
@@ -49262,7 +49268,7 @@ static void tramp_cont_mark_one(JSContext *ctx, void *st, uint8_t kind, ContLink
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS:
-    case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
+    case CONT_PROMISE_ALL_SETTLE:
         break;
     }
     DCHECKF(kind == CONT_NONE,
