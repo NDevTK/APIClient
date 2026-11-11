@@ -654,7 +654,6 @@ static JSValue js_gc_now(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     return JS_UNDEFINED;
 }
 
-#if !APICLIENT_DEV
 /* The four constructs `gapSite` crosses, as the result document's `_instanceGaps` states each: a DFAIL's literal,
    a DFAILF's format, and for a text the site composed, that text as its first reach wrote it. */
 #define TF_GAP_FIRST "the fixture's gapSite(0) was crossed: a construct only the release-only gapsite document reaches"
@@ -663,7 +662,7 @@ static JSValue js_gc_now(JSContext *ctx, JSValueConst this_val, int argc, JSValu
 #define TF_GAP_COMPOSED "the fixture's gapSite(3) was crossed, stated by a text the site composed"
 
 /* `gapSite(which)`: cross one of this fixture's own DFAIL constructs and return, as a release build does at any
-   DFAIL. A fixture's own surface. */
+   DFAIL; a dev build aborts there. A fixture's own surface, defined in both builds so their globals are one. */
 static JSValue js_gap_site(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     int32_t which = -1;
     char why[96];
@@ -682,7 +681,6 @@ static JSValue js_gap_site(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     }
     return JS_UNDEFINED;
 }
-#endif
 
 /* `childRealmCount()`: the agent's live child realms (navigable_realm_count), for a row that asks whether a frame's
    realm was reclaimed. A fixture's own surface. */
@@ -10779,9 +10777,7 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     tf_global_define(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
     tf_global_define(ctx, g, "gcNow", JS_NewCFunction(ctx, js_gc_now, "gcNow", 0));   /* a collection at a known point */
     tf_global_define(ctx, g, "childRealmCount", JS_NewCFunction(ctx, js_child_realm_count, "childRealmCount", 0));
-#if !APICLIENT_DEV
     tf_global_define(ctx, g, "gapSite", JS_NewCFunction(ctx, js_gap_site, "gapSite", 1));   /* a DFAIL crossing */
-#endif
     tf_global_define(ctx, g, "wasmMemoryNew", JS_NewCFunction(ctx, js_wasm_memory_new, "wasmMemoryNew", 1));
     tf_global_define(ctx, g, "wasmStoreNew", JS_NewCFunction(ctx, js_wasm_store_new, "wasmStoreNew", 0));
     tf_global_define(ctx, g, "wasmStoreOp", JS_NewCFunction(ctx, js_wasm_store_op, "wasmStoreOp", 4));
