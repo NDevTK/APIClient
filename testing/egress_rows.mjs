@@ -11,6 +11,8 @@
 // the address is bytes the page computed or its unknown's example is shown and decides nothing by default; an
 // address with no bytes never leaves. Fifth, the method: the page's own non-GET on its unforced run is sent with
 // the method, header list and body the page composed; no widening sends one; a redirect rewrites it (Fetch §4.5).
+// Sixth, the body class: the engine's word for whether a request body is bytes the page computed, its unknown's
+// example, or a display shape with no bytes, shown as the `body` signal; a body with no bytes never leaves.
 //
 //   node testing/egress_rows.mjs
 "use strict";
@@ -71,11 +73,11 @@ const docOf = (page, reach, driven = 'undriven', pinned = 'unpinned') =>
 /* A page request as engine/trusted.mjs's workFetch states it, from the document `docKey` at `page`. */
 async function ask(page, url, docKey, { destination = '', mode = 'cors', provenance = 'derived', pinned = 'unpinned',
                                         driven = 'undriven', reach = 'observed', headers,
-                                        address = 'concrete', method = 'GET', body = null } = {}) {
+                                        address = 'concrete', method = 'GET', body = null, bodyClass } = {}) {
   const origin = new URL(page).origin;
   return ZONE.safeFetch(url, {
     pageOrigin: origin, destination, mode, provenance, pinned, driven, address,
-    method, body,
+    method, body, ...(bodyClass === undefined ? {} : { bodyClass }),
     actor: 'page', credentialed: false, credentials: 'same-origin', useCorsPreflight: false, headers,
     doc: docOf(page, reach),
     identity: await ZONE.pageRequestIdentity(origin, page, docKey, url, 'same-origin', mode,
@@ -284,6 +286,39 @@ const ROWS = [
       return [['after the 303', a, 'GET /post-landed #1'], ['what the 303\'s target received', bodiesOf('GET', '/post-landed'), '<>'],
               ['after the 307', b, 'POST /post-kept #1'],
               ['what the 307\'s target received', bodiesOf('POST', '/post-kept'), 'a=7<application/x-www-form-urlencoded>']]; } },
+  { label: 'a body that is its unknown\'s example is sent on the unforced run, and the entry states the class',
+    run: async () => {
+      const r = await ask(PAGE_A, `${A}/post-ex`, 'engine:body', { method: 'POST', body: 'q=en', headers: FORM,
+                                                                    bodyClass: 'example' }).catch(() => null);
+      const e = r === null ? null : only(r);
+      const own = await ask(PAGE_A, `${A}/post-own`, 'engine:post', { method: 'POST', body: 'a=1', headers: FORM,
+                                                                      bodyClass: 'concrete' }).catch(() => null);
+      return [['POST /post-ex', count('POST', '/post-ex'), 1], ['admitted by', arm(e), 'default'],
+              ['the class on the vector', e && e.vector && e.vector.body, 'example'],
+              ['a body the page computed', own && own.egress[0].vector.body, 'concrete'],
+              ['a request with no body', (only(await ask(PAGE_A, `${A}/own`, 'engine:own')).vector || {}).body, 'none']]; } },
+  { label: 'a body with no bytes never leaves, at an unwidened origin or a widened one', run: async () => {
+      const refused = async (page, url) => refusalOf(await ask(page, url, 'engine:body', {
+        method: 'POST', body: '{cfg.payload}', headers: FORM, bodyClass: 'unknown' })
+        .catch(() => ({ refusal: { reason: 'aborted' } })));
+      const own = await refused(PAGE_A, `${A}/post-shape`);
+      ZONE.safeFetchWiden(W);
+      const wide = await refused(PAGE_W, `${W}/post-shape`);
+      ZONE.safeFetchUnwiden(W);
+      return [['POST /post-shape', count('POST', '/post-shape'), 0], ['unwidened', own, 'blocked-signal:body=unknown'],
+              ['widened', wide, 'blocked-signal:body=unknown'],
+              ['no grant can name it', typeof ZONE.safeFetchSignalUsable === 'function' &&
+                                        ZONE.safeFetchSignals().some((s) => s.name === 'body')
+                                         ? ZONE.safeFetchSignalUsable('body', 'unknown') : 'no such row', 'never-permitted']]; } },
+  { label: 'a request with a body that states no class is refused at the entry', run: async () => {
+      const r = await ZONE.safeFetch(`${A}/post-unclassed`, {
+        pageOrigin: A, destination: '', mode: 'cors', provenance: 'derived', pinned: 'unpinned', driven: 'undriven',
+        address: 'concrete', method: 'POST', body: 'a=1', headers: FORM, actor: 'page', credentialed: false,
+        credentials: 'same-origin', useCorsPreflight: false, doc: docOf(PAGE_A, 'observed'),
+        identity: await ZONE.pageRequestIdentity(A, PAGE_A, 'engine:body', `${A}/post-unclassed`, 'same-origin', 'cors',
+                                                 'strict-origin-when-cross-origin', PAGE_A) })
+        .then(() => 'answered', () => 'aborted');
+      return [['POST /post-unclassed', count('POST', '/post-unclassed'), 0], ['the ask', r, 'aborted']]; } },
   { label: 'the zone counts its sends by how each left and what admitted it', run: async () => {
       const c = typeof ZONE.safeFetchEgressCensus === 'function' ? ZONE.safeFetchEgressCensus() : null;
       const sum = c === null ? -1 : Object.values(c).reduce((a, n) => a + n, 0);
@@ -294,9 +329,11 @@ const ROWS = [
          adds ex-own sent by a default arm and the control's second ask answered locally, and two asks not sent. */
       /* The fifth group adds seven sent by a default arm (post-own, post-two twice, and each redirect's two
          hops), one sent widened, one answered locally, three asks not sent and one served from the record. */
-      return [['entries counted', sum, 43], ['sent by a default arm', c && c['sent default'], 19],
-              ['sent at a widened origin', c && c['sent widened'], 4], ['not sent', c && c['not-sent none'], 15],
-              ['answered locally', c && c['answered-locally default'], 3],
+      /* The sixth group adds post-ex sent by a default arm, post-own's repeat and the bodiless control each
+         answered locally, and two asks not sent. */
+      return [['entries counted', sum, 48], ['sent by a default arm', c && c['sent default'], 20],
+              ['sent at a widened origin', c && c['sent widened'], 4], ['not sent', c && c['not-sent none'], 17],
+              ['answered locally', c && c['answered-locally default'], 5],
               ['served from the record', c && c['answered-locally record'], 2]]; } },
 ];
 
