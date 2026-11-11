@@ -890,7 +890,9 @@ int cold_resume(JSContext *ctx, const char *recipes);
 /* Named residual. Not covered: a same-build resume restores no serialized COW delta, so every resume replays
    its recipe. The next diff has cold_park write each flow's delta through the flow-graph writer and
    cold_resume restore it when the engine-binary and pre-boot-baseline digests match, keeping the recipe for
-   a different build. Its absence shows as resume work that grows with each flow's recorded prefix.
+   a different build; the delta includes a compile parked in the flow's world (quickjs.h's compile carrier,
+   on a program body, an agent's program or a direct eval's frame), which the replay now reaches again. Its
+   absence shows as resume work that grows with each flow's recorded prefix.
    Named residual. Not covered: a replay re-issues its prefix's requests and the live zone or peer answers
    them; the park document holds no reply record. The next diff writes one record per prefix request and
    serves it at its recorded slot before the zone is asked. Its absence shows as a resumed flow leaving its

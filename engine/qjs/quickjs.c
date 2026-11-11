@@ -45215,11 +45215,10 @@ static JSValue JS_FlowCompileSource(JSContext *ctx, const char *src, size_t len,
    through the same driver with the seam unarmed — which is JSFlowControlHooks.budget's own arrangement ("A NULL
    `budget` is a host that declines this edge") and is js_parse_descent's relationship to js_parse_descent_at one
    level down. JS_FlowNew is that spelling.
-   IT IS AN IN-RAM PARK. The cold tier resumes a paged-out flow by replaying its arms (solver/cold.h: a frame
-   chain is regenerated, never encoded), and that replay reaches this compile again; a compile is re-derivable
-   from the row's own bytes, so a flow paged out mid-parse loses its parse and the replay re-compiles it. The
-   host therefore drops a suspended compile when it releases the flow (JS_FlowCompileDrop) rather than
-   refusing the park. A serialised image of the parse would only save that re-derivable work. */
+   The park is in RAM, held by the carrier's owner (a program text's body, an agent's program, a direct eval's
+   frame hold), which drops it (JS_FlowCompileDrop, js_eval_compile_drop) when it is released. The cold tier
+   writes no compile: it resumes a paged-out flow by replaying its recipe, which reaches the compile again;
+   solver/cold.h's residual on a same-build delta restore covers a parked compile with the rest of the delta. */
 int JS_FlowCompileStep(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags,
                        JSValue *pfn, void **pcompile) {
     JSEvalCompile *carrier = NULL;

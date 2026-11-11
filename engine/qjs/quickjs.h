@@ -3418,9 +3418,8 @@ JS_EXTERN JSValue *JS_FlowNew(JSContext *ctx, const char *src, size_t len, const
      THE RESUME IS BYTE-IDENTICAL AND NOT A RE-PARSE. What is suspended is the descent's explicit frame stack,
    whose chunks are allocated once and never moved, so the frames, the JSFunctionDef chain and every
    break/continue linkage stay at the addresses they already hold; nothing is serialised and nothing is
-   rebuilt. That is also why a parked compile is an IN-RAM park only: it cannot be serialised, and it does not
-   need to be, because a compile is RE-DERIVABLE from the source the host is holding — a flow paged out
-   mid-parse drops the parse through JS_FlowCompileDrop and re-compiles when its recipe replays the document.
+   rebuilt. The park is in RAM only, held by whoever holds the carrier: the cold tier writes no compile and a
+   paged-out flow's recipe replay reaches the compile again (solver/cold.h's same-build delta residual).
      THE SOURCE AND THE FILENAME ARE BORROWED FOR THE WHOLE COMPILE and not merely for one call — the parse
    reads them across every stint — so a caller that offers `pcompile` is promising those bytes outlive it. */
 JS_EXTERN int JS_FlowCompileStep(JSContext *ctx, const char *src, size_t len, const char *filename,
