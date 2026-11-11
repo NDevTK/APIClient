@@ -313,21 +313,19 @@ typedef struct FlowAcct {
 } FlowAcct;
 
 /* One code site in one family's ledger: the service the family has given members dispatched from there. Level 2's
-   UCB bonus is optimism over that service, `1/(1 + pulls + ...)` with `pulls` the service in quanta of work (Level
-   1's unit of a pull, a real number, so service shorter than a quantum still counts), so the count a member's
-   optimism reads is the family's (a share the family owns, kept on the account), and every member at one code site
-   reads it at every instant. Both arms of a fork stand at the decision. Service at a site lowers every member
-   standing there at once; a member that reaches code its family has not served reads full optimism, less what its
-   own operands price (FlowSite).
-   The identity is (`kind`, `key`): `kind` 0 is the site of a member that has decided nothing, FLOW_SITE_CODE a code
-   position (quickjs's JS_RunningSiteHash: the body's cross-session locator, which folds the bundle's content
-   digest, plus the opcode offset; or a program's entry, its row's content digest), FLOW_SITE_DRIVE a driven body
-   (its orphan hash), FLOW_SITE_ACT an act the engine forces (its rung's step unit).
-   A member stands at its last decision, at the entry of the unit it last began (engine.c's engine_stand_unit, as
-   the unit begins on its path), or at the code it executed at its last rest (engine.c's engine_stand_rest, each
-   quantum of service it gives, never of the slice), whichever came last, so service is charged to the code whose
-   work it is and every move is a function of the path.
-   Named residual. Not covered: the ledger is not parked, so a cold-resumed member stands at its family's keyless
+   UCB bonus is optimism over it, `1/(1 + pulls + ...)` with `pulls` the service in quanta of work (a real number, so
+   service under a quantum still counts); the count is the family's (a share it owns, kept on the account) and every
+   member at the site reads it at every instant. Both arms of a fork stand at the decision. Service at a site lowers
+   every member standing there at once; a member reaching code its family has not served reads full optimism, less
+   what its own operands price (FlowSite).
+   The identity is (`kind`, `key`): `kind` 0 is a member that has decided nothing, FLOW_SITE_CODE a code position
+   (quickjs's JS_RunningSiteHash: the body's cross-session locator folding the bundle's content digest, plus the
+   opcode offset; or a program's entry, its row's content digest), FLOW_SITE_DRIVE a driven body (its orphan hash),
+   FLOW_SITE_ACT an act the engine forces (its rung's step unit).
+   A member stands at its last decision, at the entry of the unit it last began (engine.c's engine_stand_unit), or
+   at the code it executed at its last rest (engine_stand_rest, each quantum of service, never of the slice),
+   whichever came last, so service is charged to the code whose work it is and every move is a function of the path. */
+/* Named residual. Not covered: the ledger is not parked, so a cold-resumed member stands at its family's keyless
    site at zero service. Next diff builds: the ledger in the cold tier's family record. Absence shows as: a resumed
    session re-serving sites from zero. */
 struct FlowCodeSite {
