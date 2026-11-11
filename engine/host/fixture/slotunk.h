@@ -4,7 +4,9 @@
    `Symbol.prototype.toString.call(e)` on the arm where `typeof e` is "symbol", and
    `Date.prototype.toISOString.call(e)` on the arm where `e instanceof Date` held over an unknown's prototype
    chain, which may or may not hold [[DateValue]] (`Object.create(Date.prototype)` holds none). The third is
-   Number.prototype.valueOf over a carrier `typeof` narrowed to a String, which holds no [[NumberData]].
+   Number.prototype.valueOf over a carrier `typeof` narrowed to a String, which holds no [[NumberData]]. The
+   fourth is Symbol.prototype.toString over a carrier `typeof` narrowed to an Object, which may be a Symbol
+   wrapper or not: the shape qs reaches where its `typeof` helper is a polyfill's.
    Each carrier is an absent global with no example. Each witness fetch carries a constant.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
@@ -35,6 +37,12 @@ static const char HTML_SLOTUNK[] =
     "  catch (e) { suV = e instanceof TypeError ? 'suTYPE' : 'suOTHER'; }"
     "}"
     "fetch('/api/su-num?w=' + suV);"
+    "var suO = window.__tfSlotObj, suW = 'suNONE';"
+    "if (typeof suO === 'object' && suO !== null) {"
+    "  try { suW = typeof Symbol.prototype.toString.call(suO) === 'string' ? 'suSTRING' : 'suOTHER'; }"
+    "  catch (e) { suW = e instanceof TypeError ? 'suTYPE' : 'suOTHER'; }"
+    "}"
+    "fetch('/api/su-obj?w=' + suW);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

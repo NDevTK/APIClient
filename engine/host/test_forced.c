@@ -27008,10 +27008,19 @@ TF_UNIT void probes_slotunk(const char *js, Probe *tab, int *n) {
                               !param_value_is(js, "/api/su-num", "w", "suVALUE"),
              "Number.prototype.valueOf over a carrier `typeof` narrowed to a String returned on some flow, or threw "
              "on none: ThisNumberValue holds no Number for a String");
+    const char *ob_why = NULL; int ob_tt = 1;
+    fold_row(&ob_tt, &ob_why, param_value_is(js, "/api/su-obj", "w", "suSTRING") &&
+                              param_value_is(js, "/api/su-obj", "w", "suTYPE"),
+             "Symbol.prototype.toString over a carrier `typeof` narrowed to an Object did not run both "
+             "completions of ThisSymbolValue: the String arm (a Symbol wrapper) and the TypeError arm");
+    fold_row(&ob_tt, &ob_why, !param_value_is(js, "/api/su-obj", "w", "suOTHER"),
+             "a /api/su-obj?w=suOTHER record: Symbol.prototype.toString over an Object carrier threw something "
+             "other than ThisSymbolValue's TypeError, or returned no String");
     const Probe rows[] = {
         { "su-symbol", sy_tt, "/api/su-sym", SESS_EXPLORE, sy_why },
         { "su-date", dt_tt, "/api/su-date", SESS_EXPLORE, dt_why },
         { "su-number", nm_tt, "/api/su-num", SESS_EXPLORE, nm_why },
+        { "su-object", ob_tt, "/api/su-obj", SESS_EXPLORE, ob_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
