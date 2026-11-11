@@ -18811,9 +18811,11 @@ TF_UNIT void probes_envtypes(const char *js, Probe *tab, int *n) {
     fold_row(&eq_tt, &eq_why, !emitted_record_has(js, "/api/envtype", "etMaxAbsent"),
              "`Math.max(…) == undefined` ran its holding arm: ECMAScript §21.3.2.25 Math.max ( ...args ) returns a "
              "Number");
-    fold_row(&eq_tt, &eq_why, tf_fork_rows(js, "u9:undefined", NULL) == 0 && tf_fork_rows(js, "z4:null", NULL) == 0,
-             "the fork census holds a row comparing against undefined or null, so one of the four tests forked "
-             "and its second arm reached no fetch");
+    fold_row(&eq_tt, &eq_why,
+             tf_fork_rows(js, "u9:undefined", NULL) == 0 &&
+                 tf_fork_rows(js, "z4:null", NULL) == tf_fork_rows(js, "etInjected", "z4:null"),
+             "the fork census holds a row comparing an environment value against undefined or null, so one of the "
+             "four tests forked and its second arm reached no fetch");
     fold_row(&eq_tt, &eq_why, tf_fork_rows(js, "typeof", NULL) == 0,
              "the fork census holds a typeof row: `typeof navigator.language` was minted as an unknown");
     fold_row(&open_tt, &open_why,
@@ -18824,9 +18826,23 @@ TF_UNIT void probes_envtypes(const char *js, Probe *tab, int *n) {
              emitted_record_graded_has(js, "/api/envtypemob", "derived", "etDesktop") &&
                  emitted_record_graded_has(js, "/api/envtypemob", "forced", "etMobile"),
              "/api/envtypemob does not stand at both arms of the user agent search: a String admits both");
+    const char *gone_why = NULL; int gone_tt = 1;
+
+    fold_row(&gone_tt, &gone_why, emitted_record_has(js, "/api/envtypegone", "etGoneAbsent"),
+             "NOT REACHED: /api/envtypegone has no record of the arm where ApplicationCache is absent");
+    fold_row(&gone_tt, &gone_why,
+             !emitted_record_has(js, "/api/envtypegone", "etGonePresent") &&
+                 tf_fork_rows(js, "ApplicationCache", NULL) == 0,
+             "`window.ApplicationCache == null` forked: HTML5 (W3C Recommendation, 28 October 2014) defined the "
+             "interface and no live standard does, so the name is absent in every browser");
+    fold_row(&gone_tt, &gone_why,
+             emitted_record_has(js, "/api/envtypeapp", "etAppAbsent") &&
+                 emitted_record_has(js, "/api/envtypeapp", "etAppPresent"),
+             "`window.etInjected == null` did not run both arms: a name no standard defined is application state");
     const Probe rows[] = {
         { "env-type-equality-decided", eq_tt, "/api/envtype?", SESS_EXPLORE, eq_why },
         { "env-type-open-arms-fork", open_tt, "/api/envtypewide", SESS_EXPLORE, open_why },
+        { "env-removed-global-decided", gone_tt, "/api/envtypegone", SESS_EXPLORE, gone_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

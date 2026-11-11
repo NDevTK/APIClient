@@ -21,6 +21,10 @@ static const char HTML_ENVTYPES[] =
     "fetch('/api/envtype?ua=' + etUa + '&sw=' + etSw + '&lang=' + etLang + '&mx=' + etMax);"
     "fetch('/api/envtypewide?w=' + (screen.width > 1000 ? 'etWide' : 'etNarrow'));"
     "fetch('/api/envtypemob?w=' + (navigator.userAgent.indexOf('Mobile') >= 0 ? 'etMobile' : 'etDesktop'));"
+    /* A name a dated standard defined and no live one does (HTML5's ApplicationCache) is absent in every
+       browser, so the test has one answer; a name no standard ever defined is application state and forks. */
+    "fetch('/api/envtypegone?w=' + (window.ApplicationCache == null ? 'etGoneAbsent' : 'etGonePresent'));"
+    "fetch('/api/envtypeapp?w=' + (window.etInjected == null ? 'etAppAbsent' : 'etAppPresent'));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
