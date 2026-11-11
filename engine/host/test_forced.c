@@ -2066,6 +2066,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/envarm.h"
 #include "fixture/envtypes.h"
 #include "fixture/framerace.h"
+#include "fixture/standslice.h"
 #include "fixture/waitclock.h"
 #include "fixture/framepair.h"
 #include "fixture/shuffle.h"
@@ -2897,6 +2898,7 @@ TF_DOCS[] = {
     { "envarm", HTML_ENVARM },
     { "envtypes", HTML_ENVTYPES },
     { "framerace", HTML_FRAMERACE },
+    { "standslice", HTML_STANDSLICE },
     { "waitclock", HTML_WAITCLOCK },
     { "framepair", HTML_FRAMEPAIR },
     { "shuffle", HTML_SHUFFLE },
@@ -10787,6 +10789,7 @@ static TfErrEdges g_tf_err_edges[] = {
        `observed-fresh-code` reads their order. */
     { "frBOOMfrOBS", 0, 0, 0, 0 },
     { "frBOOMfrLS",  0, 0, 0, 0 },
+    { "ssBOOMssEND", 0, 0, 0, 0 },
 };
 /* THIS DOCUMENT'S OWN ADDRESS, TAKEN FROM THE ONE CALL THAT ESTABLISHES IT rather than spelled a sixth time.
    `https://x.test/p` is already a literal at several sites and one of their comments complains about it, so a
@@ -20592,6 +20595,21 @@ TF_UNIT void probes_envtypes(const char *js, Probe *tab, int *n) {
         { "env-regexp-tests-apart", re_tt, "/api/envtypere", SESS_EXPLORE, re_why },
         { "env-regexp-literal-decides-once", once_tt, "/api/envtypeonce", SESS_EXPLORE, once_why },
         { "env-regexp-global-calls-apart", g_tt, "/api/envtypeg", SESS_EXPLORE, g_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The row of the `standslice` document (fixture/standslice.h): its checkpoint ran to its last job. Its stand
+   series is compared across slice budgets by engine/build.mjs's slicing parity stage, not here. */
+TF_UNIT void probes_standslice(const char *js, Probe *tab, int *n) {
+    const TfErrEdges *end = tf_err_edges("ssBOOMssEND");
+    const char *why = NULL; int tt = 1;
+
+    (void)js;
+    fold_row(&tt, &why, end && end->stands > 0,
+             "NOT REACHED: the stream did not announce `ssBOOMssEND`, so the checkpoint's last job never ran");
+    const Probe rows[] = {
+        { "standslice-ran", tt, "ssBOOMssEND", SESS_EXPLORE, why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -33847,6 +33865,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_envarm(js, probes, &np);
     probes_envtypes(js, probes, &np);
     probes_framerace(js, probes, &np);
+    probes_standslice(js, probes, &np);
     probes_waitclock(js, probes, &np);
     probes_framepair(js, probes, &np);
     probes_shuffle(js, probes, &np);

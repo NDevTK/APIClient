@@ -7307,22 +7307,24 @@ function pressureParityStages(bin, runs) {
   });
 }
 
-/* The documents the slicing parity stages run again on the same program: once with a slice of other work
-   (`--slice-work`), whose twin keeps the stand series and the work, and once with a host turn every microsecond
-   (`--host-turn-us 1`), whose twin also keeps the pick digest and the steps (engine/regimeparity.mjs's
-   compareSlicing). A difference is a DEFECT: a member's stand moved where a slice or a turn ended, not on its path. */
-const SLICE_PARITY_DOCS = ["min"];
-const SLICE_TWIN_WORK = 7919;
+/* The slicing parity stages: a document run again on the same program with other slicing and the two compared
+   (engine/regimeparity.mjs's compareSlicing). A host turn every microsecond (`--host-turn-us 1`) moves no slice
+   boundary, so its twin keeps the pick digest and the steps as well as the stand series and the work. A slice of
+   other work (`--slice-work`) moves where steps end, so its twin keeps only what is a function of the members'
+   paths, and only on a document that drains and whose paths read nothing where a step ends (fixture/standslice.h:
+   no reply, no timer). A difference is a DEFECT: something moved where a slice or a turn ended. */
+const SLICE_TWIN_WORK = 13007;
+const SLICE_TWINS = {
+  hostTurn: { what: "a host turn every microsecond", args: ["--host-turn-us", "1"],
+              rows: ["standSeries", "standMoves", "pickDigest", "steps"] },
+  slice: { what: `a slice of ${SLICE_TWIN_WORK} units`, args: ["--slice-work", String(SLICE_TWIN_WORK)],
+           rows: ["standSeries", "standMoves"] },
+};
+const SLICE_PARITY_DOCS = { min: [SLICE_TWINS.hostTurn], standslice: [SLICE_TWINS.hostTurn, SLICE_TWINS.slice] };
 function sliceParityStages(bin, runs) {
-  const mine = runs.filter((r) => r.doc && SLICE_PARITY_DOCS.includes(r.doc) && "captured" in r);
+  const mine = runs.filter((r) => r.doc && r.doc in SLICE_PARITY_DOCS && "captured" in r);
   if (bin === null) return [];
-  const twins = [
-    { what: `a slice of ${SLICE_TWIN_WORK} units`, args: ["--slice-work", String(SLICE_TWIN_WORK)],
-      rows: ["standSeries", "standMoves"] },
-    { what: "a host turn every microsecond", args: ["--host-turn-us", "1"],
-      rows: ["standSeries", "standMoves", "pickDigest", "steps"] },
-  ];
-  return mine.flatMap((run) => twins.map((t) => {
+  return mine.flatMap((run) => SLICE_PARITY_DOCS[run.doc].map((t) => {
     const label = `slicing parity (${run.doc}, ${t.what})`;
     const twin = runChild(`${label}, the twin`, bin, [...regimeDocArgs(run.doc), ...t.args],
                           "an abort above is the twin's own; the comparison below reads both runs");
