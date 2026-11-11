@@ -98,6 +98,7 @@ struct LayoutJob {
     CssCascadeRecord    cascade;     /* core/css/css_cascade_pass.h's cascaded values, for this job */
     LineBoxRecord       line_boxes;  /* core/layout/line_box.h's fills, for this job */
     IntrinsicSizeRecord intrinsic;   /* core/layout/intrinsic_size.h's measurements, for this job */
+    IntrinsicSizeRecord shared;      /* the run answers no grid row context decided, which every context serves */
     SelectorUndet       decline;     /* a resting match's unanswered decline; `undetermined` while held */
     char                fork_key[SELECTOR_UNDET_KEY_MAX];   /* step_fork_run's `op`, read after the return */
     LayoutJob          *alive_prev, *alive_next;   /* the driven jobs alive, for layout_job_held */
@@ -303,6 +304,7 @@ void layout_job_free(LayoutJob *job)
     css_cascade_record_release(&job->cascade);
     line_box_record_release(&job->line_boxes);
     intrinsic_size_record_release(&job->intrinsic);
+    intrinsic_size_record_release(&job->shared);
     free(job->stack);
     free(job->memo);
     lj_answers_free(job);
@@ -431,6 +433,7 @@ size_t layout_job_shed(LayoutJob *job)
     css_cascade_record_release(&job->cascade);
     line_box_record_release(&job->line_boxes);
     intrinsic_size_record_release(&job->intrinsic);
+    intrinsic_size_record_release(&job->shared);
     free(job->stack);
     job->stack = NULL;
     job->n = job->cap = job->base = 0;
@@ -491,7 +494,7 @@ IntrinsicSizeRecord *layout_job_intrinsic_sizes_shared(void)
 {
     LayoutJob *job = lj_held();
 
-    return job != NULL && lj_context(job) != NULL ? &job->intrinsic : NULL;
+    return job != NULL ? &job->shared : NULL;
 }
 
 IntrinsicSizeRecord *layout_job_intrinsic_sizes_at(size_t i)

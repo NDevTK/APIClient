@@ -177,8 +177,8 @@ CssCascadeRecord *layout_job_cascade(void);
 LineBoxRecord *layout_job_line_boxes(void);
 /* The same for css-sizing-3 §5.1's intrinsic size record (core/layout/intrinsic_size.h). */
 IntrinsicSizeRecord *layout_job_intrinsic_sizes(void);
-/* The job's own intrinsic size record while a grid row context is current, and NULL otherwise: the store of
-   answers that read nothing a context decides, which every context serves (core/layout/intrinsic_size.c). */
+/* The held job's store of run answers that read nothing a grid row context decides, which every context
+   serves, or NULL with no job held (core/layout/intrinsic_size.c). */
 IntrinsicSizeRecord *layout_job_intrinsic_sizes_shared(void);
 /* The held job's intrinsic size records by index: its own for 0, its grid row contexts' for 1 to the number
    entered, and NULL past them or with no job held. For the census of a run measured in two of them. */

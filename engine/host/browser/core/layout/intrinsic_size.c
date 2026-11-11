@@ -508,8 +508,8 @@ typedef struct {
    entry per container and run for the job's life. */
 typedef struct {
     bool answered;
-    bool pure;                   /* once `answered`: its span made no context read (layout_job_context_taint) */
-    uint64_t taints_at;          /* the job's context reads when the entry was created */
+    uint64_t reads;              /* the context reads its own activations made (layout_job_context_taint); an
+                                    answer with none is one no grid row context decided */
     IsMeasure *meas;             /* a run's or a label's measurement while begun and not released; owned */
     IntrinsicInlineSizes sizes;  /* a run's answer, once `answered` */
     lxb_dom_node_t *prev;        /* a stack's last break whose run and child are answered */
@@ -623,41 +623,51 @@ void intrinsic_size_record_release(IntrinsicSizeRecord *r)
     memset(r, 0, sizeof *r);
 }
 
-/* A run's answered entry in the job's shared record that a grid row context may serve, or NULL. Only a run's
-   entry is shared: its answer is the pair it holds, where a walk's entry holds a place its reader re-reads. */
+/* The answer the job's shared record holds for a run, which every grid row context serves, or NULL. Only a
+   run's answer is shared: it is the pair it holds, where a walk's entry holds a place its reader re-reads. */
 static IsHeld *is_shared_run(lxb_dom_element_t *el, IsKind kind, BlockFlowRun run)
 {
     IntrinsicSizeRecord *s = layout_job_intrinsic_sizes_shared();
+    IsHeld *h;
     size_t i;
+    char nbuf[160];
 
     if (s == NULL || s->cap == 0 || kind != IS_ENTRY_RUN) return NULL;
     i = is_key_probe(s->tab, s->cap, el, kind, run);
-    if (s->tab[i].el == NULL || !s->tab[i].held->answered || !s->tab[i].held->pure) return NULL;
-    return s->tab[i].held;
+    if (s->tab[i].el == NULL) return NULL;
+    h = s->tab[i].held;
+    DCHECKF(h->answered && h->reads == 0,
+            "%s: a run answer every grid row context serves was answered %d with %llu context reads during its "
+            "measurement; only an answer no context decided is shared",
+            box_subject(el, nbuf, sizeof nbuf), (int)h->answered, (unsigned long long)h->reads);
+    return h;
 }
 
-/* Answers `h`. It is pure when its span made no context read, so a grid row context did not decide it. */
-static void is_answer(IsHeld *h)
+/* Ends one activation of `h`'s ask, begun when the job had made `at` context reads, and answers it when `done`.
+   Only the activation's own reads are the entry's: another question's between two activations decide nothing
+   about it. */
+static bool is_activation_end(IsHeld *h, uint64_t at, bool done)
 {
-    h->answered = true;
-    h->pure = layout_job_context_taints() == h->taints_at;
+    h->reads += layout_job_context_taints() - at;
+    if (done) h->answered = true;
+    return done;
 }
 
-/* A pure run answer reached in a grid row context, held in the job's shared record as well, where every
-   context serves it: no context decided it. A key the shared record holds already is left as it is. */
+/* A run answer no grid row context decided, held in the job's shared record as well, where every context
+   serves it. A key the shared record holds already is left as it is. */
 static void is_publish(lxb_dom_element_t *el, BlockFlowRun run, const IsHeld *h)
 {
     IntrinsicSizeRecord *s = layout_job_intrinsic_sizes_shared();
     IsHeld *copy;
     size_t i;
 
-    DCHECK(h->answered, "an intrinsic size entry was shared before it was answered");
-    if (s == NULL || !h->pure) return;
+    DCHECK(h->answered && s != NULL, "an intrinsic size entry was shared before it was answered, or with no job");
+    if (h->reads != 0) return;
     if (s->cap != 0 && s->tab[is_key_probe(s->tab, s->cap, el, IS_ENTRY_RUN, run)].el != NULL) return;
     copy = lexbor_calloc(1, sizeof *copy);
     CHECK(copy != NULL, "out of memory sharing one intrinsic inline size answer");
     copy->answered = true;
-    copy->pure = true;
+    copy->reads = h->reads;
     copy->sizes = h->sizes;
     if (s->used * 2 >= s->cap) is_record_grow(s);
     i = is_key_probe(s->tab, s->cap, el, IS_ENTRY_RUN, run);
@@ -671,9 +681,9 @@ static void is_publish(lxb_dom_element_t *el, BlockFlowRun run, const IsHeld *h)
     s->built++;
 }
 
-/* The entry for the key in the current job's record, created on its first ask; in a grid row context, a pure
-   run answer the job's shared record holds is served when the context's record has no entry. Serving an
-   answer a context decided counts a context read for the reader. */
+/* The entry for the key in the current record (the job's own or its grid row context's), created on its first
+   ask; a run answer the job's shared record holds is served when that record has no entry. Serving an answer a
+   context decided counts a context read for the reader. */
 static IsHeld *is_held_of(lxb_dom_element_t *el, IsKind kind, BlockFlowRun run)
 {
     IntrinsicSizeRecord *r = layout_job_intrinsic_sizes();
@@ -692,7 +702,7 @@ static IsHeld *is_held_of(lxb_dom_element_t *el, IsKind kind, BlockFlowRun run)
             h = r->tab[i].held;
             if (h->answered) r->served++;
             else             r->resumed++;
-            if (h->answered && !h->pure) layout_job_context_taint();
+            if (h->answered && h->reads != 0) layout_job_context_taint();
             return h;
         }
     }
@@ -703,7 +713,6 @@ static IsHeld *is_held_of(lxb_dom_element_t *el, IsKind kind, BlockFlowRun run)
     }
     h = lexbor_calloc(1, sizeof *h);
     CHECK(h != NULL, "out of memory holding one intrinsic inline size measurement");
-    h->taints_at = layout_job_context_taints();
     if (r->used * 2 >= r->cap) is_record_grow(r);
     i = is_key_probe(r->tab, r->cap, el, kind, run);
     r->tab[i].el = el;
@@ -731,6 +740,36 @@ static const IsHeld *is_held_peek(lxb_dom_element_t *el, IsKind kind, BlockFlowR
 }
 #endif
 
+static bool is_label_steps(lxb_dom_element_t *el, const lxb_char_t *text, size_t len, bool rests, IsHeld *h)
+{
+    if (h->meas == NULL) {
+        h->meas = is_measure_new();
+        text_run_measure_init(&h->meas->m);
+        text_run_measure_chars_begin(&h->meas->m, el, text, len, &h->meas->text);
+    }
+    /* The characters are collected one per item and the steps after the collection take theirs, each counted
+       against a resting drive's line items, so a page-sized label rests between activations. */
+    while (!h->meas->collected) {
+        if (text_run_measure_text_done(&h->meas->text)) {
+            text_run_measure_finish_begin(&h->meas->m);
+            h->meas->collected = true;
+            break;
+        }
+        if (rests && !layout_job_line_items_left()) return false;
+        text_run_measure_text_step(&h->meas->m, &h->meas->text);
+        if (rests) layout_job_line_items_spend(1);
+    }
+    while (!text_run_measure_finish_done(&h->meas->m)) {
+        if (rests && !layout_job_line_items_left()) return false;
+        text_run_measure_finish_step(&h->meas->m);
+        if (rests) layout_job_line_items_spend(1);
+    }
+    h->sizes.min_content = text_run_measure_min_content(&h->meas->m);
+    h->sizes.max_content = text_run_measure_max_content(&h->meas->m);
+    is_measure_end(h, false);
+    return true;
+}
+
 /* The label's measurement, continued from where the job's record holds it. `rests` counts each item against a
    resting drive's line items and answers false when they are spent; otherwise it runs to the answer. */
 static bool is_label_width(lxb_dom_element_t *el, const lxb_char_t *text, size_t len, bool rests, CssPx *out)
@@ -742,33 +781,10 @@ static bool is_label_width(lxb_dom_element_t *el, const lxb_char_t *text, size_t
     none.after = NULL;
     none.end = NULL;
     h = is_held_of(el, IS_ENTRY_LABEL, none);
-    if (!h->answered && h->meas == NULL) {
-        h->meas = is_measure_new();
-        text_run_measure_init(&h->meas->m);
-        text_run_measure_chars_begin(&h->meas->m, el, text, len, &h->meas->text);
-    }
-    /* The characters are collected one per item and the steps after the collection take theirs, each counted
-       against a resting drive's line items, so a page-sized label rests between activations. */
-    while (h->meas != NULL && !h->meas->collected) {
-        if (text_run_measure_text_done(&h->meas->text)) {
-            text_run_measure_finish_begin(&h->meas->m);
-            h->meas->collected = true;
-            break;
-        }
-        if (rests && !layout_job_line_items_left()) return false;
-        text_run_measure_text_step(&h->meas->m, &h->meas->text);
-        if (rests) layout_job_line_items_spend(1);
-    }
-    while (h->meas != NULL && !text_run_measure_finish_done(&h->meas->m)) {
-        if (rests && !layout_job_line_items_left()) return false;
-        text_run_measure_finish_step(&h->meas->m);
-        if (rests) layout_job_line_items_spend(1);
-    }
-    if (h->meas != NULL) {
-        h->sizes.min_content = text_run_measure_min_content(&h->meas->m);
-        h->sizes.max_content = text_run_measure_max_content(&h->meas->m);
-        is_measure_end(h, false);
-        is_answer(h);
+    if (!h->answered) {
+        uint64_t at = layout_job_context_taints();
+
+        if (!is_activation_end(h, at, is_label_steps(el, text, len, rests, h))) return false;
     }
     *out = h->sizes.max_content;
     return true;
@@ -875,12 +891,10 @@ static void is_count_measure(lxb_dom_element_t *el, BlockFlowRun run)
     }
 }
 
-bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
+static bool is_run_steps(lxb_dom_element_t *el, BlockFlowRun run, IsHeld *h)
 {
-    IsHeld *h = is_held_of(el, IS_ENTRY_RUN, run);
     IsMeasure *k;
 
-    if (h->answered) return true;
     if (h->meas == NULL) {
         /* Collected before any of it is measured: [UAX14]'s rules read forward past the boundary they decide
            (LB25 by three characters, LB9 across any number of marks); see core/layout/text_run.h. */
@@ -923,7 +937,17 @@ bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
     h->sizes.max_content = css_px_max(text_run_measure_max_content(&k->m), k->floats.rows);
     /* §5.1's answer is two numbers, so the measurement is freed once they are read. */
     is_measure_end(h, true);
-    is_answer(h);
+    return true;
+}
+
+bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
+{
+    IsHeld *h = is_held_of(el, IS_ENTRY_RUN, run);
+    uint64_t at;
+
+    if (h->answered) return true;
+    at = layout_job_context_taints();
+    if (!is_activation_end(h, at, is_run_steps(el, run, h))) return false;
     is_count_measure(el, run);
     is_publish(el, run, h);
     return true;
@@ -1373,16 +1397,10 @@ static IntrinsicInlineSizes is_table_sizes(lxb_dom_element_t *el)
 
 /* `is_block_context`'s walk asked ahead of its read, in the read's order: each anonymous block box's run, then
    each block-level child's own sizes, its place held from one ask to the next. */
-static bool is_block_context_ask(lxb_dom_element_t *el)
+static bool is_block_context_steps(lxb_dom_element_t *el, IsHeld *h)
 {
-    BlockFlowRun none;
-    IsHeld *h;
-
-    none.after = NULL;
-    none.end = NULL;
-    h = is_held_of(el, IS_ENTRY_STACK, none);
     /* The floats `is_block_context` reads, gathered and measured first. */
-    if (!h->answered) {
+    {
         lxb_dom_element_t **fv;
         size_t fn, i;
 
@@ -1394,7 +1412,7 @@ static bool is_block_context_ask(lxb_dom_element_t *el)
             }
         free(fv);
     }
-    while (!h->answered) {
+    for (;;) {
         lxb_dom_node_t *brk;
         BlockFlowRun run;
 
@@ -1403,15 +1421,25 @@ static bool is_block_context_ask(lxb_dom_element_t *el)
         run.after = h->prev;
         run.end = brk;
         if (block_flow_run_generates_box(el, run) && !intrinsic_inline_run_sizes_ask(el, run)) return false;
-        if (brk == NULL) {
-            is_answer(h);
-            break;
-        }
+        if (brk == NULL) return true;
         if (!intrinsic_inline_sizes_ask(lxb_dom_interface_element(brk))) return false;
         h->prev = brk;
         layout_job_line_items_spend(1);
     }
-    return true;
+}
+
+static bool is_block_context_ask(lxb_dom_element_t *el)
+{
+    BlockFlowRun none;
+    IsHeld *h;
+    uint64_t at;
+
+    none.after = NULL;
+    none.end = NULL;
+    h = is_held_of(el, IS_ENTRY_STACK, none);
+    if (h->answered) return true;
+    at = layout_job_context_taints();
+    return is_activation_end(h, at, is_block_context_steps(el, h));
 }
 
 /* `is_table_sizes`' operands asked ahead of its read: CSS 2.1 §17.5.2.2's column widths read every cell's sizes
@@ -1421,16 +1449,10 @@ static bool is_block_context_ask(lxb_dom_element_t *el)
    step that begins the ask, over every row of the table. Next: §17.5's grid built as a held walk over
    core/layout/table_box.h's rows. How its absence shows: a REST_UNIT_LAYOUT_DESCENDANTS overrun whose samples
    sit under `table_grid_build` reached from `is_table_ask`. */
-static bool is_table_ask(lxb_dom_element_t *el)
+static bool is_table_steps(lxb_dom_element_t *el, IsHeld *h)
 {
-    BlockFlowRun none;
-    IsHeld *h;
     IsTable *t;
 
-    none.after = NULL;
-    none.end = NULL;
-    h = is_held_of(el, IS_ENTRY_TABLE, none);
-    if (h->answered) return true;
     if (h->table == NULL) {
         if (!layout_job_line_items_left()) return false;
         h->table = lexbor_calloc(1, sizeof *h->table);
@@ -1453,8 +1475,21 @@ static bool is_table_ask(lxb_dom_element_t *el)
         layout_job_line_items_spend(1);
     }
     is_table_release(h);
-    is_answer(h);
     return true;
+}
+
+static bool is_table_ask(lxb_dom_element_t *el)
+{
+    BlockFlowRun none;
+    IsHeld *h;
+    uint64_t at;
+
+    none.after = NULL;
+    none.end = NULL;
+    h = is_held_of(el, IS_ENTRY_TABLE, none);
+    if (h->answered) return true;
+    at = layout_job_context_taints();
+    return is_activation_end(h, at, is_table_steps(el, h));
 }
 
 /* css-contain-2 §3.2 "Inline-Size Containment" (and §3.1, which implies it): "the inline-axis intrinsic sizes of

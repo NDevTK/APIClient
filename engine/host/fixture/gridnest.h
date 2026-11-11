@@ -9,11 +9,7 @@
    resting drive; the shrink-to-fit width reads its containing block's width, a grid area's, which the drive
    asks as the columns' layout job question before the line box reads it. The numbers are derived from those
    sections, not read off a browser. They end with TF_CANVAS_INK, which test_forced.c defines before including
-   it.
-   `gridrun` nests a grid in a grid's item over one text run of 1024 words, longer than one activation's line
-   items, so its css-sizing-3 §5.1 measurement rests. The outer grid's columns ask it, and its row sizing lays
-   the inner grid out in a grid row context whose columns ask it again; it reads nothing a context decides, so
-   one job measures it once. Both grids' one `auto` column stretches to the 200px (§11.8), so #gt is 200px. */
+   it. */
 #ifndef ENGINE_HOST_FIXTURE_GRIDNEST_H
 #define ENGINE_HOST_FIXTURE_GRIDNEST_H
 #ifndef TF_CANVAS_INK
@@ -36,6 +32,10 @@
 static const char HTML_GRIDNEST2[] = GN_DOC("gridnest2", GN_OPEN, GN_CLOSE);
 static const char HTML_GRIDNEST4[] = GN_DOC("gridnest4", GN_OPEN GN_OPEN GN_OPEN, GN_CLOSE GN_CLOSE GN_CLOSE);
 
+/* `gridrun` nests a grid in a grid's item over one text run of 1024 words, longer than one activation's line
+   items, so its css-sizing-3 §5.1 measurement rests. The outer grid's columns ask it, and its row sizing lays
+   the inner grid out in a grid row context whose columns ask it again; it reads nothing a context decides, so
+   one job measures it once. Both grids' one `auto` column stretches to the 200px (§11.8), so #gt is 200px. */
 #define GN_W4 "aa bb cc dd "
 #define GN_W16 GN_W4 GN_W4 GN_W4 GN_W4
 #define GN_W64 GN_W16 GN_W16 GN_W16 GN_W16
