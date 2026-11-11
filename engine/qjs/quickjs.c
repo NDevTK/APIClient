@@ -47402,6 +47402,8 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
     case JS_TAG_NULL: fg_u8(out, 'N'); return;
     case JS_TAG_UNDEFINED: fg_u8(out, 'U'); return;
     case JS_TAG_UNINITIALIZED: fg_u8(out, 'Z'); return;   /* a record's not-yet-computed slot (a Concolic's proto) */
+    /* a frame's handler for a `try` (OP_catch): an offset into the frame's own body, which the graph names */
+    case JS_TAG_CATCH_OFFSET: fg_u8(out, 'H'); fg_u32(out, (uint32_t)JS_VALUE_GET_INT(v)); return;
     case JS_TAG_FLOAT64: { double d = JS_VALUE_GET_FLOAT64(v); fg_u8(out, 'D'); fg_put(out, &d, 8); return; }
     case JS_TAG_STRING: fg_string(w, out, JS_VALUE_GET_STRING(v)); return;
     case JS_TAG_STRING_ROPE: {
@@ -48082,6 +48084,7 @@ static JSValue fg_rvalue(FGReader *r)
     case 'N': return JS_NULL;
     case 'U': return JS_UNDEFINED;
     case 'Z': return JS_UNINITIALIZED;
+    case 'H': return JS_NewCatchOffset(r->ctx, (int32_t)fg_r32(r));
     case 'D': memcpy(&d, fg_take(r, 8), 8); return js_float64(d);
     case 'S': case 's': return fg_rstring(r, t);
     case 'A':
