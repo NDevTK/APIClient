@@ -6,6 +6,7 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_contain.h"
+#include "core/css/css_container.h"
 #include "core/css/css_display.h"
 #include "core/dom/document.h"
 #include "core/layout/containment.h"
@@ -49,16 +50,36 @@ bool containment_layout_paint_applies(lxb_dom_element_t *el)
     return !table_box_kind_is_internal(kind) || kind == TABLE_BOX_CELL;
 }
 
+/* The containment types in effect by declaration: the computed `contain`, and what CSS Conditional 5 §5.1
+   "Creating Query Containers: the container-type property" applies — `size` "applies style containment and
+   size containment to the principal box", and `inline-size` "applies style containment and inline-size
+   containment". `scroll-state` applies none. */
+static unsigned ct_declared(lxb_dom_element_t *el)
+{
+    unsigned bits = css_computed_contain(el), type = css_computed_container_type(el);
+
+    if (type & CSS_CONTAINER_TYPE_SIZE) bits |= CSS_CONTAIN_SIZE | CSS_CONTAIN_STYLE;
+    if (type & CSS_CONTAINER_TYPE_INLINE_SIZE) bits |= CSS_CONTAIN_INLINE_SIZE | CSS_CONTAIN_STYLE;
+    return bits;
+}
+
 bool containment_size(lxb_dom_element_t *el)
 {
     DCHECK(el != NULL, "css-contain-2 §3.1's size containment was asked of no element");
-    return (css_computed_contain(el) & CSS_CONTAIN_SIZE) && ct_size_applies(el);
+    return (ct_declared(el) & CSS_CONTAIN_SIZE) && ct_size_applies(el);
 }
 
 bool containment_inline_size(lxb_dom_element_t *el)
 {
     DCHECK(el != NULL, "css-contain-2 §3.2's inline-size containment was asked of no element");
-    return (css_computed_contain(el) & (CSS_CONTAIN_SIZE | CSS_CONTAIN_INLINE_SIZE)) && ct_size_applies(el);
+    return (ct_declared(el) & (CSS_CONTAIN_SIZE | CSS_CONTAIN_INLINE_SIZE)) && ct_size_applies(el);
+}
+
+bool containment_query_container_formatting_context(lxb_dom_element_t *el)
+{
+    DCHECK(el != NULL, "CSS Conditional 5 §5.1's independent formatting context was asked of no element");
+    return (css_computed_container_type(el) & (CSS_CONTAINER_TYPE_SIZE | CSS_CONTAINER_TYPE_INLINE_SIZE)) &&
+           !ct_shared_exclusion(el, css_computed_display(el));
 }
 
 bool containment_layout(lxb_dom_element_t *el)
@@ -77,7 +98,7 @@ bool containment_paint(lxb_dom_element_t *el)
    element does not generate a principal box". */
 static bool ct_any_active(lxb_dom_element_t *el)
 {
-    unsigned bits = css_computed_contain(el);
+    unsigned bits = ct_declared(el);
     CssDisplay d;
 
     if (bits == 0) return false;

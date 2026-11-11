@@ -219,6 +219,8 @@ static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)
        establishes an independent formatting context", which for a block container is a block formatting
        context (css-display-3 §2.2). */
     if (containment_layout(el) || containment_paint(el)) return true;
+    /* CSS Conditional 5 §5.1: a size query container "establishes an independent formatting context". */
+    if (containment_query_container_formatting_context(el)) return true;
     /* css-flexbox-1 §4 "Flex Items": "A flex item establishes an independent formatting context for its
        contents", and css-grid-1 §6.1 "Grid Item Display" says the same of a grid item. */
     if (bf_is_flex_or_grid_item(el)) return true;

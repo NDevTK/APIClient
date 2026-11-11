@@ -131,6 +131,10 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name);
    and `content` are their expansions and `none` is the empty set. */
 unsigned css_computed_contain(lxb_dom_element_t *el);
 
+/* CSS Conditional 5 §5.1's computed `container-type` of `el` as core/css/css_container.h's set; `normal` is the
+   empty set. */
+unsigned css_computed_container_type(lxb_dom_element_t *el);
+
 /* Whether `el`'s computed css-will-change-1 §2 `will-change` names `property` (a lowercase property name), so
    that "the author expects to animate or change the property with the given name on the element". */
 bool css_computed_will_change_names(lxb_dom_element_t *el, const char *property);

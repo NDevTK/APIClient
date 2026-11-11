@@ -1,6 +1,6 @@
 /* css-contain-2 §3 "Types of Containment": which containment types are in effect on an element's principal
- * box. The computed `contain` (core/css/css_computed_value.h's `css_computed_contain`) names the types the
- * author asked for; each type's section then lists the boxes on which it "has no effect", and this component
+ * box. The computed `contain` (core/css/css_computed_value.h's `css_computed_contain`) and the containment a
+ * computed `container-type` applies name the types the author asked for; each type's section then lists the boxes on which it "has no effect", and this component
  * applies those lists, so every reader asks whether a type is in effect rather than what was declared.
  *
  * Style containment (§3.4) is not answered here: it scopes counters and quote depth, and this engine generates
@@ -19,6 +19,10 @@ bool containment_size(lxb_dom_element_t *el);
 /* §3.2 "Inline-Size Containment" or §3.1: `el`'s inline-axis intrinsic sizes are determined as if it had no
    content. True wherever `containment_size` is. */
 bool containment_inline_size(lxb_dom_element_t *el);
+
+/* CSS Conditional 5 §5.1: a `size` or `inline-size` query container "establishes an independent formatting
+   context", on a principal box that can establish one (not where §3's shared exclusions put it out of reach). */
+bool containment_query_container_formatting_context(lxb_dom_element_t *el);
 
 /* §3.3 "Layout Containment": `el`'s box is a layout containment box. It establishes an independent formatting
    context and both positioning containing blocks, creates a stacking context, has no baseline for anything

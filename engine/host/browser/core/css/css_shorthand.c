@@ -13,6 +13,7 @@
 #include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_contain.h"
+#include "core/css/css_container.h"
 #include "core/css/css_counter_style.h"
 #include "core/css/css_filter.h"
 #include "core/css/css_font_shorthand.h"
@@ -1153,6 +1154,14 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
     if (strcmp(shorthand, "grid-template") == 0) return css_grid_template_component(false, value, longhand);
     if (strcmp(shorthand, "grid") == 0) return css_grid_template_component(true, value, longhand);
 
+    /* ---- CSS Conditional 5 §5.3's `container`, whose grammar core/css/css_container.h owns ----------------- */
+    if (strcmp(shorthand, "container") == 0) {
+        if (strcmp(longhand, "container-name") != 0 && strcmp(longhand, "container-type") != 0) return NULL;
+        /* css-cascade-5 §3 "Shorthand Properties": a CSS-wide keyword sets every sub-property to itself. */
+        if (css_wide_keyword(value)) return css_sh_strdup(value);
+        return css_container_shorthand_component(value, longhand);
+    }
+
     /* ---- css-lists-3 §3.6's `list-style` ------------------------------------------------------------------ */
     if (strcmp(shorthand, "list-style") == 0) {
         int term = -1;
@@ -1449,6 +1458,9 @@ bool css_shorthand_validates_longhand(const char *longhand)
     /* css-contain-2 §2's `contain`, which lexbor's registry does not carry; core/css/css_contain.h owns its
        grammar. */
     if (strcmp(longhand, "contain") == 0) return true;
+    /* CSS Conditional 5 §5.1's and §5.2's two, which it does not carry either; core/css/css_container.h owns
+       their grammars. */
+    if (strcmp(longhand, "container-type") == 0 || strcmp(longhand, "container-name") == 0) return true;
     /* filter-effects-1 §5's `filter` and filter-effects-2 §2's `backdrop-filter`; core/css/css_filter.h owns
        their grammar. */
     if (strcmp(longhand, "filter") == 0 || strcmp(longhand, "backdrop-filter") == 0) return true;
@@ -1523,6 +1535,12 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
 
         return css_contain_parse(value, &bits) ? css_contain_serialize(bits) : NULL;
     }
+    if (strcmp(longhand, "container-type") == 0) {
+        unsigned bits;
+
+        return css_container_type_parse(value, &bits) ? css_container_type_serialize(bits) : NULL;
+    }
+    if (strcmp(longhand, "container-name") == 0) return css_container_name_specified(value);
     if (strcmp(longhand, "filter") == 0 || strcmp(longhand, "backdrop-filter") == 0)
         return css_filter_specified(value);
     if (strcmp(longhand, "clip-path") == 0) return css_clip_path_specified(value);
@@ -1629,7 +1647,8 @@ typedef enum {
     CSS_SH_BACKGROUND,  /* css-backgrounds-3 §2.10's `background`, whose grammar is a LIST OF LAYERS and lives
                            in core/css/css_background_shorthand.h */
     CSS_SH_GRID_TEMPLATE,   /* css-grid-1 §7.4's `grid-template`, whose grammar is core/css/css_grid_template.h's */
-    CSS_SH_GRID             /* css-grid-1 §7.8's `grid`, the same component's */
+    CSS_SH_GRID,            /* css-grid-1 §7.8's `grid`, the same component's */
+    CSS_SH_CONTAINER        /* CSS Conditional 5 §5.3's `container`, whose grammar is core/css/css_container.h's */
 } CssShKind;
 
 typedef struct {
@@ -1668,6 +1687,8 @@ typedef struct {
 static const char *const LH_MARGIN[]  = { "margin-top", "margin-right", "margin-bottom", "margin-left" };
 static const char *const LH_PADDING[] = { "padding-top", "padding-right", "padding-bottom", "padding-left" };
 static const char *const LH_OVERFLOW[] = { "overflow-x", "overflow-y" };
+/* CSS Conditional 5 §5.3's two, in its `Value:` line's order. */
+static const char *const LH_CONTAINER[] = { "container-name", "container-type" };
 /* css-flexbox-1 §5.3 "Flex Direction and Wrap: the flex-flow shorthand", in its `Value:` line's own order
    (`<'flex-direction'> || <'flex-wrap'>`), with each longhand's own `Initial:` line beside it — §5.1's `row`
    and §5.2's `nowrap`. §5.3's own `Initial:` line is "see individual properties", so it states none for the
@@ -1731,6 +1752,9 @@ static const CssShorthandRow SHORTHANDS[] = {
     { "border-style",  LH_BORDER_STYLE,   4, CSS_SH_FOUR_SIDE, "solid", NULL, NULL },
     { "border-top",    LH_BORDER_TOP,     3, CSS_SH_ALL_OF,    "1px solid red", BORDER_PART_INITIAL, NULL },
     { "border-width",  LH_BORDER_WIDTH,   4, CSS_SH_FOUR_SIDE, "1px", NULL, NULL },
+    /* CSS Conditional 5 §5.3. The fixture names both terms, each away from its initial, so the round trip
+       exercises the `/` and both grammars. */
+    { "container",     LH_CONTAINER,      2, CSS_SH_CONTAINER, "card main / inline-size", NULL, NULL },
     /* css-flexbox-1 §7.1. The fixture names ALL THREE components with each away from its own OMITTED default
        — 2 against a default grow of 1, 3 against a default shrink of 1, `10px` against a default basis of 0 —
        which is the condition under which every one of them is written out, so the round trip exercises the
@@ -2191,6 +2215,7 @@ char *css_shorthand_serialize_value(const char *shorthand, const char *const *va
     case CSS_SH_ANIMATION:  return css_animation_shorthand_value(values);
     case CSS_SH_GRID_TEMPLATE: return css_grid_template_value(false, values);
     case CSS_SH_GRID:       return css_grid_template_value(true, values);
+    case CSS_SH_CONTAINER:  return css_container_shorthand_serialize(values);
     default:
         DCHECK(row->kind == CSS_SH_BORDER,
                "a shorthand row carries a value-serialization kind this switch does not implement");
@@ -2964,6 +2989,8 @@ bool css_shorthand_complete_for(const char *longhand)
         "direction", "writing-mode", "transform", "visibility",
         /* `contain` — css-contain-2 §2 declares it standalone and no shorthand sets it. */
         "contain",
+        /* CSS Conditional 5 §5.3's `container`, in the table above, is the only shorthand over these two. */
+        "container-type", "container-name",
         /* `will-change` — css-will-change-1 §2 declares it standalone and no shorthand sets it. */
         "will-change",
         /* `transform-box` — css-transforms-1 §5 declares it standalone and no shorthand sets it. */

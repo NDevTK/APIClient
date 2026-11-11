@@ -129,6 +129,8 @@ typedef enum {
     X(TRANSFORM,           "transform",           LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(CONTAIN,             "contain",             LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(WILL_CHANGE,         "will-change",         LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
+    X(CONTAINER_TYPE,      "container-type",      LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
+    X(CONTAINER_NAME,      "container-name",      LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(TRANSFORM_BOX,       "transform-box",       LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(TRANSFORM_ORIGIN,    "transform-origin",    LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(TRANSLATE,           "translate",           LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \

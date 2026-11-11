@@ -3276,6 +3276,8 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
     /* css-contain-2 §2 "Strong Containment: the contain property", whose `Initial:` line is `none`; lexbor's
        registry carries no `contain` entry, so this row is its §7.1 initial value. */
     { "contain", "none" },
+    /* CSS Conditional 5 §5.1 and §5.2, `Initial: normal` and `Initial: none`; lexbor's registry carries neither. */
+    { "container-type", "normal" }, { "container-name", "none" },
     /* css-will-change-1 §2 "Hinting at Future Behavior: the will-change property", `Initial: auto`; lexbor's
        registry carries no `will-change` entry. */
     { "will-change", "auto" },

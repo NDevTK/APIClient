@@ -15,6 +15,7 @@
 #include "core/css/css_animation_shorthand.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_contain.h"
+#include "core/css/css_container.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_display.h"
 #include "core/css/css_filter.h"
@@ -2664,6 +2665,27 @@ static char *computed_contain(char *spec)
     return css_contain_serialize(ok ? bits : 0);
 }
 
+/* CSS Conditional 5 §5.1's `Computed value: specified keyword` and §5.2's "the keyword none, or an ordered list
+   of identifiers", over core/css/css_container.h's grammars. As for `contain`, a value outside them here came
+   through a substitution function and is invalid at computed-value time: the initial value, since neither
+   property is inherited. */
+static char *computed_container_type(char *spec)
+{
+    unsigned bits = 0;
+    bool ok = css_container_type_parse(spec, &bits);
+
+    free(spec);
+    return css_container_type_serialize(ok ? bits : 0);
+}
+
+static char *computed_container_name(char *spec)
+{
+    char *out = css_container_name_specified(spec);
+
+    free(spec);
+    return out != NULL ? out : css_cv_strdup("none");
+}
+
 /* css-transforms-1 §4's computed value, over core/css/css_transform_origin.h's grammar. A value outside it is
    the declaration CSS Syntax drops, which leaves §4's initial `50% 50%`, as css_cv_transform_list's `none` is
    §3's. CONSUMES `spec`. */
@@ -2883,6 +2905,21 @@ unsigned css_computed_contain(lxb_dom_element_t *el)
     return bits;
 }
 
+unsigned css_computed_container_type(lxb_dom_element_t *el)
+{
+    char *v = css_computed_value(el, "container-type");
+    bool ok;
+    unsigned bits = 0;
+
+    DCHECK(v != NULL, "CSS Conditional 5 §5.1's computed `container-type` came back as no value; its row derives "
+                      "one always");
+    ok = css_container_type_parse(v, &bits);
+    DCHECKF(ok, "CSS Conditional 5 §5.1's computed `container-type` `%s` is not in the grammar its own derivation "
+                "writes", v);
+    free(v);
+    return bits;
+}
+
 static char *computed_list_style_image(char *spec)
 {
     if (css_cv_is(spec, "none")) return spec;
@@ -2970,6 +3007,10 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
         return computed_list_style_image(spec);
     case CSS_PROPERTY_CONTAIN:
         return computed_contain(spec);
+    case CSS_PROPERTY_CONTAINER_TYPE:
+        return computed_container_type(spec);
+    case CSS_PROPERTY_CONTAINER_NAME:
+        return computed_container_name(spec);
     /* css-will-change-1 §2 "Hinting at Future Behavior: the will-change property": `Computed value: specified
        value`. */
     case CSS_PROPERTY_WILL_CHANGE:
