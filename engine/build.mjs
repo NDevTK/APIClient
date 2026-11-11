@@ -1,18 +1,13 @@
-/* APIClient v2 build — minimal emscripten WASM build of CLEAN quickjs-ng + the
- * host scheduler entry (engine/host/main.c). Deliberately small: the old build
- * (COW barrier post-processing, JSPI, Lexbor/Z3 link) is gone with the
- * fresh fork. Re-add each capability ONLY when the scheduler needs it, verified.
+/* Engine build: an emscripten WASM build of engine/qjs and the host scheduler (engine/host), and with
+ * `native` the same sources as a native development host.
  *
  *   node engine/build.mjs                  -> engine/host/out/qjs.mjs + qjs.wasm (node smoke test)
- *   node engine/build.mjs native [min]     -> the smoke fixture built and run NATIVELY (the memory series)
+ *   node engine/build.mjs native [min]     -> the smoke fixture built and run natively (the memory series)
  *   node engine/build.mjs native leak      -> the same under LeakSanitizer
  *   node engine/build.mjs native address   -> the same under AddressSanitizer
- *   (the CROSS-SESSION round trip -- session one parks its frontier to a file, session two, a second
- *    process, resumes from it -- now runs on EVERY build above; `cold` as an argument is inert)
  *
- * Build success/failure is the milestone-0 signal (does clean quickjs-ng compile
- * + link + boot). Design-correctness verification stays on the live Chrome
- * harness once the browser target is wired.
+ * The cross-session round trip (session one parks its frontier to a file; session two, a second process,
+ * resumes from it) runs on every build above.
  */
 import { spawnSync, spawn } from "node:child_process";
 import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, readFileSync, renameSync, rmSync, openSync, closeSync, symlinkSync } from "node:fs";
@@ -32,76 +27,32 @@ import { spawnBudgeted, BUDGET_NOT_INSTALLED } from "./child_run.mjs";
 import { composerFields, defFields } from "./census_rows.mjs";
 import { NATIVE_HOST_LIBS } from "./native_libs.mjs";
 
-/* THE INSTANT A SOURCE-DERIVED FACT IS TAKEN AT, AND WHY IT IS THE REVISION'S AND NOT THE READER'S.
- *
- * Three readers below derive a contract from engine/host's own C — `censusRowSet` takes a census's required
- * row set from the composer's own format string, `hostDefine` reads a tuning constant, `forkCensusName` reads
- * a census's reserved key — and they READ rather than restate for CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE's
- * reason: the hand-kept copy this file used to hold went stale ELEVEN rows over two censuses, by two lanes'
- * counts. That argument is untouched and none of it is being undone here.
- *
- * WHAT NONE OF THEM STATED IS *WHEN* THEY READ, AND IN A SHARED CHECKOUT THAT IS THE WHOLE CONTRACT. Every
- * one was a lazy read of the working tree first evaluated by a POST-RUN reader — `coldFields()` is reached
- * from `lastTwo` and from `hungCauseCensus` and from nowhere else — so the required set was taken half an hour
- * after the compiler read the same file. Measured: a thirty-minute build compiled solver/result.c, a peer's
- * row arrived in the working tree while it ran, and the reader then demanded `classicParseShared` of an
- * artifact it had itself just built without it. The build died at its LAST stage, having already completed a
- * full native smoke, under a message telling its reader that a renamed field must be renamed here — so the
- * cheapest hypothesis available is that something is wrong with the reader's OWN diff, and the field the
- * message names belongs to a peer. This is §A-CROSS-BOUNDARY-DIFF inside the build tool: build.mjs is
- * INTERPRETED FROM THE TREE and therefore live on WRITE, the artifact is live only after a compile, and the
- * two halves of one contract were being deployed at different instants.
- *
- * SO THE FACT IS TAKEN WHERE THE BUILD TAKES ITS REVISION, WHICH IS THE INSTANT EVERY OTHER NUMBER HERE IS
- * ALREADY ABOUT. `revAtStart()` is evaluated before the first compiler runs and every verdict this file
- * prints is a statement about that revision; a field contract taken at a DIFFERENT instant is a second,
- * differently-timed contract, and the day the two disagree the build reports a defect in the tree. Frozen and
- * in-tree are then ONE contract and not two: a frozen snapshot's tree cannot move, so the freeze reads exactly
- * what a late read would have read and this mechanism is invisible there — which is the
- * §A-superseded-system-is-DELETED test, no second path to keep in step with the first.
- *
- * IT READS THE WORKING TREE AND DELIBERATELY NOT `git show <rev>:<path>`. The compiler compiles the WORKING
- * TREE, so on a DIRTY cone — a state this file supports and stamps, and the state a lane landing a diff is
- * always in — committed content is the wrong bytes; and a reader that preferred one and fell back to the other
- * would be two contracts keyed on dirtiness, with the fallback landing in exactly the case it is most often
- * used in. There is no branch here at all: one read, of the bytes the compiler gets, at an instant this file
- * chooses.
- *
- * THE RESIDUAL WINDOW IS THE BUILD'S OWN AND IS ALREADY REPORTED. Between this freeze and the compiler's read
- * of one file sit the lexbor archive and every object before it, so a tree that moves in that window leaves an
- * artifact the frozen set does not describe. That is not a new hole and it is not this contract's: it is the
- * same window `revisionMoved` asks about at the end of every build, over the same cone, and a build whose tree
- * moved prints `[rev] THE TREE MOVED UNDER THIS BUILD`. What the freeze makes impossible is the case that was
- * costing whole builds — a row ADDED after it is simply not in the required set, so the reader asks the
- * artifact only for what the artifact was built to answer. A row RENAMED inside that window still THROWS,
- * because the artifact then genuinely disagrees with the revision this build claims to be of; `hostSourceMoved`
- * is read into that throw so the reader is sent to the movement instead of to their own diff. Nothing here
- * turns a refusal into a warning: a set that disagrees with its artifact over a tree that did NOT move is the
- * same loud failure it has always been, and the throw now says which of the two it is.
- *
- * AND A FIRST READ AFTER THE FREEZE IS REFUSED RATHER THAN SERVED. A pre-read keyed on a LIST of files would be
- * the hand-kept second copy this whole mechanism exists to end, one level up in the instrument; so the set is
- * the registry below and the registry is populated by the fact declarations themselves, which is
- * `censusRowSet`'s own argument applied to its own callers. A derivation added later and left unregistered
- * would otherwise be taken late and silently — the defect returning under a new name — and instead it stops
- * the build at its own line and names what to do. */
+/* Source-derived facts. Readers below take contracts from engine/host's own sources (a census's row set from
+   its declaration, a tuning constant, a census's reserved key) instead of restating them. Every such fact is
+   taken at one instant, `freezeHostSources`, beside the revision and before the first compiler runs, so the
+   required sets describe the tree that was compiled: in a shared checkout a row a peer adds while the build
+   runs is not in the set, and a reader asks the artifact only for what it was built to answer.
+   The read is of the working tree, never `git show <rev>:<path>`, because the compiler compiles the working
+   tree and a dirty cone is a state this file supports and stamps.
+   A tree that moves between the freeze and the compiler's read of a file is the window `revisionMoved`
+   reports at the end of every build. A row renamed in that window still throws, and `hostSourceMoved` is
+   read into that throw so the message names the movement.
+   The registry is filled by the fact declarations themselves, so no list of files is kept, and a host source
+   first read after the freeze is refused by `hostSource`. */
 const SOURCE_FACTS = [];
 const HOST_SOURCE = new Map();
 let SOURCES_FROZEN = false;
-/* A FACT DERIVED FROM engine/host's SOURCES, MEMOIZED AND REGISTERED BY ITS OWN DECLARATION. No `why` is
-   passed: the derivation beneath already carries one and throws with it, and a second copy of the reason here
-   is the thing this file is largest about. Declared at module scope BY EVERY CALLER, including the four whose
-   reading happens inside a stage — a fact reachable only from inside a function is a fact the freeze cannot
-   take, and `hostSource` refuses it rather than serving it late. */
+/* A fact derived from engine/host's sources, memoized and registered by its own declaration. Every caller
+   declares it at module scope, including those whose reading happens inside a stage: a fact reachable only
+   from inside a function is one the freeze cannot take, and `hostSource` refuses it. */
 function sourceFact(derive) {
   let value, taken = false;
   const get = () => { if (!taken) { value = derive(); taken = true; } return value; };
   SOURCE_FACTS.push(get);
   return get;
 }
-/* ONE READ OF ONE HOST SOURCE PER BUILD. Cached so two derivations over one file cannot disagree about what
-   that file says, which they could while each read it at its own instant — and so that `hostSourceMoved` has
-   the bytes to compare against rather than a digest of something nobody kept. */
+/* One read of one host source per build, cached so two derivations over one file agree and so
+   `hostSourceMoved` has the bytes to compare against. */
 function hostSource(file, why) {
   const had = HOST_SOURCE.get(file);
   if (had !== undefined) return had;
@@ -116,20 +67,16 @@ function hostSource(file, why) {
   HOST_SOURCE.set(file, src);
   return src;
 }
-/* TAKEN BESIDE THE REVISION, BEFORE THE FIRST COMPILER RUNS — called once, at the top level, next to the line
-   that prints which revision this build is of. Evaluating every fact here also moves a DERIVATION failure — a
-   composer renamed, a `#define` gone — from the end of a thirty-minute build to its first second, which is the
-   same fact arriving at the only moment it is cheap to receive. */
+/* Takes every registered fact, then refuses further first reads. Called once at the top level, beside the
+   line that prints the build's revision, so a derivation failure (a composer renamed, a `#define` gone) stops
+   the build in its first second. Returns the number of host sources read. */
 function freezeHostSources() {
   for (const get of SOURCE_FACTS) get();
   SOURCES_FROZEN = true;
   return HOST_SOURCE.size;
 }
-/* WHICH OF THE FROZEN SOURCES HAS SINCE MOVED, read into the field-contract throw so that a disagreement
-   between a required set and an artifact is not reported as the reader's defect when it is the tree's. Returns
-   the paths, or an EMPTY array — a positive empty, read as "the sources these contracts came from are still on
-   disk as they were", never as a question nobody asked. A file that has been DELETED reads as moved, which is
-   what it is. */
+/* The frozen sources whose bytes on disk now differ, as paths; an empty array says none moved. A deleted file
+   reads as moved. */
 function hostSourceMoved() {
   const moved = [];
   for (const [file, was] of HOST_SOURCE) {
@@ -140,231 +87,54 @@ function hostSourceMoved() {
   return moved;
 }
 
-/* A RUN THAT NEVER RETURNS IS NOT A VERDICT, AND A WALL CLOCK CANNOT SAY WHY. Every program this file
-   launches gets ONE budget and ONE backstop, and they measure DIFFERENT THINGS through DIFFERENT SIGNALS so
-   that they can never collapse into one verdict. Declared here because the native targets run ~300 lines
-   before the wasm ones and a `const` below them would be a TDZ throw.
-
-   THE BUDGET IS CPU, WHICH IS THE THING THE QUESTION IS ABOUT. What this file wants to know is how much
-   EXPLORATION the fixture was granted, and until this change it granted a stretch of WALL CLOCK — so the
-   amount of work the smoke was allowed was a function of what the other nine agents on the box were doing.
-   Measured on six consecutive builds of this project, each killed at the same fifteen wall-clock minutes:
-   the run retired between 45158 and 68947 flows. That is a 53% spread in the budget, invisible in the report,
-   and a reader comparing two revisions' smoke results was comparing two different machines. CLAUDE.md
-   §Testing names the fix in the units to use — CPU actually consumed, RLIMIT_CPU — and the kernel enforces it
-   for free: the child is exec'd under `ulimit -t`, exceeds it, and dies on SIGXCPU. THAT IS NOT A CAP ON THE
-   FRONTIER (§NO BOUNDS is about the engine capping its own exploration and has never had anything to say
-   about a harness refusing to wait forever); it is the same budget the wall clock was pretending to be,
-   stated in units the machine cannot move.
-
-   THE BACKSTOP IS THE WALL CLOCK, AND IT IS NOW ONLY FOR WHAT CPU CANNOT SEE. A deadlocked child consumes no
-   CPU, so RLIMIT_CPU never fires on one and something else must. It is GENEROUS — four times the CPU budget,
-   so it fires only on a child that averaged under a quarter of one core — it arrives as SIGTERM from THIS
-   HARNESS where the budget arrives as SIGXCPU from the KERNEL, and it carries its own verdict and its own
-   exit code. Both numbers are printed at every outcome and the verdict names which of them decided.
-
-   AND RAISING THAT WALL NUMBER IS NOT RAISING A CAP, BECAUSE THE CAP MOVED TO THE KERNEL. The incident this
-   backstop was written for — four abandoned `out/qjs.js` processes found at 84-97% CPU having run 1.9 to 4.1
-   hours, which WERE the machine load six lanes then declined to measure against — is now impossible by
-   construction rather than by the clock: a runaway can burn at most RUN_CPU_BUDGET_S of CPU before the kernel
-   kills it, whatever the wall clock says. A process the wall backstop reaches is by definition one that was
-   not consuming the machine. */
+/* Every program this file launches gets one budget and one backstop, which measure different things and
+   arrive as different signals.
+   The budget is CPU: the child is exec'd under `ulimit -t` and the kernel ends it with SIGXCPU, so the work a
+   run is granted does not depend on what else the machine is doing. It limits how long this harness waits,
+   not what the engine explores.
+   The backstop is the wall clock, for what CPU cannot see: a deadlocked child consumes no CPU. It is four
+   times the CPU budget, arrives as SIGTERM from this harness, and carries its own verdict and exit code.
+   Declared here because the native targets read these during module evaluation, above the wasm ones, and a
+   `const` below them would be read in its temporal dead zone. */
 const RUN_CPU_BUDGET_S = 15 * 60;
-/* THE HARD LIMIT IS THE FLOOR UNDER THE SOFT ONE. The kernel sends SIGXCPU at the soft limit, whose default
-   disposition terminates — but a child that installed a handler and ignored it would run on, so the hard
-   limit is what makes the budget unconditional (SIGKILL, unblockable). One minute apart, which is enough for
-   an orderly SIGXCPU death and short enough that the runaway case is still bounded. */
+/* The hard limit is the floor under the soft one: SIGXCPU at the soft limit can be handled and ignored, and
+   the hard limit's SIGKILL cannot. One minute apart leaves room for an orderly SIGXCPU death. */
 const RUN_CPU_HARD_S = RUN_CPU_BUDGET_S + 60;
 const RUN_DEADLOCK_MS = 4 * RUN_CPU_BUDGET_S * 1000;
 
-/* THE QUIET LIST IS DECLARED AT MODULE SCOPE, ABOVE EVERY READER, and both halves of that matter.
-   It must be ABOVE the `native` target, which reads it during module evaluation — a `const` below that
-   point is a temporal dead zone and the target dies before compiling anything. It must be at DEPTH ZERO,
-   because a declaration moved inside the function that reads it is invisible to the module-level reader
-   below and the DEFAULT target dies instead. Both failures were made here, in that order, and neither is
-   a syntax error: `node --check` passes on both, so only running each target catches them. */
-/* -Wno-array-bounds IS NOT IN THIS LIST AND MUST NOT BE RE-ADDED. It was, with no stated reason, and what it
-   silenced was a REAL out-of-bounds stack write: a twelve-argument enqueue assigning into an eleven-slot
-   `JSValueConst argv[11]`, in a file this build compiles, through every build that has ever run. The
-   diagnostic names that line exactly. Muting a memory-safety check is the `?:`-past-a-broken-invariant this
-   project bans, arriving in a compiler flag instead of in C — and an entry here with no reason beside it is
-   how it survived. Measured before removal, with a positive control (a synthetic index-past-end warns), a
-   negative control (the in-bounds form is silent) and the real pre-fix revision of that file (warns): every
-   host source, quickjs and lexbor answer ZERO, so this entry was protecting nothing.
-   AND IT IS `-Werror=array-bounds` RATHER THAN A WARNING, WHICH IS A CLAIM A BUILD ANSWERED AND NOT A
-   PREFERENCE. Un-muting it first was deliberate: an optimizing build performs more of this analysis than
-   `-fsyntax-only`, so whether the class could be made fatal was a question only a full build could settle,
-   and promoting on the strength of a syntax check would have been the cure-validated-on-a-short-example
-   shape — right by the evidence available and unchecked against the case that can actually differ. A whole
-   build at real -O then reported ZERO of them, so the promotion costs nothing today and the class cannot be
-   reintroduced in silence tomorrow. That order is the point: measure, then make impossible.
-   If a future finding here is a FALSE positive, narrow it at the site with the reason written down; do not
-   re-mute the class, and do not demote it to a warning — a warning nobody reads is how this started. */
-/* SIX ENTRIES LEFT THIS LIST ON ONE MEASUREMENT, AND WHAT THEY WERE SUPPRESSING WAS NOTHING.
-   A mute list is read as a set of decisions — these classes were considered and silenced — and three of these
-   were never asked of any compiler this project runs. `-Wno-stringop-overflow`, `-Wno-maybe-uninitialized` and
-   `-Wno-dangling-pointer` are GCC spellings; clang REJECTS all three as unknown warning options, and they were
-   accepted only because `-Wno-unknown-warning-option` stands first in the list and swallows them. The build
-   spawns exactly two compilers and neither is gcc (`clang`, and `emcc`, which IS clang), so they muted nothing
-   anywhere — while reading as a considered decision to silence three MEMORY-SAFETY classes, which is the worst
-   thing a dead entry can pretend to be. Re-derive with: feed clang a trivial program with `-W<name>` and look
-   for "unknown warning option".
-   THREE MORE WERE LIVE AND EMPTY, which is the half worth measuring rather than assuming. Over every `.c` in
-   `engine/host` (406 files) AND `engine/qjs` (14), `-Wparentheses`, `-Wchar-subscripts` and
-   `-Wmisleading-indentation` each report ZERO. So removing them silences nothing and turns three real checks
-   back on, which is the direction this list should only ever move. Re-derive by running `clang -fsyntax-only`
-   over those trees with the flag un-negated and counting `warning: …[-W<name>]` — a front-end pass, no codegen.
-   THE ZERO WAS CHECKED BEFORE IT WAS BELIEVED (five reading zero at once is the shape of a pass that never
-   ran): the same command reports `-Wcomment` from real files, compiles them with zero errors, and a two-line
-   control, `if (a & b == 1)`, makes `-Wparentheses` speak. IT WAS TAKEN UNDER THE NATIVE DIALECT, so code
-   behind the wasm build's own defines was not seen by it and the build is what settles that.
-   WHAT IS DELIBERATELY STILL HERE. `-Wno-unused` and `-Wno-sign-compare` were EXCLUDED from that measurement
-   (passed as `-Wno-` to quiet the pass), so nothing above is a claim about them. `-Wno-format-overflow`
-   measured zero over `engine/host` and that is a front-end answer to a question clang may only decide under
-   optimisation, so it is not the same evidence as the three that went. Neither is a decision; both are
-   unmeasured, and saying so is the difference between a list of choices and a list of habits.
-
-   NAMED RESIDUAL — `-Wno-implicit-fallthrough` IS A LIVE SUPPRESSION PROTECTING CODE THAT IS NOT OURS.
-   WHAT IS NOT COVERED: this project's own 406 host sources are compiled with a real defect class muted, at
-   zero cost to them, because the flag set is GLOBAL and the population needing it is entirely upstream. The
-   same pass measures `-Wimplicit-fallthrough` at ZERO over `engine/host` and FORTY-FOUR over `engine/qjs`,
-   where a switch-based interpreter falls through on purpose. WHAT THE NEXT DIFF BUILDS: a per-source warning
-   set at the compile spawn — host sources get `-Werror=implicit-fallthrough`, `engine/qjs` does not — which is
-   admissible here and nowhere else because the object cache already keys a name on (source path, FLAGS), so a
-   per-source flag changes an object's identity rather than silently reusing one compiled under a different
-   set. It is not done in the same diff as this comment because it edits that naming path, and a change to the
-   one invariant the whole memo scheme rests on is not one to land without a build behind it. HOW ITS ABSENCE
-   WOULD SHOW: a `case` in a host switch that falls into the next one compiles silently, in a tree whose
-   exhaustive-`switch` discipline is what several of its asserts are made of. */
+/* Declared at module scope and above every reader. The `native` target reads it during module evaluation, so
+   a `const` below that point is in its temporal dead zone; the module-level reader below needs it at depth
+   zero. `node --check` passes on both mistakes, so only running each target catches them. */
+/* `-Wno-array-bounds` is not in this list, and array bounds is an error rather than a warning: muting the
+   class hides real out-of-bounds writes. A false positive is narrowed at its site with the reason written
+   down, never by re-muting the class or demoting it to a warning.
+   `clang` and `emcc` (which is clang) are the only compilers this build spawns, so every entry is a clang
+   spelling; `-Wno-unknown-warning-option` would swallow a GCC-only one and it would mute nothing.
+   `-Wno-unused`, `-Wno-sign-compare` and `-Wno-format-overflow` are unmeasured, not decided. */
+/* Named residual: `-Wno-implicit-fallthrough` is a live suppression that only engine/qjs needs. What is not
+   covered: host sources compile with implicit fallthrough muted, because the flag set is global, while
+   engine/qjs's switch-based interpreter falls through on purpose. What the next diff builds: a per-source
+   warning set at the compile spawn (host sources get `-Werror=implicit-fallthrough`, engine/qjs does not),
+   which the object cache admits because an object's name is keyed on (source path, flags). How its absence
+   would show: a `case` in a host switch that falls into the next one compiles silently. */
 const QUIET_WARNINGS = ["-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare",
   "-Wno-format-overflow", "-Wno-implicit-fallthrough",
   "-Werror=implicit-function-declaration", "-Werror=array-bounds"];
 
-/* THE CHILD-CPU METER MOVED TO engine/gate_cpu.mjs, WHOLE, because this file's copy was the CORRECT one of
-   THREE and the other two were not — engine/wpt.mjs and engine/solvergate.mjs each carried a hand-copy that
-   indexed /proc/self/stat two fields too low and so reported the PARENT's own `utime`/`stime`, ~0 by
-   construction, as the killed child's consumption. One fact answered from three places is the defect; that two
-   of the three were wrong is only how it surfaced. Nothing about the reading changed — fields 16 and 17,
-   `getconf` for the units, `null` rather than a plausible 0.0 where a host cannot measure — and the shared
-   reader additionally ASSERTS that its parse is anchored at field 3, which is the one thing that can go wrong
-   with the arithmetic and the one thing nothing here could see. */
+/* The one-, five- and fifteen-minute load averages, or "unknown" on a host without /proc/loadavg. The
+   child-CPU meter is engine/gate_cpu.mjs's. */
 const loadNow = () => {
   try { return readFileSync("/proc/loadavg", "utf8").trim().split(/\s+/).slice(0, 3).join(" "); }
   catch { return "unknown"; }
 };
-/* `.signal` IS NOT THE HANG TEST, AND USING IT AS ONE MADE THIS REPORTER LIE. `spawnSync` sets `signal` for a
-   child killed by ANY signal, so an ABORT — a DCHECK doing its job, arriving as SIGABRT — was reported as
-   "DID NOT FINISH within 15 min", with a load average beside it inviting the reader to blame the machine. That
-   is exactly the conflation this backstop exists to prevent, committed inside the backstop: measured, a run
-   that reached its completion moment and then aborted at `idl_args.c:2148` was filed as a hang.
-   The discriminator is node's own: a timeout kill sets `error.code === "ETIMEDOUT"`, and nothing else does. A
-   signal without it is a CRASH, and a crash's `@WHY` is the result — it must not be dressed as a timing
-   artifact.
-   AND SIGXCPU IS THE THIRD THING THAT SIGNAL CAN BE, which is the whole reason the budget was moved to the
-   kernel: it is neither a crash nor a hang, it is the run reaching the exact amount of CPU this file agreed to
-   spend on it, and it is the only one of the three whose arrival is a fact about the TREE rather than about
-   the machine.
-   AND THE PARAGRAPH ABOVE WAS TRUE OF A HOST THAT IS NOT THE ONE THIS BUILD SHIPS. `signal` distinguishes an
-   abort ONLY where the host can deliver one, and the WASM smoke's cannot — emscripten turns `abort()` into a
-   thrown `RuntimeError` and node exits 1, which is also what an incomplete probe table exits with. So the
-   discriminator that keeps a DCHECK from being misfiled is not `signal` at all; it is what the aborting
-   macros WRITE. See `abortRecord`. Six outcomes, six reports, six exit codes.
-
-   AND THE HUNG REPORT ASSERTED A CAUSE IT NEVER MEASURED. It said the kill meant "a defect in the fixture,
-   not the engine" — a claim about which of two named causes held, made by a function whose children run
-   `stdio: "inherit"`, so it has never seen a line of their output. Measured, it was backwards: the three runs
-   it called HUNG reached `finished` 545-705 while every run it called FAILED died on an abort at 16-261, so
-   it reported 20-40x MORE work completed as the worse verdict, and a reader who trusted it went looking for a
-   stall in a frontier whose `blocked` and `owed` were 0 in every sample of every run. The kill cannot decide
-   this — deciding it needs the child's census, which needs capturing stdout rather than inheriting it, and
-   that is a real change and not this one. So it now names the discriminator and stops claiming the answer.
-
-   AND THE VERDICT IS RETURNED RATHER THAN EXITED ON, BECAUSE A STAGE THAT EXITS IS A DOOR IN FRONT OF EVERY
-   STAGE BEHIND IT — see the stage list at the bottom for the one that stood behind this exit.
-   The `hint` is printed HERE, at the non-pass, which is also the only way it prints at all: the three call
-   sites below each carried an `if (t.status !== 0)` block with a diagnostic in it, and every one of those
-   blocks was DEAD CODE — this function had already exited on that exact condition. The lines naming the
-   @COLDPARK census and the LeakSanitizer summary have never once reached a terminal. */
-/* THE KILL NOW READS THE CENSUS, because the previous sentence here — "deciding it needs the child's census,
-   which needs capturing stdout rather than inheriting it, and that is a real change and not this one" — was a
-   gap DOCUMENTED where the fix belonged. It named the mechanism, named the obstacle, and left the reporter
-   printing an instruction to a human about numbers the reporter itself could have read. Every child now runs
-   through `runChild`, which gives the run a FILE instead of the terminal and hands the bytes here, so the two
-   causes the paragraph above distinguishes are distinguished BY THIS FUNCTION.
-   The samples compared are the last one and one an ABSOLUTE span of engine work behind it, never two adjacent
-   ones, because the paragraph's own caveat — "a plateau that resolves is WFQ re-ranking, not a stall" — is
-   exactly what two adjacent samples cannot see: one re-ranking pause between them reads as a stall, and a
-   stall that happens to emit once reads as health. That window used to be HALF THE RUN, which made its left
-   edge a function of where the budget ran out; the paragraph at the window's own definition says what that
-   cost and why the width is fixed now.
-   THE VERDICT IS STILL A NON-PASS AND STILL CODE 2. A healthy frontier that wanted more budget is a REAL
-   change in this fixture — this same smoke terminated inside the backstop until it did not — so naming the
-   cause is diagnosis, never permission to call the run green. */
-/* THE FIELDS ARE NAMED AND THEIR ABSENCE THROWS, because the paragraph this function replaced read a field the
-   census does not have. It told the reader "`finished` flat with `live` rising is the stall" — and @COLD had no
-   `live`: it printed `flows` for the live count, and `live` was a @PROGRESS name. Written as a comparison that
-   was the worst possible form of the mistake, `undefined > undefined`, which is FALSE for every input, so the
-   stall arm could never once have fired and the discriminator would have answered "healthy" to a stall
-   forever. A JS property read that answers `undefined` is this file's silent-fallback, and the fix is the same
-   one C gets: name the contract and abort on the origin that breaks it.
-   AND THE READER WAS RIGHT ABOUT THE NAME, WHICH IS WHY THE PRODUCER MOVED RATHER THAN THIS LIST. `flows` was
-   the frontier's LIVE size and `flows` was ALSO the number of flows ever created, one line apart in two
-   markers — and those are opposite verdicts on the same shape, since a frontier that stops growing has either
-   RETIRED its members or PAGED them. solver/result.c names it `live` now, for what it counts, and the created
-   total keeps `_flows` on the document where it is a TOTAL among totals. A counter named after something it
-   does not count is worse than a missing one: it is a wrong answer that looks like a measurement. */
-/* AND `finished` RISING IS NOT SUFFICIENT FOR "HEALTHY", WHICH THIS FUNCTION LEARNED FROM ITS OWN FIRST REAL
-   READING. Measured on the full-document smoke: 150 @H samples, the last row to flip did so at sample 82, and
-   the 68 samples after it moved NOTHING — sixteen rows still 0, every `-atsink` row among them — while @COLD's
-   `finished` climbed the whole time and `blocked`/`owed` stayed 0. The first arm called that a healthy frontier
-   that wanted more budget. It is not: the frontier was retiring flows steadily and NONE of that work advanced a
-   single statement the fixture makes, which is a claim about the WFQ's value ordering and not about the clock.
-   More budget helps the first state and does nothing for this one, so telling them apart is the whole point.
-   The probe table is the second stream and the fixture's OWN measure of progress — @COLD says work is moving,
-   @H says whether any of it arrived — so the discriminator reads both or it is guessing from half the evidence.
-   The window is the same absolute window, for the same reason: one WFQ re-ranking pause is not a freeze. */
-/* THE ROW SET IS THE CONTRACT AND THE READING IS A SUBSET OF IT, AND THE SET IS DERIVED — this reader's last
-   hand-kept copy closed rather than extended by three more names. Its job is not that every row is compared
-   (`hungCauseCensus` reads five of them): it is that a row solver/result.c STOPS EMITTING, or renames, fails the
-   build at this line instead of being compared as `undefined` — which is FALSE for every input, so the arm
-   reading it can never fire again — and that a row ADDED over there does not join the unchecked half by
-   default, which a required-PRESENCE loop over a typed-out list structurally cannot deliver.
-   THE MEASUREMENT THAT ENDED THE LIST IS THE SAME ONE `wfqFields()` WAS BUILT ON, TAKEN A SECOND TIME. That
-   half of this file abandoned "adding a row there is a change in two places on purpose" on evidence: EIGHT
-   rows had been added to the @WFQ census and to no reader, three of them in the hour the derivation was being
-   written. The sentence that stood here said these three lists AGREED with their composers at that revision
-   and were therefore a residual and not a defect — and it was TRUE WHEN WRITTEN AND WRONG WITHIN THE DAY.
-   `result_cold_json` gained `replayHits`, `replayLeft` and `replayLeftArms`; none of the three reached this
-   list; nothing broke, because `censusFields` requires the names it is GIVEN and is silent about a row it was
-   never told about. Eleven rows over two censuses, by two lanes' counts, is not a list anybody is going to
-   remember to update. It is a derivation somebody typed out.
-   THE ARTIFACT IT DERIVES FROM IS THE COMPOSER'S OWN FORMAT STRING — `idlgen`'s argument one layer down: an
-   auditor reads the declaration the producer already obeys and never a table of names beside it.
-   THE PER-ROW READING NOTES THAT STOOD HERE ARE GONE WITH THE LIST, deliberately and not as collateral, and
-   for a reason sharper than the @WFQ half's. Every one of them answered the question WHY IS THIS ROW LISTED —
-   why `resumed` rides beside the three orphanClaims rows, why `pendReady` partitions `pend`, why `steps` is
-   here rather than left to the histogram that is checked against it — and a DERIVED set does not list
-   anything, so that question has no referent left. What each of them said about the row's MEANING is
-   solver/result.c's own paragraph beside the row, one `git show` away and maintained where the row is
-   written; what they said about this file's READING of it lives at the reading (`stepCostReading` states the
-   ratio and its denomination, `programCursorReading` states what `deepest` and `completed` are read against,
-   `coldPartition` states the two population splits). A second copy of either, kept in the file whose whole
-   subject is what a second copy costs, is the thing being deleted here.
-   THE OBJECT ROWS ARE NOT NUMBERS AND ARE NOT IN THIS SET — `stepUnits`, `stepUnitRuns`,
-   `stepUnitOverruns`, `outOfProgramsAtTheLadderUnits`, `programCursors` and `programsAhead` are spliced with
-   `%s` and are validated as PARTITIONS by `censusHistRows`, a contract a numeric-presence loop cannot state
-   and would refuse outright. Most are partitions of the FRONTIER or of the run; the ladder one is a partition
-   of ONE ROW on the same line, which `censusHistRows` already expresses because its total is a parameter
-   rather than `live`. THE COUNT IS NOT WRITTEN HERE ANY MORE AND THAT IS THE POINT: this sentence read
-   "three of the four" while the array beside it already held FIVE, which is CLAUDE.md's
-   count-disagreeing-with-its-own-list with the list one line below the number — and the number is the half a
-   reader quotes onward. The array is the enumeration, and `censusRowSet` is what refuses the day a further
-   object arrives with no reader. The split is taken from the CONVERSION in the format string
-   and never from an exclusion list beside it, and `censusRowSet` is what refuses the day a fourth object
-   arrives with no reader.
-   MEMOIZED BECAUSE IT IS A FILE READ AND THE ANSWER CANNOT CHANGE UNDER ONE BUILD — and never evaluated at
-   module load, for `wfqFields`' reason: `HOST` is a `const` far below this line, so a top-level derivation
-   here would reach it in its temporal dead zone and `node --check` would pass on it. */
+/* The rows the @COLD reader requires of the frontier census, derived from the census's own declaration
+   (solver/metrics/cold.def, through `censusDefRowSet`) so that a row the engine stops emitting or renames
+   fails the build here instead of comparing as `undefined`, and a row it gains is required by default.
+   The array names the rows declared as objects: they are not numbers and are outside the numeric set, their
+   readers validate them (`censusHistRows` for the histograms, as partitions), and `censusObjectsChecked`
+   refuses an object row that arrives with no reader named here.
+   A `sourceFact`, so it is taken at the freeze and not at module load: `HOST` is a `const` far below this
+   line, and a top-level derivation would reach it in its temporal dead zone. */
 const coldFields = sourceFact(() => censusDefRowSet(["cold"],
   ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "stepUnitOverrunSeamlessArms",
    "stepUnitOverrunAskArms", "stepUnitOverrunGapArms",
@@ -373,13 +143,9 @@ const coldFields = sourceFact(() => censusDefRowSet(["cold"],
    "ramLimitSource", "saleCensus"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer's declaration rather than from a list beside it"));
-/* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
-   `stepUnitReading` checks its histogram against `live`: two rows that are supposed to be the whole of a third
-   are two numbers that can drift, and drifted they are WORSE than the one number they replaced, because each
-   half still looks like a measurement. The engine asserts the same identity at engine_frontier_census, where
-   all three are in one hand; a difference visible HERE and not there is a row lost between the census and this
-   document, which is exactly what a renamed field does. Every reading below that quotes an arm goes through
-   this first, so no verdict is composed from a census that is not internally true. */
+/* Checks that `parts` sum to `total` within one census, before any reading quotes them. The engine asserts
+   the same identity at `where`, with all the rows in one hand; a difference visible here and not there is a
+   row lost between the census and this document. */
 function coldPartition(c, total, parts, where) {
   const sum = parts.reduce((t, p) => t + c[p], 0);
   if (sum !== c[total])
@@ -388,62 +154,15 @@ function coldPartition(c, total, parts, where) {
                     `stopped describing one population and no reading composed from any of them is about the ` +
                     `run that happened. The engine asserts the same identity at ${where}; a disagreement ` +
                     `visible here and not there is a row lost between the census and this document.`);
-  /* THE REASON A GIVEN SET PARTITIONS ITS TOTAL BELONGS TO THE CALLER AND NOT TO THIS MESSAGE, AND IT USED TO
-     BE HERE. The text named ONE caller's ground — "every member is on exactly one side of `Flow.cand_src` for
-     the whole of its life" — which is true of `finished`/`sold` and false of the two other callers this
-     helper already had, so a `pagedAsks` disagreement reported a reason about a field that partition does not
-     involve. A shared helper reads as single-purpose at each of its call sites (CLAUDE.md
-     §AN-ASSERT-THAT-NAMES-A-REMEDY), and `where` is the argument that already carries which site this is. */
+    /* The message gives no reason why a given set partitions its total: that reason differs per caller, and
+     `where` names the site that holds it. */
 }
-/* WHAT RETIRED, AND WHICH POPULATION IT WAS — the reading `finished` alone could never be, and a NAMED
-   function for `stepUnitReading`'s reason: a reading that is a sentence spliced into the middle of a composer
-   can only be exercised by running the whole build, so it is written where one census object is the whole of
-   its input and it can be handed a line off a log.
-   A frontier holds exploration flows and @S candidate sessions, and on a document that finds anything the
-   second are the great majority of the members — so a retirement total is dominated by the search's own
-   spend. An exploration flow that ran to its end is coverage this document GAINED; a candidate MEMBER that
-   ran to its end is search spent on a derived payload that did not fire, which buys coverage nothing. Stated
-   at EVERY outcome, pass included, because the two are one number and take opposite work.
-
-   `finishedCands` COUNTS MEMBERS AND NOT SESSIONS, AND EVERY SENTENCE BELOW USED TO SAY SESSIONS — kept as a
-   record because the KEY still reads `Cands` and a reader who re-derives the unit from the key will write the
-   old sentences again. They read "EVERY retirement in this run was a candidate session", "${retCands} @S
-   candidate session(s)" and, riding the verdict's NAME where `causeName` cuts it and therefore in the one line
-   anybody reads, ", @S CANDIDATE DISCARD ONLY" — whose replacement holds that string's exact length for the
-   reason stated at the mark. solver/engine.c raises that counter at flow_finish, which is
-   the one line a member ever completes on, and engine_sibling_assemble copies the whole `cand_src` identity to
-   every sibling of a candidate — so N arms of ONE seed each raise it once and "44 payloads discarded" was 44
-   MEMBERS of some smaller number of payloads. solver/engine.h carries the mechanism and says why the key is
-   not renamed from here (it is composed into `qjs.wasm` and this file is live on write, so the halves cannot
-   land together without a build).
-
-   THE PER-SESSION DENOMINATOR IS NOT AVAILABLE TO THIS FUNCTION AND MAY NOT BE FAKED INTO IT. `_candidates`
-   is solve.c's per-seed count, and it is emitted on result_json's TOP LEVEL rather than on the @COLD census
-   this function is handed — so pairing them here would mean reading a field off an object that has never had
-   one, which `coldFields()` cannot require and a `??` would quietly turn into a plausible datum. The pairing
-   belongs to a reader holding BOTH documents. RETIREMENT: this note goes when a per-session ended count is
-   emitted on the @COLD census itself, because the sentence can then name sessions truthfully.
-
-   THE PARTITION IS CHECKED HERE AND NOT ONLY AT THE VERDICT, because this is the reading that quotes the arms:
-   a sentence composed from rows that do not sum to their total is a sentence about a frontier that was not
-   there, and it would be printed at every outcome including the passes.
-   THE ZERO ARM IS THE LOUD ONE and is named rather than left to be noticed in a pair of digits: a run whose
-   entire retirement is candidates has retired no exploration at all, and that is the sentence a reader acts
-   on. It is a reading of the counters and not a threshold — nothing here is compared against a proportion. */
-/* HOW MUCH OF THE REPLY DOOR WAS THE DOCUMENT'S OWN BUNDLE, WHICH IS THE VERDICT THIS WHOLE TOOL IS FOR AND
-   WHICH HAD NO ROW. The reply door is a fetch, an injected `<script src>`, the document's own script slots and
-   a dynamic `import()` (solver/result.c), so `replyAsked` on its own cannot say whether a run reached ONE
-   request of the application's or merely dragged in the scripts the page shipped. `rootProgramsAwaitedAtSeed` is the
-   bundle's own share — the seeded rows whose bytes the door still owes — so the subtraction is the number of
-   openings the RUN reached, and `§Learning-from-replies calls that the POINT`.
-   IT WAS BEING DONE BY HAND AND THE HAND COUNT IS IN A LANDED COMMENT: a live-run reading of a real page said
-   "that document ships EXACTLY SIX `<script src>` elements — so the request door opened for the bundle and
-   for nothing else", with the six counted off the page. That number was in no log and comparable with no other
-   document, which is the same defect as reading `deepest` against a denominator nobody published.
-   THE FOURTH ARM IS THE ONE A TERNARY WOULD HAVE LOST. `replyAsked` BELOW the bundle's share is not a smaller
-   version of "nothing was reached" — it says the run never finished asking for its own scripts, so it is a
-   statement about how far the run got and sends a reader to the cursor histogram rather than to the driving.
-   A READING AND NEVER A THRESHOLD (§NO BOUNDS): nothing branches on it and no verdict is refused for it. */
+/* How much of the reply door was the document's own bundle. The door carries a fetch, an injected
+   `<script src>`, the document's own script slots and a dynamic `import()` (solver/result.c), so `replyAsked`
+   alone cannot say whether the run reached a request of the application's. `rootProgramsAwaitedAtSeed` is the
+   bundle's share (the seeded rows whose bytes the door still owes), and the difference bounds what the run
+   reached beyond it. `replyAsked` below the bundle's share is its own arm: the run did not finish asking for
+   its own scripts. A reading, never a threshold: nothing branches on it. */
 function bundleShareReading(b) {
   coldPartition(b, "rootPrograms", ["rootProgramsHeldAtSeed", "rootProgramsAwaitedAtSeed", "rootProgramsRefusedAtSeed"],
                 "engine_frontier_census");
@@ -452,16 +171,8 @@ function bundleShareReading(b) {
   if (owed === 0)
     return `; the document's own ${b.rootPrograms} program(s) owe the reply door NOTHING (every one is inline ` +
            `or already fetched), so all ${asked} ask(s) are openings the run reached`;
-  /* THE DIFFERENCE IS AN UPPER BOUND AND NOT A COUNT, WHICH THIS ARM USED TO STATE AS A COUNT AND WHICH A
-     MEASUREMENT CAUGHT. The two numbers are drawn from POPULATIONS OF DIFFERENT WIDTH: `rootProgramsAwaitedAtSeed`
-     counts the document's own seed rows that still need bytes, and the reply door carries more than those —
-     solver/result.c names it as "a fetch, an injected `<script src>`, the document's own script slots, a
-     dynamic `import()`", and a driver that hands the document in may or may not have spent an ask on it. So
-     `replyAsked - rootProgramsAwaitedAtSeed` bounds what the RUN reached above the bundle; it does not count it, and
-     reading it as a count credits the run with every non-script opening the door happened to carry.
-     Measured on a real bundle: `replyAsked 21` against `rootProgramsAwaitedAtSeed 17`, where the four are the
-     document and its peers rather than four requests the driving discovered. §a-coverage-figure-states-what-
-     it-is-a-fraction-of, owed by this reading to itself. */
+    /* The difference is an upper bound, not a count: the reply door also carries the document itself and
+     every non-script resource, and none of those are among the seed rows. */
   if (beyond > 0)
     return `; at most ${beyond} of those ask(s) are above the ${owed} its own bundle owes — an UPPER BOUND on ` +
            `what the run reached beyond the document's own scripts, never a count of them, because the reply ` +
@@ -476,23 +187,14 @@ function bundleShareReading(b) {
          `the document's own scripts — read the cursor histogram, not the driving`;
 }
 
-/* WHAT THE REPLY DOOR'S GAP MEANS, WHICH `answered/asked` ON ITS OWN CANNOT SAY AND WAS READ WRONGLY BECAUSE
-   OF IT. A record this door KEYED ends in exactly one of four states and solver/pending_index.c credits each
-   at the one line that puts it there, so the four are a PARTITION of `replyAsked` and the identity is checked
-   here as well as in the engine — a disagreement visible in one and not the other is a row lost between the
-   census and this document, which is what `coldPartition`'s message already says for every other caller.
-   THE GAP'S THREE READINGS TAKE OPPOSITE WORK AND THAT IS THE WHOLE REASON THIS READING EXISTS. A host that
-   still owes replies sends a reader to the scheduler and the delivery seam; a surface THIS TOOL REFUSED sends
-   them to the person's own per-origin egress control and means nothing is broken at all; and a record whose
-   flow DEPARTED owing it (finished, or sold to the cold tier) is a designed state `pending_free` documents.
-   Measured before these rows existed: four fresh-browser drives of one real SPA read `replyAsked 9 /
-   replyAnswered 7` every time, the two were REFUSALS of the page's own boot `fetch()` and of the `.catch`
-   arm's error report, and the gap was relayed onward as two replies the host had failed to pay — with an
-   address named that had in fact come back 200. A second page in the same browser read 31/31 with no refusal.
-   ONE INSTANT, NOT TWO: `replyOutstanding` is a GAUGE and the other four are LIFETIME counts
-   (solver/pending_index.h), so this is a reading of the census line in front of it and nothing here may be
-   differenced against another line. A READING AND NEVER A THRESHOLD (§NO BOUNDS): nothing branches on it and
-   no verdict is refused for it. */
+/* What the reply door's gap means. A record the door keyed ends in one of four states, each credited by
+   solver/pending_index.c at the line that puts it there, so the four partition `replyAsked` and the identity
+   is checked here as well as in the engine. The three unanswered states send a reader to different places: a
+   host that still owes replies (the scheduler and the delivery seam), a request this tool's egress policy
+   refused (the person's per-origin control; nothing is broken), and a record whose flow departed owing it
+   (finished, or sold to the cold tier: a designed state `pending_free` documents).
+   `replyOutstanding` is a gauge and the other four are lifetime counts (solver/pending_index.h), so this
+   reads one census line and nothing here is differenced against another. A reading, never a threshold. */
 function replyDoorReading(b) {
   coldPartition(b, "replyAsked",
                 ["replyAnswered", "replyDeclined", "replyDropped", "replyOutstanding"], "solver/result.c");
@@ -503,8 +205,7 @@ function replyDoorReading(b) {
                               `about this run rather than clean about it`;
   if (asked === ans) return s + ` — every record this door keyed was paid, so a reply-consuming row still ` +
                                 `at 0 is downstream of the delivery and never this door`;
-  /* THE PARTS ARE NAMED IN FULL AND NOT ONLY THE LARGEST, because two of the three are findings about other
-     subsystems and a reader who sees one number cannot know which they are holding. */
+    /* All three parts are named, not only the largest: two of them are findings about other subsystems. */
   s += `, and the ${asked - ans} unanswered are ${dec} REFUSED by this tool's own egress policy` +
        `, ${drop} dropped with a flow that departed owing them, ${out} still outstanding`;
   if (out === 0)
@@ -518,12 +219,20 @@ function replyDoorReading(b) {
   return s;
 }
 
+/* The retirement sentence, stated at every outcome. A frontier holds exploration flows and @S candidate
+   sessions: an exploration flow that ran to its end is coverage gained, and a candidate member that ran to
+   its end is search spent on a derived payload that did not fire, so the two are named apart and a run whose
+   whole retirement is candidates gets its own sentence. `finishedCands` counts members, not sessions, though
+   the key reads `Cands` (solver/engine.h states why). The per-seed count `_candidates` is on result_json's
+   top level and not on the census this function is handed, so no per-session figure is composed here.
+   The partitions are checked first because this reading quotes their arms. It takes one census object, so it
+   can be exercised with a line off a log, and nothing in it is a threshold. */
 function retiredReading(c) {
   coldPartition(c, "finished", ["finishedFlows", "finishedCands"], "engine_frontier_census");
   coldPartition(c, "sold", ["soldFlows", "soldCands"], "engine_frontier_census");
-  /* AND THE PAGER'S OWN PARTITION, which is what makes the `sold` arm below a reading rather than a zero.
-     engine_reclaim_tail leaves by exactly five exits and each counts itself on the line it leaves by; a sale's
-     record may sell more flows for their bulk, so the sale exits and the funded flows sum to `sold`. */
+    /* The pager's own partition. engine_reclaim_tail leaves by five exits and each counts itself on the line it
+     leaves by; a sale's record may sell more flows for their bulk, so the sale exits and the funded flows sum
+     to `sold`. */
   coldPartition(c, "pagedAsks", ["pagedOver", "pagedUnarmed", "pagedFloor", "pagedShed", "pagedSales"],
                 "engine_frontier_census");
   coldPartition(c, "sold", ["pagedSales", "parkFunded"], "engine_frontier_census");
@@ -546,14 +255,10 @@ function retiredReading(c) {
                  `\`cand_rung\` are readings of a re-execution and do not cross the cold tier), so those ` +
                  `${c.soldCands} cost the search a measured distance the exploration sales did not`
                : ``)
-           /* THE ZERO ARM IS A SENTENCE AND NOT A BLANK, because `sold 0` was the one row here a reader could
-              take three incompatible ways. `pagedAsks` is the positive statement: 0 asks means the allocator
-              never refused this instance anything, so nothing was paged because nothing NEEDED to be — the RAM
-              floor was not met and the pager is unexercised rather than broken. Asks with no sale is the loud
-              case and splits again: refusals declined OUTSIDE the reclaim safepoint are pressure the frontier
-              was never consulted about (arming, not paging, is what is short), while refusals answered at the
-              FLOOR are the pager consulted and holding nothing but the running flow, which is the physical end
-              of paging and the point at which the allocator's NULL is the honest answer. */
+                      /* The zero arm is a sentence. `pagedAsks` 0 says the allocator never refused this instance
+              anything, so the pager is unexercised. Asks with no sale split by where the refusal was
+              answered: outside the reclaim safepoint (the frontier was not consulted, so arming is what is
+              short) or at the floor (the pager holds nothing but the running flow). */
            : `; sold 0 of ${c.pagedAsks} allocator refusal(s)` +
              (c.pagedAsks === 0
                ? ` — the allocator never refused this instance anything, so the RAM floor was NOT met in this ` +
@@ -573,50 +278,19 @@ function retiredReading(c) {
                      : `; not one refusal reached the frontier at all, so every one of them arrived where the ` +
                        `safepoint is down — what is short here is ARMING and not members to sell`)));
 }
-/* THE FORK TABLE'S LARGEST ROW, AND ONLY THE LARGEST. decide.c's own note says the table is a CASCADE — a
-   chain of gates produces rows in a geometric series and the last site in program order is always the biggest
-   — so a list of every row is a list, and the one row plus how much of all forking it is, is the reading.
-   `{}` is the positive statement that nothing forked, which on a bundle that should have branched on opaque
-   input is the loudest thing in this sentence and must not render as a blank.
-   AND THE OVERFLOW ROW IS NOT A PREDICATE, WHICH THIS READER STATED THAT IT WAS. decide.c's predicate table is
-   FIXED-SIZE, and the mass no resident row can prove is its own is published as one prose-named row the
-   composer renders in the same object under the same shape as a real key — deliberately, because "an
-   undercount that says so is a measurement". Taking the argmax over the object therefore hands back a NON-SITE
-   as the answer to "which predicate is growing the frontier", and counts the prose row among the
-   `predicate(s)`. It had no reader that honoured it, and on a real document that row has LED the table by a
-   wide margin — so the one line anybody reads named a bucket as the hot predicate, with a percentage beside it.
-   AND A MECHANISM IS NOT A PREDICATE EITHER, WHICH IS THE SAME DEFECT ONE LAYER IN AND IS THE ONE THE DATA
-   FORCED. This reader called every non-overflow row a `named predicate`, and the largest row of a real
-   document is `(a function the page never called was driven — no predicate was asked)` — an ORPHAN DRIVE,
-   which is a mechanism this tree performs and definitionally not a question the program asked. So the one line
-   anybody reads answered "which predicate is growing the frontier" with a row that is not one, exactly as it
-   did with the bucket, and the fix is the same: say WHAT KIND OF ROW leads. It is not to special-case that row
-   into second place — it legitimately leads, and decide.h says why (a mechanism that fires on every orphan
-   drive outweighs every individual branch beneath it).
-   THE DISCRIMINATOR IS THE PRODUCER'S OWN, NOT A SNIFF. decide.c asserts at `fork_key_count` and again at the
-   row loop of `decide_fork_json` that a constraint key opens on concolic_ident_compose's decimal length prefix
-   and a mechanism row on `(`, and that its own bound member opens on `_`. That is the rule used here, byte for
-   byte, so the two halves are one rule and not two spellings of one; a first byte outside all three THROWS,
-   because a row read as whichever namespace it resembles is the merge those asserts exist to prevent.
-   THE OVERFLOW ROW IS MATCHED BY NAME BEFORE THAT TEST. It is prose, so it opens on `(` exactly as a mechanism
-   does, and it is the opposite kind of thing — a mechanism row names a site this tree wrote, the overflow row
-   is the mass of the sites it CANNOT name. Split on the byte first and the largest thing in the object is
-   filed under the population that is exact by construction.
-   AND THE `spill > top` HEURISTIC IS GONE, REPLACED RATHER THAN KEPT BESIDE ITS REPLACEMENT. It was a proxy
-   for the only question that matters about an exclusion — could a site the table dropped outrank the one it
-   named — and it was a proxy in the wrong units twice over: it compared the spill against the largest row of
-   EITHER population, so a mechanism row (exact, never at risk of eviction, and typically the largest thing
-   here) decided a question about the predicates; and even against the right population it answered with a
-   TOTAL where the question is about a SINGLE key. decide.c now emits Space-Saving's own bound — the most any
-   absent site can have taken — so the question is answered exactly, and a proxy kept beside an exact answer is
-   a second system whose only contribution is to disagree.
-   NEITHER HALF DEFAULTS. Every value is checked as an integer in the range its class allows, every key is
-   classified or the read THROWS — which is what makes the classes a partition rather than an arithmetic
-   identity restating its own definition — and the bound's absence beside rows is refused rather than filled in — that absence is structurally "this census predates this reader", which is the one thing a stale
-   @FORKAT line can be. `{}` is untouched and remains the positive statement that nothing forked, which on a
-   bundle that should have branched on opaque input is the loudest thing in this sentence.
-   IT TAKES THE TABLE AND NOT THE LOG for `retiredReading`'s reason: one object is the whole of its input, so
-   it can be handed a line off a log and exercised without a build. */
+/* The fork table's reading: for each population its total, its largest row and that row's share. decide.c's
+   table is a cascade (a chain of gates produces rows in a geometric series), so the largest row and its share
+   are the reading and a list of every row is not. `{}` is the positive statement that nothing forked.
+   Rows are classified by solver/decide.c's own rule, which it asserts at `fork_key_count` and in
+   `decide_fork_json`: a constraint key opens on concolic_ident_compose's decimal length prefix, a mechanism
+   row on `(`, an unnamed fork site on `~`, and the census's own bounds on `_`. Any other first byte throws.
+   The two overflow rows are matched by name before that test, because they are prose opening on `(` like a
+   mechanism row and are the opposite thing: the mass of the sites a fixed-size table cannot name.
+   A mechanism row (an orphan drive, for one) is this tree's own call site, counted exactly, and is not a
+   predicate even when it leads. Whether an excluded site could outrank the largest named predicate is
+   answered by the bound decide.c emits (Space-Saving's: the most any absent site can have taken).
+   Nothing defaults: every value is range-checked, every key is classified, and rows without their bound are
+   refused as a census older than this reader. It takes the table, not the log, so it can be handed one line. */
 function forkReading(t) {
   const keys = Object.keys(t);
   if (!keys.length) return `forks: NONE — not one predicate of this document ever split a flow`;
@@ -626,10 +300,8 @@ function forkReading(t) {
   let spill = 0, bound = null, siteSpill = 0, siteBound = null;
   for (const k of keys) {
     const v = t[k];
-    /* A ROW IS AT LEAST ONE AND THE BOUND MAY BE ZERO, which is the one place their shapes differ and is
-       exactly solver/decide.c's `fork_rows_sane`: a row is claimed BY an arrival and only grows, so a count of
-       zero is a state that table cannot be in and a site published as having taken no forks is a site the
-       reader will go and look for. The bound is a different kind of number and zero is its ordinary reading. */
+        /* A row is at least 1 and a bound may be 0 (solver/decide.c's `fork_rows_sane`): a row is claimed by an
+       arrival and only grows. */
     if (!Number.isInteger(v) || v < (k.startsWith("_") ? 0 : 1))
       throw new Error(`[build] the @FORKAT census carries ${JSON.stringify(v)} under ${JSON.stringify(k)} — ` +
                       `a row of it is a count of forks and is at least 1 (solver/decide.c's fork_rows_sane: a ` +
@@ -638,11 +310,8 @@ function forkReading(t) {
                       `members is a non-negative integer. Anything else is that composer having lost the row rather than a ` +
                       `table with a strange shape, and every percentage taken off it would be a reading of ` +
                       `that loss.`);
-    /* THE TWO OVERFLOW ROWS ARE MATCHED BY NAME AND BEFORE ANY BYTE TEST, which is solver/decide.h's own
-       rule and is why it must be stated twice now rather than once: both are prose opening on `(`, exactly
-       like a mechanism row, and both are the OPPOSITE kind of thing — a mechanism row names a site this tree
-       wrote, an overflow row is the mass of the sites its table CANNOT name. Splitting on the byte first
-       files the largest thing in the object under the population that is exact by construction. */
+        /* Both overflow rows are matched by name before any byte test (solver/decide.h's rule), since each opens
+       on `(` like a mechanism row. */
     if (k === over) { spill = v; continue; }
     if (k === siteOver) { siteSpill = v; continue; }
     if (k.startsWith("_")) {
@@ -657,11 +326,9 @@ function forkReading(t) {
     }
     if (k.startsWith("(")) { mech.push(k); continue; }
     if (k[0] >= "0" && k[0] <= "9") { pred.push(k); continue; }
-    /* AND THE THIRD POPULATION: A FORK THAT ASKED NOTHING THIS ENGINE COULD SPELL, NAMED BY THE VALUE'S OWN
-       DISPLAY SHAPE. Its prefix is a byte solver/decide.c WRITES in front of that shape and never a property
-       of the shape itself — a page can spell `(` or a decimal digit as a first byte as easily as anything
-       else, so without the prefix this population would arrive scattered across the other two and the census
-       would report a page's shapes as this tree's own call sites. */
+        /* An unnamed fork site: a fork that asked nothing this engine could spell, named by the value's display
+       shape. solver/decide.c writes the `~` prefix in front of that shape, because a page can spell any first
+       byte. */
     if (k[0] === "~") { site.push(k); continue; }
     throw new Error(`[build] the @FORKAT census carries a row ${JSON.stringify(k)} opening on none of its ` +
                     `namespaces — solver/decide.c asserts that a constraint key opens on ` +
@@ -699,28 +366,23 @@ function forkReading(t) {
   const sum = (a) => a.reduce((n, k) => n + t[k], 0);
   const mechSum = sum(mech), predSum = sum(pred), siteSum = sum(site);
   const total = mechSum + predSum + spill + siteSum + siteSpill;
-  /* AND A BOUND WITH NOTHING TO BOUND IS NOT A DOCUMENT THAT NEVER FORKED — that is `{}`, handled above.
-     solver/decide.c emits this member only where it counted a fork, and a fork it counted is a row it filed,
-     so the two arrive together. Refused rather than divided by: every percentage below is over this total. */
+    /* A bound with no rows is not a document that never forked (that is `{}`): solver/decide.c emits the member
+     only where it counted a fork, and every fork it counts is filed into a row. Refused rather than divided
+     by, since every percentage below is over this total. */
   if (total === 0)
     throw new Error(`[build] the @FORKAT census carries its bound member and not one row — solver/decide.c ` +
                     `emits that member only where it has counted a fork, and every fork it counts is filed ` +
                     `into a row, so this object is a composer that counted forks it did not publish. A ` +
                     `document that never forked is \`{}\` and is a different sentence entirely.`);
-  /* THE PARTITION IS THE CONTRACT AND IT IS ENFORCED BY EXHAUSTIVE CLASSIFICATION, NOT BY AN IDENTITY. The
-     mechanisms' exact counts, the predicates' floors and the errors summed once ARE Space-Saving's counters,
-     so they close over the forks — and solver/decide.c asserts that at the composer, where `g_fork_total` is
-     in hand. Here it is not: this object carries no total of its own, so `mech + pred + spill === total` would
-     be its own definition restated and could not fail. What CAN fail is the classification, and every way it
-     can is refused above — an unknown namespace, an unknown `_` member, a row below 1 — so the denominator
-     below is every fork this census filed and the bound is outside it, which is the half a consumer owns.
-     RESIDUAL: the rows are NOT checked against the engine's own fork total, which solver/result.c publishes as
-     the @COLD census's `forks` from the same emission block (solver/engine.c prints @COLD then @FORKAT with
-     @HEAP and @WFQ between). The next diff pairs the two BY INDEX within that block rather than by last-line —
-     they are printed in order, so a truncated tail leaves one more @COLD than @FORKAT and a last-to-last
-     comparison would false-throw on the artifact rather than on the census. Its absence shows as a dropped or
-     double-counted row surviving into this reading in a RELEASE build, where decide_fork_json's own
-     `sum == g_fork_total` DCHECK is compiled out and nothing else is looking. */
+    /* The partition is enforced by exhaustive classification, not by an identity: this object carries no total
+     of its own, so `mech + pred + spill === total` would restate its own definition. Every way classification
+     can fail is refused above, so the denominator below is every fork this census filed and the bounds are
+     outside it. solver/decide.c asserts the sum against `g_fork_total` at the composer.
+     Residual: the rows are not checked against the engine's own fork total, which solver/result.c publishes
+     as the @COLD census's `forks` in the same emission block. The next diff pairs the two by index within
+     that block (a truncated tail leaves one more @COLD than @FORKAT, so a last-to-last comparison would throw
+     on the artifact). Its absence shows as a dropped or double-counted row surviving into this reading in a
+     release build, where decide_fork_json's `sum == g_fork_total` DCHECK is compiled out. */
   const slots = forkKeySlots();
   if (spill > 0 && pred.length !== slots)
     throw new Error(`[build] the @FORKAT census reports ${spill} unattributable fork(s) with ${pred.length} ` +
@@ -737,27 +399,22 @@ function forkReading(t) {
   const pct = (v) => Math.round(100 * v / total);
   const top = (a) => (a.length ? a.reduce((x, k) => (t[k] > t[x] ? k : x), a[0]) : null);
   const tp = top(pred), tm = top(mech), ts = top(site);
-  /* SENTENCE ONE IS THE QUESTION THIS CENSUS EXISTS FOR — which PREDICATE is growing the frontier — and it is
-     answered out of the predicate population alone. */
+    /* Sentence one answers which predicate is growing the frontier, out of the predicate population alone. */
   return `forks: ${total} — ` +
     (tp === null
       ? `NOT ONE of them asked a predicate this table could name`
       : `${predSum} (${pct(predSum)}%) at ${pred.length} named predicate(s), the largest ${pct(t[tp])}% at ` +
         `${JSON.stringify(tp)}, and every named count is a FLOOR: the hits that row can prove are its own`) +
-    /* AND SENTENCE TWO IS THE OTHER POPULATION, NAMED AS WHAT IT IS. These rows are prose this tree writes at
-       its own call sites, so a document cannot add one and none of them is a branch a program took — which is
-       why they are exact, and why the largest of them leading says nothing whatever about a predicate. */
+        /* Sentence two: mechanism rows are prose this tree writes at its own call sites, so they are exact and a
+       document cannot add one. */
     `. ` + (tm === null
       ? `Every fork asked a predicate — no mechanism forked without one`
       : `${mechSum} (${pct(mechSum)}%) asked NO predicate at all: ${mech.length} mechanism(s), the largest ` +
         `${pct(t[tm])}% at ${JSON.stringify(tm)}, counted exactly — those rows are this tree's own call sites ` +
         `and not questions the program asked, so a document cannot add one and the largest of them leading ` +
         `is not an answer about a predicate`) +
-    /* AND SENTENCE THREE IS THE POPULATION THAT ASKED NOTHING THIS ENGINE COULD SPELL, WHICH IS NEITHER OF
-       THE OTHER TWO AND USED TO BE COUNTED AS ONE OF THEM. A site row names WHERE a fork happened — the
-       value's own display shape — and never WHAT it asked: nothing was asked, both arms were kept and no
-       constraint was recorded, so these are not predicates; and the names are the page's, so they are not
-       this tree's call sites either. They are floors for the predicates' reason exactly, over their own
+        /* Sentence three: an unnamed-site row names where a fork happened (the value's display shape) and not
+       what it asked; both arms were kept and no constraint was recorded. They are floors over their own
        admitted table. */
     `. ` + (ts === null
       ? (siteSum + siteSpill === 0
@@ -771,9 +428,9 @@ function forkReading(t) {
           ? `, and that table did not overflow, so every such site this document reached is named`
           : `, with ${siteSpill} (${pct(siteSpill)}%) the named shapes cannot prove is theirs and no site ` +
             `it dropped taking more than ${siteBound} fork(s)`)) +
-    /* AND SENTENCE FOUR IS WHAT THE PREDICATE TABLE COULD NOT HOLD, WITH THE ONE NUMBER THAT MAKES THE ARGMAX
-       ABOVE SAFE OR UNSAFE TO QUOTE. `tp` is non-null on every arm that reads it: a spill proves a full table, and
-       the check above proves a full table has its rows. */
+        /* Sentence four: what the predicate table could not hold, and whether the argmax above is safe to quote.
+       `tp` is non-null on every arm that reads it: a spill proves a full table, and the check above proves a
+       full table has its rows. */
     `. ` + (spill === 0
       ? `decide.c's PREDICATE table did not overflow, so no predicate was excluded and a constraint key ` +
         `absent from these rows was never reached by this document`
@@ -4695,6 +4352,13 @@ function retireReading(b, lastRetire, n, every) {
          `stepUnitRuns above is what NAMES the arm, the suffix sums here being the only rows for which "the ` +
          `lowest 0 is the localisation" is true at all.`;
 }
+/* Names why a killed run did not finish, from the two streams in its captured output: the @COLD frontier
+   census and the fixture's probe table. Each is read as its last sample against one a fixed number of samples
+   behind it (`HUNG_WINDOW_CENSUSES`, or half the run when that is shorter), never two adjacent ones, because
+   one re-ranking pause between adjacent samples reads as a stall. `finished` rising is not by itself health:
+   the probe table says whether the work that retired advanced any statement the fixture makes. Every census
+   row read is required through `censusFields`, so an absent row throws. The result is diagnosis; the caller's
+   verdict stays a non-pass. */
 function hungCauseCensus(out) {
   const s = [];
   for (const m of out.matchAll(/^@COLD (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
@@ -5855,6 +5519,12 @@ const NOT_ASKED_WITNESS = /^\[[a-z][a-z-]*\] NOT ASKED — this host cannot put:
 const BACKSTOP_WITNESS =
   /^\[[a-z][a-z-]*\] the BACKSTOP above ended this run, [^\n]*? did not pass: ([^.\n]+)\./m;
 
+/* The outcome of one child, returned as a stage verdict and never exited on, so the stages behind it still
+   run. A timeout kill is `error.code === "ETIMEDOUT"` and nothing else: `signal` is set for a child ended by
+   any signal, so a signal without that code is a crash, except SIGXCPU, which is the CPU budget reached. The
+   WASM host cannot deliver an abort as a signal (emscripten turns `abort()` into a thrown `RuntimeError` and
+   node exits 1, as an incomplete probe table also does), so an abort is recognised by what the aborting
+   macros write: see `abortRecord`. `hint` is printed at every non-pass. */
 function runOutcome(label, t, hint) {
   /* APPENDED TO EVERY VERDICT THIS FUNCTION PRODUCES, which is why it is computed once here and folded into
      `bad` rather than added at each arm — an arm added later would otherwise be the one that drops it, and
