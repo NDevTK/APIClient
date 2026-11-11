@@ -2,8 +2,9 @@
    so it is in no flat tree. The host's shrink-to-fit width asks css-sizing-3 §5.1's intrinsic sizes of its
    content, which first gathers CSS 2.2 §9.5's floats of the formatting context the host establishes, by a
    pre-order walk of its flat subtree (css-shadow-1 §4.1): the shadow root's 10px block, never the light span.
-   CSS 2.2 §10.3.9 then makes the host 10px wide. One of test_forced.c's exploring documents (its TF_DOCS
-   table); it ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
+   CSS 2.2 §10.3.9 then makes the host 10px wide, read through CSSOM VIEW §6's getBoundingClientRect(). One
+   of test_forced.c's exploring documents (its TF_DOCS table); it ends with TF_CANVAS_INK, which test_forced.c
+   defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_SHADOWFLOATS_H
 #define ENGINE_HOST_FIXTURE_SHADOWFLOATS_H
 #ifndef TF_CANVAS_INK
@@ -15,7 +16,7 @@ static const char HTML_SHADOWFLOATS[] =
     "<div id=sh style=\"display:inline-block\"><span>light</span></div>"
     "<script>var h=document.getElementById('sh');"
     "h.attachShadow({mode:'open'}).innerHTML='<div style=\"width:10px;height:10px\"></div>';"
-    "fetch('/api/shadowfloats?w='+h.offsetWidth);</script>"
+    "fetch('/api/shadowfloats?w='+h.getBoundingClientRect().width);</script>"
     TF_CANVAS_INK "</body></html>";
 
 #endif
