@@ -1351,14 +1351,15 @@ typedef struct {
     long host_terminated;    /* rendezvous ids withdrawn: Fetch §2 Infrastructure's terminate-a-fetch-controller */
     long paged_reqs;         /* synchronous requests a sale took with it */
     /* Whether the allocator's refusal edge reached the pager at all, which a zero `sold` cannot say:
-       `paged_over + paged_unarmed + paged_floor + paged_shed + paged_sales + sold_spilled + chain_spilled ==
-       paged_asks` and `paged_sales == sold`, asserted at engine_frontier_census. */
+       `paged_over + paged_unarmed + paged_floor + paged_shed + paged_sales + sold_spilled + chain_spilled +
+       paged_reserve == paged_asks` and `paged_sales == sold`, asserted at engine_frontier_census. */
     long paged_asks;         /* times the allocator's refusal edge reached this engine (engine_reclaim_tail) */
     long paged_over;         /* …declined because the request exceeds the instance's whole limit */
     long paged_unarmed;      /* …declined because the reclaim safepoint was not armed (outside the flow step) */
     long paged_floor;        /* …answered at the frontier's floor: no member but the flow that is running */
     long paged_shed;         /* …answered by shedding a held snapshot (solver/source_cut.h) */
     long paged_sales;        /* …answered by a sale of the frontier's tail */
+    long paged_reserve;      /* …answered by giving the sale's block to the asker, with nothing left to sell */
     long sale_unfunded;       /* sales that found no reserve held and ran without their census */
     /* Each sale's one outcome (engine.c), summing to `sold`: written for an in-session restore, or waiting for
        the session's park because it ran unfunded, met a part with no writer, or holds a named reason. */
@@ -1372,7 +1373,7 @@ typedef struct {
     long restored_spilled;    /* picks that read a written stub's bytes back from the disk tier */
     long sold_named;          /* objects and cells written stubs read back as themselves (JS_FlowGraphSettle) */
     long sale_over_reserve;   /* funded sales whose allocations asked for more than the block they gave back */
-    long sale_reserve_kib;    /* the sale reserve held now, 0 when the allocator refused it */
+    long sale_reserve_kib;    /* the sale reserve held now, 0 when the allocator refused it or it was given */
     long sale_need_max_kib;   /* the most one sale's allocations asked for (c_alloc.h's span) */
     /* What held memory at the RAM floor's last answer (engine.c's engine_floor_census), all 0 before the first:
        the C heap's live bytes and footprint, the runtime's share, the sale reserve held, the written stubs

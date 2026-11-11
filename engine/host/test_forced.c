@@ -19625,7 +19625,8 @@ static long tf_hist_above(const char *js, const char *key, int from) {
    sale-floor-sells: with every allocation refused at the act, the members were sold, a sale took its census on
    storage it funded, and the bill after the sale still lists the request the sold member owes.
    sale-chain-spill-returns: there, asked on after the sales, the floor moved a frozen segment to the disk tier,
-   a restore read one back, and the owing member reported.
+   a restore read one back, and the owing member reported. sale-floor-funds-next: there, a second sale took its
+   census, on the block the first gave back and took again.
    sale-async-returns: as sale-forced-returns, for a member whose delta holds a pre-fork promise's settlement,
    and its report reads the value the restored settlement carries.
    sale-keep-same-record: a member whose owed record a holder outside it names (g_tf_keep) gets that record back
@@ -19810,8 +19811,17 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     fold_row(&cs, &cswhy, param_value_is(js, "/api/sl-floor-done", "b", "22"),
              "NOT REACHED: the member owing /api/sl-floor-owed did not report within the session after frozen "
              "segments of its chain went to the disk tier");
+    /* At the floor two sales in sequence are both funded: the block the first gave back is taken again after it. */
+    const char *fnwhy = NULL;
+    int fn = 1;
+    fold_row(&fn, &fnwhy, g_tf_sale.floor == 1 && g_tf_sale.gave >= 2,
+             "NOT ARMED: with the floor placed, fewer than two members were sold, so no sale followed another there");
+    fold_row(&fn, &fnwhy, censused >= 2,
+             "fewer than two sales took their census: the block the first sale at the floor gave back was not "
+             "taken again for the next (`saleUnfunded`)");
     const Probe rows[] = {
         { "sale-floor-sells", xt, "slFloor", SESS_EXPLORE, xwhy },
+        { "sale-floor-funds-next", fn, "slFloor", SESS_EXPLORE, fnwhy },
         { "sale-chain-spill-returns", cs, "slFloor", SESS_EXPLORE, cswhy },
         { "sale-spill-returns", st, "slForced", SESS_EXPLORE, stwhy },
         { "sale-forced-returns", ft, "slForced", SESS_EXPLORE, fwhy },

@@ -80,8 +80,8 @@ METRIC(net_prog_xhr_asks_life, "netProgXhrAsksLife", LIFETIME, "reply", PROCESS,
 METRIC(net_prog_xhr_queued_life, "netProgXhrQueuedLife", LIFETIME, "program", PROCESS, "solver/engine.c", INT)
 /* `sold` and `resumed` are outcome censuses over gates with legitimate declining arms.
    `sold` is gated on the allocator's refusal, so 0 is the RAM floor never met; its ask side is
-   `pagedAsks` with its five exits (`pagedOver`, `pagedUnarmed`, `pagedFloor`, `pagedShed`,
-   `pagedSales`). `resumed` is gated in the trusted zone on a
+   `pagedAsks` with its exits (`pagedOver`, `pagedUnarmed`, `pagedFloor`, `pagedShed`,
+   `pagedSales`, `soldSpilled`, `chainSpilled`, `pagedReserve`). `resumed` is gated in the trusted zone on a
    key of the document's address plus bundle id that no document publishes, so 0 is no residue
    written, a key miss (the design working on a changed bundle), or a rebuild that produced
    nothing — only the last a defect, and separating them is a trusted-zone diff.
@@ -303,6 +303,7 @@ METRIC(paged_unarmed, "pagedUnarmed", LIFETIME, "ask", PROCESS, "solver/engine.c
 METRIC(paged_floor, "pagedFloor", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
 METRIC(paged_shed, "pagedShed", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
 METRIC(paged_sales, "pagedSales", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
+METRIC(paged_reserve, "pagedReserve", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
 /* …and the sales RAM pressure made at rest before any refusal (solver/engine.h's engine_set_ram_share), with the
    limit, where it came from, and the share that decided them, the limit as pressure last read it (a memory cgroup's
    headroom moves with the other processes it charges). `ramLimitSource` is a one-arm histogram naming the source (a census row is a count or counts), and its "none" arm is a process with no known

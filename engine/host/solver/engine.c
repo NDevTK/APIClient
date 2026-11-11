@@ -12907,23 +12907,31 @@ char *engine_sale_census_json(void) {
    taken while memory stood is given back for the length of the sale and taken again after it. A sale that finds
    no block held runs without its census and is counted.
    No bound on a sale's need is known before the sale: the survey's storage follows the member's reachable
-   graph, which only its walk counts. So the block is sized after the fact, at twice the most a sale's
-   allocations have asked for (the allocator's span across the sale), and SALE_RESERVE_FIRST, which stands until
-   a sale is measured, is a placeholder no run chose.
-   Named residual. Not covered: a sale that asks for more than the block given back; and a sale after which the
-   allocator refuses the block again, what the sale freed having gone to the heap's free lists and not back to
-   the address space, so the next sale is unfunded. Next diff builds: the survey's buffers laid in the block
-   itself and never given to the allocator, the block's end a refusal the sale counts. Absence shows as: the
-   refused allocation's own CHECK inside a sale, `saleOverReserve` (sales that asked for more than the block)
+   graph, which only its walk counts. So the block follows the sales as they are measured: twice what the last
+   funded sale's allocations asked for (the allocator's span across the sale), so one large member does not size
+   every later block; SALE_RESERVE_FIRST, which stands until a sale is measured, is a placeholder no run chose.
+   A block the allocator refuses is asked again at half, down to the last sale's need, so a reserve is held
+   whenever one that funds a sale like the last fits. At the floor, with nothing left to sell, the block is given
+   to the allocation that asked (`pagedReserve`).
+   Named residual. Not covered: a sale that asks for more than the block given back, and a block the allocator
+   refuses even at the last sale's need, what the sale freed having gone to the heap's free lists in pieces;
+   a block given at the floor is asked again only after the next sale, which runs unfunded. Next diff builds:
+   the write's graph bytes streamed to their stub's storage, so the block funds only the walk's identity tables
+   and the head bytes. Absence shows as: the refused allocation's own CHECK inside a sale, `saleOverReserve`
    above zero, and `saleUnfunded` climbing with `sold`. */
 #define SALE_RESERVE_FIRST ((size_t)4 << 20)
 static void *g_sale_reserve;
-static size_t g_sale_reserve_bytes = SALE_RESERVE_FIRST, g_sale_need_max;
+static size_t g_sale_reserve_bytes = SALE_RESERVE_FIRST, g_sale_need_max, g_sale_need_last;
+static size_t g_sale_held;    /* the block held now, in bytes; 0 with none */
 static size_t g_sale_given;   /* the block the open sale gave back, in bytes */
-static long g_sale_unfunded, g_sale_over_reserve;
+static long g_sale_unfunded, g_sale_over_reserve, g_reclaim_reserve;
 
 static void engine_sale_reserve_hold(void) {
-    if (g_sale_reserve == NULL) g_sale_reserve = malloc(g_sale_reserve_bytes);   /* a refusal leaves none held */
+    for (size_t b = g_sale_reserve_bytes; g_sale_reserve == NULL; b /= 2) {
+        g_sale_reserve = malloc(b);   /* a refusal at every size leaves none held */
+        if (g_sale_reserve) g_sale_held = b;
+        if (b / 2 < g_sale_need_last || b / 2 == 0) break;
+    }
 }
 
 /* Gives the block back for a sale and opens the sale's span; 0 when none is held. */
@@ -12931,7 +12939,8 @@ static int engine_sale_reserve_give(void) {
     if (g_sale_reserve == NULL) return 0;
     free(g_sale_reserve);
     g_sale_reserve = NULL;
-    g_sale_given = g_sale_reserve_bytes;
+    g_sale_given = g_sale_held;
+    g_sale_held = 0;
     if (c_alloc_span_measured()) c_alloc_span_open();
     return 1;
 }
@@ -12942,8 +12951,9 @@ static void engine_sale_reserve_retake(int funded) {
         size_t need = c_alloc_span_take();
 
         if (need > g_sale_need_max) g_sale_need_max = need;
-        g_sale_over_reserve += need > g_sale_given;   /* the first of its size: the sales before it sized the block */
-        if (need > g_sale_reserve_bytes / 2) g_sale_reserve_bytes = need * 2;
+        g_sale_over_reserve += need > g_sale_given;
+        g_sale_need_last = need;
+        g_sale_reserve_bytes = need * 2;
     }
     engine_sale_reserve_hold();
 }
@@ -13039,7 +13049,7 @@ static void engine_floor_census(void) {
     g_floor.footprint = (long)c_alloc_footprint();
     JS_GetLiveCounts(JS_GetRuntime(g_sess_ctx), &lc);
     g_floor.js = (long)lc.malloc_size;
-    g_floor.reserve = g_sale_reserve ? (long)g_sale_reserve_bytes : 0;
+    g_floor.reserve = (long)g_sale_held;
     cow_chain_split_begin();
     for (int m = 0; m < flow_count(); m++) {
         const Flow *f = flow_at(m);
@@ -13470,6 +13480,14 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
         }
         /* Then a frozen segment only written stubs stand on, counted by cow.c (`chainSpilled`). */
         if (engine_chain_spill(keep)) return 1;
+        /* Then the sale's block: with nothing left to sell it funds no sale, so it funds the asker. */
+        if (g_sale_reserve != NULL) {
+            free(g_sale_reserve);
+            g_sale_reserve = NULL;
+            g_sale_held = 0;
+            g_reclaim_reserve++;
+            return 1;
+        }
     }
     if (!tail) {
         /* The floor, a reading rather than a failure: the frontier held nothing but the flow this allocation is
@@ -15491,6 +15509,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->paged_over         = g_reclaim_over;
     out->paged_unarmed      = g_reclaim_unarmed;
     out->paged_floor        = g_reclaim_floor;
+    out->paged_reserve      = g_reclaim_reserve;
     out->paged_shed         = g_reclaim_shed;
     out->paged_sales        = g_reclaim_sales;
     cow_chain_out_stats(&out->chain_out_segs, &out->chain_out_bytes, &out->chain_spilled, &out->chain_filled);
@@ -15504,7 +15523,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->sold_spilled = g_sold_spilled;
     out->restored_spilled = g_restored_spilled;
     out->sale_over_reserve = g_sale_over_reserve;
-    out->sale_reserve_kib = g_sale_reserve ? (long)(g_sale_reserve_bytes / 1024) : 0;
+    out->sale_reserve_kib = (long)(g_sale_held / 1024);
     out->floor_live_kib = g_floor.live / 1024;
     out->floor_footprint_kib = g_floor.footprint / 1024;
     out->floor_js_kib = g_floor.js / 1024;
@@ -15612,18 +15631,19 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "%ld at engine_queue_fetched_script) — a door queued a program through a second compile door",
             out->net_prog_fetch_queued, out->net_prog_xhr_queued, out->net_prog_queued);
     /* And the refusal edge's own partition, which makes a zero `sold` readable: every engine_reclaim_tail call
-       leaves by one of seven exits (a request past the whole limit, declined because the safepoint is unarmed,
+       leaves by one of eight exits (a request past the whole limit, declined because the safepoint is unarmed,
        answered at the floor, a held snapshot shed, a sale, a written stub's bytes or a chain segment moved to the
-       disk tier), so the arms are the whole of the asks, and this catches an eighth exit added without a counter. `asks` alone separates "the allocator never refused" from "the pager
+       disk tier, the sale's block given), so the arms are the whole of the asks, and this catches a ninth exit
+       added without a counter. `asks` alone separates "the allocator never refused" from "the pager
        was consulted and could do nothing". A sale exit sells one flow, and a shed at the edge is one of the sheds
        `cuts_shed` counts. */
     DCHECKF(out->paged_over + out->paged_unarmed + out->paged_floor + out->paged_shed + out->paged_sales +
-                out->sold_spilled + out->chain_spilled == out->paged_asks,
+                out->sold_spilled + out->chain_spilled + out->paged_reserve == out->paged_asks,
             "the census's reclaim rows do not partition the allocator's asks (%ld past the limit + %ld unarmed + %ld "
-            "at the floor + %ld shed + %ld sales + %ld written stubs spilled + %ld chain segments spilled against "
-            "%ld) — engine_reclaim_tail has seven exits that each count themselves", out->paged_over,
-            out->paged_unarmed, out->paged_floor, out->paged_shed, out->paged_sales, out->sold_spilled,
-            out->chain_spilled, out->paged_asks);
+            "at the floor + %ld shed + %ld sales + %ld written stubs spilled + %ld chain segments spilled + %ld "
+            "blocks given against %ld) — engine_reclaim_tail has eight exits that each count themselves",
+            out->paged_over, out->paged_unarmed, out->paged_floor, out->paged_shed, out->paged_sales,
+            out->sold_spilled, out->chain_spilled, out->paged_reserve, out->paged_asks);
     DCHECKF(out->paged_sales == out->sold,
             "the census counts %ld sale exits against %ld flows sold — engine_sale_release runs once per sale exit",
             out->paged_sales, out->sold);
