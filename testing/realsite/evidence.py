@@ -5,7 +5,8 @@ Chromium always makes that the engine never sent, with each one's method, kind a
 instance the program rows reached, the reply door, the clock licence, page errors split into standing and
 exploration-produced, the records by provenance and door, the sales by outcome, the engine gaps the instance
 crossed (`_instanceGaps`) and the oldest observed-class member's place; the zone's egress decisions by how each
-was answered; and per instance the observed world over the run's census samples. `picks` there is the pick
+was answered and what admitted or refused it, with the first the page asked on a path not forced that was not
+sent; and per instance the observed world over the run's census samples. `picks` there is the pick
 count of the best-weighted observed member at that sample, which is one member's history only while the
 observed world holds few members. A replay's recording answers a send by method, URL and body, so a send it
 lacks is a miss whatever the engine did; misses are split into GET and the rest."""
@@ -39,7 +40,13 @@ def main(diff_path):
         ids = Counter(x['method'] + ' ' + x['url'].split('?')[0] for x in ms)
         print('  recording lacked, %s: %d sends, %d addresses' % (name, len(ms), len(ids)), ids.most_common(8))
     eg = [json.loads(l.split('\t', 1)[1]) for l in open(base + '.egress.tsv')] if os.path.exists(base + '.egress.tsv') else []
-    print('egress decisions', len(eg), dict(Counter((e['method'], e['how'], e['refusal']) for e in eg)))
+    # An entry answered from the document's record or the cache states no vector; the rest state every signal.
+    print('egress decisions', len(eg), dict(Counter((e['method'], e['how'], (e['admittedBy'] or {}).get('kind'),
+                                                    (e['admittedBy'] or {}).get('arm'), e['refusal']) for e in eg)))
+    own = [e for e in eg if e['how'] == 'not-sent' and e['vector']['actor'] == 'page' and e['vector']['provenance'] != 'forced']
+    print('  not sent though the page asked on a path not forced:', len(own), dict(Counter(e['refusal'] for e in own)))
+    for e in own[:1]:
+        print('    first:', e['method'], e['url'][:160], '| refused by', e['refusal'], '| vector', e['vector'])
     print('chromium: counted', dj['counted'], 'of', dj['loads'], 'loads; stable identities', len(dj['stable']), 'varying',
           len(dj['varying']), '| engine never sent', len(dj['missing']), '| engine sends no load made', len(dj['extra']))
     for m in dj['missing'][:4]:
@@ -85,7 +92,7 @@ def main(diff_path):
         for g in gaps or []:
             print('     gap %s:%s reached %s%s: %s' % (g['siteFile'], g['siteLine'], g['reached'],
                                                     ' (composed)' if g['composed'] else '', g['message'][:300]))
-    cold, rows = {}, {}
+    cold, rows, units = {}, {}, list(docs[0]['_cold']['stepUnitRuns']) if docs else []
     for l in gzip.open(base + '.census.tsv.gz', 'rt'):
         tag, marker, payload = l.rstrip('\n').split('\t', 2)
         j = json.loads(payload)
@@ -93,12 +100,15 @@ def main(diff_path):
             cold[tag] = j
         elif marker == '@WFQ' and tag in cold:
             o = (j.get('observedTerms') or {}).get('observed')
+            old = j.get('observedOldest')
             rows.setdefault(tag, []).append((cold[tag]['stepWork'], j['members'], j['observedMembers'], j['observedWGap'],
                                              o['picks'] if o else None, o['hostOwed'] if o else None,
-                                             cold[tag]['sold'], cold[tag]['resumed'], cold[tag]['completed']))
+                                             cold[tag]['sold'], cold[tag]['resumed'], cold[tag]['completed'],
+                                             (old['cursor'], old['ownWork'], units[old['stepUnit']]) if old else None))
     for tag, rs in rows.items():
         print(' observed world,', tag, '- (stepWork, members, observed members, observedWGap, best observed member picks,'
-              ' its hostOwed, sold, resumed, deepest completed):')
+              ' its hostOwed, sold, resumed, deepest completed, the oldest observed-class member\'s (program row, own work,'
+              ' last step\'s arm)):')
         turn = [i for i in range(1, len(rs)) if (rs[i][2] == 0) != (rs[i - 1][2] == 0)]
         keep = sorted(set([0, 1, 2, len(rs) // 4, len(rs) // 2, 3 * len(rs) // 4, len(rs) - 2, len(rs) - 1] + turn + [i - 1 for i in turn]))
         for i in keep:
