@@ -1,88 +1,36 @@
-/* THE NATIVE CROSS-INSTANCE TRANSPORT'S GATE — two PROCESSES, two ORIGINS, one synchronous read that cannot be
- * answered locally. `node engine/peergate.mjs [path-to-native-binary]`, after `node engine/build.mjs native`.
+/* The native cross-instance transport's gate: two processes, two origins, and one synchronous read that
+ * cannot be answered locally. `node engine/peergate.mjs [path-to-native-binary]`, after
+ * `node engine/build.mjs native`.
  *
- * IT EXISTS BECAUSE THE CAPABILITY IT MEASURES EXISTS AND NOTHING REACHED IT. SECURITY.md's rule is that a host
- * which cannot PROVISION a second instance has not tested the transport, and that every cross-instance
- * mechanism is then a design that has never run. `engine/trusted.mjs` provisions one — as a child `--abi`
- * process of the SHIPPED `qjs_*` ABI — and it was reachable only by hand, against a live URL, from no gate at
- * all. `engine/route.mjs` is this file's WASM sibling and drives two emscripten instances inside ONE process;
- * this one drives two OS PROCESSES over pipes, which is the shape SECURITY.md actually names ("in a process
- * that means a child PROCESS ... over a pipe") and the shape whose failures are lifetime failures rather than
- * heap ones.
+ * SECURITY.md's rule is that a host which cannot provision a second instance has not tested the transport.
+ * `engine/trusted.mjs` provisions one as a child `--abi` process of the shipped `qjs_*` ABI, and this gate
+ * drives it: two OS processes over pipes, where `engine/route.mjs`, its WASM sibling, drives two emscripten
+ * instances in one process. Every document served is a literal in this file; only the loopback port varies,
+ * and the bytes served are printed with a failing verdict.
  *
- * ── WHAT WOULD MAKE THIS FILE PASS FOR THE WRONG REASON, AND WHAT MAKES EACH OF THOSE IMPOSSIBLE ────────────
- * This section is the point of the file. The defect it was written against is not a bug in the engine: it is
- * that `route.mjs`'s fixture was COMPENSATING for one. Its peer document fetched `/hold`, a request the driver
- * never answered, so the peer's boot flow stayed PARKED and therefore stayed ALIVE long enough to answer a
- * cross-origin read. A real peer has no `/hold`. The gate was green on a property of the fixture, and the
- * missing `qjs_set_referenced` ABI entry — without which a provisioned peer runs its scripts, drains, closes,
- * and the creator's first `otherW.length` arrives at an instance with no timeline to run the getter in —
- * survived underneath it. So:
- *
- *   W1  A PEER KEPT ALIVE BY UNFINISHED WORK RATHER THAN BY `referenced`. Closed TWICE, and the second is the
- *       one that holds if this file is edited later. (a) NEITHER peer document makes any request: no script
- *       fetch, no subresource, no `src` on either iframe. (b) The gate asserts AT THE WIRE that the set of
- *       paths this server was asked for at the PEER AUTHORITY is exactly {/peer, /peer-closed} — so a `/hold`
- *       added to a fixture is a third path and FAILS, and it fails whether it was added on purpose or by
- *       someone reaching for a way to make a red gate green. Note also that the native zone cannot reproduce
- *       route.mjs's artifact even if asked to: a script-initiated `fetch()` is DECLINED by trusted.mjs, a
- *       declined round pays nothing, and `test_forced.c`'s `--abi` arm treats an unpaid stall at an
- *       UNREFERENCED instance as `abi_stalled()`'s DFAIL. A `/hold` here aborts the peer; it cannot hold it.
- *
- *   W2  THE READ ANSWERED OUT OF THE ASKING AGENT'S OWN RECORD. Both crossing members are chosen so that the
- *       local answer is a DIFFERENT VALUE from the true one, which is the only construction that can tell them
- *       apart. `peerA.length` is HTML §7.2.2.2 "Indexed access on the Window object"'s "number of
- *       document-tree child navigables" OF THE PEER'S ACTIVE DOCUMENT: `/peer` carries two srcless `<iframe>`s,
- *       so the true answer is 2, while window_proxy.c's local arms answer 0 for every state in which they
- *       answer at all. `peerB.closed` is §7.2.2.1 "Opening and closing windows"' `closed`, whose is-closing
- *       half is written BY THE AGENT THAT RAN close() — `/peer-closed` closes itself — so the creator's own
- *       record says `false` for ever and only the peer's says `true`. A gate that asserted `length === 0` or
- *       `closed === false` would be satisfied by a local answer and would be measuring nothing.
- *
- *   W3  A CROSS-ORIGIN PAIR THAT IS NOT ACTUALLY CROSS-ORIGIN. CLAUDE.md: "provisioning one for a same-origin
- *       child tests a transport that must never carry it" — a same-origin pair is ONE agent cluster, answered
- *       in-heap by navigable.c's `child_in_this_agent`, and no process is provisioned at all. The gate asserts
- *       the two serialized origins differ, and then asserts it again where it cannot be faked: every request
- *       this server received carries the `Host` field the client sent, and the peer documents must arrive
- *       under `localhost:<port>` while the seed arrives under `127.0.0.1:<port>`.
- *
- *   W4  A §7.2.1 FILTER THAT THROWS FOR EVERYTHING. CLAUDE.md names this exactly: "a filter that threw for
- *       everything passes a test that only checks the throw". So BOTH halves are asserted from ONE page, in
- *       one run: `peerA.document` must throw a SecurityError (§7.2.1.3.1 CrossOriginProperties ( O )'s list
- *       does not contain `document`, and §7.2.1.3.2 CrossOriginPropertyFallback ( P )'s last step is "Throw a
- *       SecurityError DOMException"), and `peerA.self === peerA` must answer TRUE without throwing (`self` is
- *       on that list with [[NeedsGetter]] true). Either one alone is a test of nothing.
- *
- *   W5  A DRIVER THAT DIED BEFORE THE CHECKS IT LOOKS LIKE IT MADE. CLAUDE.md's named shape: "a driver
- *       aborting on its FIRST reply because a required field was added to the reply record, so every check
- *       below that line is unreachable while the file still looks like a passing gate." Every check in this
- *       file is DECLARED up front in one table, every one of them RUNS, and the gate refuses to report a
- *       verdict unless the number of checks that produced a result equals the number declared. An ABSENT
- *       observation and a FALSE one are never the same verdict: each check reports `missing` or `wrong` with
- *       the value it actually saw.
- *
- *   W6  THE HARNESS'S OWN CLOCK REPORTED AS THE ENGINE'S DEFECT. §Testing: a measurement a loaded machine can
- *       falsify is not a measurement. There is a backstop here because a deadlocked pipe consumes no CPU and
- *       no other signal can see it, and it is GENEROUS, it is reset by any PROGRESS (a request arriving, a
- *       byte written by the child) rather than by elapsed time alone, and it reports through a verdict of its
- *       OWN — `BACKSTOP`, with the load average beside it — which is never collapsed into a check failure.
- *
- * ── WHAT THIS GATE DOES NOT MEASURE, SAID RATHER THAN IMPLIED ────────────────────────────────────────────────
- * CLAUDE.md requires that a peer answer BY RUNNING A PROGRAM — the IDL getter §7.2.1 defines the member as, on
- * a flow of the peer's own frontier — and this file proves that the answer came FROM the peer's document (W2)
- * without independently witnessing the flow base it ran on. The evidence for that is in the PEER's own result
- * document (`_flows` greater than its boot count, `_worldSegmentsMade` non-zero because the getter runs under
- * the ASKING world's segment), and `trusted.mjs` deliberately does not print a peer's `@RESULT`: it reports
- * only its LENGTH, on the ground that merging two documents' finding sets is a grammar it does not have. That
- * is right about merging and it leaves the counters unreadable from out here. Closing it is a change to
- * `trusted.mjs`'s per-peer report — the peer's `@RESULT` is already parsed into `i.result` there and nothing
- * reads it — and it is named here rather than left as an assertion this file appears to make and does not.
- *
- * ── THE BYTES ARE FROZEN, WHICH IS WHY THIS IS A GATE AND NOT A RUN AGAINST A SITE ──────────────────────────
- * §Testing: "ONE RUN OF A LIVE SITE IS NOT A MEASUREMENT, AND A BEFORE/AFTER BUILT FROM TWO OF THEM IS AN
- * ARTIFACT OF THE SITE." Every document below is a literal in this file. The ONE thing that varies between
- * runs is the loopback PORT, which the OS assigns; it is substituted once, and the exact bytes served are
- * printed with the verdict so a failing run's input is not a thing anybody has to reconstruct. */
+ * The checks are built so that the gate cannot pass for the wrong reason. Their descriptions cite these:
+ *   W1  A peer kept alive by unfinished work and not by `referenced`. Neither peer document makes a request,
+ *       and the gate asserts at the wire that the peer authority was asked for exactly {/peer, /peer-closed}.
+ *   W2  A read answered out of the asking agent's own record. Each crossing member's local answer differs
+ *       from the true one. `peerA.length` is HTML §7.2.2.2 "Indexed access on the Window object"'s "number of
+ *       document-tree child navigables" of the peer's active document: 2, where window_proxy.c's local arms
+ *       answer 0. `peerB.closed` is §7.2.2.1 "Opening and closing windows"' `closed`, whose is-closing half is
+ *       written by the agent that ran close(): true, where the creator's own record says false.
+ *   W3  A cross-origin pair that is not cross-origin. A same-origin pair is one agent cluster, answered
+ *       in-heap by navigable.c's `child_in_this_agent`, and provisions no process. The two serialized origins
+ *       must differ, and the `Host` field of each request must show the peer documents arriving under
+ *       `localhost:<port>` and the seed under `127.0.0.1:<port>`.
+ *   W4  A §7.2.1 filter that throws for everything. Both halves are asserted from one page: `peerA.document`
+ *       throws a SecurityError (§7.2.1.3.1 CrossOriginProperties ( O )'s list does not contain `document`,
+ *       and §7.2.1.3.2 CrossOriginPropertyFallback ( P )'s last step is "Throw a SecurityError
+ *       DOMException"), and `peerA.self === peerA` answers true without throwing (`self` is on that list
+ *       with [[NeedsGetter]] true).
+ *   W5  A driver that died before the checks it appears to make. Every check is declared in one table, and
+ *       no verdict is reported unless every declared check produced a result. An absent observation
+ *       (`missing`) and a false one (`wrong`) are separate verdicts.
+ *   W6  The harness's own clock reported as the engine's defect. The backstop measures no progress (no
+ *       request, no byte from the child), because a deadlocked pipe consumes no CPU; it reports through its
+ *       own `BACKSTOP` verdict with the load average, never as a check failure. */
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
@@ -94,17 +42,14 @@ import { loadavg } from 'node:os';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 
-/* TWO AUTHORITIES, ONE PORT, AND THE PAIR IS A CHOICE WITH A REASON RATHER THAN A CONVENIENCE. HTML's origin
-   is the (scheme, host, port) tuple, and `127.0.0.1` and `localhost` are two different HOSTS — an IPv4 address
-   and a domain — so one listening socket serves two ORIGINS with no second port, no TLS and no /etc/hosts
-   edit. They are both `loopback` under `safe-fetch.js` (`_ipAddressSpace` answers it for the name "localhost"
-   and for the IPv4 loopback block), which is what makes the pair reachable at all: that file refuses a target
-   only when it is less public than the PAGE principal, so loopback->loopback is allowed by its own rule. That
-   is asserted below against the real file rather than asserted here in prose. */
+/* Two authorities on one port. HTML's origin is the (scheme, host, port) tuple, and `127.0.0.1` and
+   `localhost` are different hosts, so one listening socket serves two origins. Both are `loopback` to
+   `safe-fetch.js` (`_ipAddressSpace`), which refuses a target only when it is less public than the page
+   principal; the `pna` check asks the real file. */
 const SEED_HOST = '127.0.0.1';
 const PEER_HOST = 'localhost';
 
-/* ── THE FIXTURES ────────────────────────────────────────────────────────────────────────────────────────────
+/* ── The fixtures ────────────────────────────────────────────────────────────────────────────────────────────
    Which document a read reaches is decided by when it runs. HTML §7.2.2.1 "Opening and closing windows"'
    window open steps navigate the new traversable at step 15.5 and return its WindowProxy at step 19, and
    §7.4.2.2 "Beginning navigation"'s navigate fetches in parallel (step 24), so a read on the line after
@@ -118,20 +63,14 @@ const PEER_HOST = 'localhost';
    back parks the flow that would have made the reports after it, so the handler reports the two local-answer
    rows (W4's pair) before the crossing `length`.
 
-   WHY THE BEACON IS A NAVIGATION AND NOT A `fetch()`. `fetch()` would be the obvious channel and it cannot be
-   used: trusted.mjs fires only OBSERVED parks (the seed, and a parser-inserted `<script src>` of it), a
-   script-initiated fetch is DECLINED, a declined round pays nothing, and `abi_pay() == 0` at an unreferenced
-   instance is `abi_stalled()`'s DFAIL. The seed would abort before printing anything. A same-origin
-   `window.open` instead reaches navigable.c's `child_in_this_agent` arm, becomes §7.4.5's load job for a
-   navigable THIS instance holds, and asks the zone `document.fetch` with the load's own provenance — which
-   for an address the page's own code composed on a path that stood on no contradicted arm is `derived`. The
-   bytes then come through the ONE chokepoint like every other byte, which is also what makes the observation
-   trustworthy: it is `safe-fetch.js` that fetched it. A `derived` navigation is refused `destination=value`
-   at an empty table (no default arm carries a navigation, which composes no witness mark), which is why the
-   child is widened per signal at both authorities (RUN_PERMITS).
-
-   AND THE OBSERVATIONS RIDE THE PATH RATHER THAN A QUERY STRING, because the whole address is what this
-   server sees and the path is the half no consumer of a result document has to be asked about. */
+   The beacon is a navigation because trusted.mjs fires only observed parks and declines a script-initiated
+   `fetch()`; a declined round pays nothing, and `abi_pay() == 0` at an unreferenced instance is
+   `abi_stalled()`'s DFAIL. A same-origin `window.open` reaches navigable.c's `child_in_this_agent` arm,
+   becomes §7.4.5's load job for a navigable this instance holds, and asks the zone `document.fetch` with the
+   load's own provenance, which is `derived` for an address the page composed on no contradicted arm, so the
+   bytes come through `safe-fetch.js`. A `derived` navigation is refused `destination=value` at an empty
+   table, which is why the child is widened per signal at both authorities (RUN_PERMITS). The observation
+   rides the path, which is the whole of what this server sees, and not a query string. */
 const seedDoc = (port) => `<!doctype html>
 <script>
 var peerA, peerB;
@@ -157,58 +96,42 @@ peerB = window.open("http://${PEER_HOST}:${port}/peer-closed", "peerB");
 window.open("/beacon/blankclosed-" + (typeof peerB.closed) + "-" + peerB.closed);
 </script>`;
 
-/* THE PEER WHOSE `length` IS A FACT THE ASKER CANNOT COMPUTE. Two SRCLESS iframes: §7.4 creates each child
-   navigable with the initial `about:blank` and no response, so this document makes NO request of any kind —
-   which is W1's first half — and §7.2.2.2's count of them is 2 in the peer and 0 in anything answering
-   locally. Its script runs after both iframes are in the tree, so the post says the count is 2. `unsent` is
-   never called, so the post in it is reached only by this tool's drive of uncalled code: `actor=tool`. */
+/* The peer whose `length` the asker cannot compute. Two srcless iframes: §7.4 creates each child navigable
+   with the initial `about:blank` and no response, so this document makes no request (W1), and §7.2.2.2's
+   count is 2 in the peer and 0 in anything answering locally. Its script runs after both iframes are in the
+   tree, so the post says the count is 2. `unsent` is never called, so the post in it is reached only by this
+   tool's drive of uncalled code: `actor=tool`. */
 const PEER_DOC = `<!doctype html><iframe></iframe><iframe></iframe>` +
                  `<script>function unsent() { opener.postMessage("driven", "*"); }` +
                  `opener.postMessage("peer-active", "*");</script>`;
 
-/* THE PEER THAT CLOSES ITSELF — §7.2.2.1's close(), run in the agent that holds the document, which is the
-   whole content of the member. The creator holds a WindowProxy for the same traversable and its own `closing`
-   byte is never written, so its local answer is `false` for ever about a window that has closed. Step 6.1
-   sets is closing before the post and step 6.2 queues definitely close, which destroys the traversable
-   (§7.3.1.6 "Navigable destruction"), so the read may reach a document already destroyed. */
+/* The peer that closes itself: §7.2.2.1's close(), run in the agent that holds the document. The creator
+   holds a WindowProxy for the same traversable and its own `closing` byte is never written, so its local
+   answer stays `false`. Step 6.1 sets is closing before the post and step 6.2 queues definitely close, which
+   destroys the traversable (§7.3.1.6 "Navigable destruction"), so the read may reach a document already
+   destroyed. */
 const PEER_CLOSED_DOC = `<!doctype html><script>window.close(); opener.postMessage("peer-closed", "*");</script>`;
 
-/* A BEACON'S REPLY IS A DOCUMENT WITH NOTHING IN IT — no script, no subresource, nothing to fetch — so a
-   beacon can never itself become a request this gate then has to explain. */
+/* A beacon's reply is a document with no script and no subresource, so a beacon never causes a request. */
 const BEACON_DOC = `<!doctype html><title>beacon</title>`;
 
-/* ── WHAT THIS GATE PERMITS AT ITS OWN FIXTURE, STATED ROW BY ROW ────────────────────────────────────────────
-   CLAUDE.md §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS draws the default at PROGRAM LOADS ONLY, and this gate's
-   probe is not one: it is a `document` load, which Fetch §2.2.5 "Requests" makes neither script-like nor a
-   subresource, so `destination` reads `value` — this tool spending somebody else's server. Measured against
-   the real file rather than reasoned about: at the table `trusted.mjs` states (`{}`) the probe is REFUSED
-   `destination=value`, and the two default arms that could carry a `value` request cannot, because one wants
-   `provenance=observed` (the probe is `derived`) and the other wants `actor=page` (the probe is `tool`). So
-   SPEAKING AN EMPTY TABLE IS NOT ENOUGH HERE and a reader who lands one has moved the verdict from an
-   uncaught abort to a `pna` WRONG.
-   IT IS ONE ORIGIN AND ONE VALUE PER GATING ROW, WHICH IS THE NARROWEST THING THE SHAPE CAN SAY. The only
-   request this zone ever makes is the `/pna-probe` at the PEER authority, `_firingRefusal` keys the table on
-   that request URL's own `.origin`, and both authorities are EPHEMERAL LOOPBACK PORTS THIS PROCESS OPENED
-   — an origin that does not exist outside this run and serves nothing but literals in this file. This is not
-   `safeFetchWiden`, which would permit every value of every row: `actor=page`, `provenance=observed` and
-   `provenance=forced` stay unpermitted here, so a later diff that changed what this gate asks would be
-   REFUSED and named rather than quietly carried.
-   AND IT IS A LITERAL RATHER THAN DERIVED FROM THE PROBE'S OWN VECTOR, WHICH IS THE WHOLE OF WHY `pna` IS
-   STILL A CHECK. `safeFetchSignalVector` would hand back exactly these nine values for exactly these facts,
-   and a table built from it could not refuse the request it was built from — §AN-ASSERT-WHOSE-TWO-SIDES-
-   CANNOT-DISAGREE arriving in a permission table, wearing the shape of a derivation. Written out, the three
-   diffs that SHOULD redden this gate do: a signal added to the registry, an `of` that answers differently
-   for these facts, and an edit to the probe below. The direction is the safe one and the file says so at its
-   own door — "a signal a stored grant does not name is not permitted ... every existing grant NARROWS, the
-   refusal names the new row" — so the failure is `pna` WRONG naming the row, never a silent firing. */
+/* What this gate permits its own probe, row by row. The probe is a `document` load, which Fetch §2.2.5
+   "Requests" makes neither script-like nor a subresource, so `destination` reads `value`. At an empty table
+   it is refused, and neither default arm carries it: one wants `provenance=observed` and the other
+   `actor=page`. The table is one origin and one value per gating row: `_firingRefusal` keys it on the request
+   URL's origin, here the peer authority, an ephemeral loopback port this process opened. It is not
+   `safeFetchWiden`: `actor=page`, `provenance=observed` and `provenance=forced` stay unpermitted. It is a
+   literal and not derived from `safeFetchSignalVector`, because a table built from the probe's own vector
+   could not refuse the probe. Written out, a signal added to the registry, an `of` that answers differently
+   or an edit to the probe turns `pna` wrong and names the row. */
 const PROBE_PERMITS = {
   /* Fetch §2.2.5's `document` destination is neither script-like nor a subresource. */
   destination: ['value'],
-  /* THIS GATE composed the address — see the `actor: 'tool'` beside the probe. */
+  /* This gate composed the address; see the `actor: 'tool'` beside the probe. */
   actor: ['tool'],
   /* The address is one this harness's own code composed; nothing pinned a value in it. */
   provenance: ['derived'],
-  /* The document it is composed FROM is the seed, which this harness named itself. */
+  /* The document it is composed from is the seed, which this harness named itself. */
   'doc-reach': ['observed'],
   /* No cookie jar in this process, and the probe states `credentialed: false`. */
   cookies: ['no'],
@@ -240,20 +163,10 @@ const RUN_PERMITS = {
   reaches: ['another-party'],
 };
 
-/* ── THE CHOKEPOINT, IN A REALM OF ITS OWN ───────────────────────────────────────────────────────────────────
-   Loaded exactly as `engine/trusted.mjs` loads it and for the same reason: this gate makes a CLAIM about
-   `safe-fetch.js`'s private-network rule (that `127.0.0.1` -> `localhost` is allowed because both classify
-   private), and a claim about a file is checked by running that file rather than by restating its rule here.
-   A second copy of the rule would be the drift SECURITY.md's one-chokepoint design exists to prevent, and it
-   would drift in the one direction that matters: this gate would go on passing after the real file stopped
-   allowing the pair, and would report a transport failure as a policy that had not changed.
-   IT STATES THE TABLE BEFORE IT RETURNS, AND THE PEER ORIGIN IS AN ARGUMENT FOR THAT REASON RATHER THAN A
-   CONVENIENCE. This function used to hand back a zone that had never SPOKEN, and `_firingRefusal`'s DCHECK
-   fired on the first request of the first build that ever invoked this gate — before a single declared check
-   had produced a result, so W5's whole table was ABSENT rather than failing. A load that cannot return an
-   unstated zone makes that state impossible rather than leaving an ordering for the next reader to keep:
-   CLAUDE.md §Fix-the-ROOT is the rule, and the alternative — state it at the call site, one line later — is
-   the same window one statement narrower. */
+/* The chokepoint, in a realm of its own, loaded as `engine/trusted.mjs` loads it: this gate's claim about
+   `safe-fetch.js`'s private-network rule (`127.0.0.1` -> `localhost` is allowed because both classify
+   private) is checked by running that file and not by restating its rule. The zone's egress table is stated
+   before this returns, so no caller holds an unstated zone; `peerOrigin` is an argument for that. */
 function loadChokepoint(peerOrigin) {
   /* The timers, `AbortController` and `ReadableStream` are the wire's idle end (safe-fetch.js's _wireWatched). */
   const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, Headers, Response, swRpc: processSiteRpc,
@@ -268,42 +181,24 @@ function loadChokepoint(peerOrigin) {
     throw new Error('extension/lib/safe-fetch.js installed no `safeFetch` — this gate asks that file whether ' +
                     'the two loopback authorities may reach each other, and a load that installs nothing ' +
                     'leaves the question unasked rather than answered');
-  /* AND THE POLICY STATEMENT BESIDE IT, ASSERTED AT THE SAME DOOR AND FOR THE SHARPER REASON `trusted.mjs`
-     GIVES AT ITS OWN COPY OF THIS LIST: the chokepoint's absence is a gate with no network, and THIS name's
-     absence is a gate that reaches the network with the one decision CLAUDE.md puts at that chokepoint
-     silently missing. It is a load-time throw rather than a TypeError one call into the probe, and it is what
-     makes the statement below reachable at all — the name MOVED with the model (`safeFetchWidenStated` took a
-     list of origin strings), so a zone assembled from a stale copy of that file fails HERE, loudly. */
+  /* Asserted at load: without this name the gate would reach the network with the egress decision missing. */
   if (typeof sandbox.safeFetchEgressStated !== 'function')
     throw new Error('extension/lib/safe-fetch.js installed no `safeFetchEgressStated` — this gate cannot ' +
                     'SPEAK its per-origin egress table, so `_firingRefusal` would abort on the probe in a ' +
                     'dev build and answer it from a table nobody stated in a release one');
-  /* THE STATEMENT ITSELF, ONCE, IN THE SHAPE THAT FILE TAKES — `{ origin: { signal: [values] } }`. `{}` and
-     not `[]` for the reason `trusted.mjs` gives: an empty ARRAY is the shape the previous single-switch
-     control persisted and the chokepoint refuses it by name, because a bare origin in it meant "permit
-     everything" including the signals that did not exist when it was written. */
+  /* The statement, once, in the shape that file takes: `{ origin: { signal: [values] } }`. The chokepoint
+     refuses an array by name. */
   sandbox.safeFetchEgressStated({ [peerOrigin]: PROBE_PERMITS });
   return sandbox;
 }
 
-/* ── WHAT THIS GATE LEFT RUNNING, WHICH IS A FACT ABOUT PROCESSES AND NOT ABOUT PIPES ────────────────
-   `trusted.mjs` spawns every `--abi` instance with stderr `inherit`, so a native child holds THIS PROCESS'S
-   stderr pipe; and it awaits each instance's channel, so an instance that never returns to `abi_line()`
-   outlives the zone that provisioned it and is reparented to init. That process is not a leak in the ordinary
-   sense — it is a live engine burning a core with no payer, which is CLAUDE.md
-   §A-CAPABILITY-MATERIALIZED-PER-FLOW-AND-NEVER-RECLAIMED arriving as a PROCESS rather than as a realm, and
-   §AND-THE-LOAD-IS-NOT-ONLY-FROM-WORK-THAT-IS-RUNNING prices it: it competes with every measurement taken on
-   this box until something ends it.
-   IT IS READ OUT OF `/proc` AND NEVER OUT OF A PATTERN, which is §A-PROCESS-PATTERN-MATCHES-THE-SHELL-THAT-
-   NAMES-IT: a `pgrep -f` over a command string matches the shell doing the matching. A PROCESS GROUP is the
-   kernel's own answer to "what did this child start" — the child is spawned `detached`, so it is a group
-   leader and every descendant it does not itself detach is in that group — so membership is a lookup and not
-   an inference.
-   `comm` IS FIELD 2 OF `/proc/<pid>/stat` AND IS PARENTHESISED AND MAY CONTAIN SPACES, so every numeric field
-   is taken AFTER THE LAST `)`; splitting the line on whitespace from the left mis-indexes every field for any
-   process whose name has a space in it. A ZOMBIE IS EXCLUDED because it holds no fd and burns nothing: it is
-   an accounting entry its parent has not read yet, and reporting one as a process this gate left running
-   would be an absence and a presence behind one number. */
+/* What this gate left running. `trusted.mjs` spawns every `--abi` instance with stderr `inherit` and awaits
+   each instance's channel, so an instance that never returns to `abi_line()` outlives the zone, holds this
+   process's stderr pipe and burns a core. Leftovers are found by process group, read out of `/proc`, and
+   never by a command-line pattern: the child is spawned `detached`, so it is a group leader and its
+   descendants are in its group. `comm` is field 2 of `/proc/<pid>/stat`, is parenthesised and may contain
+   spaces, so every numeric field is taken after the last `)`. A zombie is excluded: it holds no fd and burns
+   nothing. */
 const CLK_TCK = 100;   /* `getconf CLK_TCK` on this platform; only ever used to render ticks as seconds */
 function procStat(pid) {
   let raw;
@@ -312,7 +207,7 @@ function procStat(pid) {
   if (close < 0) return null;
   const f = raw.slice(close + 2).split(' ');
   return { pid, comm: raw.slice(raw.indexOf('(') + 1, close), state: f[0], pgrp: Number(f[2]),
-           /* utime + stime, which is the quantity §Testing says to measure a budget in */
+           /* utime + stime */
            cpuS: (Number(f[11]) + Number(f[12])) / CLK_TCK };
 }
 function groupMembers(pgid) {
@@ -321,12 +216,9 @@ function groupMembers(pgid) {
     .filter((r) => r !== null && r.pgrp === pgid && r.state !== 'Z');
 }
 
-/* ── THE CHECK TABLE ─────────────────────────────────────────────────────────────────────────────────────────
-   DECLARED BEFORE ANYTHING RUNS, which is W5's mechanism. Each entry states what it is evidence OF and which
-   wrong-reason it closes; each produces exactly one of `pass`, `wrong` (an observation was made and it is not
-   the one required) or `missing` (no observation was made at all). Those last two are held apart everywhere
-   they are reported, because §@S's rule — a rung whose ABSENCE and whose ZERO read alike is three states
-   behind one answer — is about precisely this, and the report is where a gate performs it. */
+/* The check table, declared before anything runs (W5). Each entry states what it is evidence of and which
+   wrong reason it closes, and produces exactly one of `pass`, `wrong` (an observation was made and is not
+   the one required) or `missing` (no observation was made). The last two are reported apart everywhere. */
 const CHECKS = [
   ['pna', 'the real `safe-fetch.js` performs a DERIVED document load from the seed authority to the PEER ' +
           'authority — both its private-network rule (private->private is allowed; a public page reaching a ' +
@@ -370,68 +262,30 @@ const CHECKS = [
              'on a question nothing answered, which is a failure and not a note'],
   ['peers', 'every peer instance ended with status 0 — a peer that aborts prints its own `@WHY` above this ' +
             'gate\'s verdict, and that is the diagnosis rather than this line'],
-  /* THE FLOW BASE, WHICH THIS FILE'S OWN HEADER NAMED AS THE THING IT DID NOT MEASURE. `length` and `closed`
-     prove the answer came FROM the peer's document (W2) and are silent about WHAT RAN THERE — and CLAUDE.md's
-     requirement is not that the value be the peer's, it is that a peer ANSWER BY RUNNING A PROGRAM, on a flow
-     of its own frontier, under the ASKING flow's world. `_worldSegmentsMade` is the one row that can only be
-     raised by that: solver/world.c's `world_segment` DCHECKs `w.doc != g_doc`, so a segment is materialized for
-     a FOREIGN world and for nothing else, and the asking agent cannot raise a count inside a peer process at
-     all. It is read out of the PEER's own `@RESULT` — the artifact, not this harness — which `trusted.mjs` now
-     prints under that peer's tag. */
-  /* THE PROCESSES THIS GATE LEFT BEHIND, DECLARED AS A CHECK BECAUSE THE COST IS MEASURED RATHER THAN
-     ARGUED AND BECAUSE A HEALTHY RUN CAN PASS IT. `trusted.mjs` awaits every instance's channel, so a run
-     that ended cleanly has an EMPTY process group by the time it exits and this row reads `pass` — which is
-     what makes it a check and not a note. A non-empty one is the lifetime failure this whole file is about,
-     seen from outside the engine: an `--abi` instance that never returned to its ABI loop, so it never
-     observed the closed channel and never reached the assertion `test_forced.c` makes on that read. That is
-     why the row exists: an instance nothing else can see leaves this process's group non-empty.
-     THIS PARAGRAPH USED TO CALL THAT `THE ONE SHAPE THAT LEAVES NO @E` AND TO NAME `rec != NULL` AS THE
-     CONDITION, AND BOTH HALVES ARE RETIRED RATHER THAN DELETED because a reader re-derives them from the
-     sentence above: an instance that never reads cannot report, so silence looks like the exclusive property
-     of a spinner. It is not, and it never was the property the row needed. `test_forced.c` now splits that
-     read THREE ways — a stream that FAILED, an end of input with something OUTSTANDING, and an end of input
-     with NOTHING outstanding — and only the middle one aborts, because the last is the state this file's own
-     `referenced` peers rest in and an assert on it reported a harness kill as a defect in a tree. So an
-     instance that DID reach the loop and owed nothing now leaves no `@E` either, and a run wedged the way
-     this row is about no longer produces TWO identical aborts: it produces one from whichever instance was
-     genuinely owed an answer, and nothing from the peers that were merely resting.
-     WHAT THAT DOES TO THIS ROW IS NOTHING, WHICH IS WHY IT SURVIVES THE CHANGE: it reports a PROCESS that
-     outlived its zone, and a spinning instance outlives it whether or not anybody else is silent too. */
+  /* The processes this gate left behind. `trusted.mjs` awaits every instance's channel, so a run that ended
+     cleanly has an empty process group and this row passes. A non-empty group is an `--abi` instance that
+     never returned to its ABI loop and so never observed the closed channel; nothing else makes it visible.
+     An instance that reached the loop owing nothing also ends without an `@E`, so silence alone does not
+     identify a spinner. */
   ['orphans', 'the child\'s process group was EMPTY once it ended — no `--abi` instance outlived the zone that ' +
               'provisioned it. An instance spinning inside the engine never returns to `abi_line()`, so it ' +
               'observes no closed channel, prints no `@E`, holds this process\'s stderr pipe and burns a core ' +
               'with no payer until something else ends it. This row is the only place such a process is ' +
               'visible at all, and it states each one\'s consumed CPU beside it'],
-  /* NAMED RESIDUAL, AND ITS WITNESS ROWS ARE WRITTEN OUT HERE BECAUSE THE RUN THAT PRODUCED THEM LIVES IN A
-     FROZEN SNAPSHOT THAT IS DELETED THE MOMENT ITS LANE IS DONE. The row above reports the PROCESS; it is
-     silent about WHY an instance stops returning to its ABI loop, and that half is the engine's.
-     WHAT IS NOT COVERED: this gate can say that an instance outlived its zone and how much CPU it spent
-     doing it, and it cannot say which rung of the work ladder that instance was going round. The property
-     rather than the population: a `referenced` instance whose document has been DESTROYED owes nothing, is
-     blocked on nothing and may not finish — solver/engine.c\'s `g_referenced` arm turns the finish into
-     `FLOW_STEP_OWED`/`STEP_UNIT_AWAIT_PEER` precisely so there is somewhere for a later `windowproxy.get` to
-     arrive — and nothing in this gate can tell an instance RESTING in that state from one going round a rung
-     above it. The two are the same process from out here and they are opposite findings.
-     WHAT THE NEXT DIFF BUILDS: the per-instance census rows that separate them, read off the artifact the
-     zone already prints rather than composed here. On the run this row was written from the third instance
-     — the `/peer-closed` peer, identified by `destroyStep9Releases 1`, its document having run `close()` —
-     stood at `live 1, framed 1, blocked 0, owed 0, finished 0` with `renderingOpportunityAsks 2494` against
-     `renderingOpportunities 0`, `stepReachedRenderingLife 2494` against `stepNamedRenderingLife 0`, and
-     `outOfProgramsFramed 1`, while the two instances that DID reach `abi_line()` stood at 0 and 3 asks. It
-     wrote exactly ONE census and none after it, which is the WEDGED state `trusted.mjs`\'s own per-instance
-     report names — and that report never printed, because the zone was killed before it. So the diff is a
-     row saying whether a member is AT the referenced-await arm or above it, which is one bit the ladder
-     already has in hand and does not publish.
-     HOW ITS ABSENCE WOULD SHOW: a run whose `orphans` row names a process with minutes of CPU on it, beside
-     a peer whose census says its frontier owes nothing and is blocked on nothing — an instance that by every
-     published row has nothing to do and by the clock is doing it as fast as it can. A reader meeting that
-     pair today has to go to `ps` for the first half and can get no answer at all for the second.
-     AND ONE FIGURE ON THAT RUN IS NOT AMBIGUOUS AND IS WORTH MORE THAN THE REST: `_worldSegmentsMade` was 0
-     in ALL THREE instances, which is `peerflow`\'s subject — so no asking agent\'s world reached any peer
-     process, and that row would have read `wrong` rather than `missing` had anything decided it. Every
-     number above it is a FIRST census (`#1`) and therefore an opening reading rather than a terminal one;
-     this one is a zero at the only sample there was, which is the one shape an opening reading cannot
-     flatter. */
+  /* Named residual: not covered — why an instance stops returning to its ABI loop. The `orphans` row reports
+     the process and its CPU. A `referenced` instance whose document has been destroyed owes nothing, is
+     blocked on nothing and may not finish (solver/engine.c's `g_referenced` arm turns the finish into
+     `FLOW_STEP_OWED`/`STEP_UNIT_AWAIT_PEER` so a later `windowproxy.get` has somewhere to arrive), and this
+     gate cannot tell an instance resting there from one going round a rung of the work ladder above it.
+     Next diff — a per-instance census row saying whether a member is at the referenced-await arm or above
+     it, read off the artifact the zone already prints. Absence shows as — an `orphans` row naming a process
+     with minutes of CPU, beside a peer whose census says its frontier owes nothing and is blocked on
+     nothing. */
+  /* The flow base. `length` and `closed` prove the answer came from the peer's document (W2) and not what
+     ran there; the requirement is that a peer answer by running a program on a flow of its own frontier,
+     under the asking flow's world. Only that raises `_worldSegmentsMade`: solver/world.c's `world_segment`
+     DCHECKs `w.doc != g_doc`, so a segment is materialized for a foreign world only. It is read from the
+     peer's own `@RESULT`, which `trusted.mjs` prints under that peer's tag. */
   ['peerflow', 'a peer instance\'s OWN result document reports `_worldSegmentsMade` at least 1 — the asking ' +
                'agent\'s world arrived in the peer process and a segment was materialized for it, which is ' +
                'the witness that the read was performed as a PROGRAM on the peer\'s frontier under the ' +
@@ -443,10 +297,7 @@ const CHECKS = [
 async function main() {
   const bin = process.argv[2] || join(ENGINE, 'host', 'out', 'qjs-native-none');
   if (!existsSync(bin)) {
-    /* NOT A SKIP. A gate that reports green because it could not run is the excluded-test defect with the
-       total still looking complete, so an absent binary ENDS this process with a status and a sentence
-       naming what to build — CLAUDE.md §Testing puts the build in the main agent's hands, so the sentence
-       has to be enough for the party that owns it. */
+    /* Not a skip: an absent binary ends this process with a status and a sentence naming what to build. */
     console.error(`[peergate] no native host at ${bin}\n` +
                   '[peergate] build it with `node engine/build.mjs native` (which needs `node engine/wpt.mjs` ' +
                   'once, for the vendored lexbor archive). This gate drives the SHIPPED ABI — main.c\'s ' +
@@ -455,10 +306,7 @@ async function main() {
     process.exitCode = 2;
     return;
   }
-  /* THE ARTIFACT THIS RUN MEASURED, NAMED WITH THE RESULT. §Testing: a number quoted without the revision it
-     came from is not a measurement, and this gate does not build — so what it can state is exactly which
-     binary it drove and when that binary was linked, which is the pair a reader needs to know whether the
-     verdict belongs to the tree they are looking at. */
+  /* Names the artifact this run measured: the binary driven and when it was linked. */
   const st = statSync(bin);
   console.error(`[peergate] driving ${bin} (${st.size} bytes, linked ${st.mtime.toISOString()})`);
 
@@ -469,9 +317,8 @@ async function main() {
     results.set(id, { verdict, saw });
   };
 
-  /* EVERY REQUEST THIS SERVER WAS SHOWN, WITH THE AUTHORITY THE CLIENT ADDRESSED IT TO. The Host field is the
-     load-bearing part: it is the one place the cross-origin claim is a fact about bytes on a socket rather
-     than about a string this file composed. */
+  /* Every request this server was shown, with the authority the client addressed it to. The Host field is
+     the cross-origin claim as bytes on a socket. */
   const wire = [];
   let lastProgress = Date.now();
   const progress = () => { lastProgress = Date.now(); };
@@ -489,21 +336,15 @@ async function main() {
     if (path === '/peer') return html(PEER_DOC);
     if (path === '/peer-closed') return html(PEER_CLOSED_DOC);
     if (path.startsWith('/beacon/')) return html(BEACON_DOC);
-    /* THE CHOKEPOINT PROBE'S OWN TARGET, ANSWERED 200 SO THE `pna` CHECK IS ABOUT ONE THING. A 404 would also
-       prove the request was not BLOCKED, and it would make that check's own failure ambiguous between a
-       refused fetch and a fixture that stopped being served — two states behind one answer, at the one seam
-       whose whole subject is telling a refusal from an absence. */
+    /* The chokepoint probe's target, answered 200: a 404 would leave `pna`'s failure ambiguous between a
+       refused fetch and a fixture that stopped being served. */
     if (path === '/pna-probe') return html(BEACON_DOC);
-    /* ANYTHING ELSE IS A 404 AND IS STILL RECORDED, which is deliberate: `nohold` is decided over what was
-       ASKED FOR and not over what was served, so a fixture that grew a `/hold` fails this gate whether or not
-       this server would have answered it. */
+    /* Anything else is a 404 and is still recorded: `nohold` is decided over what was asked for. */
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('no such fixture');
   });
-  /* DUAL-STACK ON PURPOSE: listening with no host binds `::`, so `localhost` reaches this server whether the
-     resolver hands back ::1 or 127.0.0.1, and `127.0.0.1` reaches it as the mapped address. A gate bound to
-     one of the two would fail on a machine whose resolver prefers the other, which is a property of the box
-     and not of the engine — exactly the artifact §Testing says must not be reported as a defect. */
+  /* Dual-stack: listening with no host binds `::`, so `localhost` reaches this server whether the resolver
+     hands back ::1 or 127.0.0.1, and `127.0.0.1` reaches it as the mapped address. */
   await new Promise((res, rej) => { server.once('error', rej); server.listen(0, res); });
   const port = server.address().port;
   const seedOrigin = `http://${SEED_HOST}:${port}`;
@@ -513,40 +354,29 @@ async function main() {
   console.error(`[peergate] serving frozen fixtures on port ${port}: seed ${seedUrl}, peers ${peerOrigin}/peer ` +
                 `and ${peerOrigin}/peer-closed`);
 
-  /* ── W3, HALF ONE: THE ORIGINS ─────────────────────────────────────────────────────────────────────────── */
+  /* ── W3, half one: the origins ── */
   if (new URL(seedOrigin).origin === new URL(peerOrigin).origin)
     record('origins', 'wrong', `${new URL(seedOrigin).origin} === ${new URL(peerOrigin).origin}`);
   else
     record('origins', 'pass', `${new URL(seedOrigin).origin} vs ${new URL(peerOrigin).origin}`);
 
-  /* ── THE PNA QUESTION, PUT TO THE FILE THAT OWNS IT ────────────────────────────────────────────────────────
-     Asked with the same three options `trusted.mjs` passes for a peer's document load, because a different
-     destination or credential state is a different decision and this gate would then be answering about a
-     request nobody makes. The probe's own path is `/pna-probe`, which is neither peer document, so `nohold`
-     below excludes it BY NAME rather than by a count this line would have to keep in step with. */
-  /* AND THE PEER AUTHORITY IS HANDED IN, BECAUSE THE TABLE IS KEYED ON THE ORIGIN THE PROBE'S OWN URL
-     SERIALIZES TO and the port is not known until this server is listening — see PROBE_PERMITS for what
-     the entry says and why it is one origin rather than both. The SEED authority is deliberately absent
-     from this zone's table: this process makes exactly one request and it is at the peer. */
+  /* ── The PNA question, put to the file that owns it ──
+     Asked with the options `trusted.mjs` passes for a peer's document load, since a different destination or
+     credential state is a different decision. The probe's request is cut off the front of `wire` by
+     `probeCount` before the wire checks read it. */
+  /* The table is keyed on the origin the probe's URL serializes to, and the port is known only once the
+     server listens, so the peer authority is handed in. The seed authority is absent from this zone's table:
+     this process makes one request, at the peer. */
   const ZONE = loadChokepoint(peerOrigin);
-  /* THE GRADE IS `derived`, WHICH IS THE ONE THE RUN BELOW ACTUALLY DEPENDS ON AND IS NOT A FORMALITY. That
-     file reads the provenance BEFORE any byte moves and refuses a `forced` address at an unwidened origin, so
-     a probe that stated a different grade — or, since `_provenanceOf` is a fatal `CHECK`, none at all — would
-     answer about a request this gate never makes. Every load this run performs is `derived`: the peer
-     addresses are literals the seed's own code composed, and each `/beacon/` address is composed from a value
-     the run computed on a path that stood on no contradicted arm. */
-  /* AND THE REACH GRADE IS `observed` AND NOT `derived`, WHICH IS THE PAIR THIS PROBE EXISTS TO EXERCISE.
-     The address is composed by this gate, which is what `derived` says; the document it is composed FROM is
-     the seed, which this harness named on its own command line, which is what `observed` says. Stating one
-     word for both would have this gate testing a request shape the run never makes. */
+  /* The grade is `derived`, the one the run depends on: the peer addresses are literals the seed's code
+     composed, and each `/beacon/` address is composed from a value the run computed on no contradicted arm.
+     The reach grade is `observed`: the document the address is composed from is the seed, which this harness
+     named on its command line. */
   const probe = await ZONE.safeFetch(`${peerOrigin}/pna-probe`,
                                      { destination: 'document', mode: 'navigate',
                                        provenance: 'derived', pinned: 'unpinned',
-                                       /* THIS GATE COMPOSED THE ADDRESS, so the act is THIS TOOL'S and not
-                                          any analysed page's — see safe-fetch.js's `_actorOf`. The peer
-                                          addresses are this harness's own literals and each `/beacon/` one
-                                          is built from a value this run computed, so no page's code is
-                                          anywhere in the composition. */
+                                       /* This gate composed the address, so the act is this tool's
+                                          (safe-fetch.js's `_actorOf`). */
                                        actor: 'tool', driven: 'unstated',
                                        doc: ZONE.docRecord('observed', 'undriven', 'unpinned', 'none',
                                                            ZONE.safeFetchDocumentAddressSpace(seedUrl, null)),
@@ -559,18 +389,14 @@ async function main() {
     record('pna', 'pass', `status ${probe.status} — loopback->loopback is allowed by that file's own rule`);
   const probeCount = wire.length;
 
-  /* ── THE RUN ───────────────────────────────────────────────────────────────────────────────────────────── */
+  /* ── The run ── */
   /* The child's table at the fixture's two authorities, one row per `--explore-signal`: the page's own acts and
      nothing this tool composes. Every observation reaches the wire as a navigation the page composed (`derived`,
      or `forced` on an arm the run forked), which no default arm carries (`navigate` composes no witness mark),
      so those rows are permitted; `actor=tool` is not, so a drive of uncalled code is judged as a fetch would be
      and refused (`refused`, beside `posted` as its control). */
-  /* AND IT IS `detached`, WHICH IS WHAT GIVES THIS GATE A HANDLE ON WHAT ITS CHILD STARTED RATHER THAN ONLY
-     ON THE CHILD. `trusted.mjs` spawns each `--abi` instance in its own caller's process group, so without
-     this the grandchildren share THIS process's group and `-pid` would name the group peergate itself is in.
-     Detaching makes the child a group LEADER, so `-child.pid` is exactly "the zone and every instance it
-     provisioned" and nothing else — the kernel's own answer to the question, in place of a pattern that
-     would match the shell asking it (§A-PROCESS-PATTERN-MATCHES-THE-SHELL-THAT-NAMES-IT). It is NOT
+  /* The child is `detached`, which makes it a process group leader, so `-child.pid` names the zone and every
+     instance it provisioned; `trusted.mjs` spawns each `--abi` instance in its caller's group. It is not
      `unref`'d: the child is still this process's to wait for. */
   const child = spawn(process.execPath,
                       [join(ENGINE, 'trusted.mjs'), seedUrl, bin,
@@ -581,17 +407,12 @@ async function main() {
   let out = '', err = '', spawnError = null;
   child.stdout.on('data', (d) => { out += d; progress(); });
   child.stderr.on('data', (d) => { err += d; process.stderr.write(d); progress(); });
-  /* A CHILD THAT NEVER STARTED IS NOT A CHILD THAT EXITED, and Node reports the first as an `error` event and
-     no `close` code worth reading. Without this the gate would report `trusted.mjs ended with code null` and
-     send the reader hunting a transport failure in a process that does not exist. */
+  /* A child that never started raises `error` and no useful `close` code. */
   child.on('error', (e) => { spawnError = e; });
 
-  /* THE GROUP ID, READ FROM THE KERNEL WHILE THE CHILD IS CERTAINLY ALIVE, AND EVERY GROUP-WIDE SIGNAL GATED
-     ON IT. `detached` not taking effect is the one failure that turns a reaper into a suicide: `-child.pid`
-     against a child that shares this process's group signals THIS PROCESS and everything beside it, so the
-     group kill below is refused unless the kernel says the child IS a group leader and that its group is not
-     ours. That is §A-DESTRUCTIVE-STEP-IS-GATED-BY-THE-CHECK'S-EXIT-STATUS: the value is read once, here,
-     where the answer can be trusted, and every later act branches on it rather than on the intention. */
+  /* The group id, read from the kernel while the child is alive. Every group-wide signal is gated on it: if
+     `detached` did not take effect, `-child.pid` would signal this process's own group, so the kill is
+     refused unless the child is a group leader and its group is not ours. */
   const ourPgrp = procStat(process.pid)?.pgrp ?? -1;
   const childStat = child.pid === undefined ? null : procStat(child.pid);
   const pgid = (childStat !== null && childStat.pgrp === child.pid && childStat.pgrp !== ourPgrp)
@@ -602,19 +423,16 @@ async function main() {
                   'no group-wide signal will be sent: an `--abi` instance this run leaves behind will be ' +
                   'reported by the `orphans` row and left for the caller\'s RLIMIT_CPU. A group kill here ' +
                   'would name the group this gate is itself in.');
-  /* ONE SPELLING FOR EVERY GROUP-WIDE SIGNAL, so the gate cannot acquire a second one that skips the gate. */
+  /* The one spelling of a group-wide signal, so none skips the gate above. */
   const signalGroup = (sig) => {
     if (pgid === null) return 'no group to signal';
     try { process.kill(-pgid, sig); return `${sig} to group ${pgid}`; }
     catch (e) { return `${sig} to group ${pgid} refused: ${e.code || e.message}`; }
   };
-  /* AND THIS GATE'S OWN DEATH REAPS THE GROUP TOO, BECAUSE A PARENT THAT EXITS IS THE CASE THE WHOLE
-     `orphans` ROW IS ABOUT AND THIS PROCESS IS ONE. `engine/build.mjs` wraps each stage in a wall backstop
-     that signals the STAGE, so a peergate killed there would otherwise leave the zone and every instance it
-     provisioned running with no payer and no reader — the same lifetime failure one level out, arriving
-     through the harness that was measuring it. `exit` is the one handler that covers every ordinary path, and
-     the two signals are handled because their default disposition would skip it; each re-exits rather than
-     swallowing, so a caller's kill still ends this process. */
+  /* This gate's own death reaps the group too: `engine/build.mjs` wraps each stage in a wall backstop that
+     signals the stage, and a peergate killed there would leave the zone and its instances running. `exit`
+     covers the ordinary paths; the two signals are handled because their default disposition would skip it,
+     and each re-exits so a caller's kill still ends this process. */
   const reapOnOurWayOut = () => { if (pgid !== null) signalGroup('SIGKILL'); };
   process.on('exit', reapOnOurWayOut);
   for (const sig of ['SIGTERM', 'SIGINT'])
@@ -624,59 +442,33 @@ async function main() {
       process.exit(3);
     });
 
-  /* W6's BACKSTOP, AND IT IS A BACKSTOP RATHER THAN A BUDGET. It measures NO PROGRESS — no request arriving,
-     no byte written by the child — because a deadlocked pipe is the one failure that consumes no CPU and
-     emits no signal, and it is the only thing here a clock can see that nothing else can. It is generous, it
-     reports through a verdict of its own, and the load average travels with it: §Testing's four worked
-     examples are all one machine under load reporting HOW a thing ran as WHAT ran. */
+  /* W6's backstop. It measures no progress (no request arriving, no byte written by the child), because a
+     deadlocked pipe consumes no CPU and emits no signal. It reports through a verdict of its own, with the
+     load average. */
   const IDLE_MS = 180000;
   let backstop = null;
-  /* IT RESOLVES ON `exit` AND NOT ON `close`, AND THE DIFFERENCE IS THE WHOLE OF WHY THIS GATE ONCE TOOK
-     SIXTEEN MINUTES TO DELIVER A VERDICT IT HAD REACHED IN THREE. Node's `close` fires when the process has
-     ended AND EVERY STDIO STREAM HAS CLOSED; `exit` fires on the process ending, which is the fact every
-     reader of this gate wants and the fact `record('exit', …)` reports. `trusted.mjs` spawns each `--abi`
-     instance with stderr `inherit`, so an instance is holding a DUP of the write end of this process's stderr
-     pipe — and an instance that never returns to `abi_line()` is not ended by the channel closing, so it goes
-     on holding it after the zone is gone. The read end therefore never reaches EOF and `close` NEVER ARRIVES,
-     for as long as that process lives.
-     MEASURED ON BOTH SHAPES IN THIS NODE (v22), with the failing case as the control: a three-level parent /
-     child / grandchild where the child exits while the grandchild holds the inherited stderr, `exit` fires in
-     under half a second and `close` DOES NOT FIRE AT ALL — not in eight seconds, not ever while the
-     grandchild lives. The gate that waited on `close` was waiting on a process it had already given up on.
-     AND THAT IS NOT A TIDIER SPELLING OF THE SAME WAIT: on the run this was written from, the backstop had
-     decided at 182 s and the stage did not end until THIRTEEN MINUTES LATER, when the kernel's RLIMIT_CPU —
-     which is per-process and therefore a FRESH budget for every descendant — killed the orphan at 900 CPU
-     seconds. The gate's verdict was correct and unreadable, and what ended the stage was a budget the caller
-     installs around something else.
-     SO THE THREE ACTS ARE ORDERED AND THE ORDER IS LOAD-BEARING: learn that the child ENDED, REAP the group
-     (nothing else can release the fd), and only then DRAIN, because a drain attempted first is the same wait
-     under a different name. */
+  /* Resolves on `exit` and not `close`. Node's `close` waits for every stdio stream to close, and an `--abi`
+     instance that outlives the zone holds a dup of this process's stderr pipe, so `close` would not arrive
+     while it lives. The order is load-bearing: learn that the child ended, reap the group (nothing else
+     releases the fd), then drain. */
   const ended = await new Promise((res) => {
     child.on('exit', (code, signal) => res({ code, signal }));
     const tick = setInterval(() => {
       if (Date.now() - lastProgress < IDLE_MS) return;
       clearInterval(tick);
       backstop = { idleMs: Date.now() - lastProgress, load: loadavg() };
-      /* THE GROUP AND NOT THE CHILD. A `SIGTERM` to the child alone leaves every instance it provisioned
-         running — and the ones that are spinning are exactly the ones that will not notice their channel
-         closing, so the single-process kill reaches only the instances that would have died anyway. */
+      /* The group and not the child: a spinning instance does not notice its channel closing. */
       backstop.termed = signalGroup('SIGTERM');
     }, 2000);
     child.on('exit', () => clearInterval(tick));
   });
 
-  /* ── THE REAP, WHICH IS A CHECK BEFORE IT IS AN ACT ─────────────────────────────────────────────
-     ENUMERATED BEFORE ANYTHING IS SIGNALLED, because what was left behind is the FINDING and a kill that ran
-     first would have destroyed the evidence for it. On a healthy run this list is empty and the row passes.
-     THE CPU EACH ONE HAD BURNED IS STATED BESIDE IT, because that is the cost §AND-THE-LOAD-IS-NOT-ONLY-FROM-
-     WORK-THAT-IS-RUNNING names and it is the one number that says whether a leftover process was wedged
-     (nothing) or spinning (everything). */
+  /* ── The reap ──
+     Leftovers are enumerated before anything is signalled, because they are the finding. Each one's consumed
+     CPU is stated beside it: it says whether the process was wedged or spinning. */
   const leftBehind = pgid === null ? [] : groupMembers(pgid).filter((r) => r.pid !== child.pid);
   const reaped = leftBehind.length ? signalGroup('SIGKILL') : 'nothing to reap';
-  /* AND `missing` WHERE THERE IS NO GROUP TO LOOK IN, WHICH IS NOT THE SAME SENTENCE AS AN EMPTY ONE. A run
-     whose child never started, or whose group this process could not establish, has not shown that no
-     instance was left behind — it has shown nothing about instances at all, and answering `pass` there is
-     the vacuous pass the `nohold` row above refuses for the same reason. */
+  /* `missing` where there is no group to look in: that run has shown nothing about instances. */
   if (pgid === null)
     record('orphans', 'missing', 'this gate established no process group for its child, so there is no set of ' +
                                  'processes for this row to be about — the line above says why');
@@ -687,13 +479,10 @@ async function main() {
                  leftBehind.map((r) => `${r.pid}:${r.comm} ${r.cpuS.toFixed(1)}s CPU`).join(', ')} — ${reaped}`
              : `group ${pgid} held nothing but the child once it ended`);
 
-  /* ── THE DRAIN, BOUNDED, AND ITS OUTCOME STATED RATHER THAN ASSUMED ───────────────────────────
-     `exit` says nothing about whether this process has READ everything the child wrote, and four checks below
-     are decided out of `err` and `out` — so a resolve on `exit` with no drain would report `routed`, `peers`,
-     `peerflow` and `result` about bytes that were still in a pipe. It is a BOUNDED wait and its completion is
-     RECORDED, because a truncated `err` read as a zone that said nothing is the absent-versus-zero pair
-     arriving in this gate's own inputs; where the drain does not complete, the rows that read those buffers
-     say so in their own text rather than reporting a silence they cannot vouch for. */
+  /* ── The drain ──
+     `exit` does not say this process has read everything the child wrote, and `result`, `routed`, `peers`
+     and `peerflow` are decided out of `err` and `out`. The wait is bounded and its outcome is printed, so a
+     truncated buffer is not read as a zone that said nothing. */
   const DRAIN_MS = 5000;
   const drainStream = (st) => new Promise((res) => {
     if (st === null || st.readableEnded || st.destroyed) return res(true);
@@ -710,18 +499,13 @@ async function main() {
                   'and not over everything the zone wrote. Something still holds the write end of one of ' +
                   'these pipes; the `orphans` row above names what.');
   server.close();
-  /* THE KEEP-ALIVE SOCKETS TOO. `close` stops ACCEPTING and waits for live connections to end, and this
-     process made one itself (the chokepoint probe, through Node's own pooling `fetch`), so a gate that only
-     called `close` would print its verdict and then sit holding a socket open against itself. */
+  /* The keep-alive sockets too: `close` only stops accepting, and this process's own probe holds one. */
   server.closeAllConnections?.();
 
   if (spawnError) {
     console.error(`\n[peergate] the child was never started: ${spawnError.message}`);
-    /* AND THE ROWS THIS GATE HAD ALREADY DECIDED ARE PRINTED, for the same reason the backstop arm prints
-       them: `origins`, `pna` and `orphans` are decided before the child is spawned or without it, and a run
-       that ends here used to discard three measured rows and show a reader one sentence. `decideFromWhatIsHeld`
-       is deliberately NOT called — a child that never started produced no `ended`, no `out` and no `err`, so
-       every row below it is genuinely undecidable and `NOT RUN` is the true mark rather than a shrug. */
+    /* `origins`, `pna` and `orphans` are decided before or without the child, so they are printed. Nothing
+       else is decidable: a child that never started produced no `ended`, `out` or `err`. */
     printRows();
     process.exitCode = 2;
     return;
@@ -738,54 +522,22 @@ async function main() {
       'than deleted because a reader re-derives it from the word `idle`. What is timed is the absence of a ' +
       'REQUEST and of a BYTE; a child spinning at a full core emits neither, so `nothing moved` is exactly ' +
       'the reading this line must not offer. Read the child\'s own CPU before concluding anything from it.');
-    /* AND THE ROWS ARE PRINTED ANYWAY, WHICH IS W5 SURVIVING W6 RATHER THAN A SOFTENED VERDICT. This arm
-       used to return with the table unprinted, so a kill DISCARDED every check that had already produced a
-       result — `origins` and `pna` are both decided before the child is even spawned — and a reader got a
-       harness sentence where two measured rows existed. That is the shape W5 is written against (a driver
-       that died leaving the checks below it silently unmade while the file still looks complete), arriving
-       through W6 instead of through a reply. The EXIT CODE stays 3 and no verdict is composed: `printRows`
-       marks an unmade check `NOT RUN`, which is neither `pass` nor a failure, so nothing here can be read
-       as the gate having answered about peers.
-       THAT RESIDUAL'S REMEDY IS REFUTED BY MEASUREMENT AND IS REWRITTEN RATHER THAN DELETED, because it is
-       the reading a reader re-derives from the W6 paragraph above and because §AND-THE-`WHAT-THE-NEXT-DIFF-
-       BUILDS`-CLAUSE says a wrong one is not caught but EXECUTED. It read: the watchdog fires on a child
-       CONSUMING A FULL CORE, so the tick should read the child's own utime+stime and fire only where the
-       child has burned no CPU across the window, "leaving the busy case to the RLIMIT_CPU the caller
-       installs". Its DIAGNOSIS was right and its two remedy halves are both wrong, and the run that
-       established it is the one this arm was reached on:
-         · WHOSE CPU. The busy process was not the child. `trusted.mjs` was idle — correctly, since its
-           session-end arm fires only when EVERY live instance is stalled and one instance never stalled —
-           while a native GRANDCHILD burned a full core. A tick reading the CHILD's CPU would have fired
-           exactly as it did; a tick reading the TREE's would have DECLINED TO FIRE on a session that was
-           genuinely wedged, which is the flattering direction and the expensive one.
-         · WHOSE BUDGET. `RLIMIT_CPU` is PER PROCESS and inherited, so it is not a bound on this stage at
-           all — it is a FRESH 900 seconds for every descendant. The orphan spent all of it: the backstop
-           decided at 182 s and the stage did not end for another thirteen minutes, when the kernel killed
-           the orphan at its own limit. Handing the busy case to the caller's RLIMIT_CPU hands it to a
-           budget that does not bound the thing being measured.
-       WHAT THE NEXT DIFF BUILDS, given the reap above already ends the leftover process: the tick states
-       WHICH member of the group is consuming CPU when it fires, read once per window from the group it
-       already enumerates, so a BACKSTOP verdict distinguishes a deadlocked zone from a zone idling in front
-       of a spinning instance without a reader having to go to `ps`. HOW ITS ABSENCE WOULD SHOW: a BACKSTOP
-       line whose load average is high and whose `orphans` row names a process with minutes of CPU on it,
-       with nothing on the BACKSTOP line itself connecting the two. */
-    /* AND EVERY ROW THAT CAN STILL BE DECIDED IS DECIDED FIRST, which is what the paragraph above was for
-       and what printing the table alone never did. See `decideFromWhatIsHeld`. */
+    /* The rows are printed on this arm too (W5 under W6): `origins` and `pna` are decided before the child is
+       spawned. The exit code stays 3 and no verdict is composed.
+       Named residual: not covered — the BACKSTOP line does not say which process is consuming CPU, so it
+       does not tell a deadlocked zone from a zone idling in front of a spinning instance. The busy process
+       can be a grandchild while the child idles, and the caller's RLIMIT_CPU is per process, so neither the
+       child's CPU nor that limit decides it. Next diff — the tick states which member of the group is
+       consuming CPU when it fires, read once per window from the group it already enumerates. Absence shows
+       as — a BACKSTOP line with a high load average beside an `orphans` row naming a process with minutes of
+       CPU, and nothing on the BACKSTOP line connecting the two. */
+    /* Every row that can still be decided is decided first; see `decideFromWhatIsHeld`. */
     decideFromWhatIsHeld();
     printRows();
-    /* THE FAILED LIST, BUT NEVER `report`'s VERDICT AND NEVER ITS EXIT CODE. Every declared row now has a
-       result, so the one thing W5's guard exists to refuse cannot happen here — and this is still not a run
-       whose checks decided the outcome: the HARNESS ended it, so the status stays 3 and the sentence says
-       which of the two a reader is holding. A `wrong` row below a BACKSTOP is a real observation about a run
-       this gate cut short, which is worth strictly more than a `NOT RUN` and strictly less than the same row
-       on a run that finished, and collapsing those three into one verdict is the shape this file is against. */
-    /* W5's GUARD ON THIS ARM TOO, WHICH IS WHAT MAKES THE PARAGRAPH ABOVE A MECHANISM RATHER THAN A CLAIM.
-       `report` already refuses a verdict unless every declared row produced a result; this arm never had that
-       guard, so "after `decideFromWhatIsHeld` there are no undecided rows" was a sentence and not a check —
-       and the next row added to the table without a decision in that function would have printed `NOT RUN`
-       here for ever, which is the exact state this landing exists to remove. A GATE THAT CANNOT ACCOUNT FOR
-       ITS OWN ROWS OUTRANKS THE HARNESS VERDICT: the status becomes `report`'s 4 and not this arm's 3,
-       because a reader must not be told which checks a run cut short when the gate does not know. */
+    /* The failed list is printed, but not `report`'s verdict or exit code: the harness ended this run, so
+       the status stays 3. A `wrong` row here is an observation about a run cut short. */
+    /* W5's guard on this arm: a declared row with no result is the gate's own failure and outranks the
+       harness verdict, so the status is `report`'s 4. */
     const unmade = CHECKS.filter(([id]) => !results.has(id)).map(([id]) => id);
     if (unmade.length) {
       console.error(`\n[peergate] FAILED: ${unmade.length} declared check(s) produced no result even though ` +
@@ -809,32 +561,12 @@ async function main() {
     return;
   }
 
-  /* ── EVERY ROW THIS GATE CAN STILL DECIDE, ON EVERY PATH THAT ENDS THE RUN ───────────────────────────────
-     W5 SURVIVING W6 IN THE SENSE THAT ACTUALLY COSTS SOMETHING, WHICH THE ARM ABOVE DID NOT REACH. That arm
-     was already corrected once, for DISCARDING the rows it had: it used to return with the table unprinted,
-     and printing it was read as the fix. It is not — printing an undecided row is not deciding it, and every
-     check below this line is decided out of `wire`, `err`, `out` and `ended`, ALL FOUR OF WHICH THIS PROCESS
-     IS HOLDING at the moment the backstop fires. So the kill discarded no rows and answered none either.
-     MEASURED ON THE RUN THIS WAS WRITTEN FROM: twelve of fourteen rows read `NOT RUN`, and the wire already
-     held the seed document, both peer documents and the beacons — the seed's third instance exists, which it
-     can only if the page executed past its fourth `window.open`, so `onlist`, `offlist` and `len` had all
-     been requested and were sitting in `wire` unexamined. The gate reported that it had measured nothing
-     about the transport while holding the answer to three of the four crossing reads.
-     AND THE DIFFERENCE IS NOT COSMETIC, because those three rows are the ones that say WHICH HALF broke: a
-     `length` that answered against a `closed` that did not is §7.3.1.6 destroy-a-navigable under a held
-     reference, which this file's own fixture banner says is where that finding would be, and `NOT RUN ×4`
-     cannot express it. `NOT RUN` stays the mark for a check nothing could decide — the point is that after
-     this function runs there are none of those, so a `NOT RUN` in a future report is a statement that this
-     function did not run rather than a shrug.
-     IT IS A FUNCTION DECLARED BESIDE `printRows` AND CALLED BEFORE IT ON BOTH ARMS, which is the same shape
-     and for the same reason: two arms end this run, and a thing both of them need cannot live in one of
-     them. */
+  /* Decides every row that can be decided from `wire`, `err`, `out` and `ended`, all of which this process
+     holds whenever the run ends, the backstop included. After it runs every declared row has a result, so a
+     `NOT RUN` in a report means this function did not run. Both ending arms call it before `printRows`. */
   function decideFromWhatIsHeld() {
-    /* ── EXIT AND RESULT ───────────────────────────────────────────────────────────────────────────────────── */
-    /* AND THE SIGNAL NAMES ITS SENDER WHERE THIS GATE IS THE SENDER, because `on SIGTERM` is otherwise read
-       as a crash and this gate's own backstop is the commonest source of one. §Testing: a measurement a
-       harness can falsify is not a measurement, and the harness naming itself is the cheapest way a reader
-       tells the two apart without reconstructing the order of the lines above. */
+    /* ── Exit and result ── */
+    /* The signal names its sender where this gate sent it, so its own backstop is not read as a crash. */
     const ending = ended.signal ? `on ${ended.signal}` : `with code ${ended.code}`;
     record('exit', ended.signal === null && ended.code === 0 ? 'pass' : 'wrong',
            `trusted.mjs ended ${ending}` +
@@ -842,13 +574,9 @@ async function main() {
                        'the engine\'s own aborts, if any, are on the stderr above the BACKSTOP line'
                      : ''));
 
-    /* THE SEED'S RESULT DOCUMENT, READ WHERE THE ZONE PUTS IT AND NOT WHERE THE ENGINE PRINTS IT. The `--abi`
-       child writes `@RESULT <json>`; `trusted.mjs` takes that line apart at its own entry and re-emits the JSON
-       ALONE on its stdout, reserving stderr for everything it says in its own voice. So a reader that grepped
-       for the marker here would find nothing and report an ABSENT result for a session that produced one — the
-       defect of measuring what a harness prints instead of what the shipped path writes, one process further
-       out than usual. Everything else this process emits is stderr, so the last non-empty stdout line IS the
-       document. */
+    /* The seed's result document is the last non-empty stdout line: the `--abi` child writes
+       `@RESULT <json>`, and `trusted.mjs` re-emits the JSON alone on its stdout and says everything else on
+       stderr. */
     const resultLine = out.split('\n').map((l) => l.trim()).filter((l) => l !== '').pop();
     let seedResult = null;
     if (resultLine === undefined) {
@@ -867,7 +595,7 @@ async function main() {
       }
     }
 
-    /* ── THE WIRE ──────────────────────────────────────────────────────────────────────────────────────────── */
+    /* ── The wire ── */
     const asked = wire.slice(probeCount);
     const at = (host) => asked.filter((r) => r.host === host);
     const seedAsked = at(`${SEED_HOST}:${port}`);
@@ -888,16 +616,11 @@ async function main() {
     else
       record('peerwire', 'wrong', `the peer authority was asked only for ${JSON.stringify(peerPaths)}`);
 
-    /* W1's WIRE HALF. The comparison is over the SET of paths and not over a count, deliberately: a page whose
-       flow forked may legitimately have its document loaded more than once and that is exploration rather than
-       a defect, while a path that is NEITHER peer document is work keeping an instance alive, which is the
-       thing this whole file exists to make impossible to be green underneath. A request at a THIRD authority is
-       the same failure wearing a different field and is reported here too. */
+    /* W1's wire half. The comparison is over the set of paths and not a count: a forked flow may load its
+       document more than once. A path that is neither peer document is work keeping an instance alive, and
+       a request at a third authority is the same failure. */
     const extraPeerPaths = peerPaths.filter((p) => !wantPeer.includes(p));
-    /* "WAS IT ASKED FOR ANYTHING ELSE" IS UNDECIDABLE WHEN IT WAS ASKED FOR NOTHING, and answering it `pass`
-       anyway is a VACUOUS pass — the exact three-states-behind-one-answer shape this file is against, performed
-       by the very check that exists to prevent it. A run that provisioned no peer has not established that no
-       peer was held open by unfinished work; it has established nothing about peers at all. */
+    /* Asked for nothing, the question is undecidable: `missing`, and not a vacuous pass. */
     if (!peerAsked.length)
       record('nohold', 'missing', 'the peer authority was never asked for anything, so there is no set of paths ' +
                                   'for this check to be about');
@@ -908,27 +631,18 @@ async function main() {
     else
       record('nohold', 'pass', 'the peer authority was asked for its two documents and nothing else');
 
-    /* ── WHAT ACTUALLY SPOKE, READ OFF THE INSTANCE TAGS THIS GATE IS ALREADY HOLDING ────────────────
-       TWO ROWS BELOW STATED A CAUSE THIS GATE HAD NOT MEASURED, AND BOTH WERE FALSE ON THE RUN THAT PRODUCED
-       THIS BLOCK. `peers` read "none was provisioned" and each beacon read "the page never reached this
-       line", and the only evidence for either was an ABSENCE — of a report `trusted.mjs` prints in its
-       END-OF-SESSION block, and of a request. An absent measurement and a zero measurement are different
-       facts, which the `result` row three blocks up already refuses to confuse; these two confused them in
-       the direction that costs the most, because "none was provisioned" sends its reader to BUILD
-       provisioning that works.
-       WHAT IS HELD IS ENOUGH TO SAY WHICH, AND NEITHER HALF NEEDS A NEW PRODUCER. `trusted.mjs` echoes every
-       census the moment it arrives — for the reason its own arm argues, that a killed run otherwise leaves
-       nothing — prefixed with that instance's tag `[<document>/s<serial>]`, and the serial is minted in
-       exactly one place, its `provision`, so a tag reading `s3` is three instances provisioned whatever a
-       later report does or does not say. A child DOCUMENT name says which history created it and counts
-       nothing (solver/world.c's world_mint_doc), so it is not read for how many opens ran. */
+    /* ── What spoke, read off the instance tags ──
+       `trusted.mjs` echoes every census as it arrives, prefixed with the instance's tag
+       `[<document>/s<serial>]`, and mints the serial only in its `provision`, so a tag reading `s3` is three
+       instances provisioned whatever a later report says. An absent end-of-session report is therefore not
+       an absence of instances. A child document's name says which history created it and counts nothing
+       (solver/world.c's world_mint_doc). */
     const tagged = [...err.matchAll(/^\[trusted\] \[([^\]/]+)\/s([0-9]+)\] /gm)];
     const spokeFirst = new Map();
     for (const m of tagged) if (!spokeFirst.has(m[1])) spokeFirst.set(m[1], Number(m[2]));
     const serialsSeen = tagged.map((m) => Number(m[2]));
     const highestSerial = serialsSeen.length ? Math.max(...serialsSeen) : 0;
-    /* WHICH `window.open` OF THE SEED A BEACON IS, DERIVED FROM THE FIXTURE THIS GATE SERVES and never
-       counted by hand: a hand-written ordinal is a second copy of the fixture's own statement order. */
+    /* Which `window.open` of the seed a beacon is, derived from the fixture and not counted by hand. */
     const seedOpenOrdinal = (prefix) => {
       const src = seedDoc(port);
       const marker = src.indexOf(`"/beacon/${prefix}-"`);
@@ -937,13 +651,12 @@ async function main() {
       return n > 0 ? n : null;
     };
 
-    /* ── THE BEACONS, WHICH ARE THE PAGE'S OWN REPORT OF WHAT THE READS ANSWERED ────────────────────────────── */
+    /* ── The beacons: the page's own report of what the reads answered ── */
     const beacons = seedAsked.map((r) => r.path).filter((p) => p.startsWith('/beacon/'));
     const beacon = (id, prefix, want) => {
       const hits = beacons.filter((p) => p.startsWith(`/beacon/${prefix}-`));
       if (!hits.length) {
-        /* AND WHICH OF THE TWO READINGS THE EVIDENCE SUPPORTS, rather than the one this row used to assert.
-           See the tag block above for the arithmetic and for the measurement. */
+        /* The message names both readings the evidence leaves open. */
         const nth = seedOpenOrdinal(prefix);
         return record(id, 'missing',
                `no /beacon/${prefix}-… request was ever made, and nothing held here says which of two: the ` +
@@ -955,9 +668,8 @@ async function main() {
         return record(id, 'pass', `/beacon/${prefix}-${want}`);
       return record(id, 'wrong', `saw ${JSON.stringify(hits)}, required /beacon/${prefix}-${want}`);
     };
-    /* THE CHECK ID AND THE BEACON PREFIX ARE TWO NAMES AND ARE PASSED SEPARATELY, because they answer to two
-       different readers — the table above and the page's own source — and `record` refuses an id the table does
-       not declare, so a rename on one side stops this gate rather than quietly measuring nothing. */
+    /* The check id and the beacon prefix are passed separately: one answers to the table and one to the
+       page's source, and `record` refuses an id the table does not declare. */
     beacon('onlist', 'onlist', 'ok-true');
     beacon('offlist', 'offlist', 'throw-SecurityError');
     beacon('length', 'len', 'number-2');
@@ -985,11 +697,9 @@ async function main() {
              `${posts} post refusal(s) and ${ops} operation refusal(s) on \`actor=tool\` in the log`);
     }
 
-    /* ── WHAT THE ZONE ITSELF SAID IT COULD NOT DO ─────────────────────────────────────────────────────────────
-       `trusted.mjs` reports a record it held for the whole session in two shapes — a document no instance was
-       ever provisioned for, and one an instance HELD AND THEN LEFT — and the second is the exact lifetime
-       failure this gate is about. Both are matched, because a gate that watched for only one of them would go
-       green on the other. */
+    /* ── What the zone said it could not do ──
+       `trusted.mjs` reports a record it held for the whole session in two shapes, a document no instance was
+       provisioned for and one an instance held and then left; the pattern matches both. */
     const heldLine = /record\(s\) named a document/.test(err);
     record('routed', heldLine ? 'wrong' : 'pass',
            heldLine ? 'trusted.mjs reported held records; its own lines are above this verdict'
@@ -997,7 +707,7 @@ async function main() {
 
     const peerLines = [...err.matchAll(/peer instance \[([^\]]+)\] at (\S+) ended (with code \d+|on \w+)/g)];
     if (!peerLines.length)
-      /* AND THE ABSENCE OF THE REPORT IS NOT THE ABSENCE OF THE INSTANCES. See the tag block above. */
+      /* An absent report is not an absence of instances; see the tag block above. */
       record('peers', 'missing', highestSerial
         ? `trusted.mjs printed no per-instance ending at all, and it provisioned ${highestSerial}: the tags ` +
           `${JSON.stringify([...spokeFirst.keys()])} spoke on this gate's stderr and the serial they carry ` +
@@ -1011,16 +721,11 @@ async function main() {
              peerLines.map((m) => `${m[1]} at ${m[2]} ended ${m[3]}`).join(' ; '));
     }
 
-    /* ── THE PEER'S OWN FLOW BASE, READ OFF THE PEER'S OWN DOCUMENT ────────────────────────────────────────────
-       THREE VERDICTS AND NOT TWO, which is the rule this file already performs everywhere else: `missing` is
-       "no peer stated the row at all" and `wrong` is "every peer stated it and it is zero", and those take
-       OPPOSITE work. A zero is a TRANSPORT finding — the read was answered without the asker's world ever being
-       materialized in the peer, which is the one thing `length === 2` cannot rule out — while an absence is a
-       fact about what `trusted.mjs` could read out of a peer that printed no document, and sends the reader to
-       the peer's own `@WHY` above this verdict instead.
-       MATCHED ON `trusted.mjs`'s SEPARATE LINE and never by widening the `peers` pattern above: that pattern
-       carries ` at <url> ended `, this one does not, so the two cannot collide and a rename on either side
-       leaves the other reporting `missing` rather than quietly measuring nothing. */
+    /* ── The peer's own flow base, read off the peer's own document ──
+       Three verdicts: `missing` is no peer stating the row, and `wrong` is every peer stating zero. A zero is
+       a transport finding, the read answered without the asker's world materialized in the peer; an absence
+       sends the reader to the peer's `@WHY`. It is matched on `trusted.mjs`'s separate line, which the
+       `peers` pattern (it carries ` at <url> ended `) cannot collide with. */
     const flowLines = [...err.matchAll(/peer instance \[([^\]]+)\] flow base: (.+)$/gm)];
     const madeOf = (s) => { const m = /_worldSegmentsMade=(\d+)/.exec(s); return m ? Number(m[1]) : null; };
     const stated = flowLines.map((m) => ({ tag: m[1], made: madeOf(m[2]), saw: m[2] }))
@@ -1045,11 +750,7 @@ async function main() {
   decideFromWhatIsHeld();
   report(port);
 
-  /* THE ROWS, AS THEIR OWN FUNCTION, BECAUSE TWO ARMS END THIS RUN AND ONLY ONE OF THEM USED TO PRINT
-     THEM. A verdict is `report`'s to compose and the TABLE is not — W5's mechanism is that every check
-     is DECLARED up front and that the reader can see which of them produced a result, and that is worth
-     exactly as much on a run this harness killed as on one that finished. `NOT RUN` is already the mark
-     for a check that made no observation, so the same loop says the right thing on both paths. */
+  /* Prints the table. Both ending arms call it; `NOT RUN` marks a check with no result. */
   function printRows() {
     console.error('\n[peergate] ' + '-'.repeat(96));
     for (const [id, why] of CHECKS) {
@@ -1061,9 +762,7 @@ async function main() {
   }
 
   function report(p) {
-    /* W5's GUARD. The verdict is refused unless every declared check produced a result — a driver that died
-       between two of these would otherwise leave the ones below it silently unmade while this summary still
-       printed a total. */
+    /* W5's guard: the verdict is refused unless every declared check produced a result. */
     const missingChecks = CHECKS.filter(([id]) => !results.has(id)).map(([id]) => id);
     printRows();
     if (missingChecks.length) {
@@ -1090,9 +789,7 @@ async function main() {
   }
 }
 
-/* THE INPUT, PRINTED WITH EVERY FAILING VERDICT. A gate that reports a number without the bytes it measured
-   leaves the next reader reconstructing the fixture out of this file's source, and the port — the one thing
-   that is not frozen — is precisely the part they cannot reconstruct. */
+/* The input, printed with every failing verdict: the port is the one part a reader cannot reconstruct. */
 function printFixtures(port) {
   console.error('\n[peergate] the exact bytes served this run (the port is the only thing that varies):\n' +
                 `--- ${SEED_HOST}:${port}/creator ---\n${seedDoc(port)}\n` +
