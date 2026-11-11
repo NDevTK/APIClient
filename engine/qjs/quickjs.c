@@ -52578,6 +52578,13 @@ static uint64_t js_parse_count_bytes(JSParseState *s)
     return js_parse_count_bytes_to(s, s->buf_ptr);
 }
 
+/* Scans the token after the current one, charging the previous token's bytes. Named residual. Not covered: a
+   token this scans (a string literal, a template's head, a comment before a token, an identifier or a number)
+   is scanned whole inside the production step that asked for it, so one long token is one stint between two
+   offers; only a regexp literal's body and the bracket lookahead at an AssignmentExpression rest inside
+   themselves. Next diff builds: this scan as a machine on the parse, parked mid-token, with each of its
+   callers in js_parse_drive a resume point, the string literal arms first. Absence shows as: a document's
+   `sliceOverrunGapWork` near its longest token's length in units. */
 static __exception int next_token(JSParseState *s)
 {
     const uint8_t *p, *p_next;
@@ -54711,7 +54718,11 @@ static int js_parse_skip_step(JSParseState *s, bool can_rest, int *pbits, bool *
     return tok;
 }
 
-/* The lookahead whole, for a site that cannot park inside it. */
+/* The lookahead whole, for a site that cannot park inside it. Named residual. Not covered: every caller but
+   assign_entry (the async arrow head, destructuring patterns, a for statement's head, a
+   function's parameter list) runs the scan to its answer inside one production step. Next diff builds: each such site begun and
+   stepped as assign_entry does, with a resume state of its own. Absence shows as: `sliceOverrunGapWork` near
+   the bytes between a bracket and its match, at an async arrow or a destructuring pattern spanning a body. */
 static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_terminator)
 {
     bool rested;
