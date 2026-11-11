@@ -1673,7 +1673,8 @@ static void tf_keep_watch(void) {
 static const char *tf_sale_act(const char *urls) {
     static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed", "/api/sl-floor-owed",
                                         "/api/sl-async-owed", "/api/sl-keep-owed", "/api/sl-ctor-owed",
-                                        "/api/sl-catch-owed", "/api/sl-pexec-owed", "/api/sl-asyncfn-owed" };
+                                        "/api/sl-catch-owed", "/api/sl-pexec-owed", "/api/sl-asyncfn-owed",
+                                        "/api/sl-root-owed" };
 
     if (g_tf_pressure_none) return urls;
     for (size_t i = 0; !g_tf_sale.listed && i < COUNTOF(owed); i++) {
@@ -2934,6 +2935,7 @@ TF_DOCS[] = {
     { "salecatch", HTML_SALECATCH },
     { "salepexec", HTML_SALEPEXEC },
     { "saleasyncfn", HTML_SALEASYNCFN },
+    { "saleroot", HTML_SALEROOT },
     { "layoutshed", HTML_LAYOUTSHED, OPENER_POLICY_UNSAFE_NONE, 0, NULL, NULL, 1 },
     { "cssparsetwin", HTML_CSSPARSETWIN },
     { "compiletwin", HTML_COMPILETWIN },
@@ -19634,7 +19636,9 @@ static long tf_hist_above(const char *js, const char *key, int from) {
    sale-keep-same-record: a member whose owed record a holder outside it names (g_tf_keep) gets that record back
    (`soldNamed`), answered. sale-ctor-busy-returns, sale-catch-busy-returns, sale-pexec-* and sale-asyncfn-*: a
    member sold in a constructor's body, inside a `try`, in a promise executor two Reflect.construct calls reached,
-   or in an async body before its first await, waits on no gap of the kinds each row names, returns and reports. */
+   or in an async body before its first await, waits on no gap of the kinds each row names, returns and reports.
+   sale-root-surveyed: a member resting in a machine a promise reaction called was sold and its survey named the
+   machine. */
 static long tf_census_row(const char *js, const char *census, const char *key);
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
@@ -19650,7 +19654,8 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     int ft = 1, ot = 1, ct = 1, lt = 1, yt = 1, kt = 1, rt = 1, ht = 1, pr = 1, pm = 1, pl = 1, pt = 1;
     const char *awhy = NULL, *kwhy = NULL, *rwhy = NULL, *hwhy = NULL, *gk = strstr(js, "\"waitsGapKinds\":{");
     const char *prwhy = NULL, *pmwhy = NULL, *plwhy = NULL, *ptwhy = NULL, *awwhy = NULL, *arwhy = NULL;
-    int aw = 1, ar = 1;
+    int aw = 1, ar = 1, rs = 1;
+    const char *rswhy = NULL;
     const char *gk_end = gk ? strchr(gk, '}') : NULL;
 
     fold_row(&lt, &lwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
@@ -19772,6 +19777,14 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
                  "NOT REACHED: no /api/sl-asyncfn-busy?n=100000 record, so the member sold in the async body did "
                  "not return within the session with its count");
     }
+    {
+        const int armed = g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0;
+
+        fold_row(&rs, &rswhy, armed, "NOT ARMED: the act sold nothing");
+        fold_row(&rs, &rswhy, gk_end && tf_span_has(gk, gk_end, "JSON.parse"),
+                 "no sale named JSON.parse's machine in `waitsGapKinds`, so no member was sold resting in the "
+                 "machine the reaction called");
+    }
     fold_row(&ot, &owhy, param_value_is(js, "/api/sl-own-done", "b", "22"),
              "NOT REACHED: no /api/sl-own-done?b=22 record, so the page's own run, sold while it owed "
              "/api/sl-own-owed, did not return within the session");
@@ -19838,6 +19851,7 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
         { "sale-pexec-returns", pt, "slPexecOwe", SESS_EXPLORE, ptwhy },
         { "sale-asyncfn-written", aw, "slAfOwe", SESS_EXPLORE, awwhy },
         { "sale-asyncfn-returns", ar, "slAfOwe", SESS_EXPLORE, arwhy },
+        { "sale-root-surveyed", rs, "slRtOwe", SESS_EXPLORE, rswhy },
         { "sale-control-reaches", ct, "slCtl", SESS_EXPLORE, cwhy },
         { "sale-forced-stays-listed", lt, "slForced", SESS_EXPLORE, lwhy },
         { "sale-own-stays-listed", lt, "slOwn", SESS_EXPLORE, lwhy },
