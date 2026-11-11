@@ -10,8 +10,10 @@
    settles a promise made before the fork, so its delta holds that promise's settlement and its resolving
    function's latch when it is sold, and its report reads the settled value. `salekeep`: `sale`'s shape where,
    at the act, a holder outside the sold member (test_forced.c's tf_keep) names the member's owed record, so
-   its restore must give that holder's record back rather than a copy of it.
-   Six of test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c
+   its restore must give that holder's record back rather than a copy of it. `salector`: `sale`'s shape where the
+   busy arm's loop runs in a constructor's body (`new SlCtor()`), so the member sold beside the owing one is
+   parked in a heap frame whose continuation is the construct's record.
+   Seven of test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c
    defines before including this file. */
 #ifndef ENGINE_HOST_FIXTURE_SALE_H
 #define ENGINE_HOST_FIXTURE_SALE_H
@@ -94,6 +96,22 @@ static const char HTML_SALEKEEP[] =
     "} else {"
     TF_SALE_BUSY
     "  fetch('/api/sl-keep-busy?n=' + slN);"
+    "}"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+static const char HTML_SALECTOR[] =
+    "<!doctype html><html><body>"
+    "<script>"
+    "function SlCtor() {" TF_SALE_BUSY " this.n = slN; }"
+    "var slCtorOwe = location.hash === '#owe';"
+    "if (slCtorOwe) {"
+    "  fetch('/api/sl-ctor-owed').then(function (r) { return r.text(); })"
+    "    .then(function (t) { fetch('/api/sl-ctor-done?b=' + t.length); });"
+    "} else {"
+    "  var slC = new SlCtor();"
+    "  fetch('/api/sl-ctor-busy?n=' + slC.n);"
     "}"
     "</script>"
     TF_CANVAS_INK

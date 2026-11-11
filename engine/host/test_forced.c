@@ -1606,7 +1606,7 @@ static void tf_keep_watch(void) {
    gives a written stub's bytes back at the floor, is not asked. A held member is never sold. */
 static const char *tf_sale_act(const char *urls) {
     static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed", "/api/sl-floor-owed",
-                                        "/api/sl-async-owed", "/api/sl-keep-owed" };
+                                        "/api/sl-async-owed", "/api/sl-keep-owed", "/api/sl-ctor-owed" };
 
     if (g_tf_pressure_none) return urls;
     for (size_t i = 0; !g_tf_sale.listed && i < COUNTOF(owed); i++) {
@@ -2839,6 +2839,7 @@ TF_DOCS[] = {
     { "salefloor", HTML_SALEFLOOR },
     { "saleasync", HTML_SALEASYNC },
     { "salekeep", HTML_SALEKEEP },
+    { "salector", HTML_SALECTOR },
     { "layoutshed", HTML_LAYOUTSHED, OPENER_POLICY_UNSAFE_NONE, 0, NULL, NULL, 1 },
     { "replyrec", HTML_REPLYREC },
     { "replynone", HTML_REPLYNONE },
@@ -19442,6 +19443,30 @@ TF_UNIT void probes_rangerest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* Whether [from, to) holds `needle`. */
+static int tf_span_has(const char *from, const char *to, const char *needle) {
+    size_t n = strlen(needle);
+    for (const char *p = from; p + n <= to; p++) if (!memcmp(p, needle, n)) return 1;
+    return 0;
+}
+
+/* The sum of a census histogram `key` (its name, colon and bracket) from bucket `from` on; -1 when absent. */
+static long tf_hist_above(const char *js, const char *key, int from) {
+    const char *at = strstr(js, key);
+    long sum = 0;
+    char *end;
+
+    if (!at) return -1;
+    at += strlen(key);
+    for (int i = 0; *at && *at != ']'; i++) {
+        long v = strtol(at, &end, 10);
+        if (end == at) return -1;
+        if (i >= from) sum += v;
+        at = *end == ',' ? end + 1 : end;
+    }
+    return sum;
+}
+
 /* The rows of the four sale documents (fixture/sale.h). sale-forced-returns and sale-own-returns: the member
    owing the request was sold at the act, a sale wrote its member (`soldRestores`), a stub was restored from its
    written bytes (`restored`), and the member's report is in the result, so it returned within the session.
@@ -19453,7 +19478,9 @@ TF_UNIT void probes_rangerest(const char *js, Probe *tab, int *n) {
    and its report reads the value the restored settlement carries.
    sale-keep-same-record: as sale-forced-returns, for a member whose owed record a holder outside it names at the
    act (g_tf_keep); the sale read the held record back as itself (`soldNamed`), the reply reached it, and the
-   restored register names it rather than a copy. */
+   restored register names it rather than a copy.
+   sale-ctor-busy-returns: the member sold while its loop ran in a constructor's body was written (no sale
+   waited on `frame call` or `cont CONSTRUCT`), restored, and reported the count its constructor computed. */
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
     const char *cat = strstr(js, "\"saleCensus\":{\"n\":");
@@ -19465,8 +19492,9 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     long restored = rat ? strtol(rat + strlen("\"restored\":"), NULL, 10) : -1;
     const char *nat = strstr(js, "\"soldNamed\":");
     long named = nat ? strtol(nat + strlen("\"soldNamed\":"), NULL, 10) : -1;
-    int ft = 1, ot = 1, ct = 1, lt = 1, yt = 1, kt = 1;
-    const char *awhy = NULL, *kwhy = NULL;
+    int ft = 1, ot = 1, ct = 1, lt = 1, yt = 1, kt = 1, rt = 1;
+    const char *awhy = NULL, *kwhy = NULL, *rwhy = NULL, *gk = strstr(js, "\"waitsGapKinds\":{");
+    const char *gk_end = gk ? strchr(gk, '}') : NULL;
 
     fold_row(&lt, &lwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
              "the act sold nothing: no bill listed the owed request with a member to sell beside the one switched "
@@ -19518,6 +19546,22 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     fold_row(&kt, &kwhy, param_value_is(js, "/api/sl-keep-done", "b", "22"),
              "NOT REACHED: no /api/sl-keep-done?b=22 record, so the member sold while it owed /api/sl-keep-owed did "
              "not return within the session");
+    fold_row(&rt, &rwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
+             "NOT ARMED: the act sold nothing, so no member parked in a constructor's body was sold");
+    fold_row(&rt, &rwhy, tf_hist_above(js, "\"hFrameHeap\":[", 1) > 0,
+             "NOT ARMED: no sale's member held a heap frame (`hFrameHeap`), so none was sold in the constructor's "
+             "body");
+    fold_row(&rt, &rwhy, gk != NULL && gk_end != NULL,
+             "the result carries no sale census `waitsGapKinds`, so what the sales waited on is unread");
+    fold_row(&rt, &rwhy, gk_end && !tf_span_has(gk, gk_end, "\"frame call\"") &&
+                         !tf_span_has(gk, gk_end, "\"cont CONSTRUCT\""),
+             "a sale waited on `frame call` or `cont CONSTRUCT`: a member parked in a constructor's body was not "
+             "written");
+    fold_row(&rt, &rwhy, wrote > 0 && restored > 0,
+             "no sold member was restored from its written bytes (`soldRestores`, `restored`)");
+    fold_row(&rt, &rwhy, param_value_is(js, "/api/sl-ctor-busy", "n", "100000"),
+             "NOT REACHED: no /api/sl-ctor-busy?n=100000 record, so the member sold in the constructor's body did "
+             "not return within the session with the count its body computed");
     fold_row(&ot, &owhy, param_value_is(js, "/api/sl-own-done", "b", "22"),
              "NOT REACHED: no /api/sl-own-done?b=22 record, so the page's own run, sold while it owed "
              "/api/sl-own-owed, did not return within the session");
@@ -19543,6 +19587,7 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
         { "sale-own-returns", ot, "slOwn", SESS_EXPLORE, owhy },
         { "sale-async-returns", yt, "slAsync", SESS_EXPLORE, awhy },
         { "sale-keep-same-record", kt, "slKeep", SESS_EXPLORE, kwhy },
+        { "sale-ctor-busy-returns", rt, "slCtorOwe", SESS_EXPLORE, rwhy },
         { "sale-control-reaches", ct, "slCtl", SESS_EXPLORE, cwhy },
         { "sale-forced-stays-listed", lt, "slForced", SESS_EXPLORE, lwhy },
         { "sale-own-stays-listed", lt, "slOwn", SESS_EXPLORE, lwhy },
