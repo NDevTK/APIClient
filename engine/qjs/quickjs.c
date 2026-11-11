@@ -47029,7 +47029,7 @@ void JS_FlowReachEnd(JSFlowReach *out)
 /* JS_FlowGraph* — see quickjs.h. Host memory throughout, spelled `(free)`/`(realloc)` for the reason the reach
    census gives: a write runs where a runtime allocation could ask for a sale. */
 enum { FG_PLAIN = 1, FG_ARRAY = 2, FG_ERROR = 3, FG_RECORD = 4, FG_CLOSURE = 5, FG_BRAND = 6, FG_PROMISE = 7,
-       FG_RESOLVER = 8 };
+       FG_RESOLVER = 8, FG_CDATA = 9 };
 /* Whether `id` is a class whose objects are a brand over ordinary properties: registered by the host, with no
    finalizer, mark, record, call or exotic methods. Host classes only, because a predefined class keeps state in
    the object's union whether or not it declares a hook, and a host class's only state outside its properties is
@@ -47279,6 +47279,7 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
                          : p->class_id == JS_CLASS_PROMISE ? FG_PROMISE
                          : p->class_id == JS_CLASS_PROMISE_RESOLVE_FUNCTION ||
                            p->class_id == JS_CLASS_PROMISE_REJECT_FUNCTION ? FG_RESOLVER
+                         : p->class_id == JS_CLASS_C_FUNCTION_DATA ? FG_CDATA
                          : w->ctx->rt->class_array[p->class_id].record ? FG_RECORD
                          : fg_class_is_brand(w->ctx->rt, p->class_id) && p->u.opaque == NULL ? FG_BRAND : 0;
             if (kind == 0 && w->survey) { fg_gap(w, out, FG_GAP_CLASS, p->class_id); return; }
@@ -47511,6 +47512,23 @@ static void fg_closure(FGWriter *w, FGBuf *out, JSObject *p)
     for (int i = 0; i < b->closure_var_count; i++) fg_cell(w, out, p->u.func.var_refs[i]);
 }
 
+/* A C function with captured values: its body and step machine as the pointers they are (so the graph is read in
+   the process that wrote it), its length, magic and constructor bit, its realm and its captured values. */
+static void fg_cdata(FGWriter *w, FGBuf *out, JSObject *p)
+{
+    JSCFunctionDataRecord *s = p->u.c_function_data_record;
+
+    DCHECK(s != NULL && s->realm != NULL, "flow graph: a C function with data holds no record or no realm");
+    fg_put(out, &s->func, sizeof s->func);
+    fg_put(out, &s->step_def, sizeof s->step_def);
+    fg_u8(out, s->length);
+    fg_u8(out, s->data_len);
+    fg_put(out, &s->magic, sizeof s->magic);
+    fg_u8(out, p->is_constructor);
+    fg_u32(out, fg_realm(w, s->realm));
+    for (int i = 0; i < s->data_len; i++) fg_value(w, out, s->data[i]);
+}
+
 /* An object's body: its prototype, whether it is extensible, and its own data properties (fg_props). An array
    writes first whether its elements are dense ('F': stored apart, written as a count and the values) or ordinary
    properties ('S'), then its length's attributes and value, then the properties after the length slot. An Error
@@ -47550,6 +47568,7 @@ static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
     if (w->kinds[id] == FG_CLOSURE) fg_closure(w, out, p);
     if (w->kinds[id] == FG_PROMISE) fg_promise(w, out, p);
     if (w->kinds[id] == FG_RESOLVER) fg_resolver(w, out, p);
+    if (w->kinds[id] == FG_CDATA) fg_cdata(w, out, p);
     if (w->kinds[id] == FG_RECORD) {
         DCHECK(p->u.opaque != NULL, "flow graph: an object of a class with a record layout holds no record");
         fg_record(w, out, p->u.opaque, w->ctx->rt->class_array[p->class_id].record);
@@ -47872,6 +47891,32 @@ static void fg_rclosure(FGReader *r, JSObject *p)
     CHECK(p->u.func.var_refs != NULL, "flow graph: OOM rebuilding a closure's cells");
     for (int i = 0; i < b->closure_var_count; i++) p->u.func.var_refs[i] = fg_rcell(r);
 }
+static void fg_rcdata(FGReader *r, JSObject *p)
+{
+    JSCFunctionData *func;
+    const struct JSTrampStepDef *def;
+    uint8_t length, data_len;
+    uint16_t magic;
+    uint32_t ri;
+    JSCFunctionDataRecord *s;
+
+    memcpy(&func, fg_take(r, sizeof func), sizeof func);
+    memcpy(&def, fg_take(r, sizeof def), sizeof def);
+    length = fg_r8(r);
+    data_len = fg_r8(r);
+    memcpy(&magic, fg_take(r, sizeof magic), sizeof magic);
+    p->is_constructor = fg_r8(r) != 0;
+    ri = fg_r32(r);
+    CHECK(ri < r->g->n_realms, "flow graph: a C function's realm is no realm the graph holds");
+    CHECK(func != NULL || def != NULL, "flow graph: a C function with data has neither a body nor a step machine");
+    s = js_malloc(r->ctx, sizeof *s + data_len * sizeof(JSValue));
+    CHECK(s != NULL, "flow graph: OOM rebuilding a C function's record");
+    s->func = func; s->step_def = def; s->length = length; s->data_len = data_len; s->magic = magic;
+    s->realm = JS_DupContext(r->g->realms[ri]);
+    for (int i = 0; i < data_len; i++) s->data[i] = JS_UNDEFINED;
+    p->u.c_function_data_record = s;   /* before the values, so a collection reading them marks a whole record */
+    for (int i = 0; i < data_len; i++) s->data[i] = fg_rvalue(r);
+}
 static void *fg_ralloc(FGReader *r, const JSRecordLayout *l, size_t n)
 {
     return l->runtime_memory ? js_mallocz_rt(r->ctx->rt, n) : calloc(1, n);
@@ -48166,7 +48211,7 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
     for (uint32_t i = 0; i < r.n_objs; i++) {
         JSClassID cid = kinds[i] == FG_ERROR ? JS_CLASS_ERROR : JS_CLASS_OBJECT;
 
-        CHECK(kinds[i] >= FG_PLAIN && kinds[i] <= FG_RESOLVER, "flow graph: an object kind this reader does not know");
+        CHECK(kinds[i] >= FG_PLAIN && kinds[i] <= FG_CDATA, "flow graph: an object kind this reader does not know");
         if (kinds[i] >= FG_RECORD) {
             cid = fg_r32(&r);
             CHECK(cid < ctx->rt->class_count &&
@@ -48175,6 +48220,7 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
                        : kinds[i] == FG_PROMISE ? cid == JS_CLASS_PROMISE
                        : kinds[i] == FG_RESOLVER ? cid == JS_CLASS_PROMISE_RESOLVE_FUNCTION ||
                                                    cid == JS_CLASS_PROMISE_REJECT_FUNCTION
+                       : kinds[i] == FG_CDATA ? cid == JS_CLASS_C_FUNCTION_DATA
                        : fg_class_is_brand(ctx->rt, cid)),
                   "flow graph: an object names a class its kind does not allow in this runtime");
         }
@@ -48207,6 +48253,7 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
         if (kinds[i] == FG_CLOSURE) fg_rclosure(&r, JS_VALUE_GET_OBJ(o));
         if (kinds[i] == FG_PROMISE) fg_rpromise(&r, JS_VALUE_GET_OBJ(o));
         if (kinds[i] == FG_RESOLVER) fg_rresolver(&r, JS_VALUE_GET_OBJ(o));
+        if (kinds[i] == FG_CDATA) fg_rcdata(&r, JS_VALUE_GET_OBJ(o));
         if (kinds[i] == FG_RECORD) {   /* before anything asks the class's exotic methods, which read the record */
             JSObject *rp = JS_VALUE_GET_OBJ(o);
             rp->u.opaque = fg_rrecord(&r, ctx->rt->class_array[rp->class_id].record);
