@@ -11263,6 +11263,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    ScriptOrModule name, the module map key and the base of a relative `import()`) and `src_flags`
                    (strictness and JS_EVAL_FLAG_INLINE_SCRIPT). The question is asked before every stint, since
                    the compile in flight is the body's and the stint that finished it may have been any world's. */
+                /* Named residual. Not covered: the parse's charge is not a function of the flow's path, since a
+                   flow that finds the body's parse held, or continues a compile another world parked, retires
+                   none of the bytes another world parsed. Next diff builds: the compile's charges and budget polls
+                   recorded on the body, and each flow charged and polled through them from its own paid count
+                   (solver/flow.h's paid parses, as css_style_declaration.c's sheet parse table charges). Its
+                   absence shows as two arms of one fork reporting different clocks after starting one program. */
                 JSValue held = JS_UNDEFINED;
                 int shared = dyn_body_parse_ref(pb, prog_ctx, prog_name, src_flags, &held);
                 if (shared) {
