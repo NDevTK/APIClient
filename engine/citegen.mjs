@@ -544,6 +544,9 @@ const SPECS = [
     anchors: ["subresource integrity", "sri"] },
   { key: "xhr", label: "XMLHttpRequest Standard", kind: "bikeshed",
     base: "https://xhr.spec.whatwg.org/", edition: "maintained", anchors: ["xhr", "xmlhttprequest"] },
+  /* The WebSockets Standard: core/websockets and core/events/close_event.c cite it. Bikeshed-rendered. */
+  { key: "websockets", label: "WebSockets Standard", kind: "bikeshed",
+    base: "https://websockets.spec.whatwg.org/", edition: "maintained", anchors: ["websockets"] },
   { key: "fileapi", label: "File API", kind: "bikeshed",
     base: "https://w3c.github.io/FileAPI/", edition: "maintained", anchors: ["file api", "fileapi"] },
   /* THE FILE SYSTEM STANDARD, PROMOTED OUT OF OTHER_SPECS, AND THE PROMOTION IS THE WHOLE POINT: a foreign row
@@ -2714,7 +2717,7 @@ const OTHER_SPECS = [
      specification is fetchable, indexing it is a real repair, and it is a DIFFERENT diff that this row does
      not pretend to have made. A row here buys SILENCE; an index would buy ANSWERS. */
   "png",
-  "workers", "websockets", "rfc", "unicode", "utf", "clipboard",
+  "workers", "rfc", "unicode", "utf", "clipboard",
   "notifications", "geolocation", "geometry", "fullscreen", "pointerevents", "webaudio", "webrtc",
   /* `geolocation api`, `clipboard api` and `webrtc encoded transform` BESIDE THEIR HEADS, for the reason
      the note above gives and as the same measurement. This tree writes `Geolocation API` and `Clipboard

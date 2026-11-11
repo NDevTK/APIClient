@@ -29,6 +29,7 @@
 #include "core/encoding/encoding.h"
 #include "core/encoding/text_stream.h"
 #include "core/events/broadcast_channel.h"
+#include "core/websockets/web_socket.h"
 #include "core/events/event.h"
 #include "core/events/input_device_capabilities.h"
 #include "core/events/current_event.h"
@@ -280,6 +281,7 @@ static void d_remote_op(JSContext *c, const PlatformAgent *a) { (void)a; remote_
 static void d_remote_location(JSContext *c, const PlatformAgent *a) { (void)a; remote_location_init(c); }
 static void d_window_message(JSContext *c, const PlatformAgent *a) { (void)a; window_message_init(c); }
 static void d_broadcast_channel(JSContext *c, const PlatformAgent *a) { (void)a; broadcast_channel_init(c); }
+static void d_web_socket(JSContext *c, const PlatformAgent *a) { (void)a; web_socket_init(c); }
 static void d_unhandled_rejection(JSContext *c, const PlatformAgent *a) { (void)a; unhandled_rejection_init(c); }
 static void d_animation_frame(JSContext *c, const PlatformAgent *a) { (void)a; animation_frame_init(c); }
 static void d_idle_callback(JSContext *c, const PlatformAgent *a) { (void)a; idle_callback_init(c); }
@@ -406,6 +408,7 @@ static void r_window_storage(JSRuntime *rt) { window_storage_free(rt); }
    a queued delivery runs through, and §9.5's registry of open channels is a live Array beside it. */
 static void r_window_message(JSRuntime *rt) { window_message_free(rt); }
 static void r_broadcast_channel(JSRuntime *rt) { broadcast_channel_free(rt); }
+static void r_web_socket(JSRuntime *rt) { web_socket_free(rt); }
 /* XMLHttpRequest holds the agent's step definitions and, through §5's ProgressEvent, the private Symbol that
    interface's slots hang off. */
 static void r_xhr(JSRuntime *rt) { xhr_free(rt); }
@@ -931,6 +934,9 @@ static const PlatformComponent PLATFORM[] = {
     /* HTML §9.5 "Broadcasting to other browsing contexts": html.idl declares `[Exposed=(Window,Worker)] interface
        BroadcastChannel : EventTarget`, so no document half. */
     { "broadcast_channel",   d_broadcast_channel,   NULL,        r_broadcast_channel },
+    /* WebSockets §3.1 "Interface definition": `[Exposed=(Window,Worker)] interface WebSocket : EventTarget`,
+       so no document half. After `event`, whose CloseEvent its closed task fires. */
+    { "web_socket",          d_web_socket,          NULL,        r_web_socket },
     /* HTML §2.7.10 "Structured cloning API"'s member has no install column because of Web IDL §3.7.3 "Interface
        prototype object": it is declared on a mixin both `WorkerGlobalScope` and `Window` include, so the object it
        lands on differs per realm, and this column (whose DCHECK below refuses a realm whose §3.3.8 [Global] names
@@ -1253,6 +1259,8 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "XMLHttpRequest",        "xml_http_request" },
     { "FileReader",            "file_reader" },
     { "BroadcastChannel",      "broadcast_channel" },
+    { "WebSocket",             "web_socket" },
+    { "CloseEvent",            "event" },
     { "PromiseRejectionEvent", "unhandled_rejection" },
     { "PageRevealEvent",       "page_reveal" },
     { "AbortController",       "abort" },

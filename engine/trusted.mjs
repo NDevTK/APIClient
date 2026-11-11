@@ -1449,9 +1449,10 @@ async function main() {
        body states no class. */
     /* A `fetch()` (the empty destination; the engine's line states it only when every park on the pair is
        one) is streamed: its engine resolves at the head and reads the body as each of its records is due
-       (`streamLines`). Every other destination's algorithm consumes the body whole. */
+       (`streamLines`). Every other destination's algorithm consumes the body whole, and so does a WebSocket
+       handshake, whose destination is also empty and whose mode says which it is. */
     const entry = send.entry;
-    if (destination === '') {
+    if (destination === '' && mode !== 'websocket') {
       entry.stream = String(++e.streams);
       entry.chunks = [];
       entry.pair = id;
@@ -2449,11 +2450,13 @@ async function main() {
       if (referrer !== 'no-referrer' && !URL.canParse(referrer))
         throw new Error(`the host announced a fetch with the referrer \`${referrer}\`, which is neither ` +
                         '"no-referrer" nor a URL — the engine resolves Fetch §2.2.5\'s "client" before joining');
-      /* Only the three modes whose reader is the asking page travel on this channel (extension/bridge.js's
-         `pendingRequest` gives the reason); a `navigate` here would skip the response tainting. */
-      if (mode !== 'same-origin' && mode !== 'cors' && mode !== 'no-cors')
+      /* Only the modes whose reader is the asking page travel on this channel (extension/bridge.js's
+         `pendingRequest` gives the reason): the three a page reads a reply in, and a WebSocket's handshake
+         (WebSockets §2.2 "Opening handshake"). A `navigate` here would skip the response tainting. */
+      if (mode !== 'same-origin' && mode !== 'cors' && mode !== 'no-cors' && mode !== 'websocket')
         throw new Error(`the host announced a fetch in the mode \`${mode}\` — a reply on this channel returns ` +
-                        'to the page that asked, so only `same-origin`, `cors` and `no-cors` may arrive here');
+                        'to the page that asked, so only `same-origin`, `cors`, `no-cors` and a `websocket` ' +
+                        'handshake may arrive here');
       const key = fetchKey(id);
       /* AN ANSWER IS ALREADY OWED FOR THIS PAIR — it is in flight, or it is queued for the next write. Either
          way this announcement names the SAME outstanding record, because the child has not been let go since

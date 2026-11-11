@@ -22,6 +22,7 @@
 #include "core/html/html_link.h"
 #include "core/html/user_activation.h"
 #include "core/timing/timer.h"
+#include "core/websockets/web_socket.h"
 #include "solver/engine.h"   /* the cross-agent close: a host request and its addressee */
 #include "solver/flow.h"   /* §7.5.10 step 5's OTHER task queue: the running flow's own program sequence */
 #include "solver/world.h"    /* the cross-agent close record's document name and world */
@@ -255,9 +256,11 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
  * algorithm at all, it is that algorithm's private line — which is exactly what it had become, and the entry it
  * was missing is the one every frame removal takes.
  *
- * FOUR SETS, THREE OF THEM EMPTY BY CONSTRUCTION. The WebSocket, WebTransport and EventSource loops iterate over
+ * FOUR SETS, TWO OF THEM EMPTY BY CONSTRUCTION. The WebTransport and EventSource loops iterate over
  * interfaces this engine does not have, so "for each" runs zero times, exactly as §7.5.10's worker and worklet
- * loops do. What remains is the salvageable-false branch's second half: "clear window's map of active timers",
+ * loops do. The WebSocket loop makes each of window's sockets disappear (core/websockets/web_socket.h), outside
+ * the salvageable branch as the standard has it. What remains is that branch's second half: "clear window's map
+ * of active timers",
  * and it is THIS window's — §8.7 Timers gives every global its own map and core/timing/timer.c keeps one per
  * realm, so clearing it takes nothing from a same-origin popup this document opened.
  *
@@ -269,6 +272,7 @@ static void unloading_document_cleanup_steps(JSContext *cctx)
     DCHECK(cctx != NULL,
            "the unloading document cleanup steps were run for a navigable with no active document — both of "
            "their entries read the realm before calling and neither has one to hand over");
+    web_socket_make_disappear_all(cctx);
     if (!UNLOAD_SALVAGEABLE)
         timer_clear_map(cctx);
 }

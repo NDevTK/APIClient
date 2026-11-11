@@ -73,9 +73,16 @@ static int64_t idl_int_convert(double x, int width, bool is_signed, bool clamp)
     double span = ldexp(1.0, width), half = ldexp(1.0, width - 1);
 
     if (clamp) {
-        DCHECK(width == 64 && is_signed, "[Clamp] was declared on an integer type this conversion has no "
-                                         "range for — state the type's bounds here, they are the spec's");
+        DCHECK((width == 64 && is_signed) || (width == 16 && !is_signed),
+               "[Clamp] was declared on an integer type this conversion has no range for — state the type's "
+               "bounds here, they are the spec's");
         if (isnan(x)) return 0;
+        /* `unsigned short`: clamp to [0, 2^16 - 1], then round; both bounds are exact doubles. */
+        if (width == 16) {
+            if (x <= 0) return 0;
+            if (x >= span - 1) return (int64_t)(span - 1);
+            return (int64_t)nearbyint(x);
+        }
         if (x <= -half) return INT64_MIN;
         if (x >= half)  return INT64_MAX;
         return (int64_t)nearbyint(x);
@@ -137,6 +144,7 @@ static bool idl_is_iface(JSValueConst v, JSClassID iface)
 static bool idl_is_integer(IdlArgType t)
 {
     return t == IDL_LONG || t == IDL_UNSIGNED_LONG || t == IDL_UNSIGNED_SHORT ||
+           t == IDL_UNSIGNED_SHORT_CLAMP ||
            t == IDL_LONG_LONG || t == IDL_UNSIGNED_LONG_LONG || t == IDL_LONG_LONG_CLAMP ||
            t == IDL_UNSIGNED_LONG_ENFORCE || t == IDL_UNSIGNED_LONG_LONG_ENFORCE ||
            t == IDL_LONG_ENFORCE;
@@ -149,6 +157,7 @@ int64_t idl_integer_of(IdlArgType t, double x)
     case IDL_LONG:            return idl_int_convert(x, 32, true,  false);
     case IDL_UNSIGNED_LONG:   return idl_int_convert(x, 32, false, false);
     case IDL_UNSIGNED_SHORT:  return idl_int_convert(x, 16, false, false);
+    case IDL_UNSIGNED_SHORT_CLAMP: return idl_int_convert(x, 16, false, true);
     case IDL_LONG_LONG:       return idl_int_convert(x, 64, true,  false);
     case IDL_UNSIGNED_LONG_LONG: return idl_int_convert(x, 64, false, false);
     default:
@@ -6157,6 +6166,20 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             if (idl_bodyinit_arm(ctx, a, &t) < 0) {
                 JS_FreeValue(ctx, cb_result);
                 return JS_STEP_ABRUPT;
+            }
+        }
+
+        /* `(BufferSource or Blob or USVString)`: a buffer source or a Blob crosses as itself (Web IDL §3.2.25
+           steps 4, 6, 8 and 9); every other value is step 15's USVString. */
+        if (t == IDL_BUFFERSOURCE_OR_BLOB_OR_USVSTRING) {
+            if (JS_IsArrayBuffer(a) || JS_GetTypedArrayType(a) >= 0 || JS_IsDataView(a)) {
+                if (idl_buffer_source_refuse(ctx, a, "BufferSource", false, false)) {
+                    JS_FreeValue(ctx, cb_result);
+                    return JS_STEP_ABRUPT;
+                }
+                t = IDL_ANY;
+            } else {
+                t = blob_is(a) ? IDL_ANY : IDL_USVSTRING;
             }
         }
 

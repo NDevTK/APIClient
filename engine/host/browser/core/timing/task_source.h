@@ -156,7 +156,10 @@ typedef enum {
     /* HTML §8.1.6.6.3 HostEnqueueGenericJob(job, realm): "Queue a global task on the JavaScript engine task
        source given global to perform job()". §8.1.6.6.5 HostEnqueueTimeoutJob(job, realm, milliseconds) queues
        the same after a timeout. */
-    TASK_SOURCE_JAVASCRIPT_ENGINE
+    TASK_SOURCE_JAVASCRIPT_ENGINE,
+    /* WebSockets §4 "Feedback from the protocol" — "The task source for all tasks queued in this section is
+       the WebSocket task source." */
+    TASK_SOURCE_WEBSOCKET
 } TaskSource;
 
 /* IS §8.1.7.1's ORDERING RULE ABOUT THIS WORK ITEM? Only a task has a source, so only a task can have one in
@@ -216,6 +219,7 @@ static inline const char *task_source_name(TaskSource s)
     case TASK_SOURCE_PERMISSIONS:              return "permissions";
     case TASK_SOURCE_WEB_LOCKS:                return "web-locks";
     case TASK_SOURCE_JAVASCRIPT_ENGINE:        return "javascript-engine";
+    case TASK_SOURCE_WEBSOCKET:                return "websocket";
     }
     return "unknown";
 }

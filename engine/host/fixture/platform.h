@@ -1331,31 +1331,23 @@ static const char HTML_PLATFORM[] =
     "catch (e) { uimr = 'threw'; }"
     "fetch('/api/imagedataio?v=' + uimr);"
 
-    /* THE REACHABILITY WITNESS FOR solver's OWED-NAME CENSUS, not a probe row. Every `typeof` guard above names
-       an interface this build installs, so none reaches the arm that records an unanswered name. `WebSocket`
-       is carried by browser/platform_names.h and installed by no realm (core/platform.c's interface column has
-       no row for it), so a read of it misses on a name this engine's vocabulary owns. The witness lasts until
-       `WebSocket` reaches a realm; the diff that installs it owes this block a subject that is still absent.
-       Two spellings, one row: `window.WebSocket` is a [[Get]] missing the global's whole prototype chain and
-       reaches JSConcolicHooks.absent; `typeof WebSocket` is an unresolvable Reference that ECMAScript
-       §13.5.3.1 "Runtime Semantics: Evaluation" step 2.a answers before step 3's GetValue, recorded by
-       JSConcolicHooks.absent_unresolved. Neither throws or forks.
-       What to observe in the run's `_absent`: the `"WebSocket"` row puts 1 in `read` and 1 in `typeof`, and
-       the typeof member reads at least 1; every bucket is emitted including zero. No probe row: a census
-       member is neither an endpoint nor a param, and engine/probegate.mjs cannot resolve a bare needle over a
-       census key to a document token. */
-    "var absTy = typeof WebSocket;"
-    "var absRd = window.WebSocket;"
-    /* THE THIRD SPELLING. `'WebSocket' in window` is ECMAScript §13.10.1 "Runtime Semantics: Evaluation",
-       whose last step is "Return ? HasProperty(rightValue, ? ToPropertyKey(leftValue))"; §7.3.11
-       "HasProperty ( obj, propertyKey )" performs no [[Get]], so it reaches neither hook above and is recorded
-       at the `in` operator's own placement. It answers `false` and nothing throws.
-       What to observe: the `"WebSocket"` row reads `read 1, typeof 1, in 1`, three buckets summing to three
-       reads, and the `in` member reads at least 1 beside the typeof member. This document is the corpus's
-       only whole-run witness for the per-name split: only a row whose three buckets each stand at 1 says the
-       spellings reached the same name. A regressed split reads `read 3, typeof 0, in 0`. No probe row, for
-       the reason above. */
-    "var absIn = 'WebSocket' in window;"
+    /* The reachability witness for the solver's owed-name census, not a probe row. Every `typeof` guard above
+       names an interface this build installs, so none reaches the arm that records an unanswered name.
+       `EventSource` is carried by browser/platform_names.h and installed by no realm, so a read of it misses on
+       a name this engine's vocabulary owns; the diff that installs it owes this block a subject still absent.
+       `window.EventSource` is a [[Get]] missing the global's whole prototype chain (JSConcolicHooks.absent);
+       `typeof EventSource` is an unresolvable Reference that ECMAScript §13.5.3.1 "Runtime Semantics:
+       Evaluation" step 2.a answers before step 3's GetValue (JSConcolicHooks.absent_unresolved). Neither
+       throws or forks. The run's `_absent` row for `"EventSource"` puts 1 in `read` and 1 in `typeof`. No
+       probe row: a census member is neither an endpoint nor a param. */
+    "var absTy = typeof EventSource;"
+    "var absRd = window.EventSource;"
+    /* The third spelling: `'EventSource' in window` is ECMAScript §13.10.1 "Runtime Semantics: Evaluation",
+       whose last step is "Return ? HasProperty(rightValue, ? ToPropertyKey(leftValue))"; §7.3.11 "HasProperty
+       ( obj, propertyKey )" performs no [[Get]], so it reaches neither hook above and is recorded at the `in`
+       operator's own placement. It answers `false`. The `"EventSource"` row then reads `read 1, typeof 1,
+       in 1`; a regressed per-name split reads `read 3, typeof 0, in 0`. */
+    "var absIn = 'EventSource' in window;"
     /* §4.13 CUSTOM ELEMENTS — the reason this component exists: connectedCallback's body is code NOTHING ELSE IN
        THE PROGRAM CALLS. The endpoints below are reachable only through the lifecycle, so their presence is the
        whole claim. `extends HTMLElement` is what a real bundle writes, and after the upgrade `this.setAttribute`

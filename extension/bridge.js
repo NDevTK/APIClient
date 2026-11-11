@@ -4594,15 +4594,15 @@ const _REFERRER_POLICIES = ["", "no-referrer", "no-referrer-when-downgrade", "sa
 /* The small fixed vocabularies of a GetPending line, by field index, each solver/engine.h's. An unknown word
    would be answered by whichever arm a consumer wrote first, and for the witness mark that is the firing
    policy's permissive one (`unstated` is safe-fetch.js's word for an act with no mark, never a line's). The
-   mode is one of the three whose reader is the asking page: a `navigate` request's bytes become another
-   instance's document (fetchedDocument), so stating it here would ask for another origin's bytes with no CORS
-   question asked. */
+   mode is one whose reader is the asking page, the three a page reads a reply in or a WebSocket's handshake
+   (WebSockets §2.2 "Opening handshake"): a `navigate` request's bytes become another instance's document
+   (fetchedDocument), so stating it here would ask for another origin's bytes with no CORS question asked. */
 const PENDING_TOKENS = Object.freeze([
   [2, "initiator", ["parser", "script"]],
   [3, "provenance", ["observed", "derived", "forced"]],
   [4, "witness mark", ["pinned", "unpinned"]],
   [5, "drive mark", ["driven", "undriven"]],
-  [7, "mode", ["same-origin", "cors", "no-cors"]],
+  [7, "mode", ["same-origin", "cors", "no-cors", "websocket"]],
   [8, "referrer policy", _REFERRER_POLICIES],
   /* core/fetch/fetch.h's address class; an address with no bytes is never listed. */
   [12, "address class", ["concrete", "example"]]]);
@@ -4867,7 +4867,7 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
        re-listed request is counted once and the containment with the declined histogram holds. */
     /* A `fetch()` (the empty destination; the engine's line states it only when every park on the pair is
        one) is streamed: its engine resolves at the head. Every other destination's algorithm consumes the
-       body whole. */
+       body whole, and so does a WebSocket handshake (mode `websocket`), whose destination is also empty. */
     /* The asking documents' record, read once at the issue: `fetched` judges the request against it, and its
        reach is stated on the provide. A refused asker has no record and is declined, never provided. */
     const asker = askerRecord(eng, askers, "asker");
@@ -4883,7 +4883,7 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
                                        mode, referrerPolicy, referrer, content, asker, signal,
                                        onBodyRead, onHead, onChunk); },
       (answer) => engineDeliverReply(eng, id, answer, reach),
-      destination === "" ? id : null, reach);
+      destination === "" && mode !== "websocket" ? id : null, reach);
   }
 }
 /* What a landed answer means on the pending seam: the `deliver` half of one issue, closing over the request's

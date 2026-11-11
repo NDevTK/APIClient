@@ -280,7 +280,10 @@ enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 1
           its own bit because neither interface includes GlobalEventHandlers. */
        EH_ABSTRACT_WORKER = 4194304,
        /* Web Animations §6.4's `onfinish` and `oncancel`, which the Animation interface declares itself. */
-       EH_ANIMATION = 8388608 };
+       EH_ANIMATION = 8388608,
+       /* WebSockets §3.1 "Interface definition"'s four on WebSocket: `onopen`, `onmessage`, `onerror`,
+          `onclose`. Its own bit because the interface includes no handler mixin. */
+       EH_WEB_SOCKET = 16777216 };
 /* HTML §6.5 Activation behavior of elements' click() — whose step 4, "Fire a synthetic pointer event named
    click at this element, with the not trusted flag set", IS DOM §2.9 dispatch, so it is the same machine under
    a second entry rather than a second implementation of it. The method's other four steps ride that entry:

@@ -545,6 +545,10 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
    `deliver` is called for a failure too, because HTML §4.6.8.12 step 14.1's `error` event and §4.6.8.20's
    network-error branch are the failure arm, and they live at the element. */
 void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const FetchRequest *req);
+/* Abort that park, as engine_pending_fetch_cancel aborts a fetch()'s: the running flow's still-owed entry
+   whose completion steps are `deliver` leaves its register. WebSockets §3.1's close() on a connection not yet
+   established fails it, which ends the handshake's fetch. */
+void engine_pending_resource_cancel(JSContext *ctx, JSValueConst deliver);
 /* Called with an agent's realm when that agent's program has run (HTML §10.2.4 Processing model's run a worker:
    after "run the classic script script" or "run the module script", the ports' queues are enabled): `ran` true,
    with a module's evaluation promise in `evaluation` (JS_UNDEFINED for a classic script), or `ran` false for a

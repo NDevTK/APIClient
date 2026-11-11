@@ -536,8 +536,10 @@ function _destinationOf(opts) {
    the address. Fetch §4.1 "Main fetch" decides from it what the page may read of the reply: a `cors` reply
    passes §4.10 "CORS check", a cross-origin `no-cors` reply becomes an opaque filtered response, and a
    `same-origin` request to another origin is a network error. A CHECK, because the arm an absent or invented
-   mode would take is the one that hands the page another origin's bytes. `websocket` and `webtransport` are
-   not requests this chokepoint performs. */
+   mode would take is the one that hands the page another origin's bytes. A `websocket` request is the
+   opening handshake (WebSockets §2.2 "Opening handshake"), judged here as every request is and never sent:
+   this chokepoint opens no connection, so `_safeFetchJudged` declines an admitted one where the wire would be
+   asked. `webtransport` is not a request this chokepoint performs. */
 var _MODE_TYPES = ["same-origin", "cors", "no-cors", "navigate", "websocket", "webtransport"];
 function _modeOf(opts) {
   CHECK(typeof opts.mode === "string" && _MODE_TYPES.indexOf(opts.mode) >= 0,
@@ -545,9 +547,9 @@ function _modeOf(opts) {
         JSON.stringify(opts.mode) + " — the mode decides whether the reply is CORS-checked, opaque, or " +
         "refused for another origin, so a request that does not state the one its creating algorithm named " +
         "would be answered by whichever arm reads it as the default");
-  CHECK(opts.mode !== "websocket" && opts.mode !== "webtransport",
-        "safeFetch was called with the mode `" + opts.mode + "`, which is a connection this chokepoint does " +
-        "not open — a WebSocket or WebTransport session is the page's own (intercept.js), never a GET here");
+  CHECK(opts.mode !== "webtransport",
+        "safeFetch was called with the mode `webtransport`, which is a session this chokepoint does not open " +
+        "— a WebTransport session is the page's own (intercept.js), never a GET here");
   return opts.mode;
 }
 // What a reply is evidence of: `observed`, `derived` or `forced`. The engine states the word (solver/engine.h's
@@ -2361,7 +2363,8 @@ async function _safeFetchJudged(url, opts, egress) {
        in place of the wire once the preflight passes (`_answered`). */
     var _restoring = httpCacheRestoring();
     if (_restoring) await _restoring;
-    var _partition = httpCachePartitionOf(_identity), _cache = httpCacheFor(_partition);
+    /* WebSockets §2.2 "Opening handshake" step 2: the handshake's cache mode is "no-store". */
+    var _partition = httpCachePartitionOf(_identity), _cache = mode === "websocket" ? null : httpCacheFor(_partition);
     var _sendFacts = _identity ? { credentials: _identity.credentials, partition: _partition } : null;
     var _cacheFields = null, _cacheMode = "no-store", _stored = null, _sent;
     if (_cache !== null) {
@@ -2442,6 +2445,13 @@ async function _safeFetchJudged(url, opts, egress) {
           return _refused("decline", "blocked-destructive" + (_hop ? "-redirect:" : ":") + _dtok,
                           _exposedUrlList(_urlList), {});
         }
+      }
+      /* A WebSocket handshake every gate above admitted. The transport is not this chokepoint's: it holds
+         no connection a frame could later be written to, so nothing is sent and the request parks. Decline:
+         a browser would connect. */
+      if (mode === "websocket") {
+        _entry.refusal = "blocked-transport:websocket";
+        return _refused("decline", "blocked-transport:websocket", _exposedUrlList(_urlList), {});
       }
       var init = { method: _method, credentials: "omit", redirect: "manual" };
       if (_body !== null) init.body = _body;

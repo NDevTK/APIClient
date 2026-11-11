@@ -228,6 +228,9 @@ const INTERFACES = {
   MessageChannel:       "core/events/message_port.c",
   /* HTML 9.5. A BroadcastChannel is an EventTarget, so its inherited members are event_target.c's. */
   BroadcastChannel:    ["core/events/broadcast_channel.c", "core/events/event_target.c"],
+  /* WebSockets §3 and §6. A WebSocket is an EventTarget, so its inherited members are event_target.c's. */
+  WebSocket:           ["core/websockets/web_socket.c", "core/events/event_target.c"],
+  CloseEvent:          ["core/events/close_event.c", "core/events/event.c"],
   /* XHR §3 and §5. XMLHttpRequest's file list carries event_target.c because its prototype chain reaches
      EventTarget.prototype through XMLHttpRequestEventTarget — the seven handler attributes and the three
      listener members really ARE reachable on one, so reporting them absent would be the audit lying. */

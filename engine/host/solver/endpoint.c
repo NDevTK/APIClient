@@ -2260,7 +2260,7 @@ static void endpoint_verify_observe(JSContext *ctx, const char *key, const char 
 static int door_sends_request(int door) {
     switch ((EndpointDoor)door) {
     case EPD_SCRIPT_ELEMENT: case EPD_LINK_ELEMENT: case EPD_IMAGE_ELEMENT: case EPD_IMAGE_INPUT:
-    case EPD_FETCH: case EPD_XHR: case EPD_BEACON:
+    case EPD_FETCH: case EPD_XHR: case EPD_BEACON: case EPD_WEBSOCKET:
         return 1;
     case EPD_DOCUMENT_SCRIPT: case EPD_INJECTED_SCRIPT: case EPD_MODULE_IMPORT: case EPD_FORM_SUBMIT:
     case EPD_NAVIGATION: case EPD_BATCH_PART: case EPD_REPLY_CHUNK:

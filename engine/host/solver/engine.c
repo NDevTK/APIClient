@@ -591,7 +591,7 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
    processResponse returns at locallyAborted; a park the zone declined was never sent. The notice is
    `fetch.cancel<TAB>METHOD<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>HEADERS<TAB>BODY<TAB>URL`, the key
    engine_provide reads. */
-void engine_pending_fetch_cancel(JSContext *ctx, JSValueConst deliver) {
+static void pending_cancel_kind(JSContext *ctx, JSValueConst deliver, int kind) {
     Flow *f = flow_running();
     int i, n;
 
@@ -599,7 +599,7 @@ void engine_pending_fetch_cancel(JSContext *ctx, JSValueConst deliver) {
                       "signal-abort steps of the flow that aborted, and the park it ends is on that flow's register");
     for (i = 0, n = pending_count(f->pending); i < n; i++) {
         JSValue e = pending_entry(f->pending, i), r = pending_get(e, PEND_RESOLVE);
-        int mine = pending_get_int(e, PEND_KIND) == FLOW_PENDING_RESOLVE && JS_IsObject(r) &&
+        int mine = pending_get_int(e, PEND_KIND) == kind && JS_IsObject(r) &&
                    JS_VALUE_GET_PTR(r) == JS_VALUE_GET_PTR(deliver);
         int answered = pending_get_int(e, PEND_HAVE_VALUE) != 0;
 
@@ -609,6 +609,14 @@ void engine_pending_fetch_cancel(JSContext *ctx, JSValueConst deliver) {
         if (!answered) engine_cancel_entry(ctx, f, i);
         return;
     }
+}
+
+void engine_pending_fetch_cancel(JSContext *ctx, JSValueConst deliver) {
+    pending_cancel_kind(ctx, deliver, FLOW_PENDING_RESOLVE);
+}
+
+void engine_pending_resource_cancel(JSContext *ctx, JSValueConst deliver) {
+    pending_cancel_kind(ctx, deliver, FLOW_PENDING_RESOURCE);
 }
 
 /* Parks a dynamic `import()`. The same register and URL as a fetch, with a different delivery: a module load is

@@ -1,0 +1,72 @@
+{
+ "spec": "WebSockets Standard",
+ "key": "websockets",
+ "base": "https://websockets.spec.whatwg.org/",
+ "specUpdated": "19 October 2026",
+ "fetched": "2026-11-11",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "network-intro"
+  },
+  "2": {
+   "title": "WebSocket protocol alterations",
+   "page": "",
+   "id": "websocket-protocol"
+  },
+  "3": {
+   "title": "The WebSocket interface",
+   "page": "",
+   "id": "the-websocket-interface"
+  },
+  "4": {
+   "title": "Feedback from the protocol",
+   "page": "",
+   "id": "feedback-from-the-protocol"
+  },
+  "5": {
+   "title": "Ping and Pong frames",
+   "page": "",
+   "id": "ping-and-pong-frames"
+  },
+  "6": {
+   "title": "The CloseEvent interface",
+   "page": "",
+   "id": "the-closeevent-interface"
+  },
+  "7": {
+   "title": "Garbage collection",
+   "page": "",
+   "id": "garbage-collection"
+  },
+  "2.1": {
+   "title": "Connections",
+   "page": "",
+   "id": "websocket-connections"
+  },
+  "2.2": {
+   "title": "Opening handshake",
+   "page": "",
+   "id": "websocket-opening-handshake"
+  },
+  "3.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "interface-definition"
+  }
+ },
+ "dfns": {
+  "make disappear": [
+   "7"
+  ],
+  "obtain a websocket connection": [
+   "2.1"
+  ],
+  "websocket task source": [
+   "4"
+  ]
+ },
+ "ops": {},
+ "uses": {}
+}

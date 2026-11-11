@@ -52,6 +52,7 @@
 #include "core/events/navigation_current_entry_change_event.h"
 #include "core/events/pop_state_event.h"
 #include "core/events/hash_change_event.h"
+#include "core/events/close_event.h"
 #include "core/events/before_unload_event.h"
 #include "core/events/security_policy_violation_event.h"
 #include "core/frame/csp_violation.h"
@@ -1053,6 +1054,7 @@ static void event_declare_subclasses(JSContext *ctx)
        prototypes chain to this realm's Event.prototype, and realm.h runs the intrinsics in declaration order. */
     pop_state_event_init(ctx);
     hash_change_event_init(ctx);
+    close_event_init(ctx);   /* WebSockets §6 "The CloseEvent interface" */
     /* HTML §7.2.7.1 — the event a NAVIGATION API entry-list change fires. It is declared here for the same
        reason: its prototype chains to this realm's Event.prototype. Its `from` member brands against
        core/frame/navigation_history_entry.c's class, which core/platform.c declares before this row. */
@@ -1127,6 +1129,7 @@ static void event_free_subclasses(JSRuntime *rt)
     before_unload_event_free(rt);
     navigate_event_free(rt);
     navigation_current_entry_change_event_free(rt);
+    close_event_free(rt);
     hash_change_event_free(rt);
     pop_state_event_free(rt);
     page_transition_event_free(rt);

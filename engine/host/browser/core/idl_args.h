@@ -51,6 +51,9 @@ typedef enum {
        body's "IndexSizeError". */
     IDL_LONG_ENFORCE,
     IDL_UNSIGNED_SHORT,   /* `unsigned short` — 16, unsigned */
+    /* `[Clamp] unsigned short` — Web IDL §3.2.4.9's clamp to [0, 65535], rounding to nearest with ties to
+       even, in place of the modulo. WebSocket's `close(code)`: 70000 is 65535, so the range check refuses it. */
+    IDL_UNSIGNED_SHORT_CLAMP,
     IDL_LONG_LONG,        /* `long long` — 64, signed */
     /* `unsigned long long` — 64, unsigned; a separate row because the sign is observable. File System's
        `truncate(-1)` is 2**64-1 bytes (a QuotaExceededError), never a negative size. */
@@ -323,6 +326,10 @@ typedef enum {
        Unknown input crosses: the buffer arm tests an internal slot a concolic does not have, so the string arm
        is its arm. */
     IDL_STRING_OR_BUFFERSOURCE,
+    /* `(BufferSource or Blob or USVString)` — WebSocket's `send(data)`. Web IDL §3.2.25: a Blob takes step 4's
+       interface arm and a buffer source steps 6, 8 and 9 (idl_buffer_source_refuse), each crossing as itself;
+       every other value takes step 15's string arm as a USVString. */
+    IDL_BUFFERSOURCE_OR_BLOB_OR_USVSTRING,
     /* `BufferSource` — Web IDL §4.2 BufferSource, converted by §3.2.26: an ArrayBuffer, typed array or DataView
        crosses as itself, anything else is a TypeError. A shared or resizable buffer is refused
        (idl_buffer_source_refuse). */
@@ -487,6 +494,7 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
     case IDL_UNSIGNED_LONG_ENFORCE:
     case IDL_LONG_ENFORCE:
     case IDL_UNSIGNED_SHORT:
+    case IDL_UNSIGNED_SHORT_CLAMP:
     case IDL_LONG_LONG:
     case IDL_UNSIGNED_LONG_LONG:
     case IDL_UNSIGNED_LONG_LONG_ENFORCE:
@@ -522,6 +530,7 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
     case IDL_DOUBLE_UNLESS_IFACE:
     case IDL_STRING_UNLESS_OBJECT:
     case IDL_STRING_OR_BUFFERSOURCE:
+    case IDL_BUFFERSOURCE_OR_BLOB_OR_USVSTRING:
     case IDL_BODYINIT_NULLABLE:
     case IDL_FORMVALUE_NULLABLE:
     /* Any callable or any object is accepted, and an unknown is both, so it is placed as itself. */

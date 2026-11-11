@@ -1,24 +1,22 @@
 /* @H endpoint surface: the deduped set of endpoints forced execution learned, emitted as the `@H` array.
  *
  * Every HTTP-shaped request edge (fetch, XHR, sendBeacon, form submission, script/link/img loads, the
- * program-load park, multipart batch parts, reply-named chunks) calls endpoint_record. A concolic URL
+ * program-load park, multipart batch parts, reply-named chunks, a WebSocket's handshake) calls
+ * endpoint_record. A concolic URL
  * contributes its shape (`/api/region/{state}.region`), a concrete one its literal. A value lands in one of
  * three places and each param says which: the path (a `{hole}` segment whose example is recovered by aligning
  * the concolic's concrete URL against its shape; see path_scan), the query string, or the body (read in the
  * body's own content type). A hole's name carries the page's bytes verbatim; extension/lib/callsite-url.js
  * masks it around the trusted zone's `new URL` parse so it comes back intact.
  */
-/* Named residual: an address handed to a socket-shaped constructor.
- * Not covered: `new WebSocket(u)` (WebSockets §3 "The WebSocket interface") and `new EventSource(u)` (HTML
- * §9.2.2 "The EventSource interface") reach this surface through no path: every endpoint_record caller is
- * HTTP-shaped and neither interface is installed, so such an endpoint is absent here rather than
- * under-reported. extension/intercept.js's passive wrap of window.WebSocket is a diagnostic and is not merged.
+/* Named residual: an address handed to `new EventSource(u)`.
+ * Not covered: HTML §9.2.2 "The EventSource interface" reaches this surface through no path, since the
+ * interface is not installed; such an endpoint is absent here rather than under-reported. A WebSocket's
+ * address is recorded by core/websockets/web_socket.c through the `websocket` door.
  * Next diff: HTML §9.2.2 steps 8-15 with HTML §9.2.3 "Processing model" (the first caller of
  * core/eventsource/event_source_parser.h), recording at step 8's request as every other edge records at its
- * own call. WebSocket follows and needs a connection source first: only WebSockets §4 "Feedback from the
- * protocol" moves ready state past CONNECTING and send() throws while CONNECTING, so an interface object with
- * no transport moves bundles that feature-detect `WebSocket` off a working fallback onto an arm that throws.
- * Absence shows as: a document whose API is carried over a socket emits an @H array holding only its
+ * own call.
+ * Absence shows as: a document whose API is carried over an event stream emits an @H array holding only its
  * subresource loads while solver/absent.c's census names the interface as owed.
  */
 #ifndef ENGINE_HOST_SOLVER_ENDPOINT_H
@@ -122,6 +120,9 @@ typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind;
     X(EPD_FETCH,           "fetch")                                                                          \
     X(EPD_XHR,             "xhr")                                                                            \
     X(EPD_BEACON,          "beacon")                                                                         \
+    /* WebSockets §2.2 "Opening handshake": a socket's address, recorded where its constructor parks the \
+       handshake */                                                                                         \
+    X(EPD_WEBSOCKET,       "websocket")                                                                      \
     /* a sub-request written inside a multipart batch body the page composed */                              \
     X(EPD_BATCH_PART,      "batch-part")                                                                     \
     /* an address a reply named (solver/reply_decode.c) and no line of the page composed */                  \
