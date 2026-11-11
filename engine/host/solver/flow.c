@@ -700,6 +700,7 @@ static void flow_ix_first_pick(Flow *f);
 static void flow_ix_site_sync(FlowSite *st);
 static int flow_priced(const Flow *f);
 static void flow_obs_unlink(Flow *f);
+static int flow_outweighs_observed(const Flow *f);
 static FlowAcct *g_ix_fams;   /* the families holding an indexed member, linked through `ix_fprev`/`ix_fnext` */
 static long g_ix_fams_n;      /* …how many */
 static long g_ix_n;           /* members in the index: the frontier's members not host-owed */
@@ -2321,12 +2322,7 @@ void flow_credit_pick(Flow *f) {
     /* And the index's count of eligible members never dispatched loses this one, read by the plateau rows. */
     if (f->picks == 0) flow_ix_first_pick(f);
     f->picks++;
-    if (flow_priced(f) > 0) {
-        double w_min = 0.0;
-
-        if (flow_family_observed(f->family, NULL, &w_min) > 0 && w_min < flow_order_key(f).w)
-            g_priced_over_observed++;
-    }
+    if (flow_outweighs_observed(f)) g_priced_over_observed++;
     /* And the same event counted for the life of the instance: a member that departs takes its share of the
        per-member total with it, so the sum over standing members is a gauge and a difference of two gauges is not
        a number of dispatches. Counted on the one line every dispatch passes. */
@@ -4439,6 +4435,13 @@ static long flow_family_observed(const FlowAcct *fam, double *x_max, double *w_m
     }
     DCHECK(n == fam->obs_n, "a family's observed-class count and its list's length disagree");
     return n;
+}
+
+/* Whether `f` is a priced member weighing strictly more than an indexed observed-class member of its family. */
+static int flow_outweighs_observed(const Flow *f) {
+    double w_min = 0.0;
+
+    return flow_priced(f) > 0 && flow_family_observed(f->family, NULL, &w_min) > 0 && w_min < flow_order_key(f).w;
 }
 
 void flow_pick_terms(const Flow *f, FlowPickTerms *t) {
