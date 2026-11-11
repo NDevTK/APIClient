@@ -13,6 +13,7 @@
 #include "core/css/css_color.h"
 #include "core/css/css_computed_style.h"
 #include "core/css/css_animation_shorthand.h"
+#include "core/css/container_selector.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_contain.h"
 #include "core/css/css_container.h"
@@ -1295,6 +1296,27 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
     return css_cv_font_size_base(f, which == CSS_FONT_METRIC_REM);
 }
 
+/* CSS Conditional 5 §7's query container for the element the unit is used on. `cqi` and `cqb` name the
+   element's own inline and block axes (WPT css/css-conditional/container-queries/container-units-selection.html,
+   "Units respond to the writing-mode of the element"), mapped through css-writing-modes-4 §6.4. */
+static bool css_cv_container_extent(void *p, CssContainerAxis which, bool *vertical, CssPx *out)
+{
+    CssCvFontCtx *f = p;
+
+    DCHECK(f != NULL && f->el != NULL && vertical != NULL && out != NULL,
+           "CSS Conditional 5 §7's container callback was invoked with no element or nowhere to answer");
+    switch (which) {
+    case CSS_CONTAINER_AXIS_WIDTH:  *vertical = false; break;
+    case CSS_CONTAINER_AXIS_HEIGHT: *vertical = true; break;
+    case CSS_CONTAINER_AXIS_INLINE: *vertical = css_logical_axis_is_vertical(f->el, CSS_LOGICAL_AXIS_INLINE); break;
+    default:
+        DCHECKF(which == CSS_CONTAINER_AXIS_BLOCK, "CSS Conditional 5 §7 names no container axis %u", (unsigned)which);
+        *vertical = css_logical_axis_is_vertical(f->el, CSS_LOGICAL_AXIS_BLOCK);
+        break;
+    }
+    return container_selector_unit_extent(f->el, *vertical, out);
+}
+
 /* THE PAIR, BOUND TO ONE ELEMENT AND ONE PROPERTY. `slot` is the caller's own storage and must outlive the
    parse: the metrics are consulted DURING it and only on the arm that found an `em` or a `rem`. */
 static CssFontMetrics css_cv_font_metrics(CssCvFontCtx *slot, lxb_dom_element_t *el, const char *name)
@@ -1306,6 +1328,7 @@ static CssFontMetrics css_cv_font_metrics(CssCvFontCtx *slot, lxb_dom_element_t 
     slot->lh_affecting = css_lh_affecting_property(name);
     m.resolve = css_cv_font_metric;
     m.ctx = slot;
+    m.container = css_cv_container_extent;
     return m;
 }
 
@@ -4028,6 +4051,8 @@ bool css_resolved_ask(lxb_dom_element_t *el, const char *name)
 
     DCHECK(el != NULL && name != NULL, "a resolved value's layout was asked for with no element or no name");
     DCHECK(css_cascade_record_is_held(), "a resolved value's layout was asked outside a held cascade record");
+    /* Any computed length of `el` can be CSS Conditional 5 §7's, which reads its query containers' layout. */
+    if (!container_selector_extents_ask(el)) return false;
     lh = css_shorthand_longhands(name, &nlh);
     if (lh == NULL) return css_resolved_longhand_ask(el, name);
     for (i = 0; i < nlh; i++)

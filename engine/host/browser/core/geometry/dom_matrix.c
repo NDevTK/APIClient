@@ -408,7 +408,7 @@ static CssPx dm_no_font(void *ctx, CssFontMetric which)
 /* §6.2's steps over `text`: false for failure, which the caller throws as a SyntaxError. */
 static bool dm_parse(JSContext *ctx, const char *text, double out[16], bool *two_d)
 {
-    CssFontMetrics font = { dm_no_font, NULL };
+    CssFontMetrics font = { dm_no_font, NULL, NULL };
     CssTransformList list = { NULL, 0 };
     CssTransformMatrix3d m;
     char *s;

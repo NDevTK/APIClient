@@ -1214,27 +1214,13 @@ static bool mq_viewport_extent(const char *u, const MqEnv *e, double *extent)
     return false;
 }
 
-/* THE EXTENT ONE PERCENT IS TAKEN OF, for each of CSS Conditional 5 §7 "Container Relative Lengths"'s six
-   units. §7 states what one is worth in two sentences and this engine reaches only the second of them: "The
-   query container for each axis is the nearest ancestor container that accepts container size queries on that
-   axis. If no eligible query container is available, then use the small viewport size for that axis."
-   THERE IS NO ELIGIBLE QUERY CONTAINER IN THIS ENGINE AND THE FALLBACK IS THEREFORE THE WHOLE ANSWER, not an
-   approximation of one. §5.1 "Creating Query Containers: the container-type property" is what makes an element
-   a query container, and `container-type` is not a property this engine cascades at all — `@container` reaches
-   core/css/css_at_rule_prelude.c as a PRELUDE and core/css/css_rule.c as a CSSOM `CSSContainerRule`, and
-   neither of those makes any element answer a size query. So §7's antecedent holds for every element there is.
-   NAMED RESIDUAL — the code is correct and NARROWER than §7, so there is nothing here to crash on:
-     NOT COVERED: a `1cqw` inside an element that IS a query container, which must be 1% of THAT element's
-       width and not of the viewport.
-     THE NEXT DIFF BUILDS: `container-type` as a cascaded property and the nearest-ancestor-container walk
-       §7's first sentence names, which is §5.1's machinery and a component of its own. Grep
-       `"container-type"` across core/css before building it — the day that returns a property table row
-       rather than the two prose hits above, this function has become a silent wrong answer.
-     ITS ABSENCE WOULD SHOW as `@container (inline-size >= 400px) { .card { width: 50cqw } }` computing 50% of
-       the VIEWPORT for a card inside a 400-pixel container — a number that is plausible, never crashes, and
-       is wrong by whatever ratio the container bears to the viewport.
-   AND THE SMALL VIEWPORT SIZE IS THIS RECTANGLE, for the reason the `sv*` arm below rests on and stated once
-   there rather than twice. */
+/* THE EXTENT ONE PERCENT IS TAKEN OF, for each of CSS Conditional 5 §7 "Container Relative Lengths: the cqw,
+   cqh, cqi, cqb, cqmin, cqmax units"' six. §7 selects a query container "for each element" from its ancestors,
+   and a media query is evaluated outside the context of any element, so no container is ever eligible here and
+   §7's fallback is the whole answer: "If no eligible query container is available, then use the small viewport
+   size for that axis." An element's own container units are core/css/css_length.c's, through
+   core/css/container_selector.h. The small viewport size is this rectangle, for the reason the `sv*` arm below
+   rests on. */
 static bool mq_container_extent(const char *u, const MqEnv *e, double *extent)
 {
     double inl = mq_axis_size(MQ_AXIS_INLINE, e), blk = mq_axis_size(MQ_AXIS_BLOCK, e);

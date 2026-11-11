@@ -89,8 +89,8 @@
  * that is neither a dimension nor a keyword. The GRAMMAR and the §10.9 type algebra are that component's; the
  * UNITS stay this one's, and `calc(100vw - 2em)` reaches exactly the arms above through the resolver callback
  * §10.10.1's canonical-unit step is asked through — so a `dvh` inside a math function resolves through the
- * same arm, carrying the same fact, as a `dvh` written on its own, and a `cqw` inside one crashes with the
- * same message as a `cqw` written on its own.
+ * same arm, carrying the same fact, as a `dvh` written on its own, and a `cqw` inside one resolves against
+ * the same query container as a `cqw` written on its own.
  *
  * A LENGTH IN CSS PIXELS IS NOT ALWAYS A NUMBER, WHICH IS WHY `CssPx` BELONGS HERE AND NOT IN WHOEVER COMPUTES
  * ONE. CSS 2.1 §10.1 makes the ROOT ELEMENT's containing block the INITIAL CONTAINING BLOCK, "it has the
@@ -451,9 +451,24 @@ typedef enum {
    has an answer CSS computes with no font and no viewport at all. A value that needs no font must not pay for
    one, and must not fail for want of one. So the pair is a CALLBACK invoked at most once, only on the arm that
    found the unit. */
+/* CSS Conditional 5 §7 "Container Relative Lengths: the cqw, cqh, cqi, cqb, cqmin, cqmax units"' four extents,
+   of which `cqmin` and `cqmax` are "the smaller value of cqi or cqb" and "the larger value of cqi or cqb". */
+typedef enum {
+    CSS_CONTAINER_AXIS_WIDTH = 0,   /* `cqw` */
+    CSS_CONTAINER_AXIS_HEIGHT,      /* `cqh` */
+    CSS_CONTAINER_AXIS_INLINE,      /* `cqi`, in the element's own inline axis */
+    CSS_CONTAINER_AXIS_BLOCK        /* `cqb` */
+} CssContainerAxis;
+
+/* `container` is §7's question, which only the element can answer for the same reason the fonts' is the
+   caller's: which ancestor is the query container is a walk over the flattened element tree. It writes the
+   physical axis `which` names on the element into `*vertical`, and answers true with the selected query
+   container's extent on that axis in `*out`, or false where none is eligible, which §7 answers with "the small
+   viewport size for that axis". NULL for a caller that refuses every relative unit before the parse. */
 typedef struct {
     CssPx (*resolve)(void *ctx, CssFontMetric which);
     void  *ctx;
+    bool  (*container)(void *ctx, CssContainerAxis which, bool *vertical, CssPx *out);
 } CssFontMetrics;
 
 /* CLASSIFY AND ABSOLUTIZE a length-valued property's value, as the cascade serialized it — CSS 2.1 §4.3.2's

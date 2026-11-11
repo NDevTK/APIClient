@@ -8,6 +8,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
+#include "core/css/container_selector.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/css/css_property_applies.h"
@@ -5021,6 +5022,9 @@ static bool uv_operands_ask(lxb_dom_element_t *el, bool vertical)
     lxb_dom_element_t *x;
     CssPx h;
 
+    /* A computed length on `el` or on its containing block chain can be CSS Conditional 5 §7's, which reads the
+       content box of an ancestor query container; those are asked before any of them is derived. */
+    if (!container_selector_extents_ask(el)) return false;
     for (x = el; x != NULL; x = uv_cb(x).element)
         if (!used_value_width_ask(x)) return false;
     /* A table box's height, and a cell's, row's or row group's, is CSS 2.1 §17.5.3's over its table, whose

@@ -1231,6 +1231,38 @@ static CssPx css_len_viewport(JSContext *realm, const char *unit, double k)
     return css_px(0.0);
 }
 
+/* CSS Conditional 5 §7's units, absolutized: 1% of the selected query container's extent on the unit's axis,
+   or, "if no eligible query container is available", of "the small viewport size for that axis", which is
+   css-values-4 §6.1.2.1's small size and carries its facts through the `sv*` arm. `k` is the number divided by
+   100. `cqmin` and `cqmax` are the smaller and larger of `cqi` and `cqb`, each from its own container. */
+static CssPx css_len_container_axis(JSContext *realm, const CssFontMetrics *font, CssContainerAxis which, double k)
+{
+    bool vertical = false;
+    CssPx extent;
+
+    if (font->container(font->ctx, which, &vertical, &extent)) return css_px_scale(extent, k);
+    return css_len_viewport(realm, vertical ? "svh" : "svw", k);
+}
+
+static CssPx css_len_container(JSContext *realm, const CssFontMetrics *font, const char *unit, double k)
+{
+    DCHECK(font->container != NULL,
+           "a container-relative length reached the unit table from a caller that answers no query container, "
+           "and every such caller refuses relative units before the parse");
+    if (strcmp(unit, "cqw") == 0) return css_len_container_axis(realm, font, CSS_CONTAINER_AXIS_WIDTH, k);
+    if (strcmp(unit, "cqh") == 0) return css_len_container_axis(realm, font, CSS_CONTAINER_AXIS_HEIGHT, k);
+    if (strcmp(unit, "cqi") == 0) return css_len_container_axis(realm, font, CSS_CONTAINER_AXIS_INLINE, k);
+    if (strcmp(unit, "cqb") == 0) return css_len_container_axis(realm, font, CSS_CONTAINER_AXIS_BLOCK, k);
+    if (strcmp(unit, "cqmin") == 0)
+        return css_px_min(css_len_container_axis(realm, font, CSS_CONTAINER_AXIS_INLINE, k),
+                          css_len_container_axis(realm, font, CSS_CONTAINER_AXIS_BLOCK, k));
+    DCHECK(strcmp(unit, "cqmax") == 0,
+           "a unit reached CSS Conditional 5 §7's resolution that is not one of its six — this arm and "
+           "CSS_CONTAINER_RELATIVE are one list and have come apart");
+    return css_px_max(css_len_container_axis(realm, font, CSS_CONTAINER_AXIS_INLINE, k),
+                      css_len_container_axis(realm, font, CSS_CONTAINER_AXIS_BLOCK, k));
+}
+
 /* THE DIMENSION'S UNIT, lowercased — CSS Syntax §4 makes a unit ASCII case-insensitive, and lexbor serializes
    the ident as the author wrote it, so `4PX` and `4px` arrive here as different bytes and are one value. */
 #define CSS_LEN_UNIT_MAX 8
@@ -1300,25 +1332,7 @@ static CssPx css_len_unit_px(JSContext *realm, const CssFontMetrics *font, const
     if (css_len_is_viewport(unit) || css_len_is_viewport_variant(unit))
         return css_len_viewport(realm, unit, num / 100.0);
     else if (css_len_is_container(unit))
-        DFAIL("a length in one of CSS Conditional 5 §7 Container Relative Lengths' six units (`cqw`, `cqi`, "
-              "`cqmax`, …). §7 states what one is worth in two parts, and this engine has neither: \"container "
-              "query length units are evaluated using the same rules as container size queries on the relevant "
-              "axis (or axes) described by the unit. The query container for each axis is the nearest ancestor "
-              "container that accepts container size queries on that axis. If no eligible query container is "
-              "available, then use the small viewport size for that axis.\" THE SECOND HALF IS BUILT — "
-              "§6.1.2.1's SMALL viewport size is a picked fact of its own in core/frame/viewport.c "
-              "(`viewport_small_width`/`viewport_small_height`, carrying CSS_ENV_SMALL_VIEWPORT_*), which "
-              "the `sv*` arm above resolves through and which this arm must resolve its FALLBACK through "
-              "rather than through the default `v*` pair: one fact, two callers, and answering this one "
-              "from the ICB's source key would delete the arm where the two viewport sizes differ. SO "
-              "WHAT IS LEFT IS THE FIRST HALF AND ONLY IT: the `container-type` cascade and the "
-              "nearest-ancestor-container walk that decides WHICH element answers for each axis, which is "
-              "CSS Conditional 5 §3's own machinery and is a component of its own. Until an element can "
-              "BE a query container, §7's antecedent holds for every element there is and this arm is the "
-              "fallback outright rather than an approximation of it — which is the reading "
-              "core/css/media_query.c's `mq_container_extent` already states and answers for a media "
-              "query, and the reason this one crashes instead is that a computed value carries FACTS "
-              "where a media query carries its own serialization as the key");
+        return css_len_container(realm, font, unit, num / 100.0);
     else
         DFAIL("a unit that is not a length reached the length table; both callers admit the unit first "
               "(css_length_parse through css_len_unit_known, a math leaf through css_length_is_length_unit)");

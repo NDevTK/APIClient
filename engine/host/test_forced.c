@@ -2117,6 +2117,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/paintrest.h"
 #include "fixture/deepnest.h"
 #include "fixture/contain.h"
+#include "fixture/cqunits.h"
 #include "fixture/gridsizing.h"
 #include "fixture/insetpct.h"
 #include "fixture/staticposask.h"
@@ -2959,6 +2960,7 @@ TF_DOCS[] = {
     { "paintrest", HTML_PAINTREST },
     { "deepnest", HTML_DEEPNEST },
     { "contain", HTML_CONTAIN },
+    { "cqunits", HTML_CQUNITS },
     { "gridsizing", HTML_GRIDSIZING },
     { "insetpct", HTML_INSETPCT },
     { "staticposask", HTML_STATICPOSASK },
@@ -21603,6 +21605,73 @@ TF_UNIT void probes_contain(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `cqunits` document (fixture/cqunits.h). */
+TF_UNIT void probes_cqunits(const char *js, Probe *tab, int *n) {
+    const char *cq_sz_why = NULL; int cq_sz_tt = 1;
+    const char *cq_fb_why = NULL; int cq_fb_tt = 1;
+    const char *cq_ax_why = NULL; int cq_ax_tt = 1;
+    const char *cq_ct_why = NULL; int cq_ct_tt = 1;
+    const char *cq_cv_why = NULL; int cq_cv_tt = 1;
+    int reached = !!strstr(js, "\"/api/cqunits\"");
+    const char *nr = "NOT REACHED: there is no /api/cqunits record at all, so the document aborted before its fetch";
+
+    fold_row(&cq_sz_tt, &cq_sz_why, reached, nr);
+    fold_row(&cq_fb_tt, &cq_fb_why, reached, nr);
+    fold_row(&cq_ax_tt, &cq_ax_why, reached, nr);
+    fold_row(&cq_ct_tt, &cq_ct_why, reached, nr);
+    fold_row(&cq_cv_tt, &cq_cv_why, reached, nr);
+    fold_row(&cq_sz_tt, &cq_sz_why, param_value_is(js, "/api/cqunits", "stw", "30"),
+             "CSS Conditional 5 §7: `10cqw` under a 300px `size` container is not 30px");
+    fold_row(&cq_sz_tt, &cq_sz_why, param_value_is(js, "/api/cqunits", "sth", "20"),
+             "CSS Conditional 5 §7: `10cqh` under a 200px-tall `size` container is not 20px");
+    fold_row(&cq_sz_tt, &cq_sz_why, param_value_is(js, "/api/cqunits", "stml", "20px"),
+             "CSS Conditional 5 §7: `10cqmin` is not the smaller of `10cqi` (30px) and `10cqb` (20px)");
+    fold_row(&cq_sz_tt, &cq_sz_why, param_value_is(js, "/api/cqunits", "stmt", "30px"),
+             "CSS Conditional 5 §7: `10cqmax` is not the larger of `10cqi` (30px) and `10cqb` (20px)");
+    fold_row(&cq_fb_tt, &cq_fb_why, param_value_is(js, "/api/cqunits", "ncw", "128"),
+             "CSS Conditional 5 §7: `10cqw` with no query container is not 10% of the 1280px small viewport");
+    fold_row(&cq_fb_tt, &cq_fb_why, param_value_is(js, "/api/cqunits", "nch", "72"),
+             "CSS Conditional 5 §7: `10cqh` with no query container is not 10% of the 720px small viewport");
+    fold_row(&cq_ax_tt, &cq_ax_why, param_value_is(js, "/api/cqunits", "itw", "40"),
+             "CSS Conditional 5 §7: `10cqi` under a 400px `inline-size` container is not 40px");
+    fold_row(&cq_ax_tt, &cq_ax_why, param_value_is(js, "/api/cqunits", "ith", "72"),
+             "CSS Conditional 5 §7: `10cqb` under an `inline-size` container, which accepts no block-axis query, "
+             "did not fall back to the small viewport's height");
+    fold_row(&cq_ax_tt, &cq_ax_why, param_value_is(js, "/api/cqunits", "ich", "72"),
+             "css-contain-2 §3.2: the `inline-size` container's block size does not follow its content");
+    fold_row(&cq_ax_tt, &cq_ax_why, param_value_is(js, "/api/cqunits", "ntw", "10"),
+             "CSS Conditional 5 §7: `10cqw` did not select the nearest container accepting the horizontal axis "
+             "(the 100px `inline-size` one)");
+    fold_row(&cq_ax_tt, &cq_ax_why, param_value_is(js, "/api/cqunits", "nth", "40"),
+             "CSS Conditional 5 §7: `10cqh` did not pass the `inline-size` container to the 400px-tall `size` one");
+    fold_row(&cq_ax_tt, &cq_ax_why, param_value_is(js, "/api/cqunits", "iew", "30"),
+             "CSS Conditional 5 §7: a `size` container on a non-atomic inline, which size containment cannot "
+             "apply to, was not passed (width)");
+    fold_row(&cq_ax_tt, &cq_ax_why, param_value_is(js, "/api/cqunits", "ieh", "25"),
+             "CSS Conditional 5 §7: a `size` container on a non-atomic inline was not passed (height)");
+    fold_row(&cq_ct_tt, &cq_ct_why, param_value_is(js, "/api/cqunits", "szh", "0"),
+             "CSS Conditional 5 §5.1: `container-type: size` did not apply size containment, so the box's auto "
+             "height is not that of an empty box");
+    fold_row(&cq_cv_tt, &cq_cv_why, param_value_is(js, "/api/cqunits", "cnn", "card_main"),
+             "CSS Conditional 5 §5.3: `container: card main / inline-size` does not set `container-name`");
+    fold_row(&cq_cv_tt, &cq_cv_why, param_value_is(js, "/api/cqunits", "cnt", "inline-size"),
+             "CSS Conditional 5 §5.3: `container: card main / inline-size` does not set `container-type`");
+    fold_row(&cq_cv_tt, &cq_cv_why, param_value_is(js, "/api/cqunits", "cst", "size_scroll-state"),
+             "CSS Conditional 5 §5.1: `scroll-state size` does not compute to the grammar's order");
+    fold_row(&cq_cv_tt, &cq_cv_why, param_value_is(js, "/api/cqunits", "sct", "size"),
+             "CSS Conditional 5 §5.1: `container-type: size` does not compute to itself");
+    fold_row(&cq_cv_tt, &cq_cv_why, param_value_is(js, "/api/cqunits", "scn", "none"),
+             "CSS Conditional 5 §5.2: an undeclared `container-name` is not its initial `none`");
+    const Probe rows[] = {
+        { "cq-size-container", cq_sz_tt, "/api/cqunits", SESS_EXPLORE, cq_sz_why },
+        { "cq-no-container-fallback", cq_fb_tt, "/api/cqunits", SESS_EXPLORE, cq_fb_why },
+        { "cq-axis-selection", cq_ax_tt, "/api/cqunits", SESS_EXPLORE, cq_ax_why },
+        { "cq-container-type-containment", cq_ct_tt, "/api/cqunits", SESS_EXPLORE, cq_ct_why },
+        { "cq-computed-value", cq_cv_tt, "/api/cqunits", SESS_EXPLORE, cq_cv_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `gridsizing` document (fixture/gridsizing.h). */
 TF_UNIT void probes_gridsizing(const char *js, Probe *tab, int *n) {
     const char *gs_why = NULL; int gs_tt = 1;
@@ -34112,6 +34181,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_paintrest(js, probes, &np);
     probes_deepnest(js, probes, &np);
     probes_contain(js, probes, &np);
+    probes_cqunits(js, probes, &np);
     probes_gridsizing(js, probes, &np);
     probes_insetpct(js, probes, &np);
     probes_staticposask(js, probes, &np);
