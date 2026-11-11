@@ -691,9 +691,6 @@ JS_EXTERN void JS_GCOwe(JSRuntime *rt);
    threshold crossing (JSGCCycleStats' `residency_births`). Spans nest. */
 JS_EXTERN void JS_GCResidencyBegin(JSRuntime *rt);
 JS_EXTERN void JS_GCResidencyEnd(JSRuntime *rt);
-/* The JS objects the embedder holds written out of the heap moved by `objects`: up by what a sale wrote, down by
-   what its restore rebuilt. A path collection counts them among its survivors, as a run that wrote none would. */
-JS_EXTERN void JS_GCAbsent(JSRuntime *rt, int64_t objects);
 JS_EXTERN void JS_GCBegin(JSRuntime *rt);
 /* A release scope, for an embedder tearing down a holder of its own (a sold flow). Between the two calls, a
    release that leaves a GC object's count positive notes the object when it was born after fork generation
@@ -721,7 +718,7 @@ typedef struct JSGCCycleStats {
     bool path;
     uint64_t host;         /* lifetime: whole-heap collections only JS_GCOwe owed, finished */
     /* The program's JS object births since the last path collection and the count that owes the next one, the
-       survivors that collection left (live and absent objects), the objects absent now (JS_GCAbsent), and the
+       survivors that collection left (live and absent objects), the objects absent now (JS_FlowGraphSettle), and the
        births inside residency spans (lifetime). */
     uint64_t births, births_owe, survivors;
     int64_t absent;
@@ -3880,12 +3877,15 @@ JS_EXTERN void JS_FlowGraphFree(JSContext *ctx, JSFlowGraph *g);
    writer has no body for is a DFAIL naming it as the sale census does. */
 struct JSFlowGraphRoots;
 JS_EXTERN JSFlowGraph *JS_FlowGraphWriteFlow(JSContext *ctx, const struct JSFlowGraphRoots *roots, uint32_t floor);
-JS_EXTERN int JS_FlowGraphReadFlow(JSContext *ctx, const JSFlowGraph *g, JSValue *vals, JSValue **frames);
+JS_EXTERN int JS_FlowGraphReadFlow(JSContext *ctx, JSFlowGraph *g, JSValue *vals, JSValue **frames);
 /* A flow write's settle, once every holder the flow itself had has given its reference back (a sale's release),
    inside the release scope that owes the cycles it lets go. An object or closed cell the write built by content
    that something outside the write still names, and everything such a one names in turn (by the collector's
    mark edges, and a resolving function's pair), is read back by JS_FlowGraphReadFlow as itself; the write's
-   reference on every other is given back. Returns how many it kept. A released write is read only once settled. */
+   reference on every other is given back. Returns how many it kept. A released write is read only once settled.
+   The objects given back are absent (JSGCCycleStats), which a path collection counts among its survivors as a run
+   that wrote none would hold them live, until the read, inside a residency span, rebuilds them or the graph is
+   freed unread. */
 JS_EXTERN uint32_t JS_FlowGraphSettle(JSContext *ctx, JSFlowGraph *g);
 /* Whether a settled flow write reads `v` back as itself (an object the settle found named outside it). */
 JS_EXTERN bool JS_FlowGraphNames(const JSFlowGraph *g, JSValueConst v);

@@ -13029,9 +13029,6 @@ static void engine_sale_restore(JSContext *ctx, Flow *f) {
     JSValue *vals, *frames[1] = { NULL };
     JSValue stand_ins = f->pending;
     JSRuntime *rt = JS_GetRuntime(ctx);
-    JSGCCycleStats st;
-    uint64_t born0;
-    uint32_t written = JS_FlowGraphObjects(s->g);
     int used;
 
     DCHECK(f->cold && s != NULL && s->n_vals >= SALE_WRITE_FIXED && f->n_agents == 1 && f->delta != NULL &&
@@ -13039,17 +13036,9 @@ static void engine_sale_restore(JSContext *ctx, Flow *f) {
            "a restore was asked of a member that is not a written stub holding no bulk");
     vals = malloc(sizeof *vals * (size_t)s->n_vals);
     CHECK(vals != NULL, "engine: OOM reading a sold member back");
-    /* A restore is residency: its births owe no collection, and the objects it rebuilds are absent no more. */
+    /* A restore is residency: its births owe no collection (JS_FlowGraphReadFlow). */
     JS_GCResidencyBegin(rt);
-    JS_GCCycleStats(rt, &st);
-    born0 = st.residency_births;
     CHECK(JS_FlowGraphReadFlow(ctx, s->g, vals, frames) == 0, "engine: a sold member's graph did not read back");
-    JS_GCCycleStats(rt, &st);
-    DCHECKF(st.residency_births - born0 == written,
-            "a sold member's restore rebuilt %llu JS objects where its write wrote %u; a path collection counts "
-            "the written ones among its survivors while the member is sold, so the two must be one population",
-            (unsigned long long)(st.residency_births - born0), written);
-    JS_GCAbsent(rt, -(int64_t)written);
     f->fn = vals[0];
     f->pending = vals[1];
     f->orphan_claim_fn = vals[2];
@@ -13116,9 +13105,6 @@ static void engine_sale_release(Flow *tail) {
         tail->sold = sale_write(tail, &vals, head, head_n);
         head = NULL;
         g_sold_restores++;
-        /* Absent until its restore rebuilds them. A member that waits is not counted: it leaves the pick until
-           the session's park, which the sale writers' residual above names. */
-        JS_GCAbsent(JS_GetRuntime(g_sess_ctx), (int64_t)JS_FlowGraphObjects(tail->sold->g));
     }
     sale_vals_free(&vals);
     free(head);

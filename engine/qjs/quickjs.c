@@ -266,7 +266,8 @@ typedef struct JSGCCycle {
     bool owed, owed_host, path;
     /* What owes a path collection, as functions of the program's path: its JS object births since the last one,
        births inside a residency span left out (JS_GCResidencyBegin), against `births_owe`, which that collection
-       set from its survivors, the live objects with those the embedder holds written out (`absent`, JS_GCAbsent).
+       set from its survivors, the live objects with those a settled flow write holds out of the heap (`absent`,
+       JS_FlowGraphSettle).
        `price` is the work a standing path collection is priced at. */
     uint64_t births, births_owe, survivors, price, residency_births;
     int64_t absent;
@@ -11569,11 +11570,13 @@ void JS_GCResidencyEnd(JSRuntime *rt)
     rt->gc_cycle.residency--;
 }
 
-void JS_GCAbsent(JSRuntime *rt, int64_t objects)
+/* The JS objects settled flow writes hold out of the heap moved by `objects`: up by what a settle gave back, down
+   by the same when its read rebuilds them or its graph is freed unread. */
+static void gc_absent(JSRuntime *rt, int64_t objects)
 {
     rt->gc_cycle.absent += objects;
-    DCHECKF(rt->gc_cycle.absent >= 0, "the embedder's absent JS objects fell to %lld; a restore rebuilds no more "
-            "than its sale wrote", (long long)rt->gc_cycle.absent);
+    DCHECKF(rt->gc_cycle.absent >= 0, "the JS objects held out of the heap fell to %lld; a graph returns no more "
+            "than its settle gave back", (long long)rt->gc_cycle.absent);
 }
 
 void JS_GCOwe(JSRuntime *rt)
@@ -47251,6 +47254,9 @@ struct JSFlowGraph {
     JSObject **named_objs, **named_list;   /* the list: the named objects alone, borrowed from named_objs */
     JSVarRef **named_cells;
     uint32_t n_named;
+    /* The objects the settle gave back, counted absent (JSGCCycleStats) until the read rebuilds them or the graph
+       is freed unread: the written ones less the named, which stay live. */
+    uint32_t absent;
     /* The resolving functions the write built and the already-resolved record each shares with its pair, which
        no collector edge reports: a pair is read back whole or built whole. */
     FGRes *res;
@@ -47983,6 +47989,8 @@ uint32_t JS_FlowGraphSettle(JSContext *ctx, JSFlowGraph *g)
         if (!g->named_cells[i]) free_var_ref(rt, g->held_cells[i]);
     (free)(g->held_objs); g->held_objs = NULL;
     (free)(g->held_cells); g->held_cells = NULL;
+    g->absent = g->n_objs - g->n_named;
+    gc_absent(rt, g->absent);
     return kept;
 }
 
@@ -48711,9 +48719,21 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
 }
 
 int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots) { return fg_read(ctx, g, roots, NULL); }
-int JS_FlowGraphReadFlow(JSContext *ctx, const JSFlowGraph *g, JSValue *vals, JSValue **frames)
+int JS_FlowGraphReadFlow(JSContext *ctx, JSFlowGraph *g, JSValue *vals, JSValue **frames)
 {
-    return fg_read(ctx, g, vals, frames);
+    JSGCCycle *c = &ctx->rt->gc_cycle;
+    const uint64_t born0 = c->residency_births;
+    int ret;
+
+    /* A settled write's rebuild is residency: one birth per written object, a named one's body into a scratch. */
+    DCHECK(!g->named_objs || c->residency > 0, "flow graph: a settled write was read outside a residency span, so "
+                                               "its rebuild would owe a path collection");
+    ret = fg_read(ctx, g, vals, frames);
+    DCHECKF(!g->named_objs || c->residency_births - born0 == g->n_objs, "flow graph: a settled write's read bore "
+            "%llu JS objects where it wrote %u", (unsigned long long)(c->residency_births - born0), g->n_objs);
+    gc_absent(ctx->rt, -(int64_t)g->absent);
+    g->absent = 0;
+    return ret;
 }
 
 size_t JS_FlowGraphBytes(const JSFlowGraph *g, const uint8_t **bytes) { *bytes = g->bytes.b; return g->bytes.len; }
@@ -48721,6 +48741,7 @@ uint32_t JS_FlowGraphAnchors(const JSFlowGraph *g, const JSValue **anchors) { *a
 
 void JS_FlowGraphFree(JSContext *ctx, JSFlowGraph *g)
 {
+    gc_absent(ctx->rt, -(int64_t)g->absent);
     for (uint32_t i = 0; g->holding && i < g->n_objs; i++) JS_FreeValue(ctx, JS_MKPTR(JS_TAG_OBJECT, g->held_objs[i]));
     for (uint32_t i = 0; g->holding && i < g->n_held_cells; i++) free_var_ref(ctx->rt, g->held_cells[i]);
     for (uint32_t i = 0; g->named_objs && i < g->n_objs; i++)
