@@ -19300,7 +19300,8 @@ TF_UNIT void probes_rangerest(const char *js, Probe *tab, int *n) {
 }
 
 /* The rows of the four sale documents (fixture/sale.h). sale-forced-returns and sale-own-returns: the member
-   owing the request was sold at the act and its report is in the result, so it returned within the session.
+   owing the request was sold at the act, a sale wrote its member (`soldRestores`), a stub was restored from its
+   written bytes (`restored`), and the member's report is in the result, so it returned within the session.
    sale-forced-stays-listed and sale-own-stays-listed: the bill taken after the sale still lists the request the
    sold member owes. sale-control-reaches: the same shape with no act reports with no member sold.
    sale-floor-sells: with every allocation refused at the act, the members were sold, a sale took its census on
@@ -19311,6 +19312,9 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     long censused = cat ? strtol(cat + strlen("\"saleCensus\":{\"n\":"), NULL, 10) : -1;
     int xt = 1;
     long sold = at ? strtol(at + strlen("\"sold\":"), NULL, 10) : -1;
+    const char *wat = strstr(js, "\"soldRestores\":"), *rat = strstr(js, "\"restored\":");
+    long wrote = wat ? strtol(wat + strlen("\"soldRestores\":"), NULL, 10) : -1;
+    long restored = rat ? strtol(rat + strlen("\"restored\":"), NULL, 10) : -1;
     int ft = 1, ot = 1, ct = 1, lt = 1;
 
     fold_row(&lt, &lwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
@@ -19323,12 +19327,18 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     fold_row(&ft, &fwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
              "the act sold nothing: no bill listed /api/sl-forced-owed with a member to sell beside the one "
              "switched in, so the row's premise did not arise");
+    fold_row(&ft, &fwhy, wrote > 0 && restored > 0,
+             "no sold member was restored from its written bytes (`soldRestores`, `restored`): the sale wrote "
+             "nothing a pick could rehydrate, or no pick reached a written stub");
     fold_row(&ft, &fwhy, param_value_is(js, "/api/sl-forced-done", "b", "22"),
              "NOT REACHED: no /api/sl-forced-done?b=22 record, so the member sold while it owed "
              "/api/sl-forced-owed did not return within the session");
     fold_row(&ot, &owhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
              "the act sold nothing: no bill listed /api/sl-own-owed with a member to sell beside the one "
              "switched in, so the row's premise did not arise");
+    fold_row(&ot, &owhy, wrote > 0 && restored > 0,
+             "no sold member was restored from its written bytes (`soldRestores`, `restored`): the sale wrote "
+             "nothing a pick could rehydrate, or no pick reached a written stub");
     fold_row(&ot, &owhy, param_value_is(js, "/api/sl-own-done", "b", "22"),
              "NOT REACHED: no /api/sl-own-done?b=22 record, so the page's own run, sold while it owed "
              "/api/sl-own-owed, did not return within the session");
