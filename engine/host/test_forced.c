@@ -1216,6 +1216,30 @@ static int tf_seen_content(const char *address, const char *entry) {
     return 0;
 }
 
+/* The WebSocket handshakes the zone was shown (a pending line in mode `websocket`), each with the request
+   facts WebSockets §2.2 "Opening handshake" step 2 states, joined as
+   `METHOD|destination|credentials|referrer|<h or ->`, the last saying whether it carries a header list. */
+static struct { char url[96], facts[96]; } g_tf_ws[8];
+static int g_tf_ws_n;
+
+static void tf_ws_note(const char *url, const char *method, const char *destination, const char *credentials,
+                       const char *referrer, const char *headers_key) {
+    int has_headers = strspn(headers_key, "0") != strlen(headers_key);
+
+    if (g_tf_ws_n == (int)COUNTOF(g_tf_ws)) return;
+    snprintf(g_tf_ws[g_tf_ws_n].url, sizeof g_tf_ws[0].url, "%s", url);
+    snprintf(g_tf_ws[g_tf_ws_n].facts, sizeof g_tf_ws[0].facts, "%s|%s|%s|%s|%s", method, destination,
+             credentials, referrer, has_headers ? "h" : "-");
+    g_tf_ws_n++;
+}
+
+/* Whether a handshake to `url` was shown with exactly `facts`. */
+static int tf_ws_line(const char *url, const char *facts) {
+    for (int i = 0; i < g_tf_ws_n; i++)
+        if (!strcmp(g_tf_ws[i].url, url) && !strcmp(g_tf_ws[i].facts, facts)) return 1;
+    return 0;
+}
+
 /* How many lines whose address begins with `prefix` were shown with the address class `address`. */
 static int tf_seen_address(const char *prefix, const char *address) {
     int n = 0;
@@ -1408,6 +1432,7 @@ static int fixture_provide(JSContext *ctx) {
             tf_seen_content_note(abs, content, strlen(content));
             free(content);
         }
+        if (!strcmp(mode, "websocket")) tf_ws_note(abs, method, destination, credentials, referrer, headers_key);
         /* THE ONE REPLY RECORD every host delivers — the same shape the trusted zone stringifies as JSON. */
         /* `application/json` is what this fixture SERVES, stated by the host that serves it — the same
            position the trusted zone is in when it stamps `computedType` on a real reply (fetch.h). */
@@ -1681,6 +1706,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/pseudostate.h"
 #include "fixture/attrpres.h"
 #include "fixture/attrpreshandler.h"
+#include "fixture/websocket.h"
 #include "fixture/fragdialog.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
@@ -2482,6 +2508,7 @@ TF_DOCS[] = {
     { "pseudostate", HTML_PSEUDOSTATE },
     { "attrpres", HTML_ATTRPRES },
     { "attrpreshandler", HTML_ATTRPRESHANDLER },
+    { "websocket", HTML_WEBSOCKET },
     { "fragdialog", HTML_FRAGDIALOG },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
@@ -18295,6 +18322,99 @@ TF_UNIT void probes_attrpreshandler(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `websocket` document (fixture/websocket.h). */
+TF_UNIT void probes_websocket(const char *js, Probe *tab, int *n) {
+    static const struct { const char *row, *url, *param, *want, *why; } V[] = {
+        { "ws-constants", "/api/wsconst", "v", "c012303functionIn",
+          "WebSockets §3.1: the four ready-state constants are not 0-3 on the interface object and its "
+          "prototype, or `WebSocket` is not a function the global has" },
+        { "ws-constructor-errors", "/api/wserr", "v",
+          "SyntaxErrorD.SyntaxErrorD.SyntaxErrorD.SyntaxErrorD.SyntaxErrorD.TypeErrorJ",
+          "WebSockets §3.1 `new WebSocket(url, protocols)`: a scheme that is not ws, wss, http or https, a "
+          "fragment, an unparsable URL, a repeated subprotocol and one that is not a token are each a "
+          "SyntaxError DOMException, and a call without `new` a TypeError" },
+        { "ws-connecting-state", "/api/wsstate", "v",
+          "url-0-0-true-true-blob-InvalidStateErrorD-InvalidAccessErrorD-SyntaxErrorD-InvalidAccessErrorD-"
+          "arraybuffer-arraybuffer-true-true",
+          "WebSockets §3.1: a CONNECTING socket's url, readyState, bufferedAmount, extensions, protocol and "
+          "binaryType, send()'s InvalidStateError, close()'s code and reason refusals (70000 clamps to 65535), "
+          "the binaryType setter, or the four null handler attributes read wrong" },
+        { "ws-subclass", "/api/wssub", "v", "subtruetrue0",
+          "Web IDL §3.7.1: `class extends WebSocket` did not construct an object with the subclass's prototype" },
+        { "ws-module-toplevel", "/api/wsmodule", "v", "m03",
+          "a module whose top level reads `WebSocket.CONNECTING` did not run to its fetch" },
+        { "ws-host-fails", "/api/wsfail", "v", "error3.close3c1006wfalsertrueitrue",
+          "WebSockets §4: a handshake answered with a status other than 101 did not fire `error` and then "
+          "`close` (CloseEvent, code 1006, not clean, empty reason) with readyState CLOSED and no `open`" },
+        { "ws-close-connecting", "/api/wsclosing", "v", "state2.error3.close3c1006wfalse",
+          "WebSockets §3.1 close(): closing a CONNECTING socket did not set CLOSING at once and then fail the "
+          "connection (`error`, then `close` with 1006)" },
+        { "ws-closing-buffered", "/api/wsclosing", "b", "9",
+          "WebSockets §3.1 send(): two sends on a CLOSING socket did not add their 6 and 3 bytes to "
+          "bufferedAmount" },
+    };
+    Probe rows[COUNTOF(V) + 4];
+    const char *why[COUNTOF(V) + 4] = { NULL };
+    int tt[COUNTOF(V) + 4], reached = !!strstr(js, "\"/api/wsconst\""), i, k = (int)COUNTOF(V);
+
+    for (i = 0; i < (int)COUNTOF(V); i++) {
+        tt[i] = 1;
+        fold_row(&tt[i], &why[i], reached,
+                 "NOT REACHED: there is no /api/wsconst record, so the document's first script aborted");
+        fold_row(&tt[i], &why[i], param_value_is(js, V[i].url, V[i].param, V[i].want), V[i].why);
+        rows[i] = (Probe){ V[i].row, tt[i], V[i].url, SESS_EXPLORE, why[i] };
+    }
+    /* The handshake as the zone was shown it: WebSockets §2.2 step 1's http(s) address and step 2's request. */
+    tt[k] = 1;
+    fold_row(&tt[k], &why[k], reached, "NOT REACHED: there is no /api/wsconst record");
+    fold_row(&tt[k], &why[k],
+             tf_ws_line("https://x.test/api/ws/fail?x=1", "GET||include|no-referrer|h") &&
+                 tf_ws_line("https://x.test/api/ws/sub", "GET||include|no-referrer|-"),
+             "WebSockets §2.2: the zone was not shown the handshake as a GET to the https form of the address in "
+             "mode `websocket`, destination \"\", credentials mode `include`, referrer `no-referrer`, with a "
+             "header list exactly where subprotocols were asked for");
+    fold_row(&tt[k], &why[k],
+             tf_seen_line("https://x.test/api/ws/fail", PENDING_PINNED_NO, PENDING_PROVENANCE_OBSERVED) ||
+                 tf_seen_line("https://x.test/api/ws/fail", PENDING_PINNED_NO, PENDING_PROVENANCE_DERIVED),
+             "the page's own handshake was not listed unpinned and observed or derived, so the default arm for "
+             "the page's unforced run would not admit it");
+    rows[k] = (Probe){ "ws-handshake-line", tt[k], "/api/wsfail", SESS_EXPLORE, why[k] };
+    k++;
+    /* A handshake withdrawn in the task that asked for it is never shown to the zone. */
+    tt[k] = 1;
+    fold_row(&tt[k], &why[k], param_value_is(js, "/api/wsclosing", "b", "9"),
+             "NOT REACHED: no /api/wsclosing record, so the closed socket's events did not fire");
+    fold_row(&tt[k], &why[k],
+             !tf_seen_line("https://x.test/api/ws/closing", PENDING_PINNED_NO, NULL) &&
+                 !tf_seen_line("https://x.test/api/ws/closing", PENDING_PINNED_YES, NULL),
+             "the zone was shown the handshake of a socket closed before the task that built it ended");
+    rows[k] = (Probe){ "ws-close-withdraws", tt[k], "/api/wsclosing", SESS_EXPLORE, why[k] };
+    k++;
+    /* A handshake on a forced path is listed forced, refused by this fixture's zone, and both arms run: the
+       failure arm reaches its close event, on a path graded forced. */
+    tt[k] = 1;
+    fold_row(&tt[k], &why[k],
+             tf_seen_line("https://x.test/api/decl/wsforced", PENDING_PINNED_NO, PENDING_PROVENANCE_FORCED) ||
+                 tf_seen_line("https://x.test/api/decl/wsforced", PENDING_PINNED_YES, PENDING_PROVENANCE_FORCED),
+             "NOT REACHED: the zone was shown no handshake to /api/decl/wsforced graded forced, so the arm taking "
+             "the absent `wsInjected` as present did not construct its socket");
+    fold_row(&tt[k], &why[k], emitted_record_graded_has(js, "/api/wsrefused", "forced", "c1006s3"),
+             "the refused handshake's failure arm did not fire `close` with 1006 on a path graded forced");
+    fold_row(&tt[k], &why[k], !emitted_record_graded_has(js, "/api/wsrefused", "derived", "c1006s3") &&
+                                  !emitted_record_graded_has(js, "/api/wsrefused", "observed", "c1006s3"),
+             "a refused handshake's failure is recorded as the page's own observation");
+    rows[k] = (Probe){ "ws-refused-forced", tt[k], "/api/wsrefused", SESS_EXPLORE, why[k] };
+    k++;
+    /* The socket's address on the endpoint surface, through its own door. */
+    tt[k] = 1;
+    fold_row(&tt[k], &why[k], reached, "NOT REACHED: there is no /api/wsconst record");
+    fold_row(&tt[k], &why[k], emitted_record_has(js, "/api/ws/fail", "\"door\":\"websocket\""),
+             "the @H surface has no record of the socket's address with the door `websocket`");
+    rows[k] = (Probe){ "ws-endpoint-record", tt[k], "/api/ws/fail", SESS_EXPLORE, why[k] };
+    k++;
+    probes_append(tab, n, rows, k);
+}
+
 /* The rows of the `altbutton` document (fixture/altbutton.h). */
 TF_UNIT void probes_altbutton(const char *js, Probe *tab, int *n) {
     /* HTML §15.4.2's fifth rule: a button whose natural dimensions are its alternative text on one line. */
@@ -32144,6 +32264,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_pseudostate(js, probes, &np);
     probes_attrpres(js, probes, &np);
     probes_attrpreshandler(js, probes, &np);
+    probes_websocket(js, probes, &np);
     probes_fragdialog(js, probes, &np);
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);
