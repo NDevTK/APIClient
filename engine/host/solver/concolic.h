@@ -122,7 +122,7 @@ int         concolic_root_every(JSValueConst v, int (*member)(const char *p, siz
    would lose it for exactly that population and silently; stating it here puts the write past both
    returns, which is the same reason `src_self` is written by this mint and not by its callers. */
 /* `types` is the set of ECMAScript language types (CONCOLIC_TYF_* bits) the value takes in every world, as the
-   source's declaration fixes it: a Web IDL attribute's type through core/idl_member_types.h, or the type an
+   source's declaration fixes it: a Web IDL attribute's type through core/idl_lang_types.h, or the type an
    ECMAScript algorithm returns. Required for `whose`'s reason, since an unstated type keeps an arm no world
    takes at every equality and typeof test. CONCOLIC_TYF_ALL is the statement that nothing fixes one, and is
    refused for a world source holding a primitive example. The example is asserted to be of a stated type. */

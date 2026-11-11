@@ -95,7 +95,7 @@
 #include "core/idl_args.h"
 #include "quickjs-step.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "solver/decide.h"
 #include "core/idl_iter.h"
 #include "core/events/event.h"

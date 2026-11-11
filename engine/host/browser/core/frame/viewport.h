@@ -119,7 +119,7 @@ bool viewport_exists(JSContext *ctx);
    key would let a branch taken in the parent decide the iframe's.
    Where no source overlay is installed — a conformance host — it hands `computed` back unchanged, which is
    what keeps these members testable against what CSSOM VIEW says a viewport of this size reports. */
-/* `types` is the member's declared type as concolic_new takes it (core/idl_member_types.h). */
+/* `types` is the member's declared type as concolic_new takes it (core/idl_lang_types.h). */
 JSValue viewport_env_value(JSContext *ctx, const char *member, unsigned types, JSValue computed);
 
 /* THIS REALM's viewport, in CSS pixels — the MODELLED ANSWER, which is the example the member above carries.

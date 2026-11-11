@@ -37,7 +37,7 @@
 #include "core/layout/table_box.h"
 #include "core/layout/used_value.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "solver/metrics.h"
 #include "solver/rest_unit.h"
 #include "solver/reclaim.h"

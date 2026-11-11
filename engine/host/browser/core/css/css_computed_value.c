@@ -46,7 +46,7 @@
 #include "core/dom/shadow_root.h"
 #include "core/dom/flat_tree.h"
 #include "core/frame/viewport.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/used_value.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */

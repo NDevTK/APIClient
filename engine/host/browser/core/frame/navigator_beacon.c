@@ -68,7 +68,7 @@
 #include "core/agent_state.h"
 #include "core/url/url.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "solver/endpoint.h"
 #include "solver/engine.h"     /* the ONE composition of what a request this running code builds is evidence of */
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */

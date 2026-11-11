@@ -15,7 +15,7 @@
 #include "core/infra_strings.h"
 #include "core/json_buf.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 
 static JSRuntime *g_rt;
 static int g_id_alert = -1, g_id_confirm = -1, g_id_prompt = -1;

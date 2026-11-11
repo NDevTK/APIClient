@@ -63,7 +63,7 @@
 #include "core/dom/document.h"
 #include "core/url/url.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/post_index.h"

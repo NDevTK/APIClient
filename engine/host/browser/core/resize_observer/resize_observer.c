@@ -23,7 +23,7 @@
 #include "core/events/error_event.h"
 #include "core/events/event_target.h"
 #include "core/frame/viewport.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "core/frame/window_proxy.h"
 #include "core/geometry/dom_rect.h"
 #include "core/idl_args.h"

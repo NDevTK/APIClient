@@ -33,7 +33,7 @@
 #include "core/realm.h"
 #include "core/timing/hr_time.h"
 #include "solver/concolic.h"   /* §8.1.7.3's frameTimestamp is a MOMENT, and a moment can be unknown */
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 
 /* ---- the shapes ------------------------------------------------------------------------------------------
  *

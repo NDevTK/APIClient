@@ -13,7 +13,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/permissions/permission_store.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 
 /* §3.1's THREE STATES. The strings are the IDL's, and they are the values a page compares against — a bundle
    writes `state === "granted"` and nothing else, so the string IS the value and the enum is only how this

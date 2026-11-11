@@ -87,7 +87,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "solver/solve.h"        /* §7.2.4's three whole-URL algorithms are the @S URL-context sink */
 #include "solver/world.h"        /* this agent HOSTS this Document — §7.2.4's security check's whole premise */
 #include "core/agent_state.h"

@@ -9047,7 +9047,7 @@ static JSValue source_mint(JSContext *ctx, const char *shape, const char *src, c
                 JS_IsObject(example),
             "the environment value `%s` was minted holding a primitive example and stating every type, so each "
             "equality and typeof test over it forks an arm no world takes. State the types its declaration "
-            "fixes: core/idl_member_types.h answers a Web IDL member, and an ECMAScript algorithm names its own",
+            "fixes: core/idl_lang_types.h answers a Web IDL member, and an ECMAScript algorithm names its own",
             src ? src : "(no src)");
 
     /* A source's shape names a hole, in braces, asserted at the one mint every source goes through.

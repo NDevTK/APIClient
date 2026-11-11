@@ -90,7 +90,7 @@
 #include "core/realm.h"
 #include "solver/compose.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "solver/decide.h"
 
 /* §4.8.11.4's network states and §4.8.11.7's ready states, as the IDL's own constants. */

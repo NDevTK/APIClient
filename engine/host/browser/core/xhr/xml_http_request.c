@@ -81,7 +81,7 @@
 #include "core/xhr/xml_http_request.h"
 #include "core/timing/timer.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "solver/cow.h"
 #include "solver/endpoint.h"   /* the @H surface — every request host-edge funnels one endpoint into it */
 #include "solver/engine.h"

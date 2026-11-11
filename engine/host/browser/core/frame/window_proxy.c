@@ -29,7 +29,7 @@
 #include "core/frame/window_proxy.h"
 #include "solver/cow.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "solver/world.h"
 #include "solver/engine.h"
 #include "solver/flow.h"

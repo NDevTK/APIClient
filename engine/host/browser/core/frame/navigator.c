@@ -56,7 +56,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
 #include "core/agent_state.h"
 #include "core/file/storage_manager.h"

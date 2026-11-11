@@ -88,7 +88,7 @@
 #include "core/idl_args.h"
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "solver/dom_cow.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 

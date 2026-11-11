@@ -13,7 +13,7 @@
 #include "core/agent_state.h"
 #include "core/events/event_target.h"
 #include "core/frame/viewport.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "core/frame/visual_viewport.h"
 #include "core/idl_args.h"
 #include "core/realm.h"

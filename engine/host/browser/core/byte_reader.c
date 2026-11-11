@@ -54,6 +54,7 @@
 #define BYTE_READER_IFACE_MAX 4
 
 static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, unsigned types, JSValue value);
+static JSValue byte_reader_json_content(JSContext *ctx, JSValueConst recv, JSValue value);
 
 static const ByteReaderIface *g_iface[BYTE_READER_IFACE_MAX];
 static int g_iface_stepid[BYTE_READER_IFACE_MAX][BYTE_READER_MAX];
@@ -266,8 +267,7 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
             s->value = JS_GetException(ctx);
             reject = 1;
         } else {
-            /* The reader's callee is %JSON.parse%, so `out` is a value §25.5.2.1 ParseJSON ( text ) produces. */
-            s->value = s->content ? byte_reader_content(ctx, s->hdr.this_val, CONCOLIC_TYF_JSON, out) : out;
+            s->value = s->content ? byte_reader_json_content(ctx, s->hdr.this_val, out) : out;
         }
         if (byte_reader_capability(ctx, s, reject) < 0) return JS_STEP_ABRUPT;
         STEP_GOTO(s->hdr.stage, BR_SETTLE, &s->cphase, NULL);
@@ -297,7 +297,7 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
            resolves with what this reader's `make` builds. So this machine's result IS its promise. */
         s->promise = readable_stream_drain(ctx, s->reader, read_promise, s->hdr.this_val,
                                            f->readers[s->hdr.arg].make, f->readers[s->hdr.arg].callee,
-                                           byte_reader_content);
+                                           byte_reader_json_content);
         JS_FreeValue(ctx, read_promise);
         return JS_IsException(s->promise) ? JS_STEP_ABRUPT : JS_STEP_DONE;
     }
@@ -452,6 +452,20 @@ static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, unsigned t
     free(shape);
     free(src);
     return r;
+}
+
+/* The content of a reader's callee's value. The one callee is %JSON.parse% with no reviver, so the value is one
+   ECMAScript §25.5.2.1 ParseJSON ( text ) produces. */
+static JSValue byte_reader_json_content(JSContext *ctx, JSValueConst recv, JSValue value)
+{
+#if APICLIENT_DEV
+    const ByteReaderIface *f = iface_of(recv);
+
+    for (int i = 0; f && i < f->nreaders; i++)
+        DCHECK(f->readers[i].callee == NULL || f->readers[i].callee == infra_json_parse_fn,
+               "a byte reader calls a function other than %JSON.parse%, so its value's types are not ParseJSON's");
+#endif
+    return byte_reader_content(ctx, recv, CONCOLIC_TYF_JSON, value);
 }
 
 JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)

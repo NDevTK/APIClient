@@ -25,7 +25,7 @@
 #include "core/frame/window_proxy.h"
 #include "solver/compose.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "solver/decide.h"
 #include "solver/flow.h"   /* the cascade input generation a memo is valid under */
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */

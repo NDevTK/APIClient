@@ -1027,7 +1027,9 @@ static int ref_op_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         snprintf(src, sizeof src, "object.%s#%u", NAME[op], s->req);
         snprintf(shape, sizeof shape, "{%s}", src);
         s->req = 0;
+        /* [[Set]], [[Delete]] and [[HasProperty]] answer a Boolean; a [[Get]] or [[Call]] answers any value. */
         *presult = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD,
+                                op == REF_OP_GET || op == REF_OP_APPLY ? CONCOLIC_TYF_ALL : CONCOLIC_TYF_BOOLEAN,
                                 op == REF_OP_GET || op == REF_OP_APPLY ? JS_UNDEFINED : JS_FALSE);
         return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
     }

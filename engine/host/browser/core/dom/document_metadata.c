@@ -45,7 +45,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "core/dom/document.h"
 #include "core/dom/document_metadata.h"
 #include "core/dom/node.h"

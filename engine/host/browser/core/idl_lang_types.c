@@ -1,5 +1,5 @@
 /* Web IDL §3.2 JavaScript type mapping per member, read from the table engine/idlgen.mjs generates from the
-   IDL corpus. See core/idl_member_types.h. */
+   IDL corpus. See core/idl_lang_types.h. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,7 +7,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
-#include "core/idl_member_types.h"
+#include "core/idl_lang_types.h"
 #include "idl_member_types.h"   /* generated */
 
 static int imt_cmp(const void *key, const void *row)
