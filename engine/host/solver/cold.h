@@ -39,6 +39,9 @@ typedef struct {
        to get back where it was, so this is how much of the frontier pays that. */
     long framed;
     long blocked;            /* … holding an unanswered host request */
+    /* … whose world held an active timer when its last step ended (flow.h's `timers_at_step_end`), by whether
+       the member is suspended in a frame, and the members no step has ended on in this session. */
+    long timer_holders_framed, timer_holders_unframed, timer_holders_unread;
 
     /* WHY THE MEMBERS ARE NOT FINISHING — one count per arm of flow_step, over the whole frontier. It is the
        row `finished`/`live` could never carry: those two say work is being ADMITTED and not RETIRED, and this

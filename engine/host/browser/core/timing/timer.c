@@ -589,6 +589,16 @@ uint64_t timer_due_stamp(JSContext *ctx)
     return unknown ? 0 : best;
 }
 
+/* See timer.h. Counted where the algorithm reaches its step 14 write, by this process and never reset. */
+static long g_init_steps_run, g_init_steps_rearm;
+
+void timer_init_steps_census(long *run, long *rearm)
+{
+    DCHECK(run != NULL && rearm != NULL, "the timer initialization census was asked for one of its two counts");
+    *run = g_init_steps_run;
+    *rearm = g_init_steps_rearm;
+}
+
 /* See timer.h. The walk is timer_due_stamp's, over every global of the agent; an entry counts exactly when it
    carries an expiry, the test timer_earliest_in uses for membership of the map of active timers. */
 int timer_active_count(JSContext *ctx)
@@ -2052,6 +2062,8 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
        §8.7 STEP 15 IS THE RETURN AND IT IS WHAT SUBSTEP 9.11 RELIES ON: "Return id", which for the re-arm is
        step 2's `previousId` back again, so the identifier the page is holding keeps naming this timer. The
        task's own DCHECK reads that from the other end. */
+    g_init_steps_run++;
+    if (prev_id) g_init_steps_rearm++;
     *presult = JS_NewInt32(ctx, timer_set(gctx, s->timeout, repeat, s->nest + 1, prev_id, s->this_arg,
                                           s->handler, 0, NULL));
     return JS_STEP_DONE;

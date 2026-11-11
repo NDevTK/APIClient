@@ -3021,6 +3021,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     f->imm_at = -1; f->imm_next = 0;
     f->spin_row = 0;
     f->replies_taken = 0;
+    f->timers_at_step_end = -1;
     f->world = w;
     /* The slot and the member are written as one statement, because they are one fact (flow.h's `reg_i`) and this
        is the one line the frontier gains a member on. Assigned here and not at the calloc: `reclaim_calloc` can

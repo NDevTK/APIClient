@@ -42,6 +42,11 @@ void cold_census(ColdCensus *out)
         out->flows++;
         if (flow_frame(f)) out->framed++;
         if (flow_blocked(f)) out->blocked++;
+        if (f->timers_at_step_end < 0) out->timer_holders_unread++;
+        else if (f->timers_at_step_end > 0) {
+            if (flow_frame(f)) out->timer_holders_framed++;
+            else out->timer_holders_unframed++;
+        }
         /* …AND WHICH ARM OF flow_step THIS MEMBER LAST RETURNED THROUGH. Asserted in range rather than
            trusted: the field is written at one place from an enum, so a value outside the list is a cast or a
            corrupted Flow, and indexing on it would then scribble past the histogram inside the census that

@@ -44,6 +44,7 @@
 #include "core/events/error_event.h"   /* errorInfo's five values, read off the event step 6.2 fired */
 #include "core/events/report_exception.h"
 #include "core/timing/event_loop.h"   /* whether the clock's licence was wanted and refused — see event_loop_advance_census */
+#include "core/timing/timer.h"   /* the timer rung's called row: timer_init_steps_census */
 #include "core/rendering/rendering.h"   /* why §8.1.7.3's in-parallel half declined — the `renderingDeclined*` rows */
 #include "core/animation/style_change_event.h"   /* the style change event's walk — the `waStyleChange*` rows */
 #include "core/timing/thread_work.h"   /* the thread work that clock does not see — see the `tw*` rows */
@@ -1828,6 +1829,17 @@ char *result_cold_json(void) {
     METRIC_SET(clock_advance_asked_life, adv_asked);
     METRIC_SET(clock_advance_declined_life, adv_declined);
     METRIC_SET(clock_deadline_race_asked_life, adv_raced);
+    {
+        long init_run, init_rearm;
+
+        timer_init_steps_census(&init_run, &init_rearm);
+        DCHECK(init_rearm <= init_run, "more timer re-arms than runs of the timer initialization steps");
+        METRIC_SET(timer_init_steps_life, init_run);
+        METRIC_SET(timer_init_rearms_life, init_rearm);
+    }
+    METRIC_SET(timer_holders_framed, c.timer_holders_framed);
+    METRIC_SET(timer_holders_unframed, c.timer_holders_unframed);
+    METRIC_SET(timer_holders_unread, c.timer_holders_unread);
     METRIC_SET(clock_deadline_arrival_race_asked_life, adv_raced_arrival);
     METRIC_SET(out_of_programs, c.out_of_programs);
     METRIC_SET(out_of_programs_unrun, c.out_of_programs_unrun);

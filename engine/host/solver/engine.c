@@ -5455,6 +5455,7 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
     sib->imm_at = parent->imm_at; sib->imm_next = parent->imm_next;
     sib->spin_row = parent->spin_row;
     sib->replies_taken = parent->replies_taken;
+    sib->timers_at_step_end = parent->timers_at_step_end;
     sib->unit_seq = parent->unit_seq;
     sib->delta = cow_delta_fork(ctx, (CowDelta *)parent->delta);   /* O(1) shared base segment, then diverges */
     /* Generator-state swaps built by clone_deep_flow for this fork, recorded on the sibling's delta so the shared
@@ -13588,6 +13589,9 @@ static int engine_sched_slice(int resume) {
                step's end, inside a program too: the clock is the flow's work, not its units. */
             if (g_timer_stamp_hook && r != FLOW_STEP_DONE && r != FLOW_STEP_RETIRED)
                 g_timer_stamp_hook(ctx);
+            /* …and how many timers the stepped flow's world holds now, for the census's timer holders. */
+            if (g_timer_active_hook && r != FLOW_STEP_DONE && r != FLOW_STEP_RETIRED)
+                flow_running()->timers_at_step_end = g_timer_active_hook(ctx);
             /* The checkpoint's tail is the stepped flow's own work, HTML §8.1.7.3 "perform a microtask checkpoint"
                step 4 and the steps after it: notify about rejected promises (§8.1.4.7) captures the realm's list
                into this flow's delta and queues its task on this flow, so its allocations may sell the tail like

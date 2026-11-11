@@ -75,6 +75,11 @@ void timer_stamp_due(JSContext *ctx);
    input counts like any other. */
 int timer_active_count(JSContext *ctx);
 
+/* How many times HTML §8.7 Timers's timer initialization steps ran to their end in this process (`run`), and
+   how many of those were substep 9.11's re-performance for a repeating timer (`rearm`); the difference is the
+   page's own setTimeout and setInterval calls that armed a timer. Lifetime counts, read together. */
+void timer_init_steps_census(long *run, long *rearm);
+
 /* THE DELIVERY ARM'S HALF OF THE DEADLINE RACE: where the timer source's next task is still ahead of the clock,
    ask whether its expiry comes before the arrival about to be delivered (event_loop_deadline_before_arrival),
    and on that arm fire it as timer_run_due does. Returns 1 when a timer fired; the caller then makes the

@@ -625,6 +625,10 @@ typedef struct Flow {
        names the unknown a timer's deadline is raced against (event_loop_deadline_first). A fork carries it; a
        replay re-derives it. */
     uint32_t replies_taken;
+    /* How many timers stood in the maps of active timers when this timeline's last step ended (the timer
+       component's count through engine_set_timer_active_hook), or -1 while no step of it has ended in this
+       session. A fork carries the parent's reading, which the arm's own first step replaces. */
+    int timers_at_step_end;
     /* The unit this timeline is in: a work-clock stamp (flow_work_seq_next) minted when a job or a task of the
        ladder begins and kept across that unit's resumptions, so two equal readings are one run-to-completion
        stretch with no await, yield or task boundary between them (quickjs.h's JSConcolicHooks.unit_seq). A fork
