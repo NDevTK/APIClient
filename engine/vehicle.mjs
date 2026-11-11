@@ -76,7 +76,7 @@ export function vehicleReading(out, signal, where) {
                     `the emitter and this reader disagree`);
   const finals = verdict === null ? [] : tables.filter((t) => t.final);
   return { tables, final: finals.length ? finals[finals.length - 1].row : null, verdict, crash, quantum,
-           work: coldWork(cold, where) };
+           work: coldWork(cold, where), cold };
 }
 
 /* The work the run retired: every unit the event loop's clock banked under a flow, the units retired with no

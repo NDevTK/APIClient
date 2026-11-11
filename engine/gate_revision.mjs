@@ -258,7 +258,8 @@ export function stampArtifact(artifact, cone, assertRegime, environment) {
   return rev;
 }
 
-function readStamp(artifact) {
+/* The stamp beside `artifact`, or null where there is none to read. */
+export function readStamp(artifact) {
   try { return JSON.parse(readFileSync(stampPath(artifact), "utf8")); }
   catch { return null; }
 }

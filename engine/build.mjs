@@ -15,11 +15,12 @@ import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { cpus } from "node:os";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { stampArtifact, gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
+import { stampArtifact, readStamp, gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 import { probeTables } from "./probe_rows.mjs";
 import { abortRecord } from "./abort_record.mjs";
 import { curDeepTermSplit, neverPickedTermSplit } from "./wfq_gap.mjs";
 import { vehicleReading, compareVehicle, emsdkNode } from "./vehicle.mjs";
+import { regimeReading, compareRegimes, regimeDocArgs } from "./regimeparity.mjs";
 import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
 import { objStore, toolIdentity } from "./obj_store.mjs";
 import { cpuText } from "./gate_cpu.mjs";
@@ -7237,6 +7238,48 @@ function allocatorContractStage(bin) {
     STAGE_HOST.NATIVE);
 }
 
+/* The documents the assert-regime stage compares (engine/regimeparity.mjs): the minimal document, and each
+   document a difference between the two regimes was found and fixed on, so the fix stays read. */
+const REGIME_PARITY_DOCS = ["min"];
+/* The assert-regime stages of a native build: each listed document this build ran, run again on the other
+   regime's native program and the two compared. The other program is the one a build of this revision left in
+   OUT, which its stamp states; a revision's first native build has none, so with no such program no stage is
+   pushed and one line names the build that asks. A difference is a DEFECT of the revision: a computation only
+   the dev build makes was counted as work, so the two regimes ran different schedules. */
+function regimeParityStages(kind, regime, bin, runs) {
+  const other = regime === "dev" ? "release" : "dev";
+  const peer = join(OUT, "qjs-native-" + kind + (other === "dev" ? "" : "-" + other));
+  const mine = runs.filter((r) => r.doc && REGIME_PARITY_DOCS.includes(r.doc) && "captured" in r);
+  if (bin === null || !mine.length) return [];
+  const own = readStamp(bin), theirs = existsSync(peer) ? readStamp(peer) : null;
+  const clean = (s) => s !== null && Array.isArray(s.dirty) && !s.dirty.length && Array.isArray(s.unasked) &&
+                       !s.unasked.length;
+  if (!clean(own) || !clean(theirs) || theirs.assertRegime !== other || theirs.head !== own.head) {
+    console.log(`[build] assert-regime parity NOT RUN — ${peer} is ` +
+                (theirs === null ? "not built" : !clean(own) || !clean(theirs) ? "built from, or beside, a dirty cone"
+                 : `a ${theirs.assertRegime} build of ${theirs.head}, not a ${other} build of ${own.head}`) +
+                `; \`node engine/build.mjs native ${other === "dev" ? "" : other + " "}${MIN ? "min" : ""}\` at this ` +
+                `revision, then this build again, compares the two regimes' work`);
+    return [];
+  }
+  return mine.map((run) => {
+    const label = `assert-regime parity (${run.doc})`;
+    const theirRun = runChild(`${label}, the ${other} run`, peer, regimeDocArgs(run.doc),
+                              "an abort above is the other regime's own; the comparison below reads both runs");
+    const read = (r) => regimeReading(r.captured, r.signal, r.log);
+    const [d, rl] = regime === "dev" ? [read(run), read(theirRun)] : [read(theirRun), read(run)];
+    const c = compareRegimes(run.doc, d, rl);
+    console.log(`[build] ${label}: compared ${c.compared.join("; ") || "nothing"}` +
+                (c.uncompared.length ? `; not compared: ${c.uncompared.join("; ")}` : ``));
+    if (c.defect !== null)
+      return onHost({ label, verdict: `DEFECT — ${c.defect}`, code: 1, kind: STAGE_KIND.DEFECT }, STAGE_HOST.NATIVE);
+    if (!c.answered)
+      return onHost({ label, verdict: `NOT ASKED — ${c.uncompared.join("; ")}`, code: 1,
+                      kind: STAGE_KIND.NOT_ASKED }, STAGE_HOST.NATIVE);
+    return onHost({ label, verdict: "PASS", code: 0, kind: null }, STAGE_HOST.NATIVE);
+  });
+}
+
 /* WHAT A STAMP'S `dirty`/`unasked` PAIR SAYS, IN ONE PLACE, BECAUSE BOTH STAMP SITES SAY IT. The wasm install
    gate below turns this answer into a DECISION — `null` installs, anything else refuses — and the native link
    below puts it in the line that names the binary. The words are ONE fact, and two spellings of one fact are two
@@ -7609,6 +7652,7 @@ if (NATIVE) {
                          "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault");
   stages.push(...runs.map((s) => onHost(s, STAGE_HOST.NATIVE)));
   stages.push(...bridgeAcceptanceStages(runs));
+  stages.push(...regimeParityStages(kind, dev, bin, runs));
   /* This target runs no wasm, so it has no vehicle stage; the gate suite (`node engine/build.mjs gates`) runs
      the `vehicle (<document>)` comparisons. */
   report(stages, []);
