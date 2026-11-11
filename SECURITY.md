@@ -208,6 +208,7 @@ Which extension context can open a connection at all is enforced by CSP in all b
 | CORB for a script-like destination (Fetch §2.2.5 "Requests"), whatever the status | `_isScriptLike`, `_corbDeniesScript` | `blocked-corb:<rule>:<type>` |
 | a script-like body is never streamed, so CORB always reads the whole body | `_bodyGated` | `blocked-stream-body-gated:` |
 | a request or provisioning notice is judged by a document of the instance that sent it (the zones, before `safeFetch`) | `docRecordOfAsker`, `docRecordAskerRefusal` | `blocked-asker:<role>-<reason>`, `blocked-asker:child-not-minted`, `blocked-asker:document-not-minted` |
+| a WebSocket handshake (mode `websocket`) every gate admitted is not sent, since the zone holds no connection a frame could be written to | `_safeFetchJudged` | `blocked-transport:websocket` |
 
 Each refusal is graded by `_refused`: `network` where a real browser would also fail the request, so the reply
 is that failure; `decline` where only this tool declines, so the request parks unanswered — unless the same
@@ -253,8 +254,11 @@ fetch skips the browser's own CORS, so `safeFetch` runs Fetch §4.1 "Main fetch"
 - The mode is part of the request's identity: the engine keys its pending register on (method, mode, referrer
   policy, referrer, header list digest, body digest, url) (`PendRequestKey` in `solver/pending_index.h`,
   `engine_provide`), so a `<script src=u>` and a `fetch(u)` are two requests with two
-  answers. The pending channel carries only `same-origin`, `cors` and `no-cors` (`pendingRequest` in `bridge.js`
-  CHECKs it), because its reply returns to the asking page.
+  answers. The pending channel carries `same-origin`, `cors`, `no-cors` and `websocket` (`pendingRequest` in
+  `bridge.js` CHECKs it), because its reply returns to the asking page. A `websocket` line is a WebSocket's
+  opening handshake (WebSockets §2.2 Opening handshake), judged by the signal table like every request and
+  never sent: one every gate admits is declined `blocked-transport:websocket`, since the zone opens no
+  connection.
 - A fetch()'s header list (each entry `[name, value, class]`), body bytes and body class, and an
   XMLHttpRequest record's header list in the same form, are the untrusted engine's statement (`qjs_request`, the
   Renderer interface's `GetRequest`; on the native host the last field of the bill's `fetch` record). Each host
@@ -631,8 +635,8 @@ seed address as a spec-compliant browser would, and nothing else. Three arms: a 
 the person configured as their own server; the seed load itself (`actor=tool`, `provenance` and `doc-reach`
 both `observed`); and the page's own unforced run — `provenance` `observed` or `derived`, `doc-reach`
 `observed` or `derived`, `actor=page`, `witness=unpinned`. That last arm is one rule for every kind of act:
-a program load, a subresource load, a `fetch()`, a navigation and a post to another document are judged by
-the same four rows, and `destination` is shown and decides nothing. A request on a forced path, a request of
+a program load, a subresource load, a `fetch()`, a navigation, a WebSocket handshake and a post to another
+document are judged by the same four rows, and `destination` is shown and decides nothing. A request on a forced path, a request of
 a document reached on a forced path, a driven request, a probe and any tool-composed request fire only at an
 origin a person widened; each is still recorded with everything computed about it. The load of a route a
 document declared is discovery and states `actor=tool`: HTML §7.4.4's URL and history update steps fetch
