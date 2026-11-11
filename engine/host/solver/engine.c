@@ -1,5 +1,6 @@
 /* The dispatch loop — see engine.h. */
 #include "core/fetch/fetch.h"
+#include "core/eventsource/event_source.h"
 #include "core/dom/document_name_index.h"   /* the name index recounted at a session's close */
 #include "core/events/listener_act.h"   /* the user act a driven listener is reached by, stated by a PoC */
 #include "core/html/input_value.h"      /* the person typing into a text control, a drive's typing act */
@@ -3664,6 +3665,15 @@ static inline int method_is_token(const char *m) {
    `method_is_token` stays static until it has a second caller, then moves to the component whose record carries
    the method. */
 
+/* Whether the subresource park `p` is an EventSource's request, whose processResponse takes the head. */
+static inline bool pending_resolve_is_event_source(JSContext *ctx, JSValueConst p) {
+    JSValue deliver = pending_get(p, PEND_RESOLVE);
+    bool r = event_source_is_response_delivery(ctx, deliver);
+
+    JS_FreeValue(ctx, deliver);
+    return r;
+}
+
 /* Is this destination script-like? §2.2.5: "A request's destination is script-like if it is `audioworklet`,
    `paintworklet`, `script`, `serviceworker`, `sharedworker`, or `worker`." CORB is decided by the trusted zone
    (safe-fetch.js asks the same question); here it decides which member of a deduplicated set the line states. */
@@ -4410,11 +4420,14 @@ int engine_provide(JSContext *ctx, const PendRequestKey *key, const char *how, c
             (void)engine_driven_token(rd);
             reply_driven = reply_driven < 0 ? rd : (reply_driven && rd);
         }
-        /* Only a `fetch()` takes a head before its body: every other kind's algorithm consumes the body whole,
-           and the zone streams only a line whose destination is the empty one (the fold above). */
-        DCHECKF(!reply_body_streamed(ctx, value) || pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOLVE,
-                "a streamed head reached a park of kind %d — only a fetch() resolves at the head (Fetch §5.6), "
-                "so the line's destination fold let a whole-body consumer through. request=%s %s",
+        /* Only a `fetch()` and an EventSource take a head before the body (Fetch §5.6, and HTML §9.2.2 step 15's
+           processResponse): every other algorithm consumes the body whole, and the zone streams only a line
+           whose destination is the empty one (the fold above). */
+        DCHECKF(!reply_body_streamed(ctx, value) || pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOLVE ||
+                (pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOURCE &&
+                 pending_resolve_is_event_source(ctx, p)),
+                "a streamed head reached a park of kind %d — only a fetch() and an EventSource take the head, so "
+                "the line's destination fold let a whole-body consumer through. request=%s %s",
                 (int)pending_get_int(p, PEND_KIND), method, url);
         pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
         reply_arrived(NULL, p);
@@ -5270,10 +5283,13 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
             JSValue deliver = pending_get(p, PEND_RESOLVE);
             ReplyBodyOp op = JS_IsNull(pv) ? REPLY_BODY_ERROR : reply_body_piece_op(ctx, pv);
 
-            DCHECK(fetch_is_body_delivery(ctx, deliver),
-                   "a body park carries a delivery that is not a fetch body's — reply_body_park is handed the "
-                   "closure fetch()'s head delivery built");
-            if (!JS_IsNull(pv)) reply_body_next(ctx, p, pv, fetch_body_delivery_open(ctx, deliver));
+            DCHECK(fetch_is_body_delivery(ctx, deliver) || event_source_is_body_delivery(ctx, deliver),
+                   "a body park carries a delivery that is neither a fetch body's nor an EventSource's — "
+                   "reply_body_park is handed the closure a head delivery built");
+            if (!JS_IsNull(pv))
+                reply_body_next(ctx, p, pv, fetch_is_body_delivery(ctx, deliver)
+                                                ? fetch_body_delivery_open(ctx, deliver)
+                                                : event_source_body_delivery_open(ctx, deliver));
             if (op == REPLY_BODY_CLOSE) {
                 JSValue whole = reply_body_whole(ctx, p), buv = reply_body_url(ctx, p);
 

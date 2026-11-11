@@ -30,6 +30,7 @@
 #include "core/encoding/text_stream.h"
 #include "core/events/broadcast_channel.h"
 #include "core/websockets/web_socket.h"
+#include "core/eventsource/event_source.h"
 #include "core/events/event.h"
 #include "core/events/input_device_capabilities.h"
 #include "core/events/current_event.h"
@@ -283,6 +284,7 @@ static void d_remote_location(JSContext *c, const PlatformAgent *a) { (void)a; r
 static void d_window_message(JSContext *c, const PlatformAgent *a) { (void)a; window_message_init(c); }
 static void d_broadcast_channel(JSContext *c, const PlatformAgent *a) { (void)a; broadcast_channel_init(c); }
 static void d_web_socket(JSContext *c, const PlatformAgent *a) { (void)a; web_socket_init(c); }
+static void d_event_source(JSContext *c, const PlatformAgent *a) { (void)a; event_source_init(c); }
 static void d_unhandled_rejection(JSContext *c, const PlatformAgent *a) { (void)a; unhandled_rejection_init(c); }
 static void d_animation_frame(JSContext *c, const PlatformAgent *a) { (void)a; animation_frame_init(c); }
 static void d_idle_callback(JSContext *c, const PlatformAgent *a) { (void)a; idle_callback_init(c); }
@@ -411,6 +413,7 @@ static void r_window_storage(JSRuntime *rt) { window_storage_free(rt); }
 static void r_window_message(JSRuntime *rt) { window_message_free(rt); }
 static void r_broadcast_channel(JSRuntime *rt) { broadcast_channel_free(rt); }
 static void r_web_socket(JSRuntime *rt) { web_socket_free(rt); }
+static void r_event_source(JSRuntime *rt) { event_source_free(rt); }
 /* XMLHttpRequest holds the agent's step definitions and, through §5's ProgressEvent, the private Symbol that
    interface's slots hang off. */
 static void r_xhr(JSRuntime *rt) { xhr_free(rt); }
@@ -940,6 +943,7 @@ static const PlatformComponent PLATFORM[] = {
     /* WebSockets §3.1 "Interface definition": `[Exposed=(Window,Worker)] interface WebSocket : EventTarget`,
        so no document half. After `event`, whose CloseEvent its closed task fires. */
     { "web_socket",          d_web_socket,          NULL,        r_web_socket },
+    { "event_source",        d_event_source,        NULL,        r_event_source },
     /* HTML §2.7.10 "Structured cloning API"'s member has no install column because of Web IDL §3.7.3 "Interface
        prototype object": it is declared on a mixin both `WorkerGlobalScope` and `Window` include, so the object it
        lands on differs per realm, and this column (whose DCHECK below refuses a realm whose §3.3.8 [Global] names

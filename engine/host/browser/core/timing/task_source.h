@@ -159,7 +159,10 @@ typedef enum {
     TASK_SOURCE_JAVASCRIPT_ENGINE,
     /* WebSockets §4 "Feedback from the protocol" — "The task source for all tasks queued in this section is
        the WebSocket task source." */
-    TASK_SOURCE_WEBSOCKET
+    TASK_SOURCE_WEBSOCKET,
+    /* HTML §9.2.3 "Processing model" — "The task source for any tasks that are queued by EventSource objects is
+       the remote event task source." */
+    TASK_SOURCE_REMOTE_EVENT
 } TaskSource;
 
 /* IS §8.1.7.1's ORDERING RULE ABOUT THIS WORK ITEM? Only a task has a source, so only a task can have one in
@@ -220,6 +223,7 @@ static inline const char *task_source_name(TaskSource s)
     case TASK_SOURCE_WEB_LOCKS:                return "web-locks";
     case TASK_SOURCE_JAVASCRIPT_ENGINE:        return "javascript-engine";
     case TASK_SOURCE_WEBSOCKET:                return "websocket";
+    case TASK_SOURCE_REMOTE_EVENT:             return "remote-event";
     }
     return "unknown";
 }

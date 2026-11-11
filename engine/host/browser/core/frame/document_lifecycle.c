@@ -22,6 +22,7 @@
 #include "core/html/html_link.h"
 #include "core/html/user_activation.h"
 #include "core/timing/timer.h"
+#include "core/eventsource/event_source.h"
 #include "core/websockets/web_socket.h"
 #include "solver/engine.h"   /* the cross-agent close: a host request and its addressee */
 #include "solver/flow.h"   /* §7.5.10 step 5's OTHER task queue: the running flow's own program sequence */
@@ -253,11 +254,12 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
  * Document reaches it at step 18 and HTML §7.5.10's destroy a Document at step 4, and a Document can arrive
  * by either alone (a navigation unloads and then destroys; a removed `<iframe>` is destroyed with no unload).
  *
- * Of the standard's four sets, the WebTransport and EventSource loops iterate over interfaces this engine
- * does not have, so they run zero times, as §7.5.10's worker and worklet loops do. The WebSocket loop makes
- * each of window's sockets disappear (core/websockets/web_socket.h), outside the salvageable branch as the
- * standard has it. The branch's second half clears window's map of active timers, which is this window's:
- * core/timing/timer.c keeps one per realm, so clearing it takes nothing from a same-origin popup.
+ * Of the standard's four sets, the WebTransport loop iterates over an interface this engine does not have, so
+ * it runs zero times, as §7.5.10's worker and worklet loops do. The WebSocket loop makes each of window's
+ * sockets disappear (core/websockets/web_socket.h), outside the salvageable branch as the standard has it. The
+ * branch forcibly closes each of window's EventSource objects (core/eventsource/event_source.h) and clears
+ * window's map of active timers, which is this window's: core/timing/timer.c keeps one per realm, so clearing
+ * it takes nothing from a same-origin popup.
  *
  * The EventSource close and the timer clear are both inside "if document's salvageable state is false",
  * which is read through UNLOAD_SALVAGEABLE rather than assumed away: writing them unconditionally would be
@@ -268,8 +270,10 @@ static void unloading_document_cleanup_steps(JSContext *cctx)
            "the unloading document cleanup steps were run for a navigable with no active document — both of "
            "their entries read the realm before calling and neither has one to hand over");
     web_socket_make_disappear_all(cctx);
-    if (!UNLOAD_SALVAGEABLE)
+    if (!UNLOAD_SALVAGEABLE) {
+        event_source_forcibly_close_all(cctx);
         timer_clear_map(cctx);
+    }
 }
 
 /* ---- §7.4.2.4's FIRE BEFOREUNLOAD, one document -------------------------------------------------------------

@@ -1333,21 +1333,21 @@ static const char HTML_PLATFORM[] =
 
     /* The reachability witness for the solver's owed-name census, not a probe row. Every `typeof` guard above
        names an interface this build installs, so none reaches the arm that records an unanswered name.
-       `EventSource` is carried by browser/platform_names.h and installed by no realm, so a read of it misses on
+       `SharedWorker` is carried by browser/platform_names.h and installed by no realm, so a read of it misses on
        a name this engine's vocabulary owns; the diff that installs it owes this block a subject still absent.
-       `window.EventSource` is a [[Get]] missing the global's whole prototype chain (JSConcolicHooks.absent);
-       `typeof EventSource` is an unresolvable Reference that ECMAScript §13.5.3.1 "Runtime Semantics:
+       `window.SharedWorker` is a [[Get]] missing the global's whole prototype chain (JSConcolicHooks.absent);
+       `typeof SharedWorker` is an unresolvable Reference that ECMAScript §13.5.3.1 "Runtime Semantics:
        Evaluation" step 2.a answers before step 3's GetValue (JSConcolicHooks.absent_unresolved). Neither
-       throws or forks. The run's `_absent` row for `"EventSource"` counts both. No probe row: a census member
+       throws or forks. The run's `_absent` row for `"SharedWorker"` counts both. No probe row: a census member
        is neither an endpoint nor a param. */
-    "var absTy = typeof EventSource;"
-    "var absRd = window.EventSource;"
-    /* The third spelling: `'EventSource' in window` is ECMAScript §13.10.1 "Runtime Semantics: Evaluation",
+    "var absTy = typeof SharedWorker;"
+    "var absRd = window.SharedWorker;"
+    /* The third spelling: `'SharedWorker' in window` is ECMAScript §13.10.1 "Runtime Semantics: Evaluation",
        whose last step is "Return ? HasProperty(rightValue, ? ToPropertyKey(leftValue))"; §7.3.11 "HasProperty
        ( obj, propertyKey )" performs no [[Get]], so it reaches neither hook above and is recorded at the `in`
-       operator's own placement. It answers `false`. The `"EventSource"` row then holds equal counts in
+       operator's own placement. It answers `false`. The `"SharedWorker"` row then holds equal counts in
        `read`, `typeof` and `in`; a regressed per-name split puts all of them in `read`. */
-    "var absIn = 'EventSource' in window;"
+    "var absIn = 'SharedWorker' in window;"
     /* §4.13 CUSTOM ELEMENTS — the reason this component exists: connectedCallback's body is code NOTHING ELSE IN
        THE PROGRAM CALLS. The endpoints below are reachable only through the lifecycle, so their presence is the
        whole claim. `extends HTMLElement` is what a real bundle writes, and after the upgrade `this.setAttribute`

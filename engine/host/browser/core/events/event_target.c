@@ -1484,7 +1484,7 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("onended", "ended", EH_GLOBAL)                                                                             \
     X("onerror", "error", EH_GLOBAL | EH_WINDOW_REFLECTING | EH_XHR | EH_IDB_REQUEST |                           \
                           EH_IDB_TRANSACTION | EH_FILE_READER | EH_WORKER_GLOBAL_SCOPE | EH_ABSTRACT_WORKER |    \
-                          EH_WEB_SOCKET)                                                                         \
+                          EH_WEB_SOCKET | EH_EVENT_SOURCE)                                                       \
     X("onfocus", "focus", EH_GLOBAL | EH_WINDOW_REFLECTING)                                                      \
     X("onformdata", "formdata", EH_GLOBAL)                                                                       \
     X("oninput", "input", EH_GLOBAL)                                                                             \
@@ -1642,7 +1642,7 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("onbeforeunload", "beforeunload", EH_WINDOW)                                                               \
     X("onhashchange", "hashchange", EH_WINDOW)                                                                   \
     X("onlanguagechange", "languagechange", EH_WINDOW | EH_WORKER_GLOBAL_SCOPE)                                  \
-    X("onmessage", "message", EH_WINDOW | EH_PORT | EH_WEB_SOCKET)                                               \
+    X("onmessage", "message", EH_WINDOW | EH_PORT | EH_WEB_SOCKET | EH_EVENT_SOURCE)                             \
     X("onmessageerror", "messageerror", EH_WINDOW | EH_PORT)                                                     \
     X("onoffline", "offline", EH_WINDOW | EH_WORKER_GLOBAL_SCOPE)                                                \
     X("ononline", "online", EH_WINDOW | EH_WORKER_GLOBAL_SCOPE)                                                  \
@@ -1730,8 +1730,8 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
        finish notification steps, §4.5.14's cancel). `onremove` arrives with §5.5.2's removal, which is the      \
        one that queues a `remove` event. */                                                                      \
     X("onfinish", "finish", EH_ANIMATION)                                                                        \
-    /* WebSockets §3.1 "Interface definition"'s `onopen`; its other three ride the rows above. */               \
-    X("onopen", "open", EH_WEB_SOCKET)
+    /* WebSockets §3.1 "Interface definition"'s and HTML §9.2.2's `onopen`; their others ride the rows above. */ \
+    X("onopen", "open", EH_WEB_SOCKET | EH_EVENT_SOURCE)
 
 /* The NAMES are string literals, not stringified identifiers, so the IDL gap auditor — which scans a component
    for the property names it installs — can SEE them. Behind a `#n` it saw none of these and reported all ninety
