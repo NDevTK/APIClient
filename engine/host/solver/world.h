@@ -344,6 +344,9 @@ char *world_vec_fork_point(const char *vec);
    ancestor present in `ancestry` (nearest first, as world_ancestry writes it), or empty if none is. Borrowed:
    the registry owns it until world_release. */
 CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int n_anc);
+/* Each foreign segment's chain marked as one a switch-in may apply (cow.h's cow_chain_mark_resident), for the
+   pager's chain spill: a delivery switches a segment in, so no segment it stands on may move to the disk tier. */
+void world_segments_mark_resident(void);
 
 /* Has this instance already materialized a segment for `w`? The sender asks the equivalent question about a
    peer before mirroring a fork; here it is what makes "materialized lazily" observable to a fixture. */

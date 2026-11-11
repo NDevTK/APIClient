@@ -1537,8 +1537,9 @@ static int tf_dk_pay(JSContext *ctx) {
 }
 
 /* The sale documents' act (fixture/sale.h): `listed` once a bill has named an owed request, `gave` the members
-   the reclaim edge then gave back, `relisted` whether the bill still named the request after them. */
-static struct { int listed; long gave; int relisted; int floor; int spilled; } g_tf_sale;
+   the reclaim edge then gave back, `relisted` whether the bill still named the request after them, `moved` the
+   asks `salefloor`'s floor then answered by moving memory to the disk tier. */
+static struct { int listed; long gave; int relisted; int floor; int spilled; long moved; } g_tf_sale;
 
 /* `--pressure-act none`: the run takes no forced pressure act, so a document whose act relocates its members runs
    as its own no-pressure twin. Memory decides where a flow lives, never whether or when it runs, so the twin's
@@ -1665,7 +1666,8 @@ static void tf_keep_watch(void) {
 /* At the payment whose bill first lists a sale document's owed request, sells every member but the one switched
    in through the allocator's refusal edge (engine_reclaim_at_rest), before anything is paid, and answers the
    bill as it stands after. It stops when no member but that one is resident; `sale` then asks the edge once more,
-   whose exit at the floor moves a written stub's bytes to the disk tier. A held member is never sold. */
+   whose exit at the floor moves a written stub's bytes to the disk tier, and `salefloor` asks it until it answers
+   at the floor, each answer a move to the disk tier. A held member is never sold. */
 static const char *tf_sale_act(const char *urls) {
     static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed", "/api/sl-floor-owed",
                                         "/api/sl-async-owed", "/api/sl-keep-owed", "/api/sl-ctor-owed",
@@ -1681,6 +1683,7 @@ static const char *tf_sale_act(const char *urls) {
         if (i == 4) tf_keep_take();
         while (tf_sellable() > (flow_running() != NULL) && engine_reclaim_at_rest() > 0) g_tf_sale.gave++;
         if (i == 0) g_tf_sale.spilled = engine_reclaim_at_rest();
+        if (at_floor) while (engine_reclaim_at_rest() > 0) g_tf_sale.moved++;
         if (at_floor) tf_floor_lift();
         urls = engine_pending_fetches();
         g_tf_sale.relisted = strstr(urls, owed[i]) != NULL;
@@ -19591,6 +19594,8 @@ static long tf_hist_above(const char *js, const char *key, int from) {
    sold member owes. sale-control-reaches: the same shape with no act reports with no member sold.
    sale-floor-sells: with every allocation refused at the act, the members were sold, a sale took its census on
    storage it funded, and the bill after the sale still lists the request the sold member owes.
+   sale-chain-spill-returns: there, asked on after the sales, the floor moved a frozen segment to the disk tier,
+   a restore read one back, and the owing member reported.
    sale-async-returns: as sale-forced-returns, for a member whose delta holds a pre-fork promise's settlement,
    and its report reads the value the restored settlement carries.
    sale-keep-same-record: a member whose owed record a holder outside it names (g_tf_keep) gets that record back
@@ -19763,8 +19768,21 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     fold_row(&st, &stwhy, param_value_is(js, "/api/sl-forced-done", "b", "22"),
              "NOT REACHED: the owing member did not report within the session after a written stub's bytes went "
              "to the disk tier");
+    /* At the floor a frozen segment only written stubs stand on moves to the disk tier and comes back at the
+       restore of a stub standing on it. */
+    const char *cswhy = NULL;
+    int cs = 1;
+    fold_row(&cs, &cswhy, g_tf_sale.floor == 1 && g_tf_sale.moved > 0 && tf_census_row(js, "_cold", "chainSpilled") > 0,
+             "NOT ARMED: with the floor placed, no ask after the sales moved a frozen segment to the disk tier "
+             "(`chainSpilled`)");
+    fold_row(&cs, &cswhy, tf_census_row(js, "_cold", "chainFilled") > 0,
+             "no frozen segment on the disk tier was read back by a restore within the session (`chainFilled`)");
+    fold_row(&cs, &cswhy, param_value_is(js, "/api/sl-floor-done", "b", "22"),
+             "NOT REACHED: the member owing /api/sl-floor-owed did not report within the session after frozen "
+             "segments of its chain went to the disk tier");
     const Probe rows[] = {
         { "sale-floor-sells", xt, "slFloor", SESS_EXPLORE, xwhy },
+        { "sale-chain-spill-returns", cs, "slFloor", SESS_EXPLORE, cswhy },
         { "sale-spill-returns", st, "slForced", SESS_EXPLORE, stwhy },
         { "sale-forced-returns", ft, "slForced", SESS_EXPLORE, fwhy },
         { "sale-own-returns", ot, "slOwn", SESS_EXPLORE, owhy },
@@ -48155,8 +48173,8 @@ static int tf_spill_write(const EngineSpillPart *parts, int n, uint64_t *key) {
     return 0;
 }
 
-static int tf_spill_read(uint64_t key, uint8_t *const *bufs, const size_t *lens, int n) {
-    uint64_t at = key - 1;
+static int tf_spill_read(uint64_t key, size_t from, uint8_t *const *bufs, const size_t *lens, int n) {
+    uint64_t at = key - 1 + from;
 
     DCHECK(g_tf_spill.fd >= 0 && key != 0 && key <= g_tf_spill.end + 1, "the disk tier was read at a key it never named");
     for (int i = 0; i < n; i++)

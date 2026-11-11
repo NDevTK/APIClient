@@ -1653,6 +1653,10 @@ char *result_cold_json(void) {
     METRIC_SET(restored, e.restored);
     METRIC_SET(sold_spilled, e.sold_spilled);
     METRIC_SET(restored_spilled, e.restored_spilled);
+    METRIC_SET(chain_spilled, e.chain_spilled);
+    METRIC_SET(chain_filled, e.chain_filled);
+    METRIC_SET(chain_out_segs, e.chain_out_segs);
+    METRIC_SET(chain_out_kib, e.chain_out_bytes / 1024);
     METRIC_SET(sold_named, e.sold_named);
     METRIC_SET(sale_over_reserve, e.sale_over_reserve);
     METRIC_SET(sale_reserve_kib, e.sale_reserve_kib);

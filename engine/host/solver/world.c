@@ -890,6 +890,11 @@ int world_segments_held(void)
     return g_segs_n;
 }
 
+void world_segments_mark_resident(void) {
+    for (int i = 0; i < g_segs_n; i++)
+        if (g_segs[i].delta) cow_chain_mark_resident(g_segs[i].delta);
+}
+
 CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int n_anc)
 {
     ForeignSegment *s = find_segment(w);

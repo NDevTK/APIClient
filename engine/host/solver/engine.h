@@ -580,18 +580,23 @@ struct Flow;
 int64_t engine_reply_clock(const struct Flow *f);
 int64_t engine_reply_due(const struct Flow *f);
 
-/* The disk tier a written stub's bytes move to at the RAM floor and are read back from within the session
-   (engine.c's engine_reclaim_tail and engine_sale_restore): a file in the native host, IndexedDB in the extension.
-   `write` stores the `n` parts, names the entry in `*key` (never 0) and answers 0, allocating nothing (it runs at
-   the allocator's floor); `read` fills each part's buffer with the bytes stored under `key` and answers 0; `drop`
-   forgets `key`, an entry of `len` bytes. The host installs it before the first session. */
+/* The disk tier a written stub's bytes and a frozen heap segment's entries move to at the RAM floor and are read
+   back from within the session (engine.c's engine_reclaim_tail, engine_sale_restore, cow.c's chain fill): a file
+   in the native host, IndexedDB in the extension. `write` stores the `n` parts, names the entry in `*key` (never
+   0) and answers 0, allocating nothing (it runs at the allocator's floor); `read` fills each part's buffer with
+   the bytes stored under `key` from byte `off` of the entry on and answers 0, allocating nothing; `drop` forgets
+   `key`, an entry of `len` bytes. The host installs it before the first session. */
 typedef struct { const uint8_t *b; size_t n; } EngineSpillPart;
 typedef struct {
     int (*write)(const EngineSpillPart *parts, int n, uint64_t *key);
-    int (*read)(uint64_t key, uint8_t *const *bufs, const size_t *lens, int n);
+    int (*read)(uint64_t key, size_t off, uint8_t *const *bufs, const size_t *lens, int n);
     void (*drop)(uint64_t key, size_t len);
 } EngineSpillStore;
 void engine_set_spill_store(const EngineSpillStore *store);
+/* The installed store's three answers: `engine_spill_write` answers -1 with no store installed or a refusal;
+   `engine_spill_read` CHECKs the read, since the entry is the only copy of what it holds. */
+int  engine_spill_write(const EngineSpillPart *parts, int n, uint64_t *key);
+void engine_spill_read(uint64_t key, size_t off, uint8_t *buf, size_t len);
 /* Forgets what the disk tier holds under `key`, `len` bytes (a written stub released with its bytes there). */
 void engine_spill_drop(uint64_t key, size_t len);
 /* The work residency caused, banked apart from engine_service_work: the collector's past a path collection's
@@ -1332,8 +1337,8 @@ typedef struct {
     long host_terminated;    /* rendezvous ids withdrawn: Fetch §2 Infrastructure's terminate-a-fetch-controller */
     long paged_reqs;         /* synchronous requests a sale took with it */
     /* Whether the allocator's refusal edge reached the pager at all, which a zero `sold` cannot say:
-       `paged_over + paged_unarmed + paged_floor + paged_shed + paged_sales + sold_spilled == paged_asks` and
-       `paged_sales == sold`, asserted at engine_frontier_census. */
+       `paged_over + paged_unarmed + paged_floor + paged_shed + paged_sales + sold_spilled + chain_spilled ==
+       paged_asks` and `paged_sales == sold`, asserted at engine_frontier_census. */
     long paged_asks;         /* times the allocator's refusal edge reached this engine (engine_reclaim_tail) */
     long paged_over;         /* …declined because the request exceeds the instance's whole limit */
     long paged_unarmed;      /* …declined because the reclaim safepoint was not armed (outside the flow step) */
@@ -1346,6 +1351,10 @@ typedef struct {
     long sold_restores, sold_waits_unfunded, sold_waits_gap, sold_waits_other;
     long restored;            /* written stubs a pick read back */
     long sold_spilled;        /* written stubs whose bytes the pager moved to the disk tier at the floor */
+    /* Frozen heap segments only written stubs stood on, whose entries the pager moved to the disk tier at the floor
+       (cow.h's cow_chain_spill), lifetime; read back by a restore, lifetime; and on the tier now, with their
+       entries' bytes. */
+    long chain_spilled, chain_filled, chain_out_segs, chain_out_bytes;
     long restored_spilled;    /* picks that read a written stub's bytes back from the disk tier */
     long sold_named;          /* objects and cells written stubs read back as themselves (JS_FlowGraphSettle) */
     long sale_over_reserve;   /* funded sales whose allocations asked for more than the block they gave back */

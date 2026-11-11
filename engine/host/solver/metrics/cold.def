@@ -113,6 +113,13 @@ METRIC(sold_waits_other, "soldWaitsOther", LIFETIME, "member", PROCESS, "solver/
 METRIC(restored, "restored", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 METRIC(sold_spilled, "soldSpilled", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 METRIC(restored_spilled, "restoredSpilled", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+/* …and the frozen heap segments only written stubs stood on whose entries the pager moved to the disk tier at the
+   floor (cow.c's cow_chain_spill), the ones a restore read back, and those on the tier now with their entries'
+   bytes. `chainSpilled` is an exit of `pagedAsks`. */
+METRIC(chain_spilled, "chainSpilled", LIFETIME, "segment", PROCESS, "solver/cow.c", INT)
+METRIC(chain_filled, "chainFilled", LIFETIME, "segment", PROCESS, "solver/cow.c", INT)
+METRIC(chain_out_segs, "chainOutSegs", GAUGE, "segment", PROCESS, "solver/cow.c", INT)
+METRIC(chain_out_kib, "chainOutKiB", GAUGE, "KiB", PROCESS, "solver/cow.c", INT)
 /* …and what written stubs' bytes name by reference because something outside them still named it at the sale
    (JS_FlowGraphSettle): objects and closure cells, summed over sales. */
 METRIC(sold_named, "soldNamed", LIFETIME, "object", PROCESS, "solver/engine.c", INT)

@@ -2145,9 +2145,10 @@ void  flow_sale_end(Flow *f, JSValue stand_ins);
 void  flow_restore_end(Flow *f);
 /* Frees a written member's bytes, in memory or on the disk tier, and the graph's anchors. */
 void  flow_sold_free(JSContext *ctx, FlowSold *s);
-/* The written stub of least weight whose bytes are resident, other than `keep`: the one whose bytes the pager
-   moves to the disk tier first; NULL when none stands. */
-Flow *flow_sold_worst(const Flow *keep);
+/* The written stub of least weight, other than `keep`, that `ok` answers for (engine.c: its bytes resident, or a
+   segment of its chain movable): the one whose memory the pager moves to the disk tier first; NULL when none
+   stands. */
+Flow *flow_sold_worst(const Flow *keep, bool (*ok)(const Flow *m));
 int   flow_cold(const Flow *f);
 /* The stubs standing, and the stubs that have left the registry (flow_remove): every member ever sold is one or
    the other. */

@@ -1,6 +1,7 @@
 /* Per-flow swappable COW delta — see cow.h. */
 #include "solver/cow.h"
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
+#include "solver/engine.h"    /* the disk tier a frozen segment's entries move to (engine_spill_*) */
 #include "check.h"
 #include <malloc.h>   /* malloc_usable_size: the split census's component-block bytes */
 #include <stdlib.h>
@@ -341,7 +342,8 @@ static void *cow_delta_alloc(void *p, size_t n) {
    the whole history and every switch between them replayed all of it. A frozen segment is never written again,
    so two flows that reach the same segment agree about everything from there down and neither the fork nor the
    swap has to look at it. */
-typedef struct CowSeg { CowEntry *e; int n; struct CowSeg *base; int refcount; uint32_t split; } CowSeg;
+/* `out` names the segment's entries on the disk tier while `e` is NULL (cow_chain_spill), 0 while they are here. */
+typedef struct CowSeg { CowEntry *e; int n; struct CowSeg *base; int refcount; uint32_t split; uint64_t out; } CowSeg;
 /* head_applied: IS THIS DELTA'S HEAD ON THE LIVE HEAP RIGHT NOW. `g_cow_installed` states that for the frozen
    CHAIN and nothing stated it for the HEAD, so two functions here asked `g_current` instead — and `g_current`
    is a ROUTE ("where do captures go"), not an applied-state. The two are one fact only while the scheduler is
@@ -366,6 +368,8 @@ static CowSeg *g_cow_installed = NULL;
 /* WHAT THE CHAIN IS HOLDING — see cow.h. Counted at the two points a segment's lifetime begins and ends (the
    fork that freezes one, and the unref that frees it), so the pair cannot drift from the thing it counts. */
 static long g_seg_live, g_seg_entries_live;
+/* …and of those, the segments whose entries are on the disk tier, with their entries, and the moves each way. */
+static long g_seg_out, g_seg_out_entries, g_seg_spills, g_seg_fills;
 void cow_chain_stats(long *segs, long *entries) {
     if (segs) *segs = g_seg_live;
     if (entries) *entries = g_seg_entries_live;
@@ -374,7 +378,30 @@ void cow_chain_stats(long *segs, long *entries) {
    allocated at exactly its entry count (the head's array is handed over whole at the freeze), so the entries
    are the array and there is no capacity slack to account for. */
 long cow_chain_bytes(void) {
-    return g_seg_live * (long)sizeof(CowSeg) + g_seg_entries_live * (long)sizeof(CowEntry);
+    return g_seg_live * (long)sizeof(CowSeg) + (g_seg_entries_live - g_seg_out_entries) * (long)sizeof(CowEntry);
+}
+
+void cow_chain_out_stats(long *segs, long *bytes, long *spills, long *fills) {
+    *segs = g_seg_out;
+    *bytes = g_seg_out_entries * (long)sizeof(CowEntry);
+    *spills = g_seg_spills;
+    *fills = g_seg_fills;
+}
+
+/* A segment's entries handed to `fn` as they stand, or for a segment on the disk tier, read back a chunk at a time
+   into this frame: a walk that reads or releases them allocates nothing. The chunk is a copy, so `fn` writes
+   nothing into it that must outlive the call. */
+enum { COW_OUT_CHUNK = 16 };
+static void cow_seg_each(const CowSeg *s, void (*fn)(CowEntry *e, int n, void *arg), void *arg) {
+    CowEntry chunk[COW_OUT_CHUNK];
+
+    if (!s->out) { fn(s->e, s->n, arg); return; }
+    for (int i = 0; i < s->n; i += COW_OUT_CHUNK) {
+        int k = s->n - i < COW_OUT_CHUNK ? s->n - i : COW_OUT_CHUNK;
+
+        engine_spill_read(s->out, (size_t)i * sizeof(CowEntry), (uint8_t *)chunk, (size_t)k * sizeof(CowEntry));
+        fn(chunk, k, arg);
+    }
 }
 
 void cow_delta_head_stats(const CowDelta *d, long *entries, long *bytes) {
@@ -553,6 +580,12 @@ CowDelta *cow_current(void) { return g_current; }
    eight sites that build an entry write `e->obj = JS_DupValue(ctx, obj)`, so one reference per entry naming it
    is exactly what a delta holds. A non-slot entry leaves `obj` undefined, whose pointer cannot equal a live
    object's, so those fall out without a kind test. */
+typedef struct { void *p; int count; } CowNaming;
+static void cow_naming_chunk(CowEntry *e, int n, void *arg) {
+    CowNaming *nm = arg;
+    for (int i = 0; i < n; i++) nm->count += JS_VALUE_GET_PTR(e[i].obj) == nm->p;
+}
+
 int cow_entries_naming(JSValueConst v, int *out_base)
 {
     const CowDelta *d = cow_current();
@@ -564,9 +597,12 @@ int cow_entries_naming(JSValueConst v, int *out_base)
     if (!d) return 0;
     for (i = 0; i < d->n; i++)
         if (JS_VALUE_GET_PTR(d->e[i].obj) == p) own++;
-    for (s = d->base; s; s = s->base)
-        for (i = 0; i < s->n; i++)
-            if (JS_VALUE_GET_PTR(s->e[i].obj) == p) base++;
+    for (s = d->base; s; s = s->base) {
+        CowNaming nm = { p, 0 };
+
+        cow_seg_each(s, cow_naming_chunk, &nm);
+        base += nm.count;
+    }
     if (out_base) *out_base = base;
     return own;
 }
@@ -595,8 +631,12 @@ int cow_entries_naming_in(JSValueConst v, void *const *ds, int n)
                 CHECK(seen != NULL, "cow: OOM recording the segments a frontier-wide count has visited");
             }
             seen[nseen++] = s;
-            for (k = 0; k < s->n; k++)
-                if (JS_VALUE_GET_PTR(s->e[k].obj) == p) count++;
+            {
+                CowNaming nm = { p, 0 };
+
+                cow_seg_each(s, cow_naming_chunk, &nm);
+                count += nm.count;
+            }
         }
     }
     free(seen);
@@ -2186,6 +2226,7 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     if (applied) cow_unapply_entries(ctx, src->e, src->n);
     seg->e = src->e; seg->n = src->n; seg->base = src->base; seg->refcount = 2;   /* running flow + sibling */
     seg->split = 0;
+    seg->out = 0;
     g_seg_live++; g_seg_entries_live += seg->n;
     src->e = NULL; src->n = 0; src->cap = 0;   /* fresh empty head for the running flow */
     free(src->hash); src->hash = NULL; src->hash_cap = 0;
@@ -2209,6 +2250,10 @@ bool cow_delta_empty(const CowDelta *d) { return d == NULL || (d->n == 0 && d->b
 
 static void cow_entries_free(JSContext *ctx, CowEntry *e, int n);
 
+/* What a segment on the disk tier gives back at its last unref: its entries' references, read a chunk at a time. */
+typedef struct { JSContext *ctx; } CowRelease;
+static void cow_release_chunk(CowEntry *e, int n, void *arg) { cow_entries_free(((CowRelease *)arg)->ctx, e, n); }
+
 /* Drop a chain reference: refcount--, free the segment's entries at zero, continue into its base. A loop, not
    recursion — the chain's depth is the fork depth and C stack cannot be parked. */
 static void cow_seg_unref(JSContext *ctx, CowSeg *s) {
@@ -2224,7 +2269,15 @@ static void cow_seg_unref(JSContext *ctx, CowSeg *s) {
                "a frozen heap segment was freed while the heap was still SHOWING it — the installed chain would "
                "point into freed memory and the next context switch walks it, and every write in the segment "
                "stays standing in the baseline with nothing left that can unapply it");
-        cow_entries_free(ctx, s->e, s->n);
+        if (s->out) {
+            CowRelease r = { ctx };
+
+            cow_seg_each(s, cow_release_chunk, &r);
+            engine_spill_drop(s->out, (size_t)s->n * sizeof(CowEntry));
+            g_seg_out--; g_seg_out_entries -= s->n;
+        } else {
+            cow_entries_free(ctx, s->e, s->n);
+        }
         g_seg_live--; g_seg_entries_live -= s->n;
         free(s->e); free(s);
         s = base;
@@ -2249,6 +2302,8 @@ static void cow_apply_seg_until(JSContext *ctx, CowSeg *s, CowSeg *stop) {
     while (cur != stop) { next = cur->base; cur->base = prev; prev = cur; cur = next; }
     cur = prev; prev = stop;
     while (cur != stop) {
+        DCHECK(!cur->out, "a frozen segment on the disk tier was applied — only written stubs stand on one, and a "
+                          "stub's restore reads its chain back (cow_chain_fill) before its switch-in");
         cow_apply_entries(ctx, cur->e, cur->n, "cow_install_chain: a frozen segment of the incoming chain");
         next = cur->base; cur->base = prev; prev = cur; cur = next;
     }
@@ -2290,6 +2345,8 @@ static void cow_install_chain(JSContext *ctx, CowSeg *want) {
            "that capture is about to write would record a state from another flow's timeline, and every "
            "context switch from then on replays it");
     for (s = g_cow_installed; s != common; s = s->base) {
+        DCHECK(!s->out, "the installed chain holds a frozen segment on the disk tier — the segment a resident "
+                        "chain reaches is never moved");
         touched += s->n;
         cow_unapply_entries(ctx, s->e, s->n);
     }
@@ -2487,6 +2544,12 @@ static void cow_entry_serial(const CowEntry *e, void (*val)(JSValueConst v, void
 
 uint32_t cow_delta_fork_gen(const CowDelta *d) { return d->fork_gen; }
 
+typedef struct { void (*val)(JSValueConst v, void *arg); void *arg; CowSerialCensus *out; } CowSerialWalk;
+static void cow_serial_chunk(CowEntry *e, int n, void *arg) {
+    CowSerialWalk *w = arg;
+    for (int i = 0; i < n; i++) cow_entry_serial(&e[i], w->val, w->arg, w->out);
+}
+
 void cow_delta_serial_census(const CowDelta *d, void (*val)(JSValueConst v, void *arg), void *arg,
                              CowSerialCensus *out) {
     DCHECK(d != NULL && !d->head_applied, "a serial census was asked of a delta whose head is on the heap — its "
@@ -2496,9 +2559,11 @@ void cow_delta_serial_census(const CowDelta *d, void (*val)(JSValueConst v, void
     for (int i = 0; i < d->n; i++) cow_entry_serial(&d->e[i], val, arg, out);
     out->host_bytes_head = out->host_bytes;
     for (const CowSeg *s = d->base; s != NULL; s = s->base) {
+        CowSerialWalk w = { val, arg, out };
+
         out->segs++;
         out->chain += s->n;
-        for (int i = 0; i < s->n; i++) cow_entry_serial(&s->e[i], val, arg, out);
+        cow_seg_each(s, cow_serial_chunk, &w);
     }
 }
 
@@ -2533,21 +2598,26 @@ static uint32_t g_split_gen;
 
 void cow_chain_split_begin(void) { g_split_gen += 2; }
 
-/* A segment's bytes into `acc`. The component bytes and records are the C library's blocks (cow_state_free frees
-   them with free), so their size is the allocator's. */
-static void cow_seg_split_bytes(const CowSeg *s, CowChainBytes *acc) {
-    acc->entries += (long)sizeof *s + (long)s->n * (long)sizeof(CowEntry);
-    for (int i = 0; i < s->n; i++) {
-        const CowEntry *e = &s->e[i];
+/* A segment's bytes into `acc`: its entries while they are here, and the component bytes and records they own,
+   which stay here when the entries move (read back a chunk at a time for a segment on the disk tier). The blocks
+   are the C library's (cow_state_free frees them with free), so their size is the allocator's. */
+static void cow_split_chunk(CowEntry *e, int n, void *arg) {
+    CowChainBytes *acc = arg;
+
+    for (int i = 0; i < n; i++) {
         long b = 0;
 
-        if (!e->is_state || (e->state_kind != COW_STATE_HOST && e->state_kind != COW_STATE_BODY &&
-                             e->state_kind != COW_STATE_HOST_REC))
+        if (!e[i].is_state || (e[i].state_kind != COW_STATE_HOST && e[i].state_kind != COW_STATE_BODY &&
+                               e[i].state_kind != COW_STATE_HOST_REC))
             continue;
-        if (e->a_base) b += (long)malloc_usable_size(e->a_base);
-        if (e->a_cur) b += (long)malloc_usable_size(e->a_cur);
-        if (e->state_kind == COW_STATE_HOST_REC) acc->rec += b; else acc->pod += b;
+        if (e[i].a_base) b += (long)malloc_usable_size(e[i].a_base);
+        if (e[i].a_cur) b += (long)malloc_usable_size(e[i].a_cur);
+        if (e[i].state_kind == COW_STATE_HOST_REC) acc->rec += b; else acc->pod += b;
     }
+}
+static void cow_seg_split_bytes(const CowSeg *s, CowChainBytes *acc) {
+    acc->entries += (long)sizeof *s + (s->out ? 0 : (long)s->n * (long)sizeof(CowEntry));
+    cow_seg_each(s, cow_split_chunk, acc);
 }
 
 void cow_chain_split_resident(const CowDelta *d, CowChainBytes *acc) {
@@ -2563,6 +2633,54 @@ void cow_chain_split_stub(const CowDelta *d, CowChainBytes *acc) {
     for (CowSeg *s = d->base; s != NULL && s->split != g_split_gen && s->split != g_split_gen + 1; s = s->base) {
         s->split = g_split_gen + 1;
         cow_seg_split_bytes(s, acc);
+    }
+}
+
+void cow_chain_mark_resident(const CowDelta *d) {
+    DCHECK(g_split_gen != 0, "a chain was marked resident before its census began");
+    for (CowSeg *s = d->base; s != NULL && s->split != g_split_gen; s = s->base) s->split = g_split_gen;
+}
+
+bool cow_chain_spillable(const CowDelta *d) {
+    for (const CowSeg *s = d->base; s != NULL && s->split != g_split_gen; s = s->base)
+        if (!s->out) return true;
+    return false;
+}
+
+/* The entries are written as the bytes they are: each keeps the references it owns, counted, and what they point
+   at stays resident, so the move frees the entry array and changes no object's life. */
+bool cow_chain_spill(const CowDelta *d) {
+    for (CowSeg *s = d->base; s != NULL && s->split != g_split_gen; s = s->base) {
+        EngineSpillPart part;
+
+        if (s->out) continue;
+        DCHECK(s != g_cow_installed, "a segment the heap is showing was not marked resident before a chain spill");
+        part = (EngineSpillPart){ (const uint8_t *)s->e, (size_t)s->n * sizeof(CowEntry) };
+        if (engine_spill_write(&part, 1, &s->out) != 0) {
+            s->out = 0;
+            return false;
+        }
+        free(s->e);
+        s->e = NULL;
+        g_seg_out++; g_seg_out_entries += s->n; g_seg_spills++;
+        return true;
+    }
+    return false;
+}
+
+void cow_chain_fill(CowDelta *d) {
+    for (CowSeg *s = d->base; s != NULL; s = s->base) {
+        size_t len = (size_t)s->n * sizeof(CowEntry);
+        CowEntry *e;
+
+        if (!s->out) continue;
+        e = reclaim_malloc(len);
+        CHECK(e != NULL, "cow: OOM reading a frozen segment back from the disk tier");
+        engine_spill_read(s->out, 0, (uint8_t *)e, len);
+        engine_spill_drop(s->out, len);
+        s->out = 0;
+        s->e = e;
+        g_seg_out--; g_seg_out_entries -= s->n; g_seg_fills++;
     }
 }
 
@@ -2781,14 +2899,22 @@ int cow_delta_head_read(JSContext *ctx, CowDelta *d, const uint8_t *bytes, size_
     return v;
 }
 
+typedef struct { const CowSeg *s; CowObjectVisit visit; void *arg; } CowObjectsWalk;
+static void cow_objects_chunk(CowEntry *e, int n, void *arg) {
+    CowObjectsWalk *w = arg;
+    for (int i = 0; i < n; i++) cow_entry_objects(w->s, &e[i], false, w->visit, w->arg);
+}
+
 /* See cow.h. */
 void cow_delta_objects(const CowDelta *d, CowSegEnter enter, CowObjectVisit visit, void *arg) {
     DCHECK(d != NULL && enter != NULL && visit != NULL,
            "a delta's object walk was asked without a delta, a segment test or a visitor — each is read below");
     for (int i = 0; i < d->n; i++) cow_entry_objects(NULL, &d->e[i], d->head_applied, visit, arg);
     for (const CowSeg *s = d->base; s != NULL; s = s->base) {
+        CowObjectsWalk w = { s, visit, arg };
+
         if (!enter(s, arg)) continue;
-        for (int i = 0; i < s->n; i++) cow_entry_objects(s, &s->e[i], false, visit, arg);
+        cow_seg_each(s, cow_objects_chunk, &w);
     }
 }
 

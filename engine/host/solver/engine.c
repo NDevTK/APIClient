@@ -12947,6 +12947,18 @@ void engine_set_spill_store(const EngineSpillStore *store) {
     g_spill = store;
 }
 
+int engine_spill_write(const EngineSpillPart *parts, int n, uint64_t *key) {
+    if (g_spill == NULL || g_spill->write(parts, n, key) != 0) return -1;
+    DCHECK(*key != 0, "the disk tier stored an entry and named it 0");
+    return 0;
+}
+
+void engine_spill_read(uint64_t key, size_t off, uint8_t *buf, size_t len) {
+    DCHECK(g_spill != NULL && key != 0, "a disk tier entry was read that no store named");
+    CHECK(g_spill->read(key, off, &buf, &len, 1) == 0,
+          "the disk tier could not give back an entry's bytes, which are the only copy of what they hold");
+}
+
 void engine_spill_drop(uint64_t key, size_t len) {
     DCHECK(g_spill != NULL && key != 0, "a disk tier entry was dropped that no store named");
     g_spill->drop(key, len);
@@ -12955,9 +12967,11 @@ void engine_spill_drop(uint64_t key, size_t len) {
 /* A written stub's bytes, moved to the disk tier: the graph's, its delta head's and its register's standing.
    They hold in-process pointers and are kept as they are, which is sound because they are read back only within
    this session, by this process. Answers 0 when the store refused them, which leaves the stub as it was.
-   Named residual. Not covered: the stub's frozen delta chain, DOM base and pin blob stay resident. Next diff
-   builds: those written to the same tier, or each released and re-derived from the stub's recipe at its restore.
-   Absence shows as: `pagedFloor` rising while `soldSpilled` equals the written stubs standing. */
+   Its chain's segments no resident chain reaches move separately (engine_chain_spill).
+   Named residual. Not covered: a stub's DOM base and pin blob, the component bytes and records its moved
+   segments' entries own, and segments a resident chain also reaches stay resident. Next diff builds: the
+   component blocks written beside their segment's entries. Absence shows as: `pagedFloor` rising with
+   `floorChainStubPodKiB` and `floorChainStubRecKiB` a large part of `floorLiveKiB`. */
 static int engine_sale_spill(Flow *f) {
     FlowSold *s = f->sold;
     EngineSpillPart parts[3];
@@ -13023,6 +13037,28 @@ static void engine_floor_census(void) {
     }
 }
 
+/* The pager's two disk-tier moves pick a written stub by what it still holds here: its write's bytes, or a frozen
+   segment of its chain no chain a switch-in may apply reaches. */
+static bool sale_bytes_resident(const Flow *m) { return m->sold->spill_key == 0; }
+static bool sale_chain_spillable(const Flow *m) { return cow_chain_spillable(m->delta); }
+
+/* A frozen segment of the chain of the least valuable written stub that has one no resident chain reaches, moved
+   to the disk tier (cow.h's cow_chain_spill). Every chain a switch-in may apply is marked first: each resident
+   member's, `keep`'s (a stub a restore is switching in), and each foreign world's. Allocates nothing. */
+static int engine_chain_spill(const Flow *keep) {
+    Flow *w;
+
+    if (g_spill == NULL) return 0;
+    cow_chain_split_begin();
+    for (int m = 0; m < flow_count(); m++) {
+        const Flow *f = flow_at(m);
+        if ((!flow_cold(f) || f == keep) && f->delta) cow_chain_mark_resident(f->delta);
+    }
+    world_segments_mark_resident();
+    w = flow_sold_worst(keep, sale_chain_spillable);
+    return w != NULL && cow_chain_spill(w->delta);
+}
+
 /* A spilled stub's bytes, read back from the disk tier before its restore reads them. */
 static void engine_sale_fill(FlowSold *s) {
     uint8_t *bufs[3];
@@ -13033,7 +13069,7 @@ static void engine_sale_fill(FlowSold *s) {
         bufs[i] = reclaim_malloc(lens[i] ? lens[i] : 1);
         CHECK(bufs[i] != NULL, "engine: OOM reading a written stub's bytes back from the disk tier");
     }
-    CHECK(g_spill->read(s->spill_key, bufs, lens, 3) == 0,
+    CHECK(g_spill->read(s->spill_key, 0, bufs, lens, 3) == 0,
           "the disk tier could not give back a written stub's bytes, which are the only copy of its state");
     g_spill->drop(s->spill_key, lens[0] + lens[1] + lens[2]);
     s->spill_key = 0;
@@ -13205,6 +13241,7 @@ static void engine_sale_restore(JSContext *ctx, Flow *f) {
                JS_IsUndefined(f->fn) && JS_IsUndefined(f->agents[0].jobs) && f->agents[0].frame == NULL,
            "a restore was asked of a member that is not a written stub holding no bulk");
     if (s->spill_key) engine_sale_fill(s);
+    cow_chain_fill((CowDelta *)f->delta);
     /* Through the refusal edge, armed across the switch-in with this member kept out of the sale. */
     vals = reclaim_malloc(sizeof *vals * (size_t)s->n_vals);
     CHECK(vals != NULL, "engine: OOM reading a sold member back");
@@ -13353,12 +13390,15 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     /* With no resident member left to sell, a written stub's bytes move to the disk tier before the floor: they
        are the only copy of its state within this build, so they are relocated, never given back. */
     if (!tail) {
-        Flow *w = flow_sold_worst(g_reclaim_keep ? g_reclaim_keep : flow_running());
+        const Flow *keep = g_reclaim_keep ? g_reclaim_keep : flow_running();
+        Flow *w = flow_sold_worst(keep, sale_bytes_resident);
 
         if (w && engine_sale_spill(w)) {
             g_sold_spilled++;
             return 1;
         }
+        /* Then a frozen segment only written stubs stand on, counted by cow.c (`chainSpilled`). */
+        if (engine_chain_spill(keep)) return 1;
     }
     if (!tail) {
         /* The floor, a reading rather than a failure: the frontier held nothing but the flow this allocation is
@@ -15347,6 +15387,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->paged_floor        = g_reclaim_floor;
     out->paged_shed         = g_reclaim_shed;
     out->paged_sales        = g_reclaim_sales;
+    cow_chain_out_stats(&out->chain_out_segs, &out->chain_out_bytes, &out->chain_spilled, &out->chain_filled);
     out->sale_unfunded = g_sale_unfunded;
     out->sold_restores = g_sold_restores;
     out->sold_waits_unfunded = g_sold_waits_unfunded;
@@ -15465,17 +15506,18 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "%ld at engine_queue_fetched_script) — a door queued a program through a second compile door",
             out->net_prog_fetch_queued, out->net_prog_xhr_queued, out->net_prog_queued);
     /* And the refusal edge's own partition, which makes a zero `sold` readable: every engine_reclaim_tail call
-       leaves by one of five exits (a request past the whole limit, declined because the safepoint is unarmed,
-       answered at the floor, a held snapshot shed, a sale), so the arms are the whole of the asks, and this catches
-       a sixth exit added without a counter. `asks` alone separates "the allocator never refused" from "the pager
+       leaves by one of seven exits (a request past the whole limit, declined because the safepoint is unarmed,
+       answered at the floor, a held snapshot shed, a sale, a written stub's bytes or a chain segment moved to the
+       disk tier), so the arms are the whole of the asks, and this catches an eighth exit added without a counter. `asks` alone separates "the allocator never refused" from "the pager
        was consulted and could do nothing". A sale exit sells one flow, and a shed at the edge is one of the sheds
        `cuts_shed` counts. */
     DCHECKF(out->paged_over + out->paged_unarmed + out->paged_floor + out->paged_shed + out->paged_sales +
-                out->sold_spilled == out->paged_asks,
+                out->sold_spilled + out->chain_spilled == out->paged_asks,
             "the census's reclaim rows do not partition the allocator's asks (%ld past the limit + %ld unarmed + %ld "
-            "at the floor + %ld shed + %ld sales + %ld written stubs spilled against %ld) — engine_reclaim_tail "
-            "has six exits that each count themselves", out->paged_over, out->paged_unarmed, out->paged_floor,
-            out->paged_shed, out->paged_sales, out->sold_spilled, out->paged_asks);
+            "at the floor + %ld shed + %ld sales + %ld written stubs spilled + %ld chain segments spilled against "
+            "%ld) — engine_reclaim_tail has seven exits that each count themselves", out->paged_over,
+            out->paged_unarmed, out->paged_floor, out->paged_shed, out->paged_sales, out->sold_spilled,
+            out->chain_spilled, out->paged_asks);
     DCHECKF(out->paged_sales == out->sold,
             "the census counts %ld sale exits against %ld flows sold — engine_sale_release runs once per sale exit",
             out->paged_sales, out->sold);

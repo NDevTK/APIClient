@@ -2817,11 +2817,11 @@ static void flow_stub_release(JSContext *ctx, Flow *f) {
     f->script_i = 0; f->last_compiled = -1; f->imm_at = -1; f->imm_next = 0; f->in_compile = 0;
 }
 
-Flow *flow_sold_worst(const Flow *keep) {
+Flow *flow_sold_worst(const Flow *keep, bool (*ok)(const Flow *m)) {
     Flow *worst = NULL;
     double ww = 0.0;
     for (Flow *m = g_rest_head; m; m = m->rest_next) {
-        if (m == keep || m->sold->spill_key) continue;
+        if (m == keep || !ok(m)) continue;
         double w = flow_weight(m);
         if (!worst || w < ww) { worst = m; ww = w; }
     }

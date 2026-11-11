@@ -529,7 +529,7 @@ void cow_chain_stats(long *segs, long *entries);
 /* …AND WHAT IT COSTS IN BYTES. The pair above counts segments and entries, which is the right unit for "is the
    sharing working"; the cold tier needs the other unit, because what it pages is bytes. Asked of this file
    rather than multiplied out by the caller: `sizeof(CowEntry)` is private, and a caller that guessed it would
-   report a number that drifts the next time an entry kind is added. */
+   report a number that drifts the next time an entry kind is added. Entries on the disk tier are not counted. */
 long cow_chain_bytes(void);
 /* The chain's bytes by who stands on it, for a census at the RAM floor (engine.c's engine_floor_census): begin,
    add each resident delta's chain, then each stub's. A segment counts once, as resident when a resident chain
@@ -539,6 +539,20 @@ typedef struct { long entries, pod, rec; } CowChainBytes;
 void cow_chain_split_begin(void);
 void cow_chain_split_resident(const CowDelta *d, CowChainBytes *acc);
 void cow_chain_split_stub(const CowDelta *d, CowChainBytes *acc);
+/* A frozen segment's entries move to the disk tier (engine.h's EngineSpillStore) at the RAM floor, from a segment
+   only written stubs stand on, and come back at the restore of a stub standing on it. Begin a split census, mark
+   every chain that may be applied (cow_chain_mark_resident: each resident member's, the one a restore is
+   switching in, each foreign world's); cow_chain_spillable answers whether `d`'s chain holds a segment no marked
+   chain reaches whose entries are here, and cow_chain_spill moves the nearest such one, false when there is none
+   or the tier refused. The entries keep every reference they own, counted, so nothing they name is freed; they
+   are read back only in this process. cow_chain_fill reads every segment of `d`'s chain back; a walk that only
+   reads or releases a segment's entries reads it a chunk at a time. `out_stats`: segments on the tier now and
+   their entries' bytes (gauges), and segments moved out and read back (lifetime). */
+void cow_chain_mark_resident(const CowDelta *d);
+bool cow_chain_spillable(const CowDelta *d);
+bool cow_chain_spill(const CowDelta *d);
+void cow_chain_fill(CowDelta *d);
+void cow_chain_out_stats(long *segs, long *bytes, long *spills, long *fills);
 
 /* THE OBJECTS ONE DELTA HOLDS — every object value its head and its frozen chain own a counted reference to: a
    captured slot's owner and its base and current descriptors, a strong map record's operands, a component
