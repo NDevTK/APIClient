@@ -52,7 +52,7 @@ if (rev === null || expect === null)
          "  --expect <n> is how many commits you believe that publishes. It is REQUIRED, and it is required",
          "  here for the same reason engine/pubgate.mjs requires it: the count is the part a redirection hides,",
          "  so it is an input. Run the gate with no --cut first to read the chain and every allowed cut.",
-         "  --prose <a.c,b.c> states that those paths' diffs across this range emit NO code. It is checked by",
+         "  --prose <a.c,b.mjs> states that those paths' diffs across this range emit NO code. It is checked by",
          "  engine/prosediff.mjs before anything is pushed, and a nonzero verdict pushes nothing.");
 
 /* The sha is resolved once and every later command names the resolved value, never the ref: `HEAD` moves in a
@@ -154,12 +154,13 @@ if (prose.length) {
     const bar = "──────────────────────────────────────────────────────────────────────────────────────────────────────";
     if (pd.status === 6)
       die(6, bar,
-          "the --prose claim was NOT JUDGED and NOTHING was pushed. Every path you named was DECLINED: this",
-          "instrument measures what a C PREPROCESSOR emits, so it answers about a `.c` and about nothing else —",
-          "a header has no translation unit, and a `.md`, `.mjs` or `.js` has no preprocessor at all.",
+          "the --prose claim was not judged in full and NOTHING was pushed. At least one path you named was",
+          "DECLINED: this instrument answers about a `.c` by what the C preprocessor emits and about a `.js` or",
+          "`.mjs` by its token stream, and about nothing else. A header has no translation unit, a `.md` has",
+          "neither, and a JavaScript file the parser reports errors on has no comparable token stream.",
           "That is a BLIND SPOT and not a finding about your diff, so there is no statement to go looking for.",
-          "Name the `.c` path(s) you are claiming about, or drop --prose: for a file the build does not compile",
-          "the claim is not one this check can hold, and the push needs no claim it cannot verify.");
+          "Name a `.c` that includes the header, or take the declined path out of --prose: for a file this check",
+          "cannot read, the claim is not one it can hold, and the push needs no claim it cannot verify.");
     if (pd.status === 5)
       die(5, bar,
           "the --prose claim is VOID and NOTHING was pushed. A path's CONTROL DID NOT SPEAK — an injected",

@@ -157,7 +157,7 @@ function main() {
            "  The new side is --head's tree, or the working tree when --head is absent.",
            "  A `.h` has no translation unit of its own — pass a `.c` that includes it (see the residual).",
            "  EXIT: 0 every named path cleared; 1 a FINDING (not prose-only); 5 VOID (a control did not speak);",
-           "  6 NOT ASKED (every path DECLINED, so nothing was judged); 2 usage; 3 the include-root derivation;",
+           "  6 NOT ASKED (a path was DECLINED and none is a finding or void); 2 usage; 3 the include-root derivation;",
            "  4 a command failed.");
   /* Each revision side is preprocessed against its own tree's headers, materialised whole, so a header-only change
      is visible from every includer. One include set for both sides would hide it. */
@@ -328,7 +328,7 @@ function main() {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }
   /* Bands are printed on every run. Exit precedence: a FINDING (about the diff), then VOID (a control did not
-     speak), then NOT ASKED (every path declined — about this instrument's reach). */
+     speak), then NOT ASKED (a path declined — about this instrument's reach). */
   console.log("\nBANDS — printed every run, clean day and red day alike, because a precedence that hides a band" +
               " is the folded answer this file exists to refuse:");
   console.log("  cleared  " + cleared + "  prose-only: (1) at zero and (2) accounted");
@@ -340,7 +340,7 @@ function main() {
               (worst === 0 ? "every named path cleared"
                : worst === 1 ? "a FINDING: at least one path is not prose-only"
                : worst === 5 ? "VOID: at least one path's control did not speak"
-               : worst === 6 ? "NOT ASKED: every named path was DECLINED, so nothing was judged and nothing is cleared"
+               : worst === 6 ? "NOT ASKED: at least one named path was DECLINED, so the claim over these paths is not cleared"
                : "see above"));
   /* The base tree is removed by the exit handler registered at its creation. */
   process.exit(worst);
