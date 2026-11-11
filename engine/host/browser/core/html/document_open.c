@@ -8,6 +8,7 @@
 #include "core/dom/document_current_script.h"   /* §8.4.1 step 5's "active parser whose script nesting level > 0" */
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
+#include "core/timing/thread_work.h"
 #include "core/events/event_target.h"
 #include "core/frame/window_proxy.h"
 #include "core/html/document_open.h"
@@ -185,12 +186,16 @@ static void open_clear_initial_about_blank(JSContext *realm)
     window_proxy_clear_initial_about_blank(proxy);
 }
 
-bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_t *dom)
+void document_open_start(JSContext *ctx, JSStepHdr *hdr, DocumentOpenState *s, JSValueConst doc_obj,
+                         lxb_dom_document_t *dom, int base, int after)
 {
     lxb_dom_node_t *dnode = lxb_dom_interface_node(dom);
     JSContext *realm = document_active_realm_of(dnode);
-    lxb_dom_node_t *n, *next;
-    lxb_status_t st;
+
+    DCHECK(s->dom == NULL, "a second run of HTML §8.4.1's document open steps was started on one state");
+    memset(s, 0, sizeof *s);
+    s->dom = dom;
+    s->after = after;
 
     /* STEPS 1 AND 2 — the XML throw and the throw-on-dynamic-markup-insertion counter — ARE THE CALLER'S here,
        and they are asserted rather than restated. Every entry into these steps in this engine is §8.4.3 step
@@ -281,7 +286,8 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
            ALLOCATION check. core/html/document_write.c now asks §13.2.3.5's insertion point after this returns
            and takes step 9's own answer; the two halves of one release build agree, and neither of them is a
            softening of the dev crash above. */
-        return true;
+        hdr->stage = after;
+        return;
     }
 
     /* STEP 6 — "if document's unload counter is greater than 0, then return document", which its note explains
@@ -308,31 +314,19 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
        whether this flow is the one navigating) are both about the FLOW and the question is about the
        NAVIGABLE. */
 
-    /* STEPS 9 AND 10 — "For each shadow-including inclusive descendant node of document, erase all event
-       listeners and handlers given node", then the same for the relevant global object.
-       THE WINDOW IS NOT A DESCENDANT AND IS THE HALF THAT MATTERS. A `load` handler that survived the open
-       runs again the moment §13.2.7 reaches its end for the newly written document, which for a handler that
-       writes is not a divergence but a LOOP. */
-    for (n = dnode; n; n = shadow_root_next_in_shadow_including(ctx, n, dnode))
-        erase_listeners_of(ctx, n);
-    if (realm != NULL) {
-        JSValueConst win = document_window_of(dnode);
-        DCHECK(JS_IsObject(win),
-               "§8.4.1 step 10 — a Document with an active realm has no Window to erase the handlers of. The "
-               "relevant global object is what a page registers `onload` on, and a document.open() that leaves "
-               "it standing re-runs the handler that wrote the document as soon as the write is closed");
-        event_target_erase_all(ctx, win);
-    }
+    /* Steps 9-11 are document_open_run's: step 9's walk is the document's size and step 11 is DOM §4.2.3
+       replace all, so each rests per node. */
+    s->cursor = dnode;
+    hdr->stage = base + DOCUMENT_OPEN_PHASE_ERASE;
+}
 
-    /* STEP 11 — "Replace all with null within document", which for a Document node is the removal of every
-       child (DOM §4.2.3's "replace all" adds nothing when the node is null). Through the per-flow chokepoint,
-       so a forked arm that opened the document reads back its own empty tree and a sibling still reads the
-       page. It is deliberately NOT the mutation-observer-firing form: §4.2.3's replace-all runs no mutation
-       records that a document with no listeners left could deliver. */
-    for (n = dnode->first_child; n; n = next) {
-        next = n->next;
-        dom_cow_remove_child(n);
-    }
+/* HTML §8.4.1 document open steps 12-18, with what step 11 leaves this engine to put right: the selection and
+   the parser's head element pointer both name nodes that have just left the tree. */
+static void document_open_finish(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_t *dom)
+{
+    JSContext *realm = document_active_realm_of(lxb_dom_interface_node(dom));
+    lxb_status_t st;
+
     /* …AND SELECTION API §2's SINGLETON, REPLACED WITH THE TREE IT POINTED INTO. §2's note states the one
        writer besides the install — "it gets replaced with a new object when Document.open() is called" — and
        HERE is where the object it describes stops being about anything: every node the old selection could
@@ -438,7 +432,65 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
        baseline record) and answers "complete" from `document_readiness_of`; that is wrong for a Document that
        now has a parser, and it is the storage's gap rather than this step's. */
     if (realm != NULL) document_set_readiness_loading(realm);
-    return true;                                                                  /* STEP 19 */
+}
+
+int document_open_run(JSContext *ctx, JSStepHdr *hdr, DocumentOpenState *s, JSValueConst doc_obj, int base)
+{
+    lxb_dom_node_t *dnode = lxb_dom_interface_node(s->dom);
+    int phase = hdr->stage - base;
+
+    DCHECK(s->dom != NULL, "HTML §8.4.1's document open steps were resumed before they were started");
+    if (phase >= DOCUMENT_OPEN_PHASE_RA_RM_RANGES &&
+        phase < DOCUMENT_OPEN_PHASE_RA_RM_RANGES + NODE_REPLACE_ALL_PHASE_N)
+        return node_replace_all_run(ctx, hdr, &s->ra, base + DOCUMENT_OPEN_PHASE_RA_RM_RANGES);
+    switch (phase) {
+    case DOCUMENT_OPEN_PHASE_ERASE:                                            /* STEP 9 */
+        if (s->cursor) {
+            erase_listeners_of(ctx, s->cursor);
+            thread_work_charge(THREAD_WORK_DOM_WALK, 1);
+            s->cursor = shadow_root_next_in_shadow_including(ctx, s->cursor, dnode);
+            return JS_STEP_YIELD;
+        }
+        hdr->stage = base + DOCUMENT_OPEN_PHASE_WINDOW;
+        return JS_STEP_YIELD;
+
+    case DOCUMENT_OPEN_PHASE_WINDOW:                                           /* STEP 10 */
+        /* The Window is no descendant, and a `load` handler left on it would run again when the written
+           document's parse ends. */
+        if (document_active_realm_of(dnode) != NULL) {
+            JSValueConst win = document_window_of(dnode);
+
+            DCHECK(JS_IsObject(win),
+                   "HTML §8.4.1 step 10: a Document with an active realm has no Window to erase the handlers of");
+            event_target_erase_all(ctx, win);
+        }
+        /* Step 11: replace all with null within document, per flow through the remove machine. */
+        node_replace_all_start(hdr, &s->ra, NULL, dnode, base + DOCUMENT_OPEN_PHASE_RA_RM_RANGES,
+                               base + DOCUMENT_OPEN_PHASE_PARSER);
+        return JS_STEP_YIELD;
+
+    case DOCUMENT_OPEN_PHASE_PARSER:                                           /* STEPS 12-18 */
+        document_open_finish(ctx, doc_obj, s->dom);
+        hdr->stage = s->after;
+        return JS_STEP_YIELD;
+
+    default:
+        DFAILF("HTML §8.4.1's document open steps were resumed at phase %d, outside the block their caller "
+               "declared for them", phase);
+        return JS_STEP_ABRUPT;
+    }
+}
+
+void document_open_visit(JSContext *ctx, DocumentOpenState *s, JSStepVisit *v)
+{
+    node_replace_all_visit(ctx, &s->ra, v);
+}
+
+const char *document_open_script_forbidden(int stage, int base)
+{
+    if (stage < base || stage >= base + DOCUMENT_OPEN_PHASE_N) return NULL;
+    return "HTML §8.4.1's document open steps run no script between step 9 and step 18: a listener that ran "
+           "there would observe a document with half its listeners erased or no parser";
 }
 
 void document_close_input_stream(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_t *dom)

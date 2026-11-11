@@ -141,19 +141,24 @@ static JSValue dw_append(JSContext *ctx, JSValue acc, JSValueConst v)
 
 /* ---- the machine --------------------------------------------------------------------------------------- */
 
-/* Two stages: Trusted Types §3.7's default policy is the step in "get trusted type compliant string" that
-   runs the page's code, and the stage that calls it is where the machine rests once it does. The second stage
-   is everything the write steps decide about the document rather than about the value. */
+/* Trusted Types §3.7's default policy is the step in "get trusted type compliant string" that runs the page's
+   code, and the stage that calls it is where the machine rests once it does. Step 9.2's document open steps are
+   core/html/document_open.h's machine, whose walks are the document's size. */
 #define DW_STAGES(X) \
     X(DW_ST_TRUSTED, "HTML §8.4.3 document write steps 1-5 (assemble `string`, the Trusted Types compliant " \
                      "string, and the line feed) — one O(1) engine action per argument") \
-    X(DW_ST_WRITE,   "HTML §8.4.3 document write steps 6-11 (the two throws, the aborted-parser return, the " \
-                     "insertion point, and handing the string to the parser)")
+    X(DW_ST_WRITE,   "HTML §8.4.3 document write steps 6-9.1 (the two throws, the aborted-parser return, the " \
+                     "insertion point and the two counters)") \
+    DOCUMENT_OPEN_ALGO_STAGES(X, DW_OPEN, "HTML §8.4.3 document write steps step 9.2") \
+    X(DW_ST_INSERT,  "HTML §8.4.3 document write steps 10-11 (insert string into the input stream; process " \
+                     "the tokens)")
 enum { IDL_STEP_STAGE_BASE(DW_STAGES) DW_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const DW_STEPS[] = { DW_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSValue string;   /* §8.4.3's `string` — owned across the stage boundary */
+    DocumentOpenState open;   /* step 9.2 */
+    uint8_t via_open;         /* step 9.2 ran, so step 10 stands on its postcondition */
 } DwState;
 
 static void dw_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -161,6 +166,13 @@ static void dw_visit(JSContext *ctx, void *st, JSStepVisit *v)
     DwState *s = st;
 
     v->val(ctx, &s->string);
+    document_open_visit(ctx, &s->open, v);
+}
+
+static const char *dw_script_forbidden(int stage, const void *st)
+{
+    (void)st;
+    return document_open_script_forbidden(stage, DW_OPEN_ERASE);
 }
 
 static int dw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -173,8 +185,10 @@ static int dw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
     *presult = JS_UNDEFINED;
+    STEP_DISPATCH(DW_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
 
-    if (hdr->stage == DW_ST_TRUSTED) {
+    STEP_ARM(DW_ST_TRUSTED);
+    {
         int i;
         bool is_trusted;
 
@@ -217,7 +231,7 @@ static int dw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         hdr->stage = DW_ST_WRITE;
     }
 
-    DCHECK(hdr->stage == DW_ST_WRITE, "the document write steps resumed into a stage §8.4.3 does not have");
+    STEP_ARM(DW_ST_WRITE);
     if (!(dom = dw_receiver(ctx, hdr->this_val))) return JS_STEP_ABRUPT;
     if (dw_is_xml_document(dom)) {                                                /* STEP 6 */
         JS_ThrowDOMException(ctx, "InvalidStateError",
@@ -279,7 +293,19 @@ static int dw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         if (target != NULL && document_current_script_is_from_external_file(target))
             return JS_STEP_DONE;
         /* STEP 9.2 — "Run the document open steps with document." */
-        if (!document_open_steps(ctx, hdr->this_val, dom)) return JS_STEP_ABRUPT;
+        s->via_open = 1;
+        document_open_start(ctx, hdr, &s->open, hdr->this_val, dom, DW_OPEN_ERASE, DW_ST_INSERT);
+        return JS_STEP_YIELD;
+    }
+    hdr->stage = DW_ST_INSERT;
+    STEP_JUMP(DW_ST_INSERT);
+
+    DOCUMENT_OPEN_ALGO_STAGES(JS_STEP_STAGE_ARM, DW_OPEN, "")
+    return document_open_run(ctx, hdr, &s->open, hdr->this_val, DW_OPEN_ERASE);
+
+    STEP_ARM(DW_ST_INSERT);
+    if (!(dom = dw_receiver(ctx, hdr->this_val))) return JS_STEP_ABRUPT;
+    if (s->via_open) {
         /* THE POSTCONDITION STEP 10 STANDS ON, AND THE ONE ARM OF §8.4.1 THAT DOES NOT MEET IT.
            IN THE STANDARD STEP 10 CANNOT BE REACHED WITHOUT ONE. §8.4.1 has three arms that "return
            document" without creating a parser — step 5's active parser whose script nesting level is
@@ -333,7 +359,8 @@ static int dw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
 
 static const IdlStepDecl DW_DECL = {
     dw_step, sizeof(DwState), dw_visit, NULL,
-    "HTML §8.4.3 the document write steps", DW_STEPS
+    "HTML §8.4.3 the document write steps", DW_STEPS,
+    .script_forbidden = dw_script_forbidden
 };
 
 /* ---- §8.4.2 close() ------------------------------------------------------------------------------------- */
@@ -369,11 +396,37 @@ static JSValue js_doc_close(JSContext *ctx, JSValueConst this_val, int argc, JSV
  * steps and its arguments are read by nothing. The second IS §7.2.2's window open steps and belongs to the
  * Window component; it is a different algorithm with a different return type reached through the same name,
  * which is why the arity test is the member's own step and not a guess. */
-static JSValue js_doc_open(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+#define DOPEN_STAGES(X) \
+    X(DOPEN_START, "HTML §8.4.1 open(unused1, unused2) (Web IDL §3.6's choice of overload; the document open " \
+                   "steps' steps 1-8)") \
+    DOCUMENT_OPEN_ALGO_STAGES(X, DOPEN_ALGO, "HTML §8.4.1 open(unused1, unused2)") \
+    X(DOPEN_DONE,  "HTML §8.4.1 open(unused1, unused2) (return document)")
+enum { IDL_STEP_STAGE_BASE(DOPEN_STAGES) DOPEN_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DOPEN_STEPS[] = { DOPEN_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static void dopen_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
+    document_open_visit(ctx, st, v);
+}
+
+static const char *dopen_script_forbidden(int stage, const void *st)
+{
+    (void)st;
+    return document_open_script_forbidden(stage, DOPEN_ALGO_ERASE);
+}
+
+static int dopen_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                      JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    DocumentOpenState *s = st;
     lxb_dom_document_t *dom;
 
-    (void)argv; (void)magic;
+    (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    STEP_DISPATCH(DOPEN_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(DOPEN_START);
     if (argc >= 3) {
         /* §3.6 step 4 has removed the two-argument entry, so this call IS `open(url, name, features)`. */
         DFAIL("§8.4.1's THREE-ARGUMENT `open` was called — Web IDL §3.6 \"Overload resolution algorithm\" selects "
@@ -383,16 +436,31 @@ static JSValue js_doc_open(JSContext *ctx, JSValueConst this_val, int argc, JSVa
               "windows\" and belongs to the Window component beside `window.open` (core/frame/navigable.c's "
               "navigable_open is what it reaches). It is not this algorithm with extra arguments: it returns a "
               "WindowProxy, it opens no input stream, and it never touches this document");
-        return JS_UNDEFINED;
+        return JS_STEP_DONE;
     }
-    if (!(dom = dw_receiver(ctx, this_val))) return JS_EXCEPTION;
-    if (dw_is_xml_document(dom))                                                  /* STEP 1 */
-        return JS_ThrowDOMException(ctx, "InvalidStateError", "document.open on an XML document");
+    if (!(dom = dw_receiver(ctx, hdr->this_val))) return JS_STEP_ABRUPT;
+    if (dw_is_xml_document(dom)) {                                                /* STEP 1 */
+        JS_ThrowDOMException(ctx, "InvalidStateError", "document.open on an XML document");
+        return JS_STEP_ABRUPT;
+    }
     /* STEP 2's throw-on-dynamic-markup-insertion counter is decided for the reason §8.4.3's step 7 is. */
-    if (!document_open_steps(ctx, this_val, dom)) return JS_EXCEPTION;
-    /* "Return document" — the RECEIVER, which is what the page compares against its own `document`. */
-    return JS_DupValue(ctx, this_val);
+    document_open_start(ctx, hdr, s, hdr->this_val, dom, DOPEN_ALGO_ERASE, DOPEN_DONE);
+    return JS_STEP_YIELD;
+
+    DOCUMENT_OPEN_ALGO_STAGES(JS_STEP_STAGE_ARM, DOPEN_ALGO, "")
+    return document_open_run(ctx, hdr, s, hdr->this_val, DOPEN_ALGO_ERASE);
+
+    STEP_ARM(DOPEN_DONE);
+    /* "Return document": the receiver, which is what the page compares against its own `document`. */
+    *presult = JS_DupValue(ctx, hdr->this_val);
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl DOPEN_DECL = {
+    dopen_step, sizeof(DocumentOpenState), dopen_visit, NULL,
+    "HTML §8.4.1 open(unused1, unused2)", DOPEN_STEPS,
+    .script_forbidden = dopen_script_forbidden
+};
 
 /* ---- declaration and install ----------------------------------------------------------------------------- */
 
@@ -419,7 +487,7 @@ void document_write_init(JSContext *ctx)
     idl_optional_from(0);
     idl_iface_brand(trusted_type_class(TRUSTED_TYPE_HTML));
     g_id_close = idl_method_id(ctx, NULL, 0, js_doc_close, 0);
-    g_id_open = idl_method_id(ctx, OPEN_ARGS, 3, js_doc_open, 0);
+    g_id_open = idl_method_id_step(ctx, OPEN_ARGS, 3, NULL, 0, &DOPEN_DECL, 0);
     idl_optional_from(0);
     /* §8.4.1's record of which parser a `close()` may end — the AGENT's key, minted beside these
        declarations because it is the same one-per-agent statement. */

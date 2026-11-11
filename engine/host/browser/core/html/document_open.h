@@ -50,6 +50,8 @@
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
+#include "quickjs-step.h"
+#include "core/dom/node_replace.h"
 
 /* Declared ONCE PER AGENT, from document_write_init — the Symbol the script-created-parser record lives under.
    There is no per-realm install: §8.4.1 states the initial value ("Document objects have an active parser was
@@ -59,11 +61,34 @@ void document_open_init(JSContext *ctx);
 /* Given back from document_agent_free, by the declarer. */
 void document_open_free(JSRuntime *rt);
 
-/* HTML §8.4.1's DOCUMENT OPEN STEPS, given a document. `doc_obj` is that Document's wrapper — the receiver the
-   member was called on, which is where the script-created-parser record lives and which every caller already
-   holds. Returns false with an exception pending (step 4's SecurityError); true otherwise, INCLUDING the steps
-   that "return document" without opening anything, because those are not failures. */
-bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_t *dom);
+/* HTML §8.4.1's document open steps, given a document, as a step machine. A member owes it a DocumentOpenState
+   visited by document_open_visit, DOCUMENT_OPEN_ALGO_STAGES at `base`, a stage `after`, and
+   document_open_script_forbidden over the block. `doc_obj` is the Document's wrapper, the member's receiver,
+   which holds the script-created-parser record. */
+#define DOCUMENT_OPEN_ALGO_STAGES(X, P, W) \
+    X(P##_ERASE,  W " → HTML §8.4.1 document open steps step 9 (erase all event listeners and handlers, one " \
+                    "shadow-including inclusive descendant of document per step)") \
+    X(P##_WINDOW, W " → HTML §8.4.1 document open steps step 10 (erase all event listeners and handlers given " \
+                    "the relevant global object)") \
+    NODE_REPLACE_ALL_ALGO_STAGES(X, P##_RA, W " → HTML §8.4.1 document open steps step 11 (replace all with " \
+                                            "null within document)") \
+    X(P##_PARSER, W " → HTML §8.4.1 document open steps steps 12-18 (the URL; is initial about:blank; " \
+                    "no-quirks mode; the script-created parser and its insertion point; the readiness)")
+enum { DOCUMENT_OPEN_ALGO_STAGES(JS_STEP_STAGE_ENUM, DOCUMENT_OPEN_PHASE, "") DOCUMENT_OPEN_PHASE_N };
+typedef struct DocumentOpenState {
+    lxb_dom_document_t *dom;
+    lxb_dom_node_t *cursor;   /* step 9's walk */
+    NodeReplaceAllState ra;   /* step 11 */
+    int after;
+} DocumentOpenState;
+/* Steps 3-8, then step 9 started with the caller's next entry at `base`; where step 5 returns document, the
+   machine stands at `after` with nothing opened. The caller ran steps 1-2 (asserted). `s` is zeroed. */
+void document_open_start(JSContext *ctx, JSStepHdr *hdr, DocumentOpenState *s, JSValueConst doc_obj,
+                         lxb_dom_document_t *dom, int base, int after);
+/* One stage; JS_STEP_YIELD at every rest, with hdr->stage at `after` once step 18 is done. Cannot throw. */
+int document_open_run(JSContext *ctx, JSStepHdr *hdr, DocumentOpenState *s, JSValueConst doc_obj, int base);
+void document_open_visit(JSContext *ctx, DocumentOpenState *s, JSStepVisit *v);
+const char *document_open_script_forbidden(int stage, int base);
 
 /* HTML §8.4.2 "Closing the input stream" steps 3-6 — the script-created-parser test, the explicit "EOF"
    character and running the tokenizer to it. Steps 1 and 2 are `close()`'s own two throws and stay with the
