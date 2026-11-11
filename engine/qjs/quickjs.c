@@ -3263,10 +3263,14 @@ JSValue JS_DupValueRT(JSRuntime *rt, JSValueConst v)
 
 /* Asked before a JS object is born. Whether a collection is owed is a function of the flow's path: it counts the JS
    objects the program holds (`js_obj_live`), never the allocator's bytes, which differ between builds whose
-   structures differ and between hosts. Memory pressure is the embedder's other signal (JS_GCOwe). */
+   structures differ and between hosts. Memory pressure is the embedder's other signal (JS_GCOwe). A birth inside
+   an unpriced span (an assert's condition) owes nothing, since a release build has no such birth. */
 static void js_trigger_gc(JSRuntime *rt)
 {
     bool force_gc;
+
+    if (APICLIENT_UNPRICED_OPEN())
+        return;
 #ifdef FORCE_GC_AT_MALLOC
     force_gc = true;
 #else
