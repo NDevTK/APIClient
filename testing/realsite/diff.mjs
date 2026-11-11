@@ -107,6 +107,11 @@ P(`Chromium request identities: ${stable.length} in every counted load, ${varyin
   `${everyKey.size} in any; requests per load ${counted.map((l) => l.requests.length).join(',')}`);
 P(`engine: ${wire.length} sends, ${sent.size} identities (${wireFile}); ${docs.length} instance(s): ` +
   docs.map((d) => `${d._novelty.scope} stepWork ${d._cold.stepWork}`).join('; '));
+/* A replay answers a send its recording lacks as a network failure, so the page's path past it is the failure's. */
+const misses = wire.filter((w) => w.wire === 'replay' && !w.hit);
+const modes = [...new Set(wire.map((w) => w.wire))].join(',');
+P(`wire mode ${modes}; sends the recording lacked: ${misses.length}` +
+  (misses.length ? ': ' + [...new Set(misses.map((w) => w.method + ' ' + describeUrl(w.url).identity))].slice(0, 8).join(', ') : ''));
 const stableSent = stable.filter((k) => sent.has(k));
 P(`of the ${stable.length} stable identities the engine sent ${stableSent.length} and never sent ${missing.length}; ` +
   `the engine sent ${extra.length} identities no Chromium load made`);
@@ -162,4 +167,5 @@ for (const e of counted[0].errors.slice(0, 20)) P(`${e.atMs}ms ${e.kind}: ${e.te
 if (counted[0].errors.length === 0) P('none');
 console.log(out.join('\n'));
 if (jsonOut) writeFileSync(jsonOut, JSON.stringify({ capDir, wireFile, resultsFile, loads: loads.length, counted: counted.length,
-  refused, stable, varying, missing, extra }, null, 1));
+  refused, stable, varying, missing, extra,
+  wireModes: modes, replayMisses: misses.map((w) => w.method + ' ' + describeUrl(w.url).identity) }, null, 1));

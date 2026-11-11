@@ -8,6 +8,12 @@
 # Its artifacts are <store>/logs/<page>.rec*.{wire.jsonl,final.results.json,stderr.tail,progress.jsonl,
 # census.tsv.gz} and one line appended to <store>/logs/record.jsonl.
 set -u
+# A live pass sends whatever the engine's egress lets out to real servers, forced arms' requests included, so
+# it runs only when the person running it has said so; engine_replay.sh is the pass that reaches no server.
+if [ "${REALSITE_LIVE_EGRESS:-}" != "I have read what this run may send" ]; then
+  echo "engine_record.sh sends to real servers; set REALSITE_LIVE_EGRESS to the sentence in this script to run it, or use engine_replay.sh" >&2
+  exit 5
+fi
 snap=$1; store=$2; page=$3; work=$4; cap=$5; backstop=$6
 here=$(cd "$(dirname "$0")" && pwd)
 slot=${REALSITE_SLOT:-/tmp/apiclient-frozen/slots/bigmem}
