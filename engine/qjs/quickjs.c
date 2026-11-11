@@ -21248,6 +21248,7 @@ typedef struct ContRecFieldsVisit {
     void (*atom)(void *u, JSAtom *slot);         /* OWN_ATOM */
     void (*pod)(void *u, void *p, size_t n);     /* POD, KIND_FLAG */
     void (*fresh)(void *u, JSValue *slot);       /* FRESH, each of FRESH_ARRAY */
+    void (*desc_out)(void *u, JSDescFacts **slot);   /* DESC_OUT: a place inside the record's requester, or NULL */
     void (*other)(void *u, const char *role);
 } ContRecFieldsVisit;
 #define CONT_REC_FIELDS_OWN_VAL(t, n)      v->val(u, CONT_OWN_SLOT(&r->n));
@@ -21255,7 +21256,7 @@ typedef struct ContRecFieldsVisit {
 #define CONT_REC_FIELDS_POD(t, n)          v->pod(u, &r->n, sizeof r->n);
 #define CONT_REC_FIELDS_BORROW(t, n)       v->borrow(u, (JSValue *)&r->n);
 #define CONT_REC_FIELDS_OUTER(t, n)
-#define CONT_REC_FIELDS_DESC_OUT(t, n)     v->other(u, "DESC_OUT");
+#define CONT_REC_FIELDS_DESC_OUT(t, n)     v->desc_out(u, &r->n);
 #define CONT_REC_FIELDS_FACTS(t, n)        v->other(u, "FACTS");
 #define CONT_REC_FIELDS_PROPS(t, n)        v->other(u, "PROPS");
 #define CONT_REC_FIELDS_OWN_ARRAY(t, n)    for (int i_ = 0; i_ < (t); i_++) v->val(u, &r->n[i_]);
@@ -48598,6 +48599,7 @@ typedef struct {
     JSVarRef **cells;   /* the private cells rebuilt so far, in written order; each closure holds its own ref */
     void **shared;      /* the resolving pairs' already-resolved records rebuilt so far, in written order */
     uint32_t n_objs, n_strs, cap_strs, n_cells, cap_cells, n_shared, cap_shared;
+    int64_t desc_off;   /* the record just read: its descriptor answer's offset into its requester, or -1 */
 } FGReader;
 static void fg_rpromise(FGReader *r, JSObject *p);
 static void fg_rresolver(FGReader *r, JSObject *p);
@@ -48946,13 +48948,21 @@ static void fg_recr_borrow(void *u, JSValue *slot) {
 static void fg_recr_atom(void *u, JSAtom *slot) { *slot = fg_rkey(u); }
 static void fg_recr_pod(void *u, void *p, size_t n) { memcpy(p, fg_take(u, n), n); }
 static void fg_recr_fresh(void *u, JSValue *slot) { (void)u; *slot = JS_UNDEFINED; }
+/* aimed by fg_rlinks once the requester it lies inside is rebuilt */
+static void fg_recr_desc_out(void *u, JSDescFacts **slot) {
+    FGReader *r = u;
+    uint32_t off = fg_r32(r);
+
+    *slot = NULL;
+    r->desc_off = off == UINT32_MAX ? -1 : (int64_t)off;
+}
 static void fg_recr_other(void *u, const char *role) {
     (void)u;
     CHECK_FAIL("flow graph: a serialized record holds a field of a role this reader has no operation for");
     (void)role;
 }
 static const ContRecFieldsVisit fg_recr = { fg_recr_val, fg_recr_borrow, fg_recr_atom, fg_recr_pod,
-                                            fg_recr_fresh, fg_recr_other };
+                                            fg_recr_fresh, fg_recr_desc_out, fg_recr_other };
 #define FG_REC_CASE_RFIELDS(k, T, p, role) case k: p##_init((T *)st); p##_fields((T *)st, &fg_recr, r); return st;
 static void *fg_rrec(FGReader *r, uint8_t kind)
 {
@@ -49044,15 +49054,27 @@ static void *fg_rlinks(FGReader *r, uint8_t kind)
 {
     void *first = NULL, *prev = NULL;
     uint8_t prev_kind = CONT_NONE;
+    int64_t prev_off = -1;
 
     while (kind != CONT_NONE && !cont_kind_recordless(kind)) {
-        void *st = kind == CONT_STEP ? (void *)fg_rmachine(r) : fg_rrec(r, kind);
+        void *st;
+        int64_t off;
 
-        if (prev) cont_outer_set(prev, prev_kind, st, kind);
-        else first = st;
-        prev = st; prev_kind = kind;
+        r->desc_off = -1;
+        st = kind == CONT_STEP || kind == CONT_STEP_YIELD ? (void *)fg_rmachine(r) : fg_rrec(r, kind);
+        off = r->desc_off;
+        if (prev) {
+            cont_outer_set(prev, prev_kind, st, kind);
+            if (prev_off >= 0) {
+                CHECK((size_t)prev_off + sizeof(JSDescFacts) <= cont_requester_size(st, kind),
+                      "flow graph: a record's descriptor answer lies outside the requester it was written in");
+                *cont_desc_out_slot(prev, prev_kind) = (JSDescFacts *)((char *)st + prev_off);
+            }
+        } else first = st;
+        prev = st; prev_kind = kind; prev_off = off;
         kind = fg_r8(r);
     }
+    CHECK(prev_off < 0, "flow graph: a record's descriptor answer names a requester its chain does not hold");
     return first;
 }
 
@@ -49082,12 +49104,44 @@ static void fg_rchain_calls(FGReader *r, JSAsyncFunctionState *s, JSFunctionByte
         uint8_t kind = fg_r8(r), flags, amode = 'o';
         int slots;
 
-        CHECK(kind == 'c' || kind == 'a', "flow graph: a heap frame carries a kind this reader does not know");
+        CHECK(kind == 'c' || kind == 'a' || kind == 'y',
+              "flow graph: a heap frame carries a kind this reader does not know");
         if (!cb) {
             uint32_t ri = fg_r32(r);
 
             CHECK(ri < r->g->n_realms, "flow graph: a call root's realm is no realm the graph holds");
             realm = r->g->realms[ri];
+        }
+        if (kind == 'y') {
+            /* an anchor at the live point, as ANCHOR_NEW builds it over the frame below */
+            CHECK(i + 1 == n, "flow graph: an anchor is written below the top of its chain");
+            t = tramp_frame_new(ctx->rt);
+            CHECK(t != NULL, "flow graph: OOM rebuilding an anchor");
+            memset(&t->sf, 0, sizeof t->sf);
+            t->b = NULL; t->local_buf = NULL; t->local_slots = 0; t->ctx = realm;
+            t->seq_req = NULL; t->seq_req_kind = CONT_NONE;
+            t->caller_this = fg_rborrow(r);
+            t->caller_new_target = fg_rborrow(r);
+            t->call_first = 0; t->call_argc = 0; t->is_tail = 0;
+            t->arg_allocated = 0; t->callee_argc = 0;
+            t->async_data = NULL; t->gen_data = NULL; t->gen_magic = 0; t->gen_tailcall = 0;
+            t->forof_off = 0;
+            t->async_promise = JS_UNDEFINED;
+            t->close_saved_exc = JS_UNINITIALIZED;
+            t->cont_kind = fg_r8(r);
+            CHECK(t->cont_kind == CONT_STEP_YIELD || t->cont_kind == CONT_GETPROP_YIELD
+                      || t->cont_kind == CONT_ARRAY_LEN_YIELD || t->cont_kind == CONT_ARG_LIST_YIELD,
+                  "flow graph: an anchor waits on a kind no anchor holds");
+            t->cont_state = fg_rlinks(r, t->cont_kind);
+            t->up = below;
+            t->caller_sf = csf; t->caller_b = cb; t->caller_ctx = realm;
+            t->caller_local_buf = cbuf; t->caller_var_buf = csf->var_buf; t->caller_arg_buf = csf->arg_buf;
+            t->caller_stack_buf = csf->var_buf + (cb ? cb->var_count : 0);
+            t->caller_sp = cend;
+            t->caller_argv = (JSValueConst *)csf->arg_buf;
+            t->caller_var_refs = NULL;   /* fg_rchain_cells, once the caller's closure holds its body */
+            below = t;
+            break;
         }
         bv = fg_rvalue(r);
         CHECK(JS_VALUE_GET_TAG(bv) == JS_TAG_FUNCTION_BYTECODE, "flow graph: a heap frame's body is not a body");
@@ -49382,7 +49436,10 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
         /* and each heap frame's, whose closure the graph may have built after the frame (a private function) */
         for (TrampFrame *t = ((JSAsyncFunctionState *)frames[i])->tramp_top; t; t = t->up) {
             const JSStackFrame *tsf = tramp_live_sf(t);
-            const JSFunctionBytecode *tb = JS_VALUE_GET_OBJ(tsf->cur_func)->u.func.function_bytecode;
+            const JSFunctionBytecode *tb;
+
+            if (!t->async_data && !t->local_buf) continue;   /* an anchor runs no body */
+            tb = JS_VALUE_GET_OBJ(tsf->cur_func)->u.func.function_bytecode;
 
             /* an async body's frame keeps no body of its own; its position is in the body it was written against */
             CHECK(t->async_data ? tsf->cur_pc >= tb->byte_code_buf
@@ -86091,9 +86148,22 @@ static void fg_frame_machine(FGWriter *w, JSStepHdr *h)
 static void fg_rec_none(void *u, JSValue *slot) { (void)u; (void)slot; }
 static void fg_rec_none_atom(void *u, JSAtom *slot) { (void)u; (void)slot; }
 static void fg_rec_none_pod(void *u, void *p, size_t n) { (void)u; (void)p; (void)n; }
-static void fg_rec_other_seen(void *u, const char *role) { (void)role; *(bool *)u = false; }
+/* What the check is asked over: the record's requester, which a descriptor answer must lie inside. */
+typedef struct { bool ok; void *outer; uint8_t outer_kind; } FGRecCheck;
+static void fg_rec_other_seen(void *u, const char *role) { (void)role; ((FGRecCheck *)u)->ok = false; }
+static bool fg_desc_out_inside(const JSDescFacts *d, const void *outer, uint8_t outer_kind)
+{
+    return !d || (outer && (const char *)d >= (const char *)outer
+                  && (size_t)((const char *)d - (const char *)outer) + sizeof *d
+                         <= cont_requester_size(outer, outer_kind));
+}
+static void fg_rec_check_desc_out(void *u, JSDescFacts **slot) {
+    FGRecCheck *c = u;
+
+    if (!fg_desc_out_inside(*slot, c->outer, c->outer_kind)) c->ok = false;
+}
 static const ContRecFieldsVisit fg_rec_check = { fg_rec_none, fg_rec_none, fg_rec_none_atom, fg_rec_none_pod,
-                                                 fg_rec_none, fg_rec_other_seen };
+                                                 fg_rec_none, fg_rec_check_desc_out, fg_rec_other_seen };
 #define FG_REC_CASE_FIELDS(k, T, p, role) case k: p##_fields((T *)st, v, u); return;
 static void fg_rec_fields(uint8_t kind, void *st, const ContRecFieldsVisit *v, void *u)
 {
@@ -86104,10 +86174,11 @@ static void fg_rec_fields(uint8_t kind, void *st, const ContRecFieldsVisit *v, v
 }
 static bool fg_rec_writable(uint8_t kind, void *st)
 {
-    bool ok = true;
+    FGRecCheck c = { true, NULL, CONT_NONE };
 
-    fg_rec_fields(kind, st, &fg_rec_check, &ok);
-    return ok;
+    c.outer = cont_outer_get(st, kind, &c.outer_kind);
+    fg_rec_fields(kind, st, &fg_rec_check, &c);
+    return c.ok;
 }
 
 /* Whether the continuation `st` of `kind` waiting on a frame is one the call writer writes with the frame: none,
@@ -86122,16 +86193,24 @@ static bool fg_cont_written(uint8_t kind, void *st)
 
 /* A declared record's fields (p_fields) in declaration order: an owned or borrowed value, a key, plain bytes;
    a fresh value is written as nothing, since a copy never shares it. */
-typedef struct { FGWriter *w; FGBuf *out; } FGRecOut;
+typedef struct { FGWriter *w; FGBuf *out; void *outer; uint8_t outer_kind; } FGRecOut;
 static void fg_recw_val(void *u, JSValue *slot) { FGRecOut *o = u; fg_value(o->w, o->out, *slot); }
 static void fg_recw_atom(void *u, JSAtom *slot) { FGRecOut *o = u; fg_key(o->w, o->out, *slot); }
 static void fg_recw_pod(void *u, void *p, size_t n) { FGRecOut *o = u; fg_put(o->out, p, n); }
+/* a descriptor answer as its offset into the record's requester, or none */
+static void fg_recw_desc_out(void *u, JSDescFacts **slot) {
+    FGRecOut *o = u;
+
+    DCHECK(fg_desc_out_inside(*slot, o->outer, o->outer_kind),
+           "flow graph: a strict write reached a descriptor answer outside the record's requester");
+    fg_u32(o->out, *slot ? (uint32_t)((const char *)*slot - (const char *)o->outer) : UINT32_MAX);
+}
 static void fg_recw_other(void *u, const char *role) {
     (void)u;
     DCHECKF(false, "flow graph: a strict write reached a record field of role %s, which has no writer", role);
 }
 static const ContRecFieldsVisit fg_recw = { fg_recw_val, fg_recw_val, fg_recw_atom, fg_recw_pod, fg_rec_none,
-                                            fg_recw_other };
+                                            fg_recw_desc_out, fg_recw_other };
 
 /* A step machine's declared fields in the strict write: a value, and an array of values as its count, its
    capacity and its live elements. Every other kind is a gap fg_frame_machine has refused. */
@@ -86235,22 +86314,22 @@ static void fg_machine(FGWriter *w, FGBuf *out, JSStepHdr *h)
 static void fg_links(FGWriter *w, FGBuf *out, void *st, uint8_t kind)
 {
     while (kind != CONT_NONE && !cont_kind_recordless(kind)) {
-        FGRecOut o = { w, out };
+        const bool machine = kind == CONT_STEP || kind == CONT_STEP_YIELD;
         uint8_t next_kind;
-        void *next;
+        void *next = cont_outer_get(st, kind, &next_kind);
+        FGRecOut o = { w, out, next, next_kind };
 
         DCHECK(st != NULL, "flow graph: a continuation of a recorded kind holds no record");
-        if (kind == CONT_STEP ? !fg_machine_writable(w->ctx, st)
-                              : !cont_kind_declared(kind) || !fg_rec_writable(kind, st)) {
+        if (machine ? !fg_machine_writable(w->ctx, st)
+                    : !cont_kind_declared(kind) || !fg_rec_writable(kind, st)) {
             /* fg_frame_links has recorded this link's gap; a survey's bytes stop here and are never read */
             DCHECKF(w->survey, "flow graph: a strict write reached continuation kind %d, which has no writer",
                     (int)kind);
             fg_u8(out, 'X');
             return;
         }
-        if (kind == CONT_STEP) fg_machine(w, out, st);
+        if (machine) fg_machine(w, out, st);
         else fg_rec_fields(kind, st, &fg_recw, &o);
-        next = cont_outer_get(st, kind, &next_kind);
         fg_u8(out, next_kind);
         st = next; kind = next_kind;
     }
@@ -86346,10 +86425,31 @@ static bool fg_frame_async_written(const TrampFrame *t)
            && !as->func_state.park_fn && fg_cont_written(t->cont_kind, t->cont_state);
 }
 
+/* Whether a heap frame is an operation's anchor at the top of its chain (ANCHOR_NEW: no body, the record or
+   resting machine its cont_state holds, its caller's realm) whose record or machine has a writer. */
+static bool fg_frame_anchor_written(JSContext *ctx, TrampFrame *t, bool top)
+{
+    if (!top || t->async_data || t->gen_data || tramp_agen_data(t) || t->local_buf) return false;
+    if (t->cont_kind == CONT_STEP_YIELD) return fg_machine_writable(ctx, t->cont_state);
+    return (t->cont_kind == CONT_GETPROP_YIELD || t->cont_kind == CONT_ARRAY_LEN_YIELD
+            || t->cont_kind == CONT_ARG_LIST_YIELD) && cont_kind_declared(t->cont_kind)
+           && fg_rec_writable(t->cont_kind, t->cont_state);
+}
+
+/* Whether the chain writer writes heap frame `t`, `top` when it is the chain's live point. */
+static bool fg_frame_written(JSContext *ctx, TrampFrame *t, bool top)
+{
+    if (t->async_data) return fg_frame_async_written(t);
+    if (t->local_buf) return fg_frame_call_written(t);
+    return fg_frame_anchor_written(ctx, t, top);
+}
+
 /* A bytecode base's chain of heap frames, after the base's record: the count, then each frame from the bottom
    (the base's callee) to the top (the live point), each 'c' for an ordinary activation as do_tramp_call pushes
    it, 'a' for an async body before its first await as do_async_tramp_call pushes it (fg_frame_async_written),
-   or for a survey 'X' where the frame is another kind. A frame's record is its body (an anchor), its function,
+   'y' for an anchor at the top (fg_frame_anchor_written), or for a survey 'X' where the frame is another kind.
+   An anchor's record is its caller's realm where the caller is a call root, its caller's receiver and
+   new.target, and its continuation (fg_links). A frame's record is its body (an anchor), its function,
    its receiver and new.target ('c') or the activation's receiver, resolving pair and the promise the call
    evaluated to ('a'), its caller's receiver and new.target, its call shape (call_first, call_argc and owns_func
    for 'c', which 'a' holds at 0; is_tail, its continuation kind and for-of offset), its buffer's law
@@ -86381,9 +86481,28 @@ static void fg_chain_calls(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s, uin
         JSValue *base, *end = i + 1 < n ? ts[i + 1]->caller_sp : NULL;
         uint32_t live;
 
-        if (!(as ? fg_frame_async_written(t) : fg_frame_call_written(t))) {
+        if (!fg_frame_written(w->ctx, t, i + 1 == n)) {
             DCHECK(w->survey, "flow graph: a strict write reached a heap frame no writer has past its gap");
             fg_u8(out, 'X');
+            break;
+        }
+        if (!as && !t->local_buf) {
+            DCHECK(t->up == (i ? ts[i - 1] : NULL) && t->caller_sf == csf && t->caller_b == cb
+                       && t->caller_ctx == (cb ? cb->realm : t->caller_ctx) && t->ctx == t->caller_ctx
+                       && t->caller_local_buf == cbuf && t->caller_var_buf == csf->var_buf
+                       && t->caller_arg_buf == csf->arg_buf
+                       && t->caller_stack_buf == csf->var_buf + (cb ? cb->var_count : 0) && t->caller_sp == cend
+                       && t->b == NULL && t->local_slots == 0 && !t->owns_func && t->call_first == 0
+                       && t->call_argc == 0 && !t->is_tail && t->forof_off == 0
+                       && JS_IsUndefined(t->async_promise) && t->seq_req_kind == CONT_NONE,
+                   "flow graph: an anchor's caller records or shape are not what ANCHOR_NEW builds over the frame "
+                   "below it");
+            fg_u8(out, 'y');
+            if (!cb) fg_u32(out, fg_realm(w, t->caller_ctx));
+            fg_value(w, out, t->caller_this);
+            fg_value(w, out, t->caller_new_target);
+            fg_u8(out, t->cont_kind);
+            fg_links(w, out, t->cont_state, t->cont_kind);
             break;
         }
         sf = tramp_live_sf(t);
@@ -86574,7 +86693,7 @@ static void fg_frame_base(FGWriter *w, JSAsyncFunctionState *s)
     for (TrampFrame *t = s->tramp_top; t; t = t->up, depth++) {
         JSAsyncGeneratorData *agd = tramp_agen_data(t);
 
-        if (!(t->async_data ? fg_frame_async_written(t) : fg_frame_call_written(t)))
+        if (!fg_frame_written(w->ctx, t, t == s->tramp_top))
             fg_frame_gap(w, FG_GAP_FRAME,
                          t->async_data ? (JS_IsUndefined(t->async_promise) ? FG_FRAME_ASYNC_RESUME : FG_FRAME_ASYNC)
                          : t->gen_data ? FG_FRAME_GENERATOR
