@@ -2054,6 +2054,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/timegate.h"
 #include "fixture/datenum.h"
 #include "fixture/dateslot.h"
+#include "fixture/splitarr.h"
 #include "fixture/rxcompile.h"
 #include "fixture/codegenrest.h"
 #include "fixture/b64coerce.h"
@@ -2881,6 +2882,7 @@ TF_DOCS[] = {
     { "timegate", HTML_TIMEGATE },
     { "datenum", HTML_DATENUM },
     { "dateslot", HTML_DATESLOT },
+    { "splitarr", HTML_SPLITARR },
     { "rxcompile", HTML_RXCOMPILE },
     { "codegenrest", HTML_CODEGENREST },
     { "b64coerce", HTML_B64COERCE },
@@ -26692,6 +26694,34 @@ TF_UNIT void probes_dateslot(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `splitarr` document (fixture/splitarr.h): a split of an unknown String, mapped, is an Array
+   whose elements the page's callback runs on, with and without an example. */
+static void splitarr_rows(const char *js, const char *cb, const char *ty, const char *so, int *tt,
+                          const char **why) {
+    fold_row(tt, why, param_value_is(js, cb, "w", "saCB"),
+             "no callback record: map's callback never ran over the split's elements on any flow");
+    fold_row(tt, why, param_value_is(js, ty, "w", "saARRAY") && !param_value_is(js, ty, "w", "saNOTARRAY"),
+             "Array.isArray over the mapped split answered false on some flow, or was reached on none");
+    fold_row(tt, why, param_value_is(js, ty, "k", "saOBJECT") && !param_value_is(js, ty, "k", "saNOTOBJECT"),
+             "typeof over the mapped split answered something other than \"object\" on some flow");
+    fold_row(tt, why, (param_value_is(js, so, "w", "saREPEAT") || param_value_is(js, so, "w", "saUNIQUE")) &&
+                      !param_value_is(js, so, "w", "saTHREW"),
+             "`.some` over the mapped split threw on some flow, or completed on none");
+}
+
+TF_UNIT void probes_splitarr(const char *js, Probe *tab, int *n) {
+    const char *q_why = NULL; int q_tt = 1;
+    const char *g_why = NULL; int g_tt = 1;
+
+    splitarr_rows(js, "/api/saq-cb", "/api/saq-type", "/api/saq-some", &q_tt, &q_why);
+    splitarr_rows(js, "/api/sag-cb", "/api/sag-type", "/api/sag-some", &g_tt, &g_why);
+    const Probe rows[] = {
+        { "sa-example", q_tt, "/api/saq-some", SESS_EXPLORE, q_why },
+        { "sa-noexample", g_tt, "/api/sag-some", SESS_EXPLORE, g_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `datenum` document (fixture/datenum.h): both arms of the gate after each coercion. */
 TF_UNIT void probes_datenum(const char *js, Probe *tab, int *n) {
     const char *pl_why = NULL; int pl_tt = 1;
@@ -33154,6 +33184,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_timegate(js, probes, &np);
     probes_datenum(js, probes, &np);
     probes_dateslot(js, probes, &np);
+    probes_splitarr(js, probes, &np);
     probes_rxcompile(js, probes, &np);
     probes_codegenrest(js, probes, &np);
     probes_b64coerce(js, probes, &np);
