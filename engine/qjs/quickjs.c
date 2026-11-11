@@ -48874,6 +48874,8 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
 int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots) { return fg_read(ctx, g, roots, NULL); }
 int JS_FlowGraphReadFlow(JSContext *ctx, JSFlowGraph *g, JSValue *vals, JSValue **frames)
 {
+    DCHECK(g->bytes.b != NULL || g->bytes.len == 0,
+           "a flow graph was read while its bytes were taken out (JS_FlowGraphTakeBytes) and not put back");
     JSGCCycle *c = &ctx->rt->gc_cycle;
     const uint64_t born0 = c->residency_births;
     int ret;
@@ -48887,6 +48889,25 @@ int JS_FlowGraphReadFlow(JSContext *ctx, JSFlowGraph *g, JSValue *vals, JSValue 
     gc_absent(ctx->rt, -(int64_t)g->absent);
     g->absent = 0;
     return ret;
+}
+
+uint8_t *JS_FlowGraphTakeBytes(JSFlowGraph *g, size_t *len)
+{
+    uint8_t *b = g->bytes.b;
+
+    DCHECK(b != NULL || g->bytes.len == 0, "a flow graph's bytes were taken out twice");
+    *len = g->bytes.len;
+    g->bytes.b = NULL;
+    g->bytes.cap = 0;
+    return b;
+}
+
+void JS_FlowGraphPutBytes(JSFlowGraph *g, uint8_t *bytes, size_t len)
+{
+    DCHECK(g->bytes.b == NULL && g->bytes.cap == 0 && len == g->bytes.len && (bytes != NULL || len == 0),
+           "a flow graph's bytes were put back while it held bytes, or at another length than were taken out");
+    g->bytes.b = bytes;
+    g->bytes.cap = len;
 }
 
 size_t JS_FlowGraphBytes(const JSFlowGraph *g, const uint8_t **bytes) { *bytes = g->bytes.b; return g->bytes.len; }

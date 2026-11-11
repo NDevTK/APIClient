@@ -111,7 +111,8 @@ METRIC(sold_waits_unfunded, "soldWaitsUnfunded", LIFETIME, "member", PROCESS, "s
 METRIC(sold_waits_gap, "soldWaitsGap", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 METRIC(sold_waits_other, "soldWaitsOther", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 METRIC(restored, "restored", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
-METRIC(sold_unwritten, "soldUnwritten", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+METRIC(sold_spilled, "soldSpilled", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+METRIC(restored_spilled, "restoredSpilled", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 /* …and what written stubs' bytes name by reference because something outside them still named it at the sale
    (JS_FlowGraphSettle): objects and closure cells, summed over sales. */
 METRIC(sold_named, "soldNamed", LIFETIME, "object", PROCESS, "solver/engine.c", INT)

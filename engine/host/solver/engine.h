@@ -579,6 +579,21 @@ struct Flow;
    siblings run or how fast the wire answered. `engine_reply_due` is the due point of an answer asked now. */
 int64_t engine_reply_clock(const struct Flow *f);
 int64_t engine_reply_due(const struct Flow *f);
+
+/* The disk tier a written stub's bytes move to at the RAM floor and are read back from within the session
+   (engine.c's engine_reclaim_tail and engine_sale_restore): a file in the native host, IndexedDB in the extension.
+   `write` stores the `n` parts, names the entry in `*key` (never 0) and answers 0, allocating nothing (it runs at
+   the allocator's floor); `read` fills each part's buffer with the bytes stored under `key` and answers 0; `drop`
+   forgets `key`, an entry of `len` bytes. The host installs it before the first session. */
+typedef struct { const uint8_t *b; size_t n; } EngineSpillPart;
+typedef struct {
+    int (*write)(const EngineSpillPart *parts, int n, uint64_t *key);
+    int (*read)(uint64_t key, uint8_t *const *bufs, const size_t *lens, int n);
+    void (*drop)(uint64_t key, size_t len);
+} EngineSpillStore;
+void engine_set_spill_store(const EngineSpillStore *store);
+/* Forgets what the disk tier holds under `key`, `len` bytes (a written stub released with its bytes there). */
+void engine_spill_drop(uint64_t key, size_t len);
 /* The work residency caused, banked apart from engine_service_work: the collector's past a path collection's
    price and all of a residency-owed one (solver/engine.c's engine_collect_slice), and the host work of residency
    spans (core/timing/thread_work.h), lifetime. */
@@ -1317,7 +1332,7 @@ typedef struct {
     long host_terminated;    /* rendezvous ids withdrawn: Fetch §2 Infrastructure's terminate-a-fetch-controller */
     long paged_reqs;         /* synchronous requests a sale took with it */
     /* Whether the allocator's refusal edge reached the pager at all, which a zero `sold` cannot say:
-       `paged_over + paged_unarmed + paged_floor + paged_shed + paged_sales + sold_unwritten == paged_asks` and
+       `paged_over + paged_unarmed + paged_floor + paged_shed + paged_sales + sold_spilled == paged_asks` and
        `paged_sales == sold`, asserted at engine_frontier_census. */
     long paged_asks;         /* times the allocator's refusal edge reached this engine (engine_reclaim_tail) */
     long paged_over;         /* …declined because the request exceeds the instance's whole limit */
@@ -1330,7 +1345,8 @@ typedef struct {
        the session's park because it ran unfunded, met a part with no writer, or holds a named reason. */
     long sold_restores, sold_waits_unfunded, sold_waits_gap, sold_waits_other;
     long restored;            /* written stubs a pick read back */
-    long sold_unwritten;      /* written stubs whose bytes the pager gave back at the floor */
+    long sold_spilled;        /* written stubs whose bytes the pager moved to the disk tier at the floor */
+    long restored_spilled;    /* picks that read a written stub's bytes back from the disk tier */
     long sold_named;          /* objects and cells written stubs read back as themselves (JS_FlowGraphSettle) */
     long sale_over_reserve;   /* funded sales whose allocations asked for more than the block they gave back */
     long sale_reserve_kib;    /* the sale reserve held now, 0 when the allocator refused it */

@@ -3877,6 +3877,11 @@ JS_EXTERN void JS_FlowGraphFree(JSContext *ctx, JSFlowGraph *g);
 struct JSFlowGraphRoots;
 JS_EXTERN JSFlowGraph *JS_FlowGraphWriteFlow(JSContext *ctx, const struct JSFlowGraphRoots *roots, uint32_t floor);
 JS_EXTERN int JS_FlowGraphReadFlow(JSContext *ctx, JSFlowGraph *g, JSValue *vals, JSValue **frames);
+/* A flow write's bytes taken out for a disk tier and put back before its read: the caller owns them in between,
+   allocated with the C library's malloc, and the graph keeps its anchors, cells and holds, which name objects of
+   this process, so the bytes are read back only within it. */
+JS_EXTERN uint8_t *JS_FlowGraphTakeBytes(JSFlowGraph *g, size_t *len);
+JS_EXTERN void JS_FlowGraphPutBytes(JSFlowGraph *g, uint8_t *bytes, size_t len);
 /* A flow write's settle, once every holder the flow itself had has given its reference back (a sale's release),
    inside the release scope that owes the cycles it lets go. An object or closed cell the write built by content
    that something outside the write still names, and everything such a one names in turn (by the collector's

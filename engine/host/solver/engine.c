@@ -12928,8 +12928,79 @@ static void engine_sale_reserve_retake(int funded) {
    that read a written stub back. */
 static long g_sold_restores, g_sold_waits_unfunded, g_sold_waits_gap, g_sold_waits_other, g_restored;
 static long g_sold_named;   /* objects and cells written stubs read back as themselves (JS_FlowGraphSettle) */
-/* Written stubs whose bytes the pager gave back at the floor (flow_stub_unwrite), each then waiting for its recipe. */
-static long g_sold_unwritten;
+/* Written stubs whose bytes the pager moved to the disk tier at the floor (engine_sale_spill), and the picks that
+   read them back from it. */
+static long g_sold_spilled, g_restored_spilled;
+
+/* The host's disk tier (engine.h). */
+static const EngineSpillStore *g_spill;
+
+void engine_set_spill_store(const EngineSpillStore *store) {
+    DCHECK(store == NULL || (store->write && store->read && store->drop),
+           "a disk tier was installed without one of its three answers");
+    g_spill = store;
+}
+
+void engine_spill_drop(uint64_t key, size_t len) {
+    DCHECK(g_spill != NULL && key != 0, "a disk tier entry was dropped that no store named");
+    g_spill->drop(key, len);
+}
+
+/* A written stub's bytes, moved to the disk tier: the graph's, its delta head's and its register's standing.
+   They hold in-process pointers and are kept as they are, which is sound because they are read back only within
+   this session, by this process. Answers 0 when the store refused them, which leaves the stub as it was.
+   Named residual. Not covered: the stub's frozen delta chain, DOM base and pin blob stay resident. Next diff
+   builds: those written to the same tier, or each released and re-derived from the stub's recipe at its restore.
+   Absence shows as: `pagedFloor` rising while `soldSpilled` equals the written stubs standing. */
+static int engine_sale_spill(Flow *f) {
+    FlowSold *s = f->sold;
+    EngineSpillPart parts[3];
+    size_t gn = 0;
+    uint8_t *gb;
+
+    DCHECK(f->cold && s != NULL && s->spill_key == 0, "a stub was spilled that is not a written one, or twice");
+    if (g_spill == NULL) {
+        DFAIL("a written stub's bytes reached the RAM floor in a host with no disk tier — install one with "
+              "engine_set_spill_store (the extension's renderer: IndexedDB, with the stub's pick waiting on the read)");
+        return 0;
+    }
+    gb = JS_FlowGraphTakeBytes(s->g, &gn);
+    parts[0] = (EngineSpillPart){ gb, gn };
+    parts[1] = (EngineSpillPart){ s->head, s->head_n };
+    parts[2] = (EngineSpillPart){ s->track, (size_t)s->track_n };
+    if (g_spill->write(parts, 3, &s->spill_key) != 0) {
+        s->spill_key = 0;
+        JS_FlowGraphPutBytes(s->g, gb, gn);
+        return 0;
+    }
+    DCHECK(s->spill_key != 0, "the disk tier stored a written stub's bytes and named the entry 0");
+    s->g_n = gn;
+    free(gb);
+    free(s->head); s->head = NULL;
+    free(s->track); s->track = NULL;
+    return 1;
+}
+
+/* A spilled stub's bytes, read back from the disk tier before its restore reads them. */
+static void engine_sale_fill(FlowSold *s) {
+    uint8_t *bufs[3];
+    size_t lens[3] = { s->g_n, s->head_n, (size_t)s->track_n };
+
+    DCHECK(s->spill_key != 0 && g_spill != NULL, "a stub's bytes were read back that are not on the disk tier");
+    for (int i = 0; i < 3; i++) {
+        bufs[i] = reclaim_malloc(lens[i] ? lens[i] : 1);
+        CHECK(bufs[i] != NULL, "engine: OOM reading a written stub's bytes back from the disk tier");
+    }
+    CHECK(g_spill->read(s->spill_key, bufs, lens, 3) == 0,
+          "the disk tier could not give back a written stub's bytes, which are the only copy of its state");
+    g_spill->drop(s->spill_key, lens[0] + lens[1] + lens[2]);
+    s->spill_key = 0;
+    JS_FlowGraphPutBytes(s->g, s->g_n ? bufs[0] : NULL, s->g_n);
+    if (!s->g_n) free(bufs[0]);
+    s->head = bufs[1];
+    s->track = bufs[2];
+    g_restored_spilled++;
+}
 static void sale_tally(SaleTally **t, int *n, const char *name) {
     int k;
     for (k = 0; k < *n; k++) if (!strcmp((*t)[k].name, name)) break;
@@ -13091,6 +13162,7 @@ static void engine_sale_restore(JSContext *ctx, Flow *f) {
     DCHECK(f->cold && s != NULL && s->n_vals >= SALE_WRITE_FIXED && f->n_agents == 1 && f->delta != NULL &&
                JS_IsUndefined(f->fn) && JS_IsUndefined(f->agents[0].jobs) && f->agents[0].frame == NULL,
            "a restore was asked of a member that is not a written stub holding no bulk");
+    if (s->spill_key) engine_sale_fill(s);
     vals = malloc(sizeof *vals * (size_t)s->n_vals);
     CHECK(vals != NULL, "engine: OOM reading a sold member back");
     /* A restore is residency: its births owe no collection (JS_FlowGraphReadFlow). */
@@ -13235,14 +13307,13 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
         }
     }
     tail = flow_worst(g_reclaim_keep ? g_reclaim_keep : flow_running());
-    /* With no resident member left to sell, a written stub's bytes go before the floor: they are re-derivable
-       from the recipe the stub keeps, so giving them back loses no work a replay cannot redo. */
+    /* With no resident member left to sell, a written stub's bytes move to the disk tier before the floor: they
+       are the only copy of its state within this build, so they are relocated, never given back. */
     if (!tail) {
-        Flow *w = flow_sold_worst();
+        Flow *w = flow_sold_worst(g_reclaim_keep ? g_reclaim_keep : flow_running());
 
-        if (w) {
-            flow_stub_unwrite(g_sess_ctx, w);
-            g_sold_unwritten++;
+        if (w && engine_sale_spill(w)) {
+            g_sold_spilled++;
             return 1;
         }
     }
@@ -15239,7 +15310,8 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->sold_waits_other = g_sold_waits_other;
     out->restored = g_restored;
     out->sold_named = g_sold_named;
-    out->sold_unwritten = g_sold_unwritten;
+    out->sold_spilled = g_sold_spilled;
+    out->restored_spilled = g_restored_spilled;
     out->sale_over_reserve = g_sale_over_reserve;
     out->sale_reserve_kib = g_sale_reserve ? (long)(g_sale_reserve_bytes / 1024) : 0;
     out->sale_need_max_kib = (long)(g_sale_need_max / 1024);
@@ -15344,11 +15416,11 @@ void engine_frontier_census(EngineFrontierCensus *out)
        was consulted and could do nothing". A sale exit sells one flow, and a shed at the edge is one of the sheds
        `cuts_shed` counts. */
     DCHECKF(out->paged_over + out->paged_unarmed + out->paged_floor + out->paged_shed + out->paged_sales +
-                out->sold_unwritten == out->paged_asks,
+                out->sold_spilled == out->paged_asks,
             "the census's reclaim rows do not partition the allocator's asks (%ld past the limit + %ld unarmed + %ld "
-            "at the floor + %ld shed + %ld sales + %ld written stubs given back against %ld) — engine_reclaim_tail "
+            "at the floor + %ld shed + %ld sales + %ld written stubs spilled against %ld) — engine_reclaim_tail "
             "has six exits that each count themselves", out->paged_over, out->paged_unarmed, out->paged_floor,
-            out->paged_shed, out->paged_sales, out->sold_unwritten, out->paged_asks);
+            out->paged_shed, out->paged_sales, out->sold_spilled, out->paged_asks);
     DCHECKF(out->paged_sales == out->sold,
             "the census counts %ld sale exits against %ld flows sold — engine_sale_release runs once per sale exit",
             out->paged_sales, out->sold);

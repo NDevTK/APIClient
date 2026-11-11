@@ -179,7 +179,9 @@ typedef struct {
    register, jobs, frame and the values of its delta's head, JS_FlowGraphWriteFlow), its head's entries around
    those values (cow_delta_head_write), and each register record's standing in the outstanding set at the sale
    (pending_track_states). Owned by the stub; the restore (engine.c) reads and frees it, flow_release frees it
-   unread. */
+   unread. At the RAM floor its bytes (the graph's, the head and the track) move to the disk tier under
+   `spill_key` (engine.h's EngineSpillStore) and come back at its restore; the graph keeps its anchors, cells and
+   holds, which name objects of this process. */
 typedef struct FlowSold {
     struct JSFlowGraph *g;
     uint8_t *head;
@@ -188,6 +190,8 @@ typedef struct FlowSold {
     int track_n;
     int n_vals;   /* the graph's value roots */
     int framed;   /* the one agent held a frame, the graph's one base */
+    uint64_t spill_key;   /* the disk tier's key while the bytes are there, 0 while they are resident */
+    size_t g_n;           /* the graph's byte length while they are there */
 } FlowSold;
 
 typedef struct Flow {
@@ -2130,14 +2134,11 @@ void  flow_sale_end(Flow *f, JSValue stand_ins);
 /* The flow.c half of a written stub's restore, once engine.c has read its bulk back: it is resident again, off
    the written list and in the order's index (it was picked, so it is not host-owed), with its rank unmoved. */
 void  flow_restore_end(Flow *f);
-/* Frees a written member's bytes and the graph's anchors. */
+/* Frees a written member's bytes, in memory or on the disk tier, and the graph's anchors. */
 void  flow_sold_free(JSContext *ctx, FlowSold *s);
-/* A written stub given back to its recipe: its bytes and what it kept for its restore (chain, DOM base, pin blob,
-   rows, snapshot references) are released, as a sale releases an unwritten stub's, and it waits unmarked for the
-   session's park. The bytes are re-derivable from the recipe the stub keeps. Not inside a sale, asserted. */
-void  flow_stub_unwrite(JSContext *ctx, Flow *f);
-/* The written stub of least weight, the one whose bytes the pager gives back first; NULL when none stands. */
-Flow *flow_sold_worst(void);
+/* The written stub of least weight whose bytes are resident, other than `keep`: the one whose bytes the pager
+   moves to the disk tier first; NULL when none stands. */
+Flow *flow_sold_worst(const Flow *keep);
 int   flow_cold(const Flow *f);
 /* The stubs standing, and the stubs that have left the registry (flow_remove): every member ever sold is one or
    the other. */

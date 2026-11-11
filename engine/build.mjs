@@ -234,7 +234,7 @@ function retiredReading(c) {
     /* The pager's own partition. engine_reclaim_tail leaves by six exits and each counts itself on the line it
      leaves by; a sale exit sells one member, so the sale exits are `sold`. */
   coldPartition(c, "pagedAsks", ["pagedOver", "pagedUnarmed", "pagedFloor", "pagedShed", "pagedSales",
-                                 "soldUnwritten"], "engine_frontier_census");
+                                 "soldSpilled"], "engine_frontier_census");
   coldPartition(c, "sold", ["soldRestores", "soldWaitsUnfunded", "soldWaitsGap", "soldWaitsOther"],
                 "engine_sale_release");
   coldPartition(c, "sold", ["pagedSales"], "engine_frontier_census");

@@ -177,6 +177,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>   /* `abi_paint`'s file I/O — the one place this host's failures are the DISK's */
+#include <fcntl.h>   /* fallocate: the disk tier gives a dropped entry's blocks back */
 #include <sys/resource.h>   /* RLIMIT_AS: the address-space ceiling native_ceiling_arm gives this host */
 #include <signal.h>         /* SIGABRT, the nested-entry child's expected end */
 #include <sys/wait.h>       /* nested_entry_selftest's children, whose abort is the answer it reads */
@@ -19589,6 +19590,7 @@ static long tf_hist_above(const char *js, const char *key, int from) {
    (`soldNamed`), answered. sale-ctor-busy-returns, sale-catch-busy-returns, sale-pexec-* and sale-asyncfn-*: a
    member sold in a constructor's body, inside a `try`, in a promise executor two Reflect.construct calls reached,
    or in an async body before its first await, waits on no gap of the kinds each row names, returns and reports. */
+static long tf_census_row(const char *js, const char *census, const char *key);
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
     const char *cat = strstr(js, "\"saleCensus\":{\"n\":");
@@ -19744,8 +19746,19 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     fold_row(&xt, &xwhy, g_tf_sale.relisted,
              "the bill taken after the sale at the floor no longer lists the owed request, so the sale withdrew a "
              "request its sold member still owes");
+    /* At the floor a written stub's bytes move to the disk tier and come back at its pick within the session. */
+    const char *pwhy = NULL;
+    int pt = 1;
+    fold_row(&pt, &pwhy, g_tf_sale.floor == 1 && tf_census_row(js, "_cold", "soldSpilled") >= 1,
+             "NOT ARMED: no written stub's bytes were moved to the disk tier at the floor (`soldSpilled`)");
+    fold_row(&pt, &pwhy, tf_census_row(js, "_cold", "restoredSpilled") >= 1,
+             "no pick read a spilled stub's bytes back from the disk tier within the session (`restoredSpilled`)");
+    fold_row(&pt, &pwhy, param_value_is(js, "/api/sl-floor-done", "b", "22"),
+             "NOT REACHED: no /api/sl-floor-done?b=22 record, so the member sold at the floor while it owed "
+             "/api/sl-floor-owed did not return within the session");
     const Probe rows[] = {
         { "sale-floor-sells", xt, "slFloor", SESS_EXPLORE, xwhy },
+        { "sale-floor-spill-returns", pt, "slFloor", SESS_EXPLORE, pwhy },
         { "sale-forced-returns", ft, "slForced", SESS_EXPLORE, fwhy },
         { "sale-own-returns", ot, "slOwn", SESS_EXPLORE, owhy },
         { "sale-async-returns", yt, "slAsync", SESS_EXPLORE, awhy },
@@ -48001,9 +48014,68 @@ static void native_ceiling_arm(void) {
 
 /* This process's turn inside a step: it has no event loop, so the turn is over when it is taken. */
 static void tf_step_turn(void) {}
+#if !defined(__EMSCRIPTEN__)
+/* The native host's disk tier (solver/engine.h's EngineSpillStore): one file, unlinked as soon as it is made so
+   the system reclaims it with the process however it ends, appended with system calls (a write runs at the
+   allocator's floor, so it allocates nothing). An entry's key is its offset plus one; a dropped entry's blocks
+   are given back by punching them out. */
+static struct { int fd; uint64_t end; } g_tf_spill = { -1, 0 };
+
+static int tf_spill_write(const EngineSpillPart *parts, int n, uint64_t *key) {
+    uint64_t at = g_tf_spill.end;
+
+    if (g_tf_spill.fd < 0) {
+        const char *tmp = getenv("TMPDIR");
+        char path[512];
+        int w = snprintf(path, sizeof path, "%s/apiclient-spill-XXXXXX", tmp && *tmp ? tmp : "/tmp");
+
+        if (w <= 0 || (size_t)w >= sizeof path || (g_tf_spill.fd = mkstemp(path)) < 0) return -1;
+        CHECK(unlink(path) == 0, "the native host could not unlink its disk tier's file");
+    }
+    for (int i = 0; i < n; i++)
+        for (size_t off = 0; off < parts[i].n; ) {
+            ssize_t w = pwrite(g_tf_spill.fd, parts[i].b + off, parts[i].n - off, (off_t)at);
+
+            if (w <= 0) return -1;
+            off += (size_t)w;
+            at += (uint64_t)w;
+        }
+    *key = g_tf_spill.end + 1;
+    g_tf_spill.end = at;
+    return 0;
+}
+
+static int tf_spill_read(uint64_t key, uint8_t *const *bufs, const size_t *lens, int n) {
+    uint64_t at = key - 1;
+
+    DCHECK(g_tf_spill.fd >= 0 && key != 0 && key <= g_tf_spill.end + 1, "the disk tier was read at a key it never named");
+    for (int i = 0; i < n; i++)
+        for (size_t off = 0; off < lens[i]; ) {
+            ssize_t r = pread(g_tf_spill.fd, bufs[i] + off, lens[i] - off, (off_t)at);
+
+            if (r <= 0) return -1;
+            off += (size_t)r;
+            at += (uint64_t)r;
+        }
+    return 0;
+}
+
+static void tf_spill_drop(uint64_t key, size_t len) {
+    DCHECK(g_tf_spill.fd >= 0 && key != 0 && key - 1 + len <= g_tf_spill.end,
+           "the disk tier was asked to drop an entry it does not hold");
+    CHECKF(len == 0 || fallocate(g_tf_spill.fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, (off_t)(key - 1),
+                                 (off_t)len) == 0,
+           "the native host could not give a dropped disk tier entry's blocks back (errno %d)", errno);
+}
+
+static const EngineSpillStore TF_SPILL = { tf_spill_write, tf_spill_read, tf_spill_drop };
+#endif
 
 int main(int argc, char **argv) {
     concolic_install_required();
+#if !defined(__EMSCRIPTEN__)
+    engine_set_spill_store(&TF_SPILL);
+#endif
     JSRuntime *rt;
     native_ceiling_arm();
     /* The attacker's site (solver/concolic.h's concolic_set_attacker_site): the host the person verifying
