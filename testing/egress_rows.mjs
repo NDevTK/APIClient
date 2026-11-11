@@ -10,6 +10,9 @@
 // whatever its destination; the seed is the one load this zone composes that leaves; and a refusal names the
 // fact that decided it.
 //
+// The third group: a refused request byte-identical to a send the same document's unforced run already made is
+// answered from that send's record, and the server's count does not move.
+//
 //   node testing/egress_rows.mjs
 "use strict";
 import { createServer } from 'node:http';
@@ -55,11 +58,11 @@ const docOf = (page, reach, driven = 'undriven', pinned = 'unpinned') =>
 
 /* A page request as engine/trusted.mjs's workFetch states it, from the document `docKey` at `page`. */
 async function ask(page, url, docKey, { destination = '', mode = 'cors', provenance = 'derived', pinned = 'unpinned',
-                                        driven = 'undriven', reach = 'observed' } = {}) {
+                                        driven = 'undriven', reach = 'observed', headers } = {}) {
   const origin = new URL(page).origin;
   return ZONE.safeFetch(url, {
     pageOrigin: origin, destination, mode, provenance, pinned, driven,
-    actor: 'page', credentialed: false, credentials: 'same-origin', useCorsPreflight: false,
+    actor: 'page', credentialed: false, credentials: 'same-origin', useCorsPreflight: false, headers,
     doc: docOf(page, reach),
     identity: await ZONE.pageRequestIdentity(origin, page, docKey, url, 'same-origin', mode,
                                              'strict-origin-when-cross-origin', page) });
@@ -75,6 +78,7 @@ const toolAsk = (page, url, provenance) =>
                         mode: provenance === 'observed' ? 'navigate' : 'cors', provenance,
                         pinned: provenance === 'observed' ? 'unpinned' : 'unstated', actor: 'tool', driven: 'unstated',
                         doc: docOf(page, 'observed'), credentialed: false, credentials: 'omit', useCorsPreflight: false });
+const text = (r) => new TextDecoder().decode(r.body);
 const refusalOf = (r) => r.refusal ? r.refusal.reason : 'sent';
 /* The firing question alone, for an act that sends nothing here. */
 const firing = (url, facts) => ZONE.safeFetchFiringRefusal(Object.assign(
@@ -165,15 +169,40 @@ const ROWS = [
                firing(`${PART}/x`, { provenance: 'forced' }), 'destination=value'],
               ['pinned at that origin', firing(`${PART}/x`, { provenance: 'forced', pinned: 'pinned' }), 'witness=pinned'],
               ['the unforced run at that origin', firing(`${PART}/x`, {}), null]]; } },
+  { label: 'a forced world\'s request identical to one the unforced run sent is served from that send\'s record',
+    run: async () => {
+      const own = await ask(PAGE_A, `${A}/served`, 'engine:served');
+      const forced = await ask(PAGE_A, `${A}/served`, 'engine:served', { provenance: 'forced' }), e = only(forced);
+      return [['GET /served', count('GET', '/served'), 1], ['the unforced ask', only(own).how, 'sent'],
+              ['the forced ask', refusalOf(forced), 'sent'], ['how', e.how, 'answered-locally'],
+              ['admitted by', arm(e), 'record'], ['it names what refused the send', e.admittedBy && e.admittedBy.refused, 'provenance=forced'],
+              ['the bytes are the recorded reply\'s', text(forced), 'GET /served #1']]; } },
+  { label: 'a forced request that differs in one header, or is another document\'s, is no such send: declined',
+    run: async () => {
+      await ask(PAGE_A, `${A}/served-h`, 'engine:servedh', { headers: [['Accept', 'text/plain']] });
+      const header = await ask(PAGE_A, `${A}/served-h`, 'engine:servedh', { provenance: 'forced', headers: [['Accept', 'text/html']] });
+      const other = await ask(PAGE_A, `${A}/served-h`, 'engine:servedh-2', { provenance: 'forced', headers: [['Accept', 'text/plain']] });
+      return [['GET /served-h', count('GET', '/served-h'), 1], ['another header', refusalOf(header), 'blocked-signal:provenance=forced'],
+              ['another document', refusalOf(other), 'blocked-signal:provenance=forced'],
+              ['how', only(header).how + ',' + only(other).how, 'not-sent,not-sent']]; } },
+  { label: 'a record a widened send made is not the unforced run\'s: once the origin is narrowed it answers nothing',
+    run: async () => {
+      const made = await ask(PAGE_W, `${W}/tool-made`, 'engine:toolmade', { provenance: 'forced' });
+      ZONE.safeFetchUnwiden(W);
+      const after = await ask(PAGE_W, `${W}/tool-made`, 'engine:toolmade', { provenance: 'forced' });
+      return [['GET /tool-made', count('GET', '/tool-made'), 1], ['made', arm(only(made)), 'widened'],
+              ['after the narrowing', refusalOf(after), 'blocked-signal:provenance=forced']]; } },
   { label: 'the zone counts its sends by how each left and what admitted it', run: async () => {
       const c = typeof ZONE.safeFetchEgressCensus === 'function' ? ZONE.safeFetchEgressCensus() : null;
       const sum = c === null ? -1 : Object.values(c).reduce((a, n) => a + n, 0);
       /* Sent by a default arm: own, twice, hop, landed, own.js, reached.js, reached.css, own-nav, seed. Sent
          widened: wide, wide.js. Not sent: pin, forced-value, assumed.js, forced.png, forced-nav, probe,
-         driven.js. Twice's second ask was answered locally. */
-      return [['entries counted', sum, 19], ['sent by a default arm', c && c['sent default'], 9],
-              ['sent at a widened origin', c && c['sent widened'], 2], ['not sent', c && c['not-sent none'], 7],
-              ['answered locally', c && c['answered-locally default'], 1]]; } },
+         driven.js. Twice's second ask was answered locally. The third group adds served and served-h sent by
+         a default arm, tool-made sent widened, three asks not sent and one served from the record. */
+      return [['entries counted', sum, 26], ['sent by a default arm', c && c['sent default'], 11],
+              ['sent at a widened origin', c && c['sent widened'], 3], ['not sent', c && c['not-sent none'], 10],
+              ['answered locally', c && c['answered-locally default'], 1],
+              ['served from the record', c && c['answered-locally record'], 1]]; } },
 ];
 
 let bad = 0;
