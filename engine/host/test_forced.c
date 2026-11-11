@@ -1581,6 +1581,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/envarm.h"
 #include "fixture/envtypes.h"
 #include "fixture/framerace.h"
+#include "fixture/shuffle.h"
 #include "fixture/storearm.h"
 #include "fixture/pagewrite.h"
 #include "fixture/keydomain.h"
@@ -2372,6 +2373,7 @@ TF_DOCS[] = {
     { "envarm", HTML_ENVARM },
     { "envtypes", HTML_ENVTYPES },
     { "framerace", HTML_FRAMERACE },
+    { "shuffle", HTML_SHUFFLE },
     { "storearm", HTML_STOREARM },
     { "pagewrite", HTML_PAGEWRITE },
     { "keydomain", HTML_KEYDOMAIN },
@@ -18858,6 +18860,32 @@ TF_UNIT void probes_framerace(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `shuffle` document (fixture/shuffle.h): element accesses at an index that is an environment
+   unknown holding an example run on the example's index. */
+TF_UNIT void probes_shuffle(const char *js, Probe *tab, int *n) {
+    const char *node_why = NULL; int node_tt = 1;
+    const char *pick_why = NULL; int pick_tt = 1;
+
+    fold_row(&node_tt, &node_why, !!strstr(js, "\"/api/shuffled\""),
+             "NOT REACHED: there is no /api/shuffled record, so the script threw before its fetch — an element read "
+             "at an index computed from Math.random() did not answer the Node the Array holds there, and "
+             "appendChild refused it");
+    fold_row(&node_tt, &node_why, param_value_is(js, "/api/shuffled", "n", "4"),
+             "the rail does not hold four children after its tiles were shuffled and appended");
+    fold_row(&node_tt, &node_why, param_value_is(js, "/api/shuffled", "set", "abcd"),
+             "the shuffled rail is not a permutation of its four tiles: a swap through the unknown index read or "
+             "wrote a slot other than the example's");
+    fold_row(&pick_tt, &pick_why,
+             emitted_record_has(js, "/api/shpick", "shTookFirst") && emitted_record_has(js, "/api/shpick", "shTookSecond"),
+             "/api/shpick does not stand at both arms of the comparison over a String picked at a Math.random() "
+             "index: the pick is still an unknown, whose example is the element at the example's index");
+    const Probe rows[] = {
+        { "shuffle-nodes-kept", node_tt, "/api/shuffled", SESS_EXPLORE, node_why },
+        { "shuffle-pick-forks", pick_tt, "/api/shpick", SESS_EXPLORE, pick_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `storearm` document. A key this run wrote reads back the value it stored (the page's own
    requests grade `derived` at best: engine_prov_of_running_path never answers `observed`). The
    branches over a localStorage key the area lacks and over the cookies the jar lacks keep the example's arm on the
@@ -31196,6 +31224,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_envarm(js, probes, &np);
     probes_envtypes(js, probes, &np);
     probes_framerace(js, probes, &np);
+    probes_shuffle(js, probes, &np);
     probes_storearm(js, probes, &np);
     probes_pagewrite(js, probes, &np);
     probes_keydomain(js, probes, &np);
