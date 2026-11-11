@@ -3028,6 +3028,7 @@ TF_DOCS[] = {
     { "modpreload", HTML_MODPRELOAD },
     { "candcontra", HTML_CANDCONTRA },
     { "candweak", HTML_CANDWEAK },
+    { "candoutcome", HTML_CANDOUTCOME },
     { "candarrive", HTML_CANDARRIVE },
     { "slicelen", HTML_SLICELEN },
     { "strsearch", HTML_STRSEARCH },
@@ -23060,7 +23061,8 @@ TF_UNIT void probes_uriclass(const char *js, Probe *tab, int *n) {
    seeds candidates on a path holding a decision over the fragment itself. A candidate reads delivered bytes there,
    so that decision asks nothing, and its slot is consumed by the delivery (decide.h's decide_delivery_stats).
    `candslot`'s delivery agrees with the recorded arm, so the candidate keeps its path and fires. `candcontra`'s
-   contradicts it and the next question differs, so the candidate is pruned and retired (`candsContradicted`).
+   contradicts it and the next question differs, so the candidate is pruned and retired (`candsContradicted`);
+   `candoutcome`'s next question is a step machine's outcome ask, where the machine parks before its arm.
    `candweak`'s contradicts it with no question after it, so the slot is never met by a question: nothing consumes
    or prunes it, and the candidate takes the arm its bytes take rather than the recorded one, so it never arrives
    at the sink. `candarrive`'s path holds a declined request's arrival between the slot over the fragment and the
@@ -23079,8 +23081,9 @@ TF_UNIT void probes_candslot(const char *js, Probe *tab, int *n) {
     long retired = kdw_census(js, "candsContradicted");
     static char buf[320];
     const char *f_why = NULL, *l_why = NULL, *c_why = NULL, *cs_why = NULL, *cc_why = NULL, *ws_why = NULL,
-               *w_why = NULL, *af_why = NULL, *ak_why = NULL;
-    int f_tt = 1, l_tt = 1, c_tt = 1, cs_tt = 1, cc_tt = 1, ws_tt = 1, w_tt = 1, af_tt = 1, ak_tt = 1, st;
+               *w_why = NULL, *af_why = NULL, *ak_why = NULL, *os_why = NULL, *oc_why = NULL;
+    int f_tt = 1, l_tt = 1, c_tt = 1, cs_tt = 1, cc_tt = 1, ws_tt = 1, w_tt = 1, af_tt = 1, ak_tt = 1, os_tt = 1,
+        oc_tt = 1, st;
 
     decide_replay_stats(&hits, &left, &left_arms);
     decide_delivery_stats(&consumed, &contradicted);
@@ -23094,6 +23097,8 @@ TF_UNIT void probes_candslot(const char *js, Probe *tab, int *n) {
     fold_row(&c_tt, &c_why, consumed >= 1 && contradicted == 0, buf);
     fold_row(&cs_tt, &cs_why, st >= S_RAN, "the innerHTML <- location.hash search ran no candidate");
     fold_row(&cc_tt, &cc_why, consumed >= 1 && contradicted >= 1 && retired >= 1 && left == 0, buf);
+    fold_row(&os_tt, &os_why, st >= S_RAN, "the innerHTML <- location.hash search ran no candidate");
+    fold_row(&oc_tt, &oc_why, consumed >= 1 && contradicted >= 1 && retired >= 1 && left == 0, buf);
     fold_row(&ws_tt, &ws_why, st >= S_RAN, "the innerHTML <- location.hash search ran no candidate");
     fold_row(&w_tt, &w_why, st >= S_RAN && st < S_ARRIVED && contradicted == 0 && retired == 0 && left == 0, buf);
     fold_row(&af_tt, &af_why, st == S_FIRED && emitted_record_has(js, "/api/decl/ca", "\"door\":\"fetch\""),
@@ -23108,6 +23113,8 @@ TF_UNIT void probes_candslot(const char *js, Probe *tab, int *n) {
         { "cs-consumed", c_tt, "csRun", SESS_EXPLORE, c_why, .gate = "cs-fired" },
         { "cc-ran", cs_tt, "ccRun", SESS_EXPLORE, cs_why },
         { "cc-pruned", cc_tt, "ccRun", SESS_EXPLORE, cc_why, .gate = "cc-ran" },
+        { "co-ran", os_tt, "coRun", SESS_EXPLORE, os_why },
+        { "co-pruned", oc_tt, "coRun", SESS_EXPLORE, oc_why, .gate = "co-ran" },
         { "cw-ran", ws_tt, "cwRun", SESS_EXPLORE, ws_why },
         { "cw-no-inherit", w_tt, "cwRun", SESS_EXPLORE, w_why, .gate = "cw-ran" },
     };

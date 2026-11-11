@@ -5,7 +5,9 @@
    Two more documents put the sink behind an arm a breakout cannot take: the parity of the fragment's first code
    unit, odd, where every markup breakout opens on `<` (even). In `candcontra` each arm then tests its own absent
    global, so a candidate's next question differs from its path's; in `candweak` nothing is asked after the parity
-   test, so the contradiction meets no further recorded question.
+   test, so the contradiction meets no further recorded question. `candoutcome` asks each arm's next question
+   through a step machine instead (JSON.parse's outcome over `window.name`, a source the candidate does not
+   deliver, and over a slice of it), so the contradiction is met at a machine's outcome ask.
    `candarrive` puts an arrival's slot on the path too: inside the length test the page posts a request the
    unconfigured zone declines (the provider's `/api/decl` rule), and both of that request's reactions test the
    absent global and write the sink, so the path reads own-source slot, the decline's arrival, program question.
@@ -51,6 +53,23 @@ static const char HTML_CANDCONTRA[] =
     TF_CANVAS_INK
     "</body></html>";
 
+static const char HTML_CANDOUTCOME[] =
+    "<!doctype html><html><body>"
+    "<div id='coo'></div>"
+    "<script>"
+    "function coRun() {"
+    "  var h = decodeURIComponent(location.hash.slice(1));"
+    "  if (h.charCodeAt(0) % 2) {"
+    "    try { JSON.parse(window.name); } catch (e) {}"
+    "    document.getElementById('coo').innerHTML = h;"
+    "  } else {"
+    "    try { JSON.parse(window.name.slice(1)); } catch (e) {}"
+    "  }"
+    "}"
+    "coRun();"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
 static const char HTML_CANDARRIVE[] =
     "<!doctype html><html><body>"
     "<div id='cao'></div>"
