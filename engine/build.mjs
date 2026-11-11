@@ -7240,7 +7240,7 @@ function allocatorContractStage(bin) {
 
 /* The documents the assert-regime stage compares (engine/regimeparity.mjs): the minimal document, and each
    document a difference between the two regimes was found and fixed on, so the fix stays read. */
-const REGIME_PARITY_DOCS = ["min"];
+const REGIME_PARITY_DOCS = ["min", "dom", "sale", "saleown"];
 /* The assert-regime stages of a native build: each listed document this build ran, run again on the other
    regime's native program and the two compared. The other program is the one a build of this revision left in
    OUT, which its stamp states; a revision's first native build has none, so with no such program no stage is
