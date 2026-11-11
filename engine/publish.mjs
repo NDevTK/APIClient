@@ -1,42 +1,22 @@
-/* PUT THE PUBLICATION GATE IN THE PATH OF THE ACT, SO A PUSH CANNOT BE ISSUED WITHOUT ITS VERDICT.
+/* Puts the publication gate in the path of the push, so a push cannot be issued without its verdict.
+ *
+ *   node engine/publish.mjs <sha> --expect <n> [--remote origin] [--prose <paths>]
  *
  * `engine/pubgate.mjs` answers whether a cut is allowed and refuses a caller that has not stated how many
- * commits it believes it is publishing. Both of those are REAL and neither is reachable from a push, because
- * nothing connects them: the gate is a command somebody remembers and the push is a separate command whose
- * argument list the gate never sees. CLAUDE.md names this residual in the gate's own words -- "a wrapper taking
- * the destination and the sha that refuses to spawn `git push` on a nonzero verdict" -- and names why prose is
- * not enough for it: its own author broke the read-the-inspection rule three times in one session, and the
- * mechanical form is the only one that survives being in a hurry.
+ * commits it believes it is publishing. This wrapper connects that verdict to the act:
+ *   - The gate is spawned here with stdio inherited, so its chain is on the operator's screen. A nonzero
+ *     verdict exits with that status and spawns nothing.
+ *   - The count is checked: `git ls-remote` gives each destination's current sha, `old..sha` is counted here,
+ *     and a disagreement with --expect refuses. Both ends are read by content; no push output is parsed.
+ *   - Both refs or neither: a `main` ahead of the session branch has its extra commits undone by the next
+ *     merge, so the destinations must stand at one sha before anything is pushed, and a divergence refuses.
+ *   - Each push is its own spawn carrying nothing else, and the result is verified by content: the remote's
+ *     sha is re-read and the tree's file count is printed, because a sha says nothing about a tree.
  *
- * MEASURED, which is why this exists rather than another paragraph: a push gated with
- * `node engine/pubgate.mjs --cut <sha> > /dev/null 2>&1; echo $?` published FOUR commits of which ONE had been
- * read. The status was 0 and CORRECT the whole time -- it answers the PAIR RULE -- and the quantity that was
- * ignored went to /dev/null. Three of the four were peers': two that are a CORRECTING PAIR, and one from a lane
- * that had not reported. The pair went out whole because the cut happened to sit above both, which is luck.
- *
- * WHAT THIS CLOSES THAT THE GATE ALONE CANNOT.
- *   THE GATE IS UNBYPASSABLE because it is spawned here, with stdio INHERITED so its chain is on the operator's
- *     screen rather than in a pipe. A nonzero verdict exits with that status and spawns nothing.
- *   THE ARITHMETIC BACKSTOP IS PERFORMED. CLAUDE.md calls it "the only check that survives both ends moving" --
- *     the inspection's commit count against what the push reports moving -- and says in as many words that no
- *     instrument here does it: the gate prints its denominator, the push prints its range, and a reader joins
- *     them by eye. This asks `git ls-remote` for each destination's CURRENT sha, counts `old..sha` itself, and
- *     refuses when that disagrees with --expect. It is read by CONTENT at both ends and parses no push output.
- *   BOTH REFS OR NEITHER. A `main` that is ahead of the session branch is a `main` whose extra commits the next
- *     merge silently undoes -- measured in this project at 280 commits -- so the two destinations must already
- *     stand at ONE sha before anything is pushed, and a divergence REFUSES rather than being papered over. That
- *     is the two-ref state CLAUDE.md says nobody thinks to look at, and the refusal is how it gets looked at.
- *   EACH PUSH IS ITS OWN SPAWN, carrying nothing else, which is the shape CLAUDE.md requires of the command
- *     itself; and the verification afterwards is by CONTENT -- the remote's sha re-read, and the tree's file
- *     count printed -- because a SHA says nothing whatever about a tree and an `ls-remote` check has already
- *     passed over an empty-tree commit in this repository.
- *
- * WHAT IT DOES NOT DO, STATED SO THE GAP IS NOT INFERRED: it does not know WHICH LANE HAS REPORTED. The gate
- * says so of itself and it is still true here -- the publishable prefix ends at the oldest UNREPORTED commit,
- * which lives in no artifact, and an --expect that matches is allowed BY THE PAIR RULE AND THE COUNT ALONE.
- * RETIREMENT: this goes when the report state is an artifact a tool can read -- a lane's own commit saying in
- * its message that its author considers it final -- because the one judgement left here is then checkable too.
- */
+ * It does not know which lane has reported. The publishable prefix ends at the oldest unreported commit, which
+ * no artifact records, so an --expect that matches is allowed by the pair rule and the count alone. That
+ * judgement becomes checkable when a lane's report is an artifact a tool can read, such as a commit whose
+ * message says its author considers it final. */
 import { spawnSync } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 import { join, resolve } from "node:path";
@@ -61,17 +41,9 @@ const rev = argv.find((a) => !a.startsWith("--") && argv[argv.indexOf(a) - 1] !=
                                                 && argv[argv.indexOf(a) - 1] !== "--prose") || null;
 const expect = flag("--expect");
 const remote = flag("--remote") || "origin";
-/* THE PATHS THE PUBLISHER CLAIMS ARE PROSE-ONLY, AS AN INPUT RATHER THAN AS A SENTENCE IN A MESSAGE. CLAUDE.md
-   requires a large share of this project's diffs to be comment-only — a retired argument is REWRITTEN rather
-   than deleted, an incident is kept at its site — and the evidence offered for one is always the same sentence,
-   `I only added comments`, which is a claim about the EMITTED PROGRAM that no gate here measures. `prosediff.mjs`
-   measures it, and the reason it is spawned HERE is the reason `--expect` is required here: nothing connects a
-   command somebody remembers to the act it was supposed to gate. A claim stated at the publish is a claim with
-   an exit status in front of it.
-   IT IS A CLAIM AND NEVER A SCAN, which is the whole of why it is opt-in. Preprocessing every changed `.c` on
-   every publish costs minutes on a large translation unit and would make a prose fix unlandable, which CLAUDE.md
-   refuses by name: a citation is prose and a build that cannot land a spelling fix stops every lane. So this
-   asks nothing of a publisher who claims nothing, and refuses the one who claims wrongly. */
+/* The paths the publisher claims are prose-only, as an input: `prosediff.mjs` measures the claim, and it is
+   spawned here so the claim has an exit status in front of the push. It is opt-in, a claim and not a scan:
+   preprocessing every changed `.c` on every publish would cost minutes on a large translation unit. */
 const prose = (flag("--prose") || "").split(",").map((x) => x.trim()).filter(Boolean);
 
 if (rev === null || expect === null)
@@ -83,12 +55,11 @@ if (rev === null || expect === null)
          "  --prose <a.c,b.c> states that those paths' diffs across this range emit NO code. It is checked by",
          "  engine/prosediff.mjs before anything is pushed, and a nonzero verdict pushes nothing.");
 
-/* THE SHA IS RESOLVED ONCE AND EVERY LATER COMMAND NAMES THE RESOLVED VALUE, never the ref it came from.
-   CLAUDE.md: `HEAD` is a MOVING REFERENCE in a shared checkout, and two evaluations of one are two questions. */
+/* The sha is resolved once and every later command names the resolved value, never the ref: `HEAD` moves in a
+   shared checkout. */
 const sha = git(["rev-parse", "--verify", `${rev}^{commit}`]).stdout.trim();
 
-/* THE DESTINATIONS. `main` is the trunk and the other is THIS branch, read rather than spelled, because a
-   hardcoded session-branch name is a coordinate and rots. A detached HEAD has no second destination to name. */
+/* The destinations: `main`, and this branch, read and not spelled. A detached HEAD has no second destination. */
 const here = git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim();
 if (here === "HEAD")
   die(2, "HEAD is detached, so there is no session branch to publish to and this would push to ONE ref.",
@@ -98,18 +69,11 @@ if (dests.length === 1)
   say("WARNING: the current branch IS main, so this publishes to ONE ref. That is the state CLAUDE.md's " +
       "two-ref rule exists to prevent; it is allowed here only because there is no second ref to name.");
 
-/* THE OTHER HALF OF THE CONSTRUCTION IS ASSERTED HERE, AND THE TWO LOCK EACH OTHER. This file puts the gate in
-   the PATH of the push; `engine/githooks/pre-push` makes a push that carries no verdict REFUSE. Either alone is
-   a convention somebody has to remember -- a bare `git push` walks past this file, and a hook nobody armed is
-   the check-shaped version `engine/lexbor_source.mjs`'s header condemns, "a check every caller must remember"
-   rather than an impossible state. So this tool will not publish from a checkout where the hook is not armed:
-   you cannot use the wrapper without the hook, and with the hook you cannot bypass the wrapper by forgetting.
-   THE PATH IS COMPARED ABSOLUTE, DELIBERATELY. git's own interpretation of a RELATIVE `core.hooksPath` has
-   differed by version about what it is relative to, and a check that cannot say which directory it means is a
-   check whose zero means nothing. An absolute path is a fact about WHERE this tree is checked out, which
-   `engine/lexbor_source.mjs` rightly refuses for an IDENTITY -- and this is not one: it is a local config in one
-   working copy, and a frozen snapshot legitimately has none, so a publish attempted from a snapshot refuses
-   here and names the command, which is the correct answer rather than a false alarm. */
+/* The hook must be armed. This file puts the gate in the path of the push, and `engine/githooks/pre-push`
+   refuses a push that carries no verdict; either alone can be walked past, so this tool will not publish from
+   a checkout whose `core.hooksPath` is not the tracked hook directory. The path is compared absolute, because
+   git's reading of a relative `core.hooksPath` has differed by version. A frozen snapshot has no such config
+   and is refused here, with the command that arms it. */
 const TOP = git(["rev-parse", "--show-toplevel"]).stdout.trim();
 const HOOKS = join(TOP, "engine", "githooks");
 const havePath = git(["config", "--get", "core.hooksPath"], { allowFail: true }).stdout.trim();
@@ -130,8 +94,7 @@ catch (e) {
 say(`cut ${sha.slice(0, 7)}  --expect ${expect}  destinations: ${dests.join(", ")} on ${remote}`);
 say("running the gate; its whole chain is below and is not piped anywhere ──────────────────────────────────");
 
-/* THE GATE, SPAWNED WITH stdio INHERITED. A nonzero verdict spawns nothing: this is `if <check>; then <act>`
-   and never `<check>; <act>`, which CLAUDE.md calls a NON-check with a reassuring transcript above it. */
+/* The gate, spawned with stdio inherited. A nonzero verdict spawns nothing: `if <check>; then <act>`. */
 const gate = spawnSync(process.execPath,
                        [new URL("pubgate.mjs", import.meta.url).pathname, "--remote", remote,
                         "--branch", "main", "--head", sha, "--cut", sha, "--expect", String(expect)],
@@ -144,8 +107,8 @@ if (gate.status !== 0)
       "read; a split pair means cut lower.");
 say("the gate allowed it ───────────────────────────────────────────────────────────────────────────────────");
 
-/* BOTH DESTINATIONS MUST ALREADY STAND AT ONE SHA, read from the REMOTE rather than from a tracking ref, which
-   is only as fresh as the last fetch. The count is then one count and serves both. */
+/* Both destinations must already stand at one sha, read from the remote and not from a tracking ref, which is
+   only as fresh as the last fetch. One count then serves both. */
 const before = new Map();
 for (const d of dests) {
   const out = git(["ls-remote", remote, `refs/heads/${d}`]).stdout.trim();
@@ -167,7 +130,7 @@ if (git(["merge-base", "--is-ancestor", old, sha], { allowFail: true }).status !
          "What such a push publishes is not this range, and this tool will not force one: history is never",
          "rewritten here to repair anything.");
 
-/* THE ARITHMETIC BACKSTOP, PERFORMED RATHER THAN LEFT TO AN EYE. */
+/* The count: the range the remote's own tip defines, against the --expect the caller stated. */
 const n = Number(git(["rev-list", "--count", `${old}..${sha}`]).stdout.trim());
 if (String(n) !== String(expect).trim())
   die(1, `REFUSED: ${remote}'s own tip is ${old.slice(0, 7)} and ${old.slice(0, 7)}..${sha.slice(0, 7)} is ${n}`,
@@ -178,25 +141,15 @@ if (String(n) !== String(expect).trim())
 say(`${n} commit(s) to publish, which is the --expect you stated and the remote's own tip says so: ` +
     `${old.slice(0, 7)}..${sha.slice(0, 7)}`);
 
-/* THE PROSE-ONLY CLAIM, CHECKED AGAINST THE REMOTE'S OWN TIP AND BEFORE ANY PUSH. The base is `old` and not a
-   tracking ref: it is what this push's range is defined against, read from `ls-remote` above, so the residue is
-   over exactly the commits about to be published rather than over whatever a local ref last fetched.
-   SPAWNED WITH stdio INHERITED AND A NONZERO VERDICT PUSHES NOTHING, which is the gate's shape for the gate's
-   reason — `if <check>; then <act>` and never `<check>; <act>`, the second being a NON-check with a reassuring
-   transcript above an unconditional irreversible act. */
+/* The prose-only claim, checked before any push. The base is `old`, the remote's own tip read by `ls-remote`
+   above, so the check covers exactly the commits about to be published. A nonzero verdict pushes nothing. */
 if (prose.length) {
   say(`checking the --prose claim over ${prose.length} path(s) against ${old.slice(0, 7)} ────────────────────`);
   const pd = spawnSync(process.execPath,
                        [new URL("prosediff.mjs", import.meta.url).pathname, ...prose, "--base", old, "--head", sha],
                        { stdio: "inherit" });
-  /* THE SENTENCE IS CHOSEN BY WHICH BAND DECIDED, NEVER ONE SENTENCE OVER EVERY NONZERO STATUS. This used to
-     read `the prose-only claim FAILED (prosediff exited N)` for every refusal and then offer a remedy list of
-     three unrelated causes, which is the `aborted` column standing for three diagnoses that CLAUDE.md names —
-     and for a DECLINED path both halves of it are false: the claim was not wrong, it was NEVER JUDGED, so a
-     reader is sent hunting a statement in a diff nothing examined. prosediff now bands its answers and says
-     which one decided; this reads that and nothing else. THE REFUSAL IS UNCHANGED in every band: a `--prose`
-     claim naming a path this instrument cannot answer about pushes nothing, which is the half the old shared
-     exit code got RIGHT and is the reason only the message moves here. */
+  /* The message is chosen by which of prosediff's bands decided: a declined path was not judged and a void
+     one had no armed control, and neither is a failed claim. Every band refuses the push. */
   if (pd.status !== 0) {
     const bar = "──────────────────────────────────────────────────────────────────────────────────────────────────────";
     if (pd.status === 6)
@@ -232,18 +185,16 @@ if (prose.length) {
            "blocks it names; history belongs in the commit message.");
 }
 
-/* EACH PUSH IS ITS OWN SPAWN AND CARRIES NOTHING ELSE. A retry is only ever for a NETWORK failure: a refusal
-   is a verdict and retrying one is arguing with it. */
+/* Each push is its own spawn and carries nothing else. A retry is only for a network failure; a refusal is a
+   verdict. */
 const moved = [];
 for (const d of dests) {
   let ok = false;
   for (let attempt = 0, wait = 2000; attempt < 5 && !ok; attempt++, wait *= 2) {
     if (attempt) { say(`retrying ${d} after ${wait / 2000}s (network)`); spawnSync("sleep", [String(wait / 2000)]); }
-    /* THE VERDICT TRAVELS WITH THE PUSH AND IS A CLAIM THE HOOK FALSIFIES, never a password. It carries the
-       SHA and the COUNT, and `engine/githooks/pre-push` checks both against what git hands it on stdin -- the
-       local sha it is about to send and the REMOTE'S CURRENT sha for that ref, which is the freshest left end
-       there is. So the arithmetic backstop is performed a SECOND time, by something that cannot be skipped,
-       against a left end that cannot be stale. */
+    /* The verdict travels with the push as a claim the hook checks: `engine/githooks/pre-push` compares the
+       sha and the count against what git hands it on stdin, the local sha and the remote's current sha for
+       the ref, so the count is checked a second time by something that cannot be skipped. */
     const r = spawnSync("git", ["push", remote, `${sha}:refs/heads/${d}`],
                         { encoding: "utf8", env: { ...process.env, APICLIENT_PUBGATE: `${sha}:${n}` } });
     process.stderr.write(r.stderr || "");
@@ -257,8 +208,8 @@ for (const d of dests) {
   moved.push(d);
 }
 
-/* VERIFIED BY CONTENT. A SHA says nothing about a tree: an empty-tree commit has passed an `ls-remote` check in
-   this repository and was reported as proof. So the remote's sha is re-read AND the tree is counted. */
+/* Verified by content: the remote's sha is re-read and the tree is counted, because a sha says nothing about
+   a tree. */
 let bad = 0;
 for (const d of dests) {
   const now = git(["ls-remote", remote, `refs/heads/${d}`]).stdout.trim().split(/\s+/)[0];
