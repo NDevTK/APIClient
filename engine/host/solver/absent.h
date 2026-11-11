@@ -1,5 +1,5 @@
-/* ABSENT STATE — which read of a name the page cannot resolve is unknown INPUT, and which is a component this
- * engine owes. Two bases ask it: the GLOBAL OBJECT, and a RECORD THE DOCUMENT PUBLISHED onto it. */
+/* Absent state: which read of a name the page cannot resolve is unknown input, and which is a component this
+ * engine owes. Two bases ask it: the global object, and a record the document published onto it. */
 #ifndef ENGINE_HOST_SOLVER_ABSENT_H
 #define ENGINE_HOST_SOLVER_ABSENT_H
 #include "quickjs.h"
@@ -9,84 +9,54 @@
    there, which the minted unknown records as this session's own reading. */
 JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name, JSConcolicAbsentAnswer answer);
 
-/* Install as JSConcolicHooks.absent_unresolved — THE SAME QUESTION REACHED BY AN OPERATION THAT PERFORMS NO
-   [[Get]], of which `op` says which. `typeof X` on a name nothing binds is answered at the
-   opcode by ECMAScript §13.5.3 The typeof Operator's §13.5.3.1 Runtime Semantics: Evaluation step 2.a;
-   `"X" in window` is answered by §13.10.1 Runtime Semantics: Evaluation's `RelationalExpression :
-   RelationalExpression in ShiftExpression`, whose last step is "Return ? HasProperty(rightValue, ?
-   ToPropertyKey(leftValue))" — §7.3.11 HasProperty ( obj, propertyKey ), which contains no [[Get]] either; and
-   `Reflect.has(window, "X")` is §28.1.8 "Reflect.has ( target, key )" step 3's "Return ?
-   target.[[HasProperty]](propertyKey)", the same §7.3.11 reached by a CALL rather than by an operator. So
-   the read hook above is asked by NONE of them, and the census would read clean on a bundle whose whole feature
-   detection is written in one of them. This RECORDS the read into the same population and the same row and
-   decides nothing — the void return is the contract for every member, since answering the first would make
-   step 2.b's GetValue run and answering either of the others would be a value nobody asked for. See absent.c
-   for why they share the classification and the row rather than keeping a census each, and why they are still
-   separate CUTS.
-   THE COUNT USED TO BE STATED HERE AS `TWO` AND IS NOT STATED AT ALL NOW, which is a rule and not a tidy-up:
-   a count of an enum's members is a fact the enum already carries and a sentence that restates it is one more
-   place to be wrong the day a member lands. The population is `JSConcolicAbsentOp`, and it is read there.
-   `op` IS THE CALLER'S TO STATE AND IS NEVER INFERRED from the name — it is the same rule JSConcolicAddOp and
-   JSConcolicEqOp already carry into this engine, and for the same reason: the party performing the operation
-   is the only one that knows which it performed. */
+/* Install as JSConcolicHooks.absent_unresolved: the same question reached by an operation that performs no
+   [[Get]], of which `op` says which. `typeof X` on a name nothing binds is answered at the opcode by
+   ECMAScript §13.5.3 The typeof Operator's §13.5.3.1 Runtime Semantics: Evaluation step 2.a; `"X" in window`
+   by §13.10.1 Runtime Semantics: Evaluation's `RelationalExpression : RelationalExpression in
+   ShiftExpression`, whose last step is "Return ? HasProperty(rightValue, ? ToPropertyKey(leftValue))"
+   (§7.3.11 HasProperty ( obj, propertyKey )); and `Reflect.has(window, "X")` by §28.1.8 "Reflect.has (
+   target, key )" step 3's "Return ? target.[[HasProperty]](propertyKey)". The read hook is asked by none of
+   them, so this records the read into the same population and row and decides nothing; the return is void
+   because no algorithm here asks a host for a value. `op` is stated by the caller, the party that performed
+   the operation, and its population is `JSConcolicAbsentOp`. */
 void absent_unresolved_note(JSContext *ctx, JSAtom name, JSConcolicAbsentOp op);
 
-/* Install as JSConcolicHooks.present — THE SAME QUESTION FOR A MEMBER THE RECORD HOLDS. A published record's
-   extent was chosen against THIS visitor's credentials, so `__FLAGS.admin === false` is a fact about this
-   session and not about the program: it is unknown for control flow exactly as a missing member is, and it
-   additionally KNOWS what it concretely is. So this mints the same derivation the read hook does, with the
-   held value as the EXAMPLE — which is the whole of §solver's "a loaded `features.admin:false` must NOT
-   concretize the gate" in one call. `holder` is the record the slot was found on and `value` is borrowed. */
+/* Install as JSConcolicHooks.present: the same question for a member the record holds. A published record's
+   extent was chosen against this visitor's credentials, so `__FLAGS.admin === false` is a fact about this
+   session and not about the program. This mints the derivation the read hook mints, with the held value as
+   its example, so a loaded `features.admin:false` does not concretize the gate. `holder` is the record the
+   slot was found on and `value` is borrowed. */
 JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JSValueConst value);
 
 /* Install as JSConcolicHooks.publish. The engine has found `value` reachable from the global object through
-   records the document's own inline scripts built, and states the PARENT it hangs off and the NAME it hangs
-   under; this files the PATH the record's members are then read by. Parents arrive before their children, so
-   a child's path is composed from a parent already filed — a child whose parent is not filed is the engine
-   and this file disagreeing about what is published, which crashes rather than inventing a root. */
+   records the document's own inline scripts built, and states the parent it hangs off and the name it hangs
+   under; this files the path the record's members are then read by. Parents arrive before their children, so
+   a child whose parent is not filed is the engine and this file disagreeing about what is published, and it
+   crashes. */
 void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSValueConst value);
 
 /* Give back the published-namespace registry. Called on the agent's release column, beside the source
    registry: a path names a record of a document that is gone. */
 void absent_free(void);
 
-/* WHICH OF THE THREE STANDARDS OWNS A GLOBAL NAME. `ABSENT_VOCAB_N` is the COUNT and is never a vocabulary; it
-   is what a per-vocabulary array is sized by, so a standard putting names on the global object adds a row to
-   one array rather than a second counter beside it. ECMA-402 was the third and it arrived exactly that way —
-   one enum member, one row in `KEY_VOCAB` and one in `g_owed_by_vocab`, and no second counter anywhere — which
-   is the promise this comment made before there was a third to test it against. */
+/* Which standard owns a global name. `ABSENT_VOCAB_N` is the count and never a vocabulary; per-vocabulary
+   arrays are sized by it, so a further standard adds one enum member and one row to each array. */
 typedef enum { ABSENT_VOCAB_WEBIDL, ABSENT_VOCAB_ECMASCRIPT, ABSENT_VOCAB_ECMA402, ABSENT_VOCAB_N } AbsentVocab;
 
-/* WHICH STANDARD OWNS THIS GLOBAL NAME, AND THE TABLE'S OWN SPELLING OF IT. Answered from the two generated
-   vocabularies — browser/platform_names.h, every name Web IDL exposes on Window, generated by
-   engine/idlgen.mjs; browser/language_names.h, ECMAScript §19 The Global Object's own subclauses, generated by
-   engine/esglobalgen.mjs; and browser/i18n_names.h, the one name ECMA-402 §8 The Intl Object puts there,
-   generated by engine/i18nglobalgen.mjs — never from anything a component or a person declares.
-
-   THREE TABLES AND ONE ENTRY POINT, WHICH IS THE ARGUMENT THE TWO PREDICATES HERE CARRIED AND STRICTLY MORE OF
-   IT. That argument is kept rather than retired: "which standard owns a name is a fact a `@WHY` has to be
-   able to state, and a MERGED TABLE is one bit answering two questions the day the two disagree." The tables
-   are still two, they are still searched separately, and neither is merged into the other. What changed is
-   that the ANSWER STATES which of them held the name, instead of a caller asking twice and having to remember
-   which of the two calls said yes — so the fact that argument is about is now CARRIED, which is the same rule
-   §AN-ASSERT-THAT-NAMES-A-REMEDY makes about a site travelling with its operation.
-
-   THE ENTRY IS THE TABLE'S OWN STATIC STRING, so it outlives every document and a caller may key on the
-   POINTER: two reads of one name yield one pointer, and a page cannot get its own bytes into anything keyed
-   that way — which is what lets absent_json write its row names with no escaping pass over page-supplied
-   input, and what makes its "these are MY bytes" assert a statement about a generated table rather than about
-   a document.
-
-   Returns NULL when neither standard owns the name, and `*vocab` is then untouched. */
+/* Which standard owns this global name, and the table's own spelling of it. Answered from the generated
+   vocabularies: browser/platform_names.h, every name Web IDL exposes on Window (engine/idlgen.mjs);
+   browser/language_names.h, ECMAScript §19 The Global Object's own subclauses (engine/esglobalgen.mjs); and
+   browser/i18n_names.h, the one name ECMA-402 §8 The Intl Object puts there (engine/i18nglobalgen.mjs). The
+   tables are searched separately and the answer states which held the name, since a `@WHY` has to say which
+   standard owes it. The entry is the table's static string, so a caller may key on the pointer and no page
+   byte enters anything keyed that way; absent_json writes its row names unescaped on that ground. Returns
+   NULL when no standard owns the name, and `*vocab` is then untouched. */
 const char *absent_standard_name(const char *name, AbsentVocab *vocab);
 
-/* THE NAMES THIS DOCUMENT ASKED FOR AND THIS ENGINE DID NOT ANSWER — solver/result.c's `_absent`, as one JSON
-   object on the heap (caller frees; NULL only on allocation failure, which every composer on that seam treats
-   as "this census is absent" rather than as a reason to fail a run). The composer in absent.c states the
-   population, the denominator every number in it is a fraction of, the KIND of every row, the identities they
-   close over, and which shapes of a feature detect this census still cannot see. THAT LAST CLAUSE IS A
-   POINTER AND NEVER A COUNT: it said "the one spelling" while there was one, and the number a reader needs is
-   whatever the named residuals over there currently say rather than whatever this line last remembered. */
+/* The names this document asked for and this engine did not answer: solver/result.c's `_absent`, as one JSON
+   object on the heap. The caller frees it; NULL only on allocation failure, which every composer on that seam
+   treats as the census being absent. absent.c states the population, the denominator, the kind of every row,
+   the identities, and, as named residuals, the feature-detect spellings the census does not see. */
 char *absent_json(void);
 
 #endif
