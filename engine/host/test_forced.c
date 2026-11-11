@@ -19637,8 +19637,8 @@ static long tf_hist_above(const char *js, const char *key, int from) {
    (`soldNamed`), answered. sale-ctor-busy-returns, sale-catch-busy-returns, sale-pexec-* and sale-asyncfn-*: a
    member sold in a constructor's body, inside a `try`, in a promise executor two Reflect.construct calls reached,
    or in an async body before its first await, waits on no gap of the kinds each row names, returns and reports.
-   sale-root-surveyed: a member resting in a machine a promise reaction called was sold and its survey named the
-   machine. */
+   sale-root-surveyed: a member resting in a machine a promise reaction called was sold and its census's survey of
+   its parked ring named the machine. */
 static long tf_census_row(const char *js, const char *census, const char *key);
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
@@ -19780,10 +19780,12 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     {
         const int armed = g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0;
 
+        const char *gs = strstr(js, "\"graphGapSales\":{"), *gs_end = gs ? strchr(gs, '}') : NULL;
+
         fold_row(&rs, &rswhy, armed, "NOT ARMED: the act sold nothing");
-        fold_row(&rs, &rswhy, gk_end && tf_span_has(gk, gk_end, "JSON.parse"),
-                 "no sale named JSON.parse's machine in `waitsGapKinds`, so no member was sold resting in the "
-                 "machine the reaction called");
+        fold_row(&rs, &rswhy, gs_end && tf_span_has(gs, gs_end, "JSON.parse"),
+                 "no sale's census named JSON.parse's machine in `graphGapSales`, so no member was sold resting in "
+                 "the machine the reaction called, or its parked ring was not surveyed");
     }
     fold_row(&ot, &owhy, param_value_is(js, "/api/sl-own-done", "b", "22"),
              "NOT REACHED: no /api/sl-own-done?b=22 record, so the page's own run, sold while it owed "
