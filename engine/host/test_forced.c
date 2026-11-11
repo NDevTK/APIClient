@@ -1478,6 +1478,11 @@ static int tf_dk_pay(JSContext *ctx) {
    the reclaim edge then gave back, `relisted` whether the bill still named the request after them. */
 static struct { int listed; long gave; int relisted; int floor; } g_tf_sale;
 
+/* `--pressure-act none`: the run takes no forced pressure act, so a document whose act relocates its members runs
+   as its own no-pressure twin. Memory decides where a flow lives, never whether or when it runs, so the twin's
+   schedule and work are the act's run's (engine/build.mjs's pressure parity stage compares the two). */
+static int g_tf_pressure_none;
+
 /* The allocator at its floor, for `salefloor`'s act: the address-space limit is lowered to what is mapped now
    and every free chunk is taken, so until tf_floor_lift each allocation is refused unless address space is given
    back first. Returns 1 once an allocation is seen refused, 0 if one still succeeds, 2 on a host with no
@@ -1545,6 +1550,7 @@ static const char *tf_sale_act(const char *urls) {
     static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed", "/api/sl-floor-owed",
                                         "/api/sl-async-owed" };
 
+    if (g_tf_pressure_none) return urls;
     for (size_t i = 0; !g_tf_sale.listed && i < COUNTOF(owed); i++) {
         const int at_floor = i == 2;
 
@@ -47299,6 +47305,12 @@ int main(int argc, char **argv) {
        it is the state SECURITY.md's one-instance-per-cluster rule exists to prevent, with the frontier's own
        registry initialised twice. So this is a return, not a branch. */
     if (arg_has(argc, argv, "--abi")) return abi_main(argc, argv);
+    {
+        const char *act = arg_val(argc, argv, "--pressure-act");
+
+        CHECK(act == NULL || !strcmp(act, "none"), "--pressure-act takes `none`, the run with no forced pressure act");
+        g_tf_pressure_none = act != NULL;
+    }
     /* The exploring session's documents, one name per line, for a driver that runs each as its own process. */
     if (arg_has(argc, argv, "--list-docs")) {
         for (size_t di = 0; di < COUNTOF(TF_DOCS); di++) printf("%s\n", TF_DOCS[di].name);

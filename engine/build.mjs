@@ -20,7 +20,7 @@ import { probeTables } from "./probe_rows.mjs";
 import { abortRecord } from "./abort_record.mjs";
 import { curDeepTermSplit, neverPickedTermSplit } from "./wfq_gap.mjs";
 import { vehicleReading, compareVehicle, emsdkNode } from "./vehicle.mjs";
-import { regimeReading, compareRegimes, regimeDocArgs } from "./regimeparity.mjs";
+import { regimeReading, compareRegimes, comparePressure, regimeDocArgs } from "./regimeparity.mjs";
 import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
 import { objStore, toolIdentity } from "./obj_store.mjs";
 import { cpuText } from "./gate_cpu.mjs";
@@ -7282,6 +7282,31 @@ function regimeParityStages(kind, regime, bin, runs) {
   });
 }
 
+/* The documents whose forced pressure act relocates members (fixture/sale.h), and the pressure parity stages of a
+   native build: each listed document this build ran, run again on the same program as its no-pressure twin
+   (`--pressure-act none`) and the two compared (engine/regimeparity.mjs's comparePressure). A difference is a
+   DEFECT: memory reached whether or when a flow runs, or the work the residency system caused was banked as a
+   flow's or a document's service. */
+const PRESSURE_PARITY_DOCS = ["sale", "saleown"];
+function pressureParityStages(bin, runs) {
+  const mine = runs.filter((r) => r.doc && PRESSURE_PARITY_DOCS.includes(r.doc) && "captured" in r);
+  if (bin === null) return [];
+  return mine.map((run) => {
+    const label = `pressure parity (${run.doc})`;
+    const twin = runChild(`${label}, the no-pressure twin`, bin, [...regimeDocArgs(run.doc), "--pressure-act", "none"],
+                          "an abort above is the twin's own; the comparison below reads both runs");
+    const read = (r) => regimeReading(r.captured, r.signal, r.log);
+    const c = comparePressure(run.doc, read(run), read(twin));
+    console.log(`[build] ${label}: compared ${c.compared.join("; ")}`);
+    if (c.defect !== null)
+      return onHost({ label, verdict: `DEFECT — ${c.defect}`, code: 1, kind: STAGE_KIND.DEFECT }, STAGE_HOST.NATIVE);
+    if (!c.answered)
+      return onHost({ label, verdict: `NOT ASKED — ${c.compared.join("; ")}`, code: 1, kind: STAGE_KIND.NOT_ASKED },
+                    STAGE_HOST.NATIVE);
+    return onHost({ label, verdict: "PASS", code: 0, kind: null }, STAGE_HOST.NATIVE);
+  });
+}
+
 /* WHAT A STAMP'S `dirty`/`unasked` PAIR SAYS, IN ONE PLACE, BECAUSE BOTH STAMP SITES SAY IT. The wasm install
    gate below turns this answer into a DECISION — `null` installs, anything else refuses — and the native link
    below puts it in the line that names the binary. The words are ONE fact, and two spellings of one fact are two
@@ -7655,6 +7680,7 @@ if (NATIVE) {
   stages.push(...runs.map((s) => onHost(s, STAGE_HOST.NATIVE)));
   stages.push(...bridgeAcceptanceStages(runs));
   stages.push(...regimeParityStages(kind, dev, bin, runs));
+  stages.push(...pressureParityStages(bin, runs));
   /* This target runs no wasm, so it has no vehicle stage; the gate suite (`node engine/build.mjs gates`) runs
      the `vehicle (<document>)` comparisons. */
   report(stages, []);

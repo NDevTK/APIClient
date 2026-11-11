@@ -104,6 +104,32 @@ export function compareRegimes(doc, dev, rel) {
   return { defect, answered, compared, uncompared, differing };
 }
 
+/* The comparison of one document run with its forced pressure act and as its no-pressure twin
+   (`--pressure-act none`) on one binary: `{ defect, answered, compared, differing }`. Memory decides where a flow
+   lives, never whether or when it runs, so the two pick the same members in the same order and retire the same
+   work; the final tables are not compared, since the act's own rows read the act. */
+export function comparePressure(doc, act, none) {
+  const compared = [], differing = [];
+  if (act.crash !== null || none.crash !== null || act.cold === null || none.cold === null ||
+      !act.cold.terminal || !none.cold.terminal)
+    return { defect: null, answered: false, differing,
+             compared: [`nothing (act: ${act.crash ?? (act.cold?.terminal ? "completed" : "no terminal census")}; ` +
+                        `none: ${none.crash ?? (none.cold?.terminal ? "completed" : "no terminal census")})`] };
+  const ac = act.cold.census, nc = none.cold.census, rows = censusRows(ac);
+  for (const k of censusRows(nc)) if (!rows.includes(k)) rows.push(k);
+  for (const k of rows) {
+    if (!Number.isInteger(ac[k]) || !Number.isInteger(nc[k]))
+      throw new Error(`${doc}: the frontier census row \`${k}\` is ${JSON.stringify(ac[k])} with the act and ` +
+                      `${JSON.stringify(nc[k])} without it — solver/metrics/cold.def declares one integer row`);
+    if (ac[k] !== nc[k]) differing.push(`${k}=${ac[k]}|${nc[k]}`);
+  }
+  if (act.retired !== none.retired) differing.push(`_workRetired=${act.retired}|${none.retired}`);
+  compared.push(`${rows.length + 1} work row(s), the pick digest ${ac.pickDigest} among them`);
+  return { defect: differing.length ? `${doc}: the run with its pressure act and its no-pressure twin ran different ` +
+                                      `schedules or retired different work (act|none): ${differing.join(" ")}` : null,
+           answered: true, compared, differing };
+}
+
 /* ── The lane-facing driver ─────────────────────────────────────────────────────────────────────────────── */
 
 function args(argv) {
