@@ -195,6 +195,18 @@ const char *fetch_body_class_token(FetchBodyClass c);
    park does. Its absence shows as an own-run `xhr.send(JSON.stringify(...))` over unknowns with examples
    listed with the body class `unknown` and never sent. */
 FetchBodyClass fetch_body_class_of(const BodyState *b, bool grounded);
+/* What a request's method is. CONCRETE: bytes the producer computed, which is every producer but fetch() — a
+   literal, or XHR, whose open() keeps an unknown method off the host edge (core/xhr/xml_http_request.c) — so
+   it is the zero. EXAMPLE: the normalized example of an unknown method (Fetch §5.4 step 25.3's derivation over
+   it), which a session with that input sends. UNKNOWN: the display shape of an unknown method with no
+   example; the request is listed and judged, and the trusted zone never sends it. */
+typedef enum {
+    FETCH_METHOD_CONCRETE = 0,
+    FETCH_METHOD_EXAMPLE,
+    FETCH_METHOD_UNKNOWN,
+} FetchMethodClass;
+/* The one spelling of the three words; fatal on a value outside them. */
+const char *fetch_method_class_token(FetchMethodClass c);
 
 typedef struct {
     const char   *method;
@@ -300,6 +312,8 @@ typedef struct {
     /* What `body`'s bytes are (FetchBodyClass above); FETCH_BODY_NONE exactly where `body` is NULL, which
        pending_park_request asserts. After the positional initializers' fields, so a bodiless one states the zero. */
     FetchBodyClass body_class;
+    /* What `method`'s bytes are (FetchMethodClass above). */
+    FetchMethodClass method_class;
 } FetchRequest;
 
 /* FETCH §4.1 "Main fetch" STEP 7, AS THE ONE COMPONENT IT IS A STEP OF — "If should request be blocked due to

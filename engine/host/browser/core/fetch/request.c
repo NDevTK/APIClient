@@ -83,11 +83,10 @@ static int       g_request_body_handle = -1;
    a fact the collector ALREADY HAS: it dispatched to these two THROUGH it. An unmarked child is the worse of
    the pair, because it keeps the internal reference gc_decref subtracts, so gc_scan reads the record as rooted
    from OUTSIDE the heap and it is never collected at all — silent. */
-static void request_finalizer(JSRuntime *rt, JSValue val)
+/* Everything a RequestData owns, and the record itself: the finalizer's, and the constructor's for a record it
+   built and never attached to a Request. */
+static void request_data_free(JSRuntime *rt, RequestData *d)
 {
-    JSClassID id;
-    RequestData *d = JS_GetAnyOpaque(val, &id);
-    if (!d) return;
     JS_FreeValueRT(rt, d->headers);
     JS_FreeValueRT(rt, d->blob_entry);
     JS_FreeValueRT(rt, d->signal);
@@ -96,6 +95,13 @@ static void request_finalizer(JSRuntime *rt, JSValue val)
     request_record_free(rt, &d->rec);
     body_state_free(rt, &d->body);
     js_free_rt(rt, d);
+}
+
+static void request_finalizer(JSRuntime *rt, JSValue val)
+{
+    JSClassID id;
+    RequestData *d = JS_GetAnyOpaque(val, &id);
+    if (d) request_data_free(rt, d);
 }
 
 /* The Headers a Request holds is a JSValue in the class opaque, which the collector cannot see through. */
@@ -108,18 +114,8 @@ static void request_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_f
         JS_MarkValue(rt, d->blob_entry, mark_func);
         JS_MarkValue(rt, d->signal, mark_func);
         JS_MarkValue(rt, d->url_unknown, mark_func);
-        /* …AND §2.2.5's RECORD, WHICH IS NINE MORE OWNED VALUES SINCE THEY STOPPED BEING `char *`.
-           IT IS A NO-OP TODAY AND IT IS NOT DECORATION, AND BOTH HALVES OF THAT HAVE TO BE SAID OR IT READS AS
-           ONE OR THE OTHER. `JS_MarkValue` reaches `mark_func` for JS_TAG_OBJECT and JS_TAG_FUNCTION_BYTECODE
-           and falls through for everything else, and `request_init_apply` fills all nine with STRINGS — so
-           nothing is marked and nothing can be, which means this line cannot currently be the reason a cycle is
-           collected. It is here because the DAY §5.4 step 25 stores an unknown method the field holds a
-           CONCOLIC, and a concolic is a class-opaque OBJECT (`concolic_is` is a `JS_GetOpaque`), at which point
-           an unmarked child is the worse of the two ways to get this wrong: it keeps the internal reference
-           gc_decref subtracts, so gc_scan reads it as rooted from outside the heap and it is never collected at
-           all, silently. The finalizer three functions up frees these and the clone dups them; the three sites
-           are ONE obligation, and leaving the third of them for the diff that makes it fire is how the first
-           two get read as the whole of it. */
+        /* …and §2.2.5's record: §5.4 step 25's method can be an unknown, a class-opaque object, and an
+           unmarked child keeps the reference gc_decref subtracts, so it would never be collected. */
         request_record_mark(rt, &d->rec, mark_func);
     }
     if (d) body_state_mark(rt, &d->body, mark_func);
@@ -203,10 +199,8 @@ bool request_str_is(JSContext *ctx, JSValueConst v, const char *lit)
        computed — which deletes a request rather than reporting one. */
     DCHECK(!concolic_is(v),
            "a §2.2.5 request record field was byte-compared against a spec constant and its value is UNKNOWN "
-           "EXTERNAL INPUT. The field can now HOLD one — that is what making these nine JSValues bought — and "
-           "the comparison still needs a FORK: the record is the storage half of §5.4 step 25 and this is the "
-           "deciding half. Give request_init_apply the JSStepHdr its fork has to be asked through (its own "
-           "block on step 25 names the whole of it) and route this predicate to that machine's branch seam");
+           "EXTERNAL INPUT — the method's tests are request_method_in_step's, which forks; a field another "
+           "step can leave unknown needs the same fork at the step that tests it");
     DCHECK(JS_IsString(v),
            "a §2.2.5 request record field was byte-compared and is not a string — request_init_apply fills all "
            "nine with §5.4's own strings or fails, and request_record_init leaves JS_UNDEFINED, so a "
@@ -408,6 +402,93 @@ char *request_method_check(JSContext *ctx, const char *m)
     return method_normalize(ctx, m);
 }
 
+/* §5.4 STEP 25.2 OVER AN UNKNOWN METHOD: its completions are the ones a page observes, `new Request` returning
+   or throwing a TypeError. Fetch §2.2.1 Methods makes a forbidden method a method, so "is not a method or is a
+   forbidden method" splits the domain into usable methods and the rest, and the TypeError is one for both
+   (XHR §3.5.1 names its two refusals apart, which is why its fork has three arms). Outcome 0 is the ordinary
+   completion, quickjs-step.h's numbering rule. */
+enum { REQ_M_USABLE = 0, REQ_M_REFUSED, REQ_M_OUTCOMES };
+#define REQ_METHOD_OP "Fetch §5.4 new Request(input, init) step 25.2 (method is not a method or is a forbidden " \
+                      "method)"
+
+/* Which completion step 25.2 reaches on the unknown's own example (step_fork_run's `real`), with `*pnorm` the
+   example normalized by step 25.3 (js_free'd by the caller) on the usable arm and NULL otherwise.
+   JS_OUTCOME_REAL_UNSTATED for an example that is absent or not a String: converting one would run the page's
+   code from a C activation with no flow base under it. */
+static int request_method_real(JSContext *ctx, JSValueConst mv, char **pnorm)
+{
+    JSValue ex = concolic_example(ctx, mv);
+    const char *mc;
+    int real = JS_OUTCOME_REAL_UNSTATED;
+
+    *pnorm = NULL;
+    if (!JS_IsString(ex)) { JS_FreeValue(ctx, ex); return real; }
+    mc = JS_ToCString(ctx, ex);
+    CHECK(mc != NULL, "request: OOM reading an unknown method's example for §5.4 step 25.2");
+    *pnorm = request_method_check(ctx, mc);
+    if (*pnorm) {
+        real = REQ_M_USABLE;
+    } else {
+        JS_FreeValue(ctx, JS_GetException(ctx));   /* the example's verdict, not this flow's completion */
+        real = REQ_M_REFUSED;
+    }
+    JS_FreeCString(ctx, mc);
+    JS_FreeValue(ctx, ex);
+    return real;
+}
+
+/* Is the normalized method `m` in `set` (Fetch §2.2.1 Methods). */
+static bool method_in_set(const char *m, RequestMethodSet set)
+{
+    bool get_head = !strcmp(m, "GET") || !strcmp(m, "HEAD");
+
+    DCHECK(set == REQUEST_METHOD_GET_OR_HEAD || set == REQUEST_METHOD_CORS_SAFELISTED,
+           "a §5.4 method test named a set Fetch §2.2.1 does not define");
+    return set == REQUEST_METHOD_GET_OR_HEAD ? get_head : get_head || !strcmp(m, "POST");
+}
+
+/* The two tests' completions, ordinary first: step 32.1 continues on a CORS-safelisted method and step 35 on
+   one that is neither `GET` nor `HEAD`, and each throws a TypeError on its other arm. */
+#define REQ_SAFELISTED_OP "Fetch §5.4 new Request(input, init) step 32.1 (this's request's method is not a " \
+                          "CORS-safelisted method)"
+#define REQ_GET_HEAD_OP "Fetch §5.4 new Request(input, init) step 35 (request's method is `GET` or `HEAD`)"
+
+int request_method_in_step(JSContext *ctx, JSStepHdr *hdr, JSValueConst method, RequestMethodSet set,
+                           bool *pin)
+{
+    /* The ordinary completion: a safelisted method for step 32.1, a method outside `GET`/`HEAD` for step 35. */
+    bool ordinary_in = set == REQUEST_METHOD_CORS_SAFELISTED;
+    const char *op = ordinary_in ? REQ_SAFELISTED_OP : REQ_GET_HEAD_OP;
+    int arm = 0, real = JS_OUTCOME_REAL_UNSTATED, r;
+    JSValue ex;
+
+    if (!concolic_is(method)) {
+        const char *m;
+
+        DCHECK(JS_IsString(method), "a §5.4 method test was handed a record whose method step 25 never set");
+        m = JS_ToCString(ctx, method);
+        CHECK(m != NULL, "request: OOM reading a request's method for a §5.4 method test");
+        *pin = method_in_set(m, set);
+        JS_FreeCString(ctx, m);
+        return 0;
+    }
+    /* The derivation step 25.3 minted carries the normalized example where the operand had one. */
+    ex = concolic_example(ctx, method);
+    if (JS_IsString(ex)) {
+        const char *m = JS_ToCString(ctx, ex);
+
+        CHECK(m != NULL, "request: OOM reading a method's example for a §5.4 method test");
+        real = method_in_set(m, set) == ordinary_in ? 0 : 1;
+        JS_FreeCString(ctx, m);
+    }
+    JS_FreeValue(ctx, ex);
+    r = step_fork_run(ctx, hdr, method, op, 2, real, &arm);
+    if (r > 0) return r;
+    DCHECK(arm == 0 || arm == 1, "a §5.4 method test's fork answered with a completion it never declared");
+    *pin = arm == 0 ? ordinary_in : !ordinary_in;
+    return 0;
+}
+
 enum { REQ_METHOD = 0, REQ_URL, REQ_HEADERS, REQ_DESTINATION, REQ_REFERRER, REQ_REFERRER_POLICY,
        REQ_MODE, REQ_CREDENTIALS, REQ_CACHE, REQ_REDIRECT, REQ_INTEGRITY, REQ_KEEPALIVE,
        REQ_IS_RELOAD_NAV, REQ_IS_HISTORY_NAV, REQ_DUPLEX, REQ_SIGNAL };
@@ -418,10 +499,8 @@ static JSValue js_request_get(JSContext *ctx, JSValueConst this_val, int magic)
     if (!d)
         return JS_ThrowTypeError(ctx, "not a Request");
     switch (magic) {
-    /* EVERY RECORD FIELD IS HANDED BACK AND NO LONGER REBUILT. They were `JS_NewString` over a `char *`,
-       which allocated a fresh string per read; they are the request's own values now, so the getter DUPS
-       — which is the same thing `headers` below has always done for the same reason, and is what makes
-       `request.method` answer the unknown itself the day §5.4 step 25 can store one. */
+    /* Every record field is the request's own value and is handed back, so `request.method` over an unknown
+       method answers the unknown step 25.3 derived. */
     case REQ_METHOD:          return JS_DupValue(ctx, d->rec.method);
     case REQ_URL:             return request_url(ctx, this_val);   /* "this's request's URL, serialized" */
     case REQ_HEADERS:         return JS_DupValue(ctx, d->headers);   /* [SameObject] */
@@ -541,11 +620,9 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
 
 /* ---- the constructor ------------------------------------------------------------------------------------- */
 
-/* WHERE THIS MACHINE RESTS, AS §5.4 NUMBERS IT. The constructor's forty-two steps run the page's code in
-   exactly two places — the header fill at step 33 and nothing else before it, and the body extraction at
-   step 37 — so the stages are the three spans those two points cut it into, and each label says its span. The
-   `stage` byte this state carried said none of that: a flow parked here could be described only as "stage 1 of
-   something", which is neither a resume point a later build can resolve nor a thing a park can report. */
+/* WHERE THIS MACHINE RESTS, AS §5.4 NUMBERS IT. A stage is re-entered at its top when it parks or forks, so
+   the stages are the spans between the points that do: step 25.2's method fork, step 30's abort-signal ask,
+   step 32.1's method fork, the header fill at step 33 and step 35's method fork. Each label says its span. */
 #define REQ_CTOR_STAGES(X) \
     X(REQ_CTOR_RECORD = IDL_STEP_FIRST, \
       "Fetch §5.4 new Request(input, init) steps 5-29 (the request record: step 12's carry-forward of a " \
@@ -556,11 +633,13 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
       "abort signal from signals — DOM §3.2 Interface AbortSignal step 2 asks each source's `aborted`, which " \
       "is the flag a page's AbortSignal.timeout() leaves unknown, so this is a rest point)") \
     X(REQ_CTOR_HEADERS, \
-      "Fetch §5.4 new Request(input, init) steps 31-33 (step 32's CORS-safelisted-method test under a " \
-      "\"no-cors\" mode, then this's headers under the guard that step chose)") \
+      "Fetch §5.4 new Request(input, init) steps 31-33 (this's headers under the guard step 32 chose)") \
     X(REQ_CTOR_BODY, \
       "Fetch §5.4 new Request(input, init) steps 34-41 (a body on GET or HEAD is a TypeError whether it is " \
-      "the init's or the input Request's; extract init[\"body\"], or proxy the input Request's)")
+      "the init's or the input Request's; extract init[\"body\"], or proxy the input Request's)") \
+    X(REQ_CTOR_GUARD, \
+      "Fetch §5.4 new Request(input, init) step 32.1 (under a \"no-cors\" mode, a method that is not a " \
+      "CORS-safelisted method is a TypeError; an unknown method forks)")
 enum { REQ_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const REQ_CTOR_STEPS[] = { REQ_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -922,29 +1001,22 @@ static JSValue init_strv(JSContext *ctx, JSValueConst init, const char *name, JS
      * members wider than the message below says.)
      *
      * TWO OF THE SEVEN ARE PLAIN STRINGS — `referrer` (USVString) and `integrity` (DOMString) — whose bytes
-     * are the page's own and whose worlds are NOT enumerable, so there is nothing here to fork over: a string
-     * type has no finite domain to enumerate and §@H's rule is that a value known only to satisfy a gate is
-     * INVENTED rather than computed. Those need what §5.4 step 25's method needs and for the same reason: a
-     * record field that can BE the unknown. See that step's block below.
+     * are the page's own and whose worlds are NOT enumerable, so there is no enumeration to fork over: each
+     * needs what §5.4 step 25's method has below, the unknown stored on the record and each predicate a later
+     * step asks of it forked by that step's own partition.
      *
      * A `?:` PAST THIS IS THE ONE ANSWER THAT IS NEVER RIGHT, for the reason the `dflt` paragraph above
      * already gives about OOM: a default here turns `the page asked for something this engine cannot state`
      * into `the page asked for same-origin credentials`, which is a plausible datum where a crash belongs. */
     if (concolic_is(v)) {
         dcheck_init_member_is_not_enum(name);
-        /* THE STORAGE HALF OF THIS IS BUILT AND THIS ABORT STILL FIRES, which is why the message below no
-           longer asks for it. The record's nine fields ARE JSValues, so there is now somewhere to put an
-           unknown `referrer` or `integrity` — and `request_init_apply` still holds no JSStepHdr, so the two
-           completions §5.4 states for a member it cannot spell cannot be ASKED from here. What is left is one
-           signature change, named at step 25's block below, which unblocks this member and that one together. */
         DFAILF("Fetch §5.4 new Request(input, init) applied the RequestInit member `%s`, and its value is "
-               "UNKNOWN EXTERNAL INPUT. `%s` is one of §5.4's two PLAIN-STRING members — `referrer` is a "
-               "USVString and `integrity` a DOMString — whose bytes are the page's own, so there is no finite "
-               "domain to enumerate. THE RECORD CAN NOW HOLD IT: these nine fields are JSValues, which is the "
-               "conversion this message used to ask for. What is missing is the ASK — this operation is §5.4 "
-               "steps 10-27 for BOTH of its callers and holds no JSStepHdr, so step_fork_run cannot be reached "
-               "from here. Give request_init_apply the JSStepHdr its callers already have, which is the single "
-               "change that unblocks this member, `integrity` and step 25's method at once", name, name);
+               "UNKNOWN EXTERNAL INPUT. `referrer` is a USVString and `integrity` a DOMString, with no finite "
+               "domain to enumerate. Build what step 25's method has: store the unknown on the record, fork "
+               "each predicate a step asks of it through request_init_apply's `hdr` by the step's own "
+               "partition (step 14's parse failure, \"client\" and URL arms for `referrer`; step 23 stores "
+               "`integrity` with no test), and give the host edge's readers of the field an unknown's class",
+               name);
         JS_FreeValue(ctx, v);
         JS_ThrowTypeError(ctx, "this engine cannot yet apply a RequestInit member whose value is unknown "
                                "external input");
@@ -967,7 +1039,8 @@ static JSValue init_strv(JSContext *ctx, JSValueConst init, const char *name, JS
    one stage of whichever machine calls this. The ORDER is still §5.4's own, because it decides WHICH TypeError
    a page sees when two members are bad at once — step 17 refuses a "navigate" mode before step 25 looks at the
    method — and that order is observable. */
-int request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *from, RequestRecord *rec)
+int request_init_apply(JSContext *ctx, JSStepHdr *hdr, JSValueConst init, const RequestRecord *from,
+                       RequestRecord *rec)
 {
     bool init_not_empty = !req_init_is_empty(ctx, init);
 
@@ -1083,79 +1156,36 @@ int request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *f
                STRING input, reached only where the member is absent — not a field this reader defaulted. */
             rec->method = from ? JS_DupValue(ctx, from->method) : JS_NewString(ctx, "GET");
         } else if (concolic_is(mv)) {
-            /* §5.4 STEP 25 OVER A METHOD NOBODY KNOWS — THE THREE THINGS THAT ARE ALREADY SETTLED, AND THE ONE
-             * THAT IS NOT. `fetch(u, {method: options.method || "get"})` is the shape, one arm of that `||`
-             * carrying the unknown, and an orphan drive of any wrapper reaches it that way by construction:
-             * Web IDL declares `method` a ByteString and core/idl_args.h's IDL_CONCOLIC_CROSSES passes unknown
-             * external input through that conversion UNCONVERTED on purpose, so opacity survives it.
-             *
-             * (1) READING BYTES OFF IT IS WRONG, which is what the line below did and what took the document
-             * down: ECMAScript §7.1.19 ToString ( arg ) steps 9-12 hand an Object to §7.1.1 ToPrimitive (
-             * input [ , preferredType ] ), which over an unknown is the identity, so the byte consumer owed C
-             * a JSString that does not exist.
-             * (2) SUBSTITUTING ITS DISPLAY SHAPE IS WORSE and is the answer to refuse first, because it does
-             * not abort. `{orphan….arg0}.method` is not a token, so §2.2.1 Methods' "A method is a byte
-             * sequence that matches the method token production" fails and step 25 throws a TypeError that
-             * DELETES the request — the endpoint this tool exists to emit — by running a predicate over a
-             * string no run ever computed. It would also decide step 32.1's CORS-safelisted-method test and
-             * step 35's GET/HEAD body test by `strcmp` against that same fabricated string.
-             * (3) THE COMPLETIONS ARE TWO AND NOT THREE, counted from what the PAGE CAN OBSERVE rather than
-             * from the branches of the prose: `new Request` returned, or it threw a TypeError. §2.2.1 makes a
-             * forbidden method a method ("A forbidden method is a method that is a byte-case-insensitive
-             * match for `CONNECT`, `TRACE`, or `TRACK`"), so the two refusals partition the domain — but §5.4
-             * step 25 throws ONE TypeError for both where XHR §3.5.1 The open() method names a "SyntaxError"
-             * and a "SecurityError" apart, and two arms a page cannot tell apart are one world twice. There is
-             * no third: the operand is a value, not an algorithm that could settle nothing.
-             *
-             * SOMEWHERE TO PUT THE ANSWER IS BUILT; WHAT IS MISSING IS SOMEBODY TO ASK. On the ordinary
-             * completion step 25.3's "Normalize method" is a DERIVATION and never a decision — §2.2.1's "To
-             * normalize a method, if it is a byte-case-insensitive match for `DELETE`, `GET`, `HEAD`,
-             * `OPTIONS`, `POST`, or `PUT`, byte-uppercase it" answers an unknown with an unknown in both of its
-             * worlds — and step 25.4's "Set request's method to method" now has a JSValue field to set, which
-             * is the half of this residual that is MET: request.h's nine are values, `request_record_visit`
-             * declares them, `Request`'s `method` getter DUPS the field rather than rebuilding a string from
-             * bytes, and core/fetch/fetch.c's fork refusal no longer names the record. THE DECIDING HALF IS
-             * STILL OWED, and it is step 25.2's predicate rather than step 25.4's store: "is not a method or is
-             * a forbidden method" is a test over BYTES that an unknown cannot answer, so the two completions
-             * have to be FORKED. WHAT THE NEXT DIFF BUILDS: steps 32.1 and 35 asking that fork rather than
-             * `request_str_is` — which asserts its operand is a real string and names this block, so it is the
-             * site that will report the day the fork exists and the store does not reach it — the @H
-             * surface taking the domain-annotated SHAPE (concolic_name_cstr) in the one column an endpoint is
-             * identified by, and §4.1 Main fetch answering a method this agent cannot spell INSIDE the agent
-             * — credentialed by construction, not established to be in RFC 9110 §9.2.1 Safe Methods' safe set,
-             * and off a forced arm. THAT LAST CLAUSE USED TO READ "the one combination that is never a
-             * setting", AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE IT IS THE REASONING A READER
-             * RE-DERIVES (CLAUDE.md §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER): stripping the cookie
-             * never made a request uncorrelated with the person, since the authority can be in the ADDRESS
-             * and the address can have been DERIVED from a credentialed read, and §9.2.1 grades what a client
-             * INTENDS rather than what a server does. Those three are SIGNALS the egress policy surfaces
-             * per-origin for a person to decide, and their correct output where nobody has widened the origin
-             * is the DEFAULT rather than a refusal: derive it, report it and not send it, a derived-and-
-             * unfired request being the report rather than a gap in it.
-             * AND THE FORK NEEDS A MACHINE: this operation is §5.4 steps
-             * 10-27 for BOTH of its callers and holds no JSStepHdr, so step_fork_run cannot be asked here
-             * until it takes one — which is the single change that unblocks this member and the TWO
-             * `init_strv` members above it. It was seven until Web IDL §3.2.18 Enumeration types gained its
-             * fork at the DECLARATION: five of that seven are enumerations and are answered before this
-             * operation runs at all, so the three this operation still refuses are `referrer`, `integrity` and
-             * this method. THAT CLAUSE USED TO END "what is left needing a JSValue field", and all three HAVE
-             * one — it is kept in its rewritten form rather than deleted because a reader counting the members
-             * this block refuses will arrive at the same three and must not conclude the field is what they
-             * are waiting for.
-             * HOW ITS ABSENCE SHOWS: this abort, on any bundle whose method is not a literal. */
-            DFAIL("Fetch §5.4 new Request(input, init) step 25 was handed a method that is UNKNOWN EXTERNAL "
-                  "INPUT. Its two observable completions are `returned` and `threw a TypeError`, and the "
-                  "ordinary one HAS somewhere to store its answer now: core/fetch/request.h declares the "
-                  "record's method a JSValue, which is the half of this that was missing. What is missing is "
-                  "the ASK — step 25.2's `is not a method or is a forbidden method` is a predicate over BYTES "
-                  "and an unknown cannot answer it, so the two completions must be forked, and this operation "
-                  "holds no JSStepHdr to reach step_fork_run through. Give request_init_apply the JSStepHdr "
-                  "both of its callers already have; that one change unblocks this member, `referrer` and "
-                  "`integrity` together");
-            JS_FreeValue(ctx, mv);
-            JS_ThrowTypeError(ctx, "this engine cannot yet build a Request whose method is unknown external "
-                                   "input");
-            return -1;
+            /* STEP 25.2 OVER AN UNKNOWN, ASKED AS A FORK (REQ_METHOD_OP). `mv` is borrowed by the ask from the
+               converted dictionary, which the caller's machine carries. Nothing this call placed survives the
+               ask: the stage is re-entered at its top and runs this again, so the record goes back to
+               request_record_init's state first. */
+            char *norm = NULL;
+            int arm = 0, real = request_method_real(ctx, mv, &norm), r;
+
+            r = step_fork_run(ctx, hdr, mv, REQ_METHOD_OP, REQ_M_OUTCOMES, real, &arm);
+            if (r > 0) {
+                js_free(ctx, norm);
+                JS_FreeValue(ctx, mv);
+                request_record_free(JS_GetRuntime(ctx), rec);
+                return r;
+            }
+            DCHECK(arm == REQ_M_USABLE || arm == REQ_M_REFUSED,
+                   "§5.4 step 25.2's fork answered with a completion it never declared");
+            if (arm == REQ_M_REFUSED) {
+                js_free(ctx, norm);
+                JS_FreeValue(ctx, mv);
+                JS_ThrowTypeError(ctx, "the Request method is not a usable method");
+                return -1;
+            }
+            /* Steps 25.3-25.4: Fetch §2.2.1's "normalize a method" answers an unknown with an unknown, so it is a
+               derivation, never a decision. Its example is the operation run on the operand's example, absent
+               on an arm that example contradicts. */
+            rec->method = concolic_new_derived(ctx, "normalize a method", (JSValueConst *)&mv, 1,
+                                               norm ? JS_NewString(ctx, norm) : JS_UNDEFINED);
+            js_free(ctx, norm);
+            DCHECK(concolic_is(rec->method),
+                   "§5.4 step 25.3's derivation over an unknown method answered that no operand was unknown");
         } else {
             /* STEPS 25.2-25.4 OVER A KNOWN METHOD, AND THE ONE PLACE BYTES ARE STILL BORROWED FROM A VALUE.
                §2.2.1 "Methods" states step 25.2's two predicates and step 25.3's normalization over a BYTE
@@ -1187,11 +1217,10 @@ int request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *f
        EXCEPTION, and each of the three sites above that can produce one tests for it at its own step because
        §5.4's order is observable. What is left for this to say is that the span filled every field, which is a
        statement about THIS FUNCTION and is exactly what a reader of the record downstream relies on. */
-#define X(f) DCHECK(JS_IsString(rec->f), "Fetch §5.4's member application returned 0 with the request record's " \
-                                         "`" #f "` unfilled — every reader downstream (the host edge's method, " \
-                                         "the CSP metadata's integrity, step 32.1's method test) takes it as a " \
-                                         "string, and a field left JS_UNDEFINED is a step that returned 0 " \
-                                         "without placing its answer");
+#define X(f) DCHECK(JS_IsString(rec->f) || (&rec->f == &rec->method && concolic_is(rec->f)),            \
+                    "Fetch §5.4's member application returned 0 with the request record's `" #f "` unfilled "   \
+                    "— every field is a String, or for the method the unknown step 25.3 derived, and a field " \
+                    "left JS_UNDEFINED is a step that returned 0 without placing its answer");
     REQUEST_RECORD_FIELDS(X)
 #undef X
     /* §5.4 step 27's "set request's priority to init["priority"]" and LOCAL NETWORK ACCESS §3.1.2 Fetch API's
@@ -1228,66 +1257,46 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             JS_ThrowTypeError(ctx, "constructor Request requires 'new'");
             return -1;
         }
-        /* Step 12's list, built before the step that copies into it. Nothing in this stage parks, so it runs
-           once per state. */
-        s->list = header_pairs_new(ctx);
-        {
-            JSValue rproto = JS_GetClassProto(ctx, g_request_class);
-            DCHECK(!JS_IsNull(rproto), "a Request was minted in a realm that never ran its install");
-            obj = JS_NewObjectProtoClass(ctx, rproto, g_request_class);
-            JS_FreeValue(ctx, rproto);
-        }
-        if (JS_IsException(obj)) { JS_FreeValue(ctx, cb_result); return -1; }
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        /* THE RECORD IS BUILT BEFORE THE REQUEST OBJECT IS MINTED, because step 25.2 may fork and a fork
+           re-enters this stage at its top: everything up to request_init_apply's answer is re-run, so it lives
+           in `d`, which a fork or a throw frees, and nothing reaches this machine's state until the record is
+           complete. */
         d = js_mallocz(ctx, sizeof(*d));
-        if (!d) { JS_FreeValue(ctx, obj); JS_FreeValue(ctx, cb_result); return -1; }
+        if (!d) return -1;
         d->headers = JS_UNDEFINED;
         d->blob_entry = JS_UNDEFINED;
+        d->signal = JS_UNDEFINED;
+        d->url_unknown = JS_UNDEFINED;
         /* §2.2.5's record in its stated state before §5.4 steps 10-27 fill it; `js_mallocz` leaves its slots
            holding the integer 0, which request_init_apply refuses. */
         request_record_init(&d->rec);
-        /* EVERY OWNED FIELD IS PLACED BEFORE THE FIRST STEP THAT CAN THROW — the failure path frees exactly
-           what the record holds, so a field handed over late is one the teardown reads uninitialised. The
-           signal is BUILT at the end of this stage, where §5.4 builds it. */
-        d->signal = JS_UNDEFINED;
-        d->url_unknown = JS_UNDEFINED;
-        JS_SetOpaque(obj, d);
-        s->result = obj;
 
         /* §5.4 step 5: a STRING input is parsed against the base URL, and a failure is a TypeError. A REQUEST
-           input contributes its URL already parsed. THE TWO ARMS DIFFER HERE AND AT EVERY MEMBER BELOW, which
-           is the correction this comment used to be the whole of: it said `which is why the two arms differ
-           only here`, and step 12 lists thirteen properties a Request input contributes — method, header
-           list, referrer, referrer policy, mode, CREDENTIALS MODE, cache mode, redirect mode, integrity
-           metadata and keepalive among them. Taking only the URL meant `new Request(r)` — the request-wrapping
-           idiom every fetch interceptor is written in — answered POST as GET, `include` as `same-origin` and
-           `no-cors` as `cors`, out of the DEFAULTS below rather than out of anything the page wrote. Each was
-           a REAL value belonging to some request, which is what made it invisible: a wrong answer the engine
-           then modelled, and every @H example value and @S verdict downstream of one is derived from a request
-           the page never made. */
+           input contributes its URL already parsed (step 6), and step 12 carries the rest of its request. */
         if (from_request) {
             d->url = js_strdup(ctx, from_request);
             d->url_unknown = JS_DupValue(ctx, from->url_unknown);
             d->url_grounded = from->url_grounded;
         } else if (concolic_is(input)) {
-            JS_FreeValue(ctx, cb_result);
-            cb_result = JS_UNDEFINED;
-            if (request_url_unknown_parse(ctx, input, d) < 0)
+            if (request_url_unknown_parse(ctx, input, d) < 0) {
+                request_data_free(JS_GetRuntime(ctx), d);
                 return -1;
+            }
         } else {
             UrlRecord rec;
             size_t n = 0;
             const char *in = JS_ToCStringLen(ctx, &n, input);
             int bad;
-            JS_FreeValue(ctx, cb_result);
-            cb_result = JS_UNDEFINED;
-            if (!in) return -1;
+
+            if (!in) { request_data_free(JS_GetRuntime(ctx), d); return -1; }
             bad = request_parse_input_url(ctx, in, n, &rec);
             JS_FreeCString(ctx, in);
-            if (bad < 0) return -1;
+            if (bad < 0) { request_data_free(JS_GetRuntime(ctx), d); return -1; }
             {
                 /* url_serialize returns a plain malloc'd string, and everything this struct holds is freed
-                   with the ENGINE's allocator — mixing the two is a heap corruption that only shows up at
-                   teardown, which is exactly where it showed up. Copy in, free out. */
+                   with the engine's allocator, so it is copied in and freed out. */
                 char *ser = url_serialize(&rec, false);
                 d->url = js_strdup(ctx, ser);
                 free(ser);
@@ -1304,13 +1313,25 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             url_record_free(&rec);
         }
 
-        /* §5.4 STEPS 10-27, THROUGH THE ONE IMPLEMENTATION OF THEM (request.h). They stood written out here,
-           and `fetch(input, init)` — which Fetch §5.6 "Fetch methods" step 2 defines as an invocation of THIS
-           constructor — had its own partial copy that read three members and dropped thirteen. Two copies of
-           one algorithm is how a step lands in one of them: this is the copy that grew step 10, step 21 and
-           step 32.1, and the other one never did. */
-        if (request_init_apply(ctx, init, from ? &from->rec : NULL, &d->rec) < 0)
-            return -1;
+        /* §5.4 STEPS 10-27, THROUGH THE ONE IMPLEMENTATION OF THEM (request.h), which `fetch(input, init)` —
+           §5.6 "Fetch methods" step 2 defines it as an invocation of this constructor — shares. A positive
+           answer is step 25.2's fork, returned for the driver after `d` is freed. */
+        r = request_init_apply(ctx, hdr, init, from ? &from->rec : NULL, &d->rec);
+        if (r != 0) {
+            request_data_free(JS_GetRuntime(ctx), d);
+            return r;
+        }
+        {
+            JSValue rproto = JS_GetClassProto(ctx, g_request_class);
+            DCHECK(!JS_IsNull(rproto), "a Request was minted in a realm that never ran its install");
+            obj = JS_NewObjectProtoClass(ctx, rproto, g_request_class);
+            JS_FreeValue(ctx, rproto);
+        }
+        if (JS_IsException(obj)) { request_data_free(JS_GetRuntime(ctx), d); return -1; }
+        JS_SetOpaque(obj, d);
+        s->result = obj;
+        /* Step 12's header list, built once: nothing after this point in the stage forks or parks. */
+        s->list = header_pairs_new(ctx);
         CHECK(d->url != NULL, "request: OOM building a Request's URL");
         /* §5.4 steps 4 / 6.3 / 26 and then step 29, "Let signals be « signal » if signal is non-null;
            otherwise « »". The two sources are the Request `input` (a `new Request(other)` inherits other's
@@ -1320,9 +1341,9 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
            AND THAT IS WHY THE THREE SLOTS ARE INITIALISED HERE RATHER THAN GUARDED ON `step_fork_pending`:
            core/dom/abort.h asks for all three to be set once before the first ask, and names the exit it
            accepts instead: "a machine whose init is in a stage its asking stage cannot re-enter has a stronger
-           guard" already, and states that fact instead. This is that stage. REQ_CTOR_RECORD never
-           returns a park code, so the only way to re-enter this machine at all is step 30's fork or the header
-           fill's delivery, and both carry a `stage` that skips this block. An init placed at the ask instead
+           guard" already, and states that fact instead. This is that stage. REQ_CTOR_RECORD's one park code is
+           step 25.2's fork, returned before this block runs, so every other re-entry of this machine (step 30's
+           fork, the header fill's delivery) carries a `stage` that skips this block. An init placed at the ask instead
            would OVERWRITE the reference the seam is holding in `sig_flag` across the park, which is the leak
            core/dom/abort.h records its first consumer having landed with. */
         {
@@ -1401,11 +1422,8 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
            "declare that builtin a step machine" at a site that already was one; solver/engine.c carries why
            the clause is read second.
            WHY THIS IS A STAGE OF ITS OWN AND NOT A GUARDED ASK INSIDE REQ_CTOR_RECORD: a fork re-enters the
-           asking stage AT ITS TOP, and REQ_CTOR_RECORD's top MINTS THE REQUEST and fills its record — a
-           re-entry there would allocate a second Request, overwrite `s->result` with it and leak the first,
-           and `request_init_apply` would overwrite every JSValue of a record it had already filled. The
-           stage boundary is where this machine can rest, and step 30's ask is a rest point this machine did
-           not have. */
+           asking stage AT ITS TOP, and REQ_CTOR_RECORD mints the Request once its record is complete — a
+           re-entry past that point would allocate a second Request and leak the first. */
         /* NOTHING IS DELIVERED INTO THIS STAGE, WHICH IS WHY NOTHING FREES `cb_result` ON THIS PATH. Only two
            entries reach here — the fall-through from REQ_CTOR_RECORD, which is a first call, and step 2's fork,
            whose two entries quickjs re-enters with JS_UNDEFINED rather than with the same delivery (quickjs.c
@@ -1448,6 +1466,26 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         JS_FreeValue(ctx, d->signal);
         d->signal = s->sig_result;
         s->sig_result = JS_UNINITIALIZED;
+        hdr->stage = REQ_CTOR_GUARD;
+    }
+
+    if (hdr->stage == REQ_CTOR_GUARD) {
+        /* §5.4 STEP 32.1: under a "no-cors" mode the method must be a CORS-safelisted method — §2.2.1 Methods'
+           `GET`, `HEAD` or `POST` — and anything else is a TypeError; the mode carried forward at step 12 is a
+           second way in. A stage of its own because the test forks over an unknown method and the header fill
+           after it parks: a re-entry of a shared stage would ask this again over the fill's delivery. Nothing
+           is delivered here (a fork's entries carry JS_UNDEFINED). */
+        bool safelisted = true;
+
+        DCHECK(JS_IsUndefined(cb_result), "§5.4 step 32.1's stage was entered carrying a delivery");
+        if (request_str_is(ctx, d->rec.mode, "no-cors")) {
+            r = request_method_in_step(ctx, hdr, d->rec.method, REQUEST_METHOD_CORS_SAFELISTED, &safelisted);
+            if (r > 0) return r;
+        }
+        if (!safelisted) {
+            JS_ThrowTypeError(ctx, "a Request with mode \"no-cors\" must use a CORS-safelisted method");
+            return -1;
+        }
         hdr->stage = REQ_CTOR_HEADERS;
     }
 
@@ -1458,17 +1496,6 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                                                                         : HEADERS_GUARD_REQUEST;
         JSValue hv;
 
-        /* §5.4 step 32.1: under a "no-cors" mode the method must be a CORS-SAFELISTED METHOD — §2.2.1 Methods'
-           `GET`, `HEAD` or `POST` — and anything else is a TypeError. It was missing, so
-           `new Request(u, {mode:"no-cors", method:"PUT"})` built a request no browser will make, and the
-           mode carried forward at step 12 gives that shape a second way in. The method here is normalized, so
-           the comparison is against the uppercase spellings and nothing else. */
-        if (guard == HEADERS_GUARD_REQUEST_NO_CORS && !request_str_is(ctx, d->rec.method, "GET") &&
-            !request_str_is(ctx, d->rec.method, "HEAD") && !request_str_is(ctx, d->rec.method, "POST")) {
-            JS_FreeValue(ctx, cb_result);
-            JS_ThrowTypeError(ctx, "a Request with mode \"no-cors\" must use a CORS-safelisted method");
-            return -1;
-        }
         hv = idl_dict_get(ctx, init, "headers");
         r = headers_fill_run(ctx, hdr, &s->fill, hv, s->list, guard, cb_result, out_cb, out_argc);
         JS_FreeValue(ctx, hv);
@@ -1483,8 +1510,9 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
 
     DCHECK(hdr->stage == REQ_CTOR_BODY,
            "the Request constructor was re-entered at a stage §5.4 does not have");
-    /* §5.4 steps 34-41. A body on a GET or a HEAD is a TypeError. The extraction itself is §5.2's, which
-       body.c owns — both including interfaces run the same six-armed union, and the Content-Type it produces
+    /* §5.4 steps 34-41. A body on a GET or a HEAD is a TypeError. This stage is re-entered at its top by step
+       35's fork over an unknown method, which is asked before anything below is written. The extraction itself
+       is §5.2's, which body.c owns — both including interfaces run the same six-armed union, and the Content-Type it produces
        is set only where the header list has none.
        AND `inputBody` IS THE HALF THAT WAS ABSENT: step 34 is "Let inputBody be input's request's body if
        input is a Request object", and every step after it reads that name. Without it a `new Request(post)`
@@ -1501,11 +1529,16 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         /* STEP 35: "If either init["body"] exists and is non-null OR INPUTBODY IS NON-NULL, and request's
            method is `GET` or `HEAD`, then throw a TypeError" — so `new Request(post, {method:"GET"})` is
            refused rather than silently issued bodiless. */
-        if ((init_body || input_body) &&
-            (request_str_is(ctx, d->rec.method, "GET") || request_str_is(ctx, d->rec.method, "HEAD"))) {
-            JS_FreeValue(ctx, bv);
-            JS_ThrowTypeError(ctx, "a Request with a GET or HEAD method cannot have a body");
-            return -1;
+        if (init_body || input_body) {
+            bool get_head = false;
+
+            r = request_method_in_step(ctx, hdr, d->rec.method, REQUEST_METHOD_GET_OR_HEAD, &get_head);
+            if (r > 0) { JS_FreeValue(ctx, bv); return r; }
+            if (get_head) {
+                JS_FreeValue(ctx, bv);
+                JS_ThrowTypeError(ctx, "a Request with a GET or HEAD method cannot have a body");
+                return -1;
+            }
         }
         if (init_body) {                                                   /* step 37 */
             char *mime = NULL;

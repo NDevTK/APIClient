@@ -460,6 +460,7 @@ static void pending_park_request(JSContext *ctx, Flow *f, JSValue e, const Fetch
     pending_set_int(e, PEND_BODY_CLASS, (int)req->body_class);
     pending_set(e, PEND_URL, JS_NewString(ctx, use_url));
     pending_set(e, PEND_METHOD, JS_NewString(ctx, req->method));
+    pending_set_int(e, PEND_METHOD_CLASS, (int)req->method_class);
     pending_set(e, PEND_DESTINATION, JS_NewString(ctx, req->destination));
     /* `fetch_credentials_token` owns the one wire spelling (core/fetch/fetch.h) and is fatal on the unplaced
        zero, the release backstop under the DCHECK above. Written unconditionally, so a record still carrying
@@ -4450,19 +4451,20 @@ int engine_provide(JSContext *ctx, const PendRequestKey *key, const char *how, c
    engine_pending_fetches' fold takes, a tie going to the lower body class. Owned. */
 static JSValue pending_node_judged_member(PendIndexNode *node) {
     JSValue best = JS_UNDEFINED;
-    int driven = 0, pinned = 0, prov = 0, cls = 0;
+    int driven = 0, pinned = 0, prov = 0, cls = 0, mcls = 0;
 
     for (int i = 0, n = pending_index_node_count(node); i < n; i++) {
         JSValue pe = pending_index_node_member(node, i);
         int m_driven = (int)pending_get_int(pe, PEND_DRIVEN), m_pinned = (int)pending_get_int(pe, PEND_PINNED);
         int m_prov = (int)pending_get_int(pe, PEND_PROV), m_cls = (int)pending_get_int(pe, PEND_BODY_CLASS);
+        int m_mcls = (int)pending_get_int(pe, PEND_METHOD_CLASS);
         int same = m_driven == driven && m_pinned == pinned && m_prov == prov;
 
         if (i == 0 || m_driven < driven || (m_driven == driven && (m_pinned < pinned ||
-            (m_pinned == pinned && m_prov < prov))) || (same && m_cls < cls)) {
+            (m_pinned == pinned && m_prov < prov))) || (same && (m_cls < cls || (m_cls == cls && m_mcls < mcls)))) {
             JS_FreeValue(pending_ctx(), best);
             best = pe;
-            driven = m_driven; pinned = m_pinned; prov = m_prov; cls = m_cls;
+            driven = m_driven; pinned = m_pinned; prov = m_prov; cls = m_cls; mcls = m_mcls;
         } else {
             JS_FreeValue(pending_ctx(), pe);
         }
@@ -4538,6 +4540,9 @@ char *engine_pending_request(JSContext *ctx, const PendRequestKey *key) {
     json_buf_raw(&b, ",");
     json_buf_key(&b, "bodyClass");
     json_buf_str(&b, fetch_body_class_token((FetchBodyClass)cls));
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "methodClass");
+    json_buf_str(&b, fetch_method_class_token((FetchMethodClass)pending_get_int(pe, PEND_METHOD_CLASS)));
     json_buf_raw(&b, "}");
     JS_FreeValue(ctx, bv);
     JS_FreeValue(ctx, hl);

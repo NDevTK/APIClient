@@ -84,12 +84,10 @@ char *request_method_check(JSContext *ctx, const char *m);
  * is rewritten rather than dropped: it is why these nine are JSValues. There is exactly one list of what a state owns — the
  * declaration — and `request_record_visit` puts these nine on it.
  * AND IT IS WHAT §5.4 STEP 25 NEEDS: "Set request's method to method" over a method that is UNKNOWN EXTERNAL
- * INPUT has nowhere to go in a `char *`, because the ToString boundary owes C real bytes. A JSValue field is
- * NECESSARY for that and is not SUFFICIENT — step 25.2's "is not a method or is a forbidden method" is a
- * PREDICATE over those bytes, which an unknown cannot answer, so the step still owes a fork; see
- * `request_init_apply`'s own block on it. This conversion is the storage half and says so. */
+ * INPUT has nowhere to go in a `char *`, because the ToString boundary owes C real bytes. */
 typedef struct {
-    JSValue method;          /* §5.4 step 25, normalized */
+    JSValue method;          /* §5.4 step 25, normalized: a String, or the unknown §2.2.1's "normalize a
+                                method" derives from an unknown init["method"] (request_init_apply) */
     JSValue mode;            /* "cors" | "no-cors" | "same-origin" | "navigate" */
     JSValue credentials;     /* "omit" | "same-origin" | "include" */
     JSValue cache;
@@ -120,17 +118,15 @@ void request_record_visit(JSContext *ctx, RequestRecord *rec, JSStepVisit *v);
    through an opaque, so a Request's own record is MARKED here, FREED by `request_record_free` in the finalizer
    and DUP'd by `request_record_copy` at clone. Those three sites are one obligation and are read together,
    exactly as the Request's `headers`/`blob_entry`/`signal` trio is.
-   IT MARKS NOTHING WHILE ALL NINE ARE STRINGS, which is today: `JS_MarkValue` reaches the collector only for
-   JS_TAG_OBJECT and JS_TAG_FUNCTION_BYTECODE. It is not therefore dead code to delete — the field that makes it
-   fire is §5.4 step 25's method the day it can hold a CONCOLIC, which is a class-opaque OBJECT — and it is not
-   a mechanism to rely on yet either. The caller's site states both halves. */
+   §5.4 step 25's method can hold an unknown, which is a class-opaque OBJECT, so the mark is load-bearing. */
 void request_record_mark(JSRuntime *rt, const RequestRecord *rec, JS_MarkFunc *mark_func);
 /* Release every value the record owns and re-initialize it. Takes the RUNTIME because a finalizer has one and
    has no context.
    FOR A CLASS-OPAQUE HOLDER ONLY. A STEP MACHINE'S record is discharged by the driver through
    `request_record_visit`, so a machine's `release` that also called this would free each slot twice — which is
    not a leak to be found later but the assert named above, firing on the one place every member's teardown
-   converges on. */
+   converges on. request_init_apply calls it mid-step to hand a fork's re-entry an empty record, which is a
+   write to the declared slots and not a release. */
 void request_record_free(JSRuntime *rt, RequestRecord *rec);
 /* §5.4 step 12's carry-forward as a copy of the record — a second reference to each of the nine, since a
    JSValue string is immutable and the two records are two requests' answers to the same question rather than
@@ -146,8 +142,8 @@ void request_record_copy(JSContext *ctx, RequestRecord *dst, const RequestRecord
  * the same comparison; what is new is that the operand can now BE unknown external input, and a byte test over
  * an unknown is the one answer §@H forbids — it would decide a gate by running a predicate over a string no
  * run ever computed. So this operation ASSERTS its operand is a real string and names the fork that is owed,
- * which is the refusal moving from "there is nowhere to store it" to "there is nobody to ask": the storage half
- * of §5.4 step 25 is this record and the DECIDING half is `request_init_apply`'s own residual.
+ * so this operation ASSERTS its operand is a real string. The method's tests over an operand that may be
+ * unknown are request_method_in_step's.
  * NOT a general-purpose helper and not in a shared header: it is the record's question, over the record's
  * fields, and the assert is only sound because those nine are the ones whose provenance this file states. */
 bool request_str_is(JSContext *ctx, JSValueConst v, const char *lit);
@@ -170,6 +166,10 @@ const RequestRecord *request_record_of(JSValueConst v);
  *
  * Returns 0, or -1 with the TypeError §5.4 states live: step 10's `window`, step 17's "navigate" mode, step
  * 21's "only-if-cached", and step 25's method. `rec` is left safe to free either way.
+ * Or a positive step code, which the caller returns from its step: step 25.2 over an unknown method is a fork
+ * asked of `hdr` (step_fork_run), and `rec` is then back in request_record_init's state, because the asking
+ * stage is re-entered at its top and this runs again. `hdr`'s stage must therefore re-run idempotently up to
+ * this call, and nothing the caller holds across it may be written before it.
  *
  * IT ALSO RETURNS -1 FOR A MEMBER THIS ENGINE CANNOT YET APPLY, which is a different thing from a step's own
  * refusal and is stated here because a caller cannot tell them apart and must not try: a member whose value is
@@ -187,7 +187,18 @@ const RequestRecord *request_record_of(JSValueConst v);
  * concolic — with `Request.url`'s getter answering it (opaque-infectious, as `location.href` is) and the
  * serialized form derived at the one C consumer that needs bytes. ITS ABSENCE SHOWS as
  * `new Request(location.hash)` aborting the agent where `fetch(location.hash)` records an endpoint. */
-int  request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *from, RequestRecord *rec);
+int  request_init_apply(JSContext *ctx, JSStepHdr *hdr, JSValueConst init, const RequestRecord *from,
+                        RequestRecord *rec);
+
+/* Fetch §2.2.1 Methods' two sets a later step of §5.4 tests a request's method against: step 32.1's
+   "CORS-safelisted method" (`GET`, `HEAD` or `POST`) and step 35's "`GET` or `HEAD`". */
+typedef enum { REQUEST_METHOD_CORS_SAFELISTED, REQUEST_METHOD_GET_OR_HEAD } RequestMethodSet;
+/* Is the record's (normalized) `method` in `set`. A String answers by bytes. An unknown asks a fork of `hdr`
+   with two completions, the step's ordinary one first: it returns that positive step code for the caller to
+   return, and its stage is re-entered at its top, so the ask comes before anything the stage writes. 0 with
+   `*pin` set otherwise. */
+int  request_method_in_step(JSContext *ctx, JSStepHdr *hdr, JSValueConst method, RequestMethodSet set,
+                            bool *pin);
 
 /* Fetch §5.4 "Request class" constructor step 5, the string-input arm: 5.1 parses `in` against the API base
    URL, 5.2 throws a TypeError if that fails, 5.3 throws one if the URL includes credentials. 0 with `rec`

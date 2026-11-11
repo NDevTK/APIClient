@@ -199,6 +199,17 @@ const char *fetch_body_class_token(FetchBodyClass c)
                "the request's `body` signal");
 }
 
+const char *fetch_method_class_token(FetchMethodClass c)
+{
+    switch (c) {
+    case FETCH_METHOD_CONCRETE: return "concrete";
+    case FETCH_METHOD_EXAMPLE:  return "example";
+    case FETCH_METHOD_UNKNOWN:  return "unknown";
+    }
+    CHECK_FAIL("fetch: a request method's class is outside FetchMethodClass — the trusted zone reads the word as "
+               "a part of the request's `bytes` signal");
+}
+
 const char *fetch_mode_token(FetchMode m)
 {
     switch (m) {
@@ -1726,6 +1737,29 @@ FetchBodyClass fetch_body_class_of(const BodyState *b, bool grounded)
    A CONVERSION PER READ WOULD BE THE SAME BYTES SEVERAL TIMES AND THE SAME OWNERSHIP RULE SEVERAL TIMES, which
    is the shape a later diff gets wrong by one. The record was filled by §5.4 steps 10-27, and a request that
    reached this seam is one whose method the standard has already normalized and refused. */
+/* The bytes the host edge is handed for a request's method, owned (JS_FreeCString), and what they are: the
+   String itself; for an unknown, its example where it has one at the park — an arm that contradicted the
+   example since step 25.3 derived it grounds nothing, as the body's does — and its display shape otherwise. */
+static FetchMethodClass fetch_method_bytes(JSContext *ctx, JSValueConst method, const char **pbytes)
+{
+    JSValue ex;
+
+    if (!concolic_is(method)) {
+        DCHECK(JS_IsString(method), "a request record's method is neither a String nor an unknown");
+        *pbytes = JS_ToCString(ctx, method);
+        return FETCH_METHOD_CONCRETE;
+    }
+    ex = concolic_example(ctx, method);
+    if (JS_IsString(ex)) {
+        *pbytes = JS_ToCString(ctx, ex);
+        JS_FreeValue(ctx, ex);
+        return FETCH_METHOD_EXAMPLE;
+    }
+    JS_FreeValue(ctx, ex);
+    *pbytes = concolic_name_cstr(ctx, method);
+    return FETCH_METHOD_UNKNOWN;
+}
+
 static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url, const RequestRecord *rec,
                           JSValueConst input, const HeaderList *hdrs, const char *body, size_t body_len,
                           FetchBodyClass body_class, JSValueConst signal)
@@ -1763,6 +1797,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
     const char *m_ref = NULL, *m_refpol = NULL;
     size_t integrity_len = 0;
     FetchAddressClass address;
+    FetchMethodClass method_class;
 
     promise = JS_NewPromiseCapability(ctx, resolving);
     if (JS_IsException(promise))
@@ -1817,7 +1852,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
        `strlen` of it: §2.2.5's integrity metadata is a BYTE SEQUENCE and a JS string may hold an interior NUL,
        which `strlen` would silently truncate the digest at — `JS_ToCStringLen` is the length the string has. */
     m_integrity = JS_ToCStringLen(ctx, &integrity_len, rec->integrity);
-    m_method    = JS_ToCString(ctx, rec->method);
+    method_class = fetch_method_bytes(ctx, rec->method, &m_method);
     m_dest      = JS_ToCString(ctx, rec->destination);
     m_cred      = JS_ToCString(ctx, rec->credentials);
     m_ref       = JS_ToCString(ctx, rec->referrer);
@@ -1961,12 +1996,13 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
                (method, url) (solver/engine.h), so a request that reached the seam unnamed would collect another
                request's reply. IT IS ON THE RECORD NOW, which is where this comment said it belonged: §5.4
                step 25 writes it there, and `GET` is what step 12 leaves standing for a page that named none. */
-            DCHECK(JS_IsString(rec->method) && *m_method,
+            DCHECK(*m_method,
                    "fetch() reached the host edge with a request record carrying no method — Fetch §5.4 step 25 "
                    "fills it on every path and §2.2.5 gives a request `GET` unless stated otherwise, so an "
                    "absent one is a record request_init_apply never filled. The EMPTY test is on the borrowed "
                    "bytes rather than the value because that is what the park is keyed on");
             req.method = m_method;
+            req.method_class = method_class;
             /* AND THE METADATA THE CHECK ABOVE WAS GIVEN, ON THE REQUEST — so the park's own §4.1 step 7 asks
                the identical question of the identical request. It is the same value and not a second reading
                of §5.4: `csp_meta` is composed once, above, out of the record's integrity and §5.4's unstated
@@ -2098,12 +2134,14 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
                       "union's other member, which runs the page's own toString)") \
     X(FETCH_RECORD,   "Fetch §5.4 new Request(input, init) steps 10-27 (every member of the converted " \
                       "RequestInit applied to the request record, with the TypeErrors those steps state)") \
-    X(FETCH_HEADERS,  "Fetch §5.4 new Request(input, init) steps 32-33 (step 32's CORS-safelisted-method test " \
-                      "under a \"no-cors\" mode, then the header fill under the guard that step chose)") \
+    X(FETCH_HEADERS,  "Fetch §5.4 new Request(input, init) steps 32.2-33 (the header fill under the guard step " \
+                      "32 chose)") \
     X(FETCH_BODY,     "Fetch §5.4 new Request(input, init) steps 35-39 (a body on GET or HEAD is a TypeError; " \
                       "extract init[\"body\"] and its Content-Type; a stream body needs `duplex` and a mode)") \
     X(FETCH_CALL,     "Fetch §5.6 Fetch methods' fetch(input, init) steps 4 and 12 (an already-aborted signal, " \
-                      "then fetch given request — the endpoint the flow parks on until the host answers)")
+                      "then fetch given request — the endpoint the flow parks on until the host answers)") \
+    X(FETCH_GUARD,    "Fetch §5.4 new Request(input, init) step 32.1 (under a \"no-cors\" mode, a method that is " \
+                      "not a CORS-safelisted method is a TypeError; an unknown method forks)")
 enum { FETCH_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_fetch_steps[] = { FETCH_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -2323,8 +2361,10 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             JS_FreeValue(ctx, s->req_url);
             s->req_url = v;
         }
-        if (request_init_apply(rctx, init, request_record_of(s->input), &s->rec) < 0)
-            return -1;
+        /* A positive answer is step 25.2's fork over an unknown method, with `s->rec` re-initialized: this
+           stage is re-entered at its top, and everything above re-runs over values it frees first. */
+        r = request_init_apply(rctx, hdr, init, request_record_of(s->input), &s->rec);
+        if (r != 0) return r;
         /* §5.4 step 12's "A copy of request's header list" for a Request input, whose Headers object's list
            is its request's (step 31), so a header the page wrote through `request.headers` is on it. It is
            re-appended under this request's guard as step 33.4 does and dropped where init["headers"] exists
@@ -2342,12 +2382,12 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                 return -1;
         }
         headers_fill_init(&s->fill);
-        hdr->stage = FETCH_HEADERS;
+        hdr->stage = FETCH_GUARD;
     }
 
     /* §5.4 steps 31 and 32.2's guard, a function of the mode step 18 settled: "request", or
        "request-no-cors" under a "no-cors" mode, which drops what that mode does not admit. */
-    DCHECK(JS_IsString(s->rec.mode) && JS_IsString(s->rec.method),
+    DCHECK(JS_IsString(s->rec.mode) && (JS_IsString(s->rec.method) || concolic_is(s->rec.method)),
            "the fetch machine reached §5.4 step 32 with an unfilled request record — every stage from here on "
            "reads the mode and the method, and request_init_apply fills both or fails, so a record with "
            "neither means a stage transition skipped FETCH_RECORD rather than a member being absent. The test "
@@ -2355,16 +2395,25 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
            "holds JS_UNDEFINED, and one whose holder was allocated zeroed holds the integer 0");
     guard = request_str_is(ctx, s->rec.mode, "no-cors") ? HEADERS_GUARD_REQUEST_NO_CORS : HEADERS_GUARD_REQUEST;
 
-    if (hdr->stage == FETCH_HEADERS) {
-        /* §5.4 step 32.1: under a "no-cors" mode the method must be a CORS-SAFELISTED METHOD — §2.2.1 Methods'
-           `GET`, `HEAD` or `POST` — and anything else is a TypeError. The method here is normalized by step 25,
-           so the comparison is against the uppercase spellings and nothing else. */
-        if (guard == HEADERS_GUARD_REQUEST_NO_CORS && !request_str_is(ctx, s->rec.method, "GET") &&
-            !request_str_is(ctx, s->rec.method, "HEAD") && !request_str_is(ctx, s->rec.method, "POST")) {
-            JS_FreeValue(ctx, cb_result);
+    if (hdr->stage == FETCH_GUARD) {
+        /* §5.4 step 32.1: under a "no-cors" mode the method must be a CORS-safelisted method — §2.2.1 Methods'
+           `GET`, `HEAD` or `POST` — and anything else is a TypeError. Its own stage because it forks over an
+           unknown method and the header fill after it parks (request.c's constructor states the same). */
+        bool safelisted = true;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        if (guard == HEADERS_GUARD_REQUEST_NO_CORS) {
+            r = request_method_in_step(ctx, hdr, s->rec.method, REQUEST_METHOD_CORS_SAFELISTED, &safelisted);
+            if (r > 0) return r;
+        }
+        if (!safelisted) {
             JS_ThrowTypeError(ctx, "a fetch with mode \"no-cors\" must use a CORS-safelisted method");
             return -1;
         }
+        hdr->stage = FETCH_HEADERS;
+    }
+    if (hdr->stage == FETCH_HEADERS) {
         /* §5.1: a request's header list has guard "request" — the names the browser owns (Host, Cookie,
            Origin, the method-override family carrying CONNECT/TRACE/TRACK) are dropped rather than sent. */
         {
@@ -2389,11 +2438,17 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         cb_result = JS_UNDEFINED;
         /* §5.4 step 35: a body with a GET or a HEAD is a TypeError, whether it is the init's or the input
            Request's. The method is the record's, so this is the test the constructor makes. */
-        if ((init_body || input_body) &&
-            (request_str_is(ctx, s->rec.method, "GET") || request_str_is(ctx, s->rec.method, "HEAD"))) {
-            JS_FreeValue(ctx, bv);
-            JS_ThrowTypeError(ctx, "a fetch with a GET or HEAD method cannot have a body");
-            return -1;
+        if (init_body || input_body) {
+            bool get_head = false;
+
+            /* Asked before this stage writes anything, because a fork re-enters it at its top. */
+            r = request_method_in_step(ctx, hdr, s->rec.method, REQUEST_METHOD_GET_OR_HEAD, &get_head);
+            if (r > 0) { JS_FreeValue(ctx, bv); return r; }
+            if (get_head) {
+                JS_FreeValue(ctx, bv);
+                JS_ThrowTypeError(ctx, "a fetch with a GET or HEAD method cannot have a body");
+                return -1;
+            }
         }
         if (init_body) {
             char *mime = NULL;
@@ -2706,7 +2761,9 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
            lifetime: `endpoint_record` is done with the bytes when it returns, where `FetchRequest` holds its
            pointers across `fetch_owe`. */
         {
-            const char *em = JS_ToCString(ctx, s->rec.method);
+            /* An unknown method is identified by its display shape, as XHR's is (concolic_name_cstr). */
+            const char *em = concolic_is(s->rec.method) ? concolic_name_cstr(ctx, s->rec.method)
+                                                        : JS_ToCString(ctx, s->rec.method);
             const char *ec;
             CHECK(em != NULL, "OOM borrowing §2.2.5's method for the @H surface's endpoint identity");
             DCHECK(JS_IsString(s->rec.credentials), "a fetch reached §5.6 step 12 with no credentials mode on its "

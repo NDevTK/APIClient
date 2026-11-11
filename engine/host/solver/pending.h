@@ -414,6 +414,8 @@ int pending_driven_compose(int kind, int path_driven);
     X(BODY,       "body",      PEND_SHARE,  JS_NULL)                                   \
     /* what the body's bytes are (core/fetch/fetch.h's FetchBodyClass); 0 is a null body */        \
     X(BODY_CLASS, "bodyClass", PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))                \
+    /* what the method's bytes are (core/fetch/fetch.h's FetchMethodClass); 0 is bytes a producer computed */ \
+    X(METHOD_CLASS, "methodClass", PEND_SHARE, JS_NewInt32(pend_ctx(), 0))             \
     /* the asking document, which every park writes before it is listed; 0 names none */             \
     X(DOC,        "doc",       PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))                \
     X(SCRIPT_EL,  "scriptEl",  PEND_SHARE,  JS_UNDEFINED)                              \

@@ -2542,6 +2542,9 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
     }
     json_buf_raw(&b, ","); json_buf_key(&b, "bodyClass");
     json_buf_str(&b, fetch_body_class_token((FetchBodyClass)d->request_body_class));
+    /* §3.5.1 open() keeps an unknown method off the host edge, so the bytes are the method this object holds. */
+    json_buf_raw(&b, ","); json_buf_key(&b, "methodClass");
+    json_buf_str(&b, fetch_method_class_token(FETCH_METHOD_CONCRETE));
     json_buf_raw(&b, "}");
     JS_FreeCString(ctx, m);
     JS_FreeCString(ctx, u);
