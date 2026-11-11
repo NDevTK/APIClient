@@ -1934,6 +1934,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/framepair.h"
 #include "fixture/shuffle.h"
 #include "fixture/storearm.h"
+#include "fixture/declwake.h"
 #include "fixture/pagewrite.h"
 #include "fixture/keydomain.h"
 #include "fixture/keydomainwalk.h"
@@ -2746,6 +2747,7 @@ TF_DOCS[] = {
     { "framepair", HTML_FRAMEPAIR },
     { "shuffle", HTML_SHUFFLE },
     { "storearm", HTML_STOREARM },
+    { "declwake", HTML_DECLWAKE },
     { "pagewrite", HTML_PAGEWRITE },
     { "keydomain", HTML_KEYDOMAIN },
     { "keydomainwalk", HTML_KEYDOMAINWALK },
@@ -20306,6 +20308,26 @@ static long abs_census_last(const char *js, const char *key) {
     return last ? strtol(last + k, NULL, 10) : -1;
 }
 
+/* The rows of the `declwake` document (fixture/declwake.h), read off the terminal step-unit census. */
+TF_UNIT void probes_declwake(const char *js, Probe *tab, int *n) {
+    static char why[320];
+    long forks = abs_census_last(js, "fork-over-a-declined-request");
+    long rests = abs_census_last(js, "await-a-refused-request");
+    long replies = abs_census_last(js, "deliver-one-reply");
+    const char *w_why = NULL; int w_tt = 1;
+
+    fold_row(&w_tt, &w_why, forks > 0 && replies >= 12,
+             "NOT REACHED: no refusal was forked, or fewer than the chain's twelve replies were delivered, so no "
+             "member rested on a refusal while replies it does not hold arrived");
+    snprintf(why, sizeof why, "members were stepped onto a refusal %ld time(s) for %ld refusal(s) their registers "
+             "took — a reply woke a member whose register does not hold its record", rests, forks);
+    fold_row(&w_tt, &w_why, rests <= forks, why);
+    const Probe rows[] = {
+        { "declined-wake-exact", w_tt, "dwpost", SESS_EXPLORE, w_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `absentarm` document. */
 TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
     /* The branch over `window.__tfAbsentGate`: this session reads undefined there, so the falsy arm is the one
@@ -33050,6 +33072,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_framepair(js, probes, &np);
     probes_shuffle(js, probes, &np);
     probes_storearm(js, probes, &np);
+    probes_declwake(js, probes, &np);
     probes_pagewrite(js, probes, &np);
     probes_keydomain(js, probes, &np);
     probes_keydomainwalk(js, probes, &np);
