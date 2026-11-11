@@ -1989,6 +1989,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/flexnest.h"
 #include "fixture/gridnest.h"
 #include "fixture/gridtemplate.h"
+#include "fixture/inlineboxstatic.h"
+#include "fixture/shadowfloats.h"
 #include "fixture/calctree.h"
 #include "fixture/svgattr.h"
 #include "fixture/gridalign.h"
@@ -2808,6 +2810,8 @@ TF_DOCS[] = {
     { "gridnest2", HTML_GRIDNEST2 },
     { "gridnest4", HTML_GRIDNEST4 },
     { "gridrun", HTML_GRIDRUN },
+    { "inlineboxstatic", HTML_INLINEBOXSTATIC },
+    { "shadowfloats", HTML_SHADOWFLOATS },
     { "gridtemplate", HTML_GRIDTEMPLATE },
     { "calctree", HTML_CALCTREE },
     { "svgattr", HTML_SVGATTR },
@@ -21813,6 +21817,29 @@ TF_UNIT void probes_layoutnest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `inlineboxstatic` and `shadowfloats` documents (fixture/inlineboxstatic.h,
+   fixture/shadowfloats.h). */
+TF_UNIT void probes_inlineboxstatic(const char *js, Probe *tab, int *n) {
+    const char *si_why = NULL, *sf_why = NULL;
+    int si_tt = !!strstr(js, "\"/api/inlineboxstatic\""), sf_tt = !!strstr(js, "\"/api/shadowfloats\"");
+
+    fold_row(&si_tt, &si_why, si_tt,
+             "NOT REACHED: there is no /api/inlineboxstatic record at all, so the document aborted before its fetch");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/inlineboxstatic", "t", "20"),
+             "css-position-3 §3.5.3: a static position inside an inline box is not its line's top, 20px down");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/inlineboxstatic", "l", "30"),
+             "css-position-3 §3.5.3: a static position inside an inline box is not 30px along its line");
+    fold_row(&sf_tt, &sf_why, sf_tt,
+             "NOT REACHED: there is no /api/shadowfloats record at all, so the document aborted before its fetch");
+    fold_row(&sf_tt, &sf_why, param_value_is(js, "/api/shadowfloats", "w", "10"),
+             "CSS 2.2 §10.3.9: a shadow host's shrink-to-fit width is not its shadow tree's 10px");
+    const Probe rows[] = {
+        { "static-position-in-inline-box", si_tt, "/api/inlineboxstatic", SESS_EXPLORE, si_why },
+        { "float-scan-over-shadow-host", sf_tt, "/api/shadowfloats", SESS_EXPLORE, sf_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `gridtemplate` document (fixture/gridtemplate.h); Chrome 155.0.8059.84 and Firefox 158.0.1
    give every value they expect. */
 TF_UNIT void probes_gridtemplate(const char *js, Probe *tab, int *n) {
@@ -33268,6 +33295,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_scrollflex(js, probes, &np);
     probes_layoutnest(js, probes, &np);
     probes_gridtemplate(js, probes, &np);
+    probes_inlineboxstatic(js, probes, &np);
     probes_calctree(js, probes, &np);
     probes_svgattr(js, probes, &np);
     probes_gridalign(js, probes, &np);
