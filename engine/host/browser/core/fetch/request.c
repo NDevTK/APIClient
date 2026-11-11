@@ -240,6 +240,23 @@ static BodyState *request_body_of(JSValueConst v)
     return d ? &d->body : NULL;
 }
 
+JSValueConst request_headers(JSValueConst v)
+{
+    RequestData *d = JS_GetOpaque(v, g_request_class);
+
+    DCHECK(d != NULL && JS_IsObject(d->headers), "the Headers object of something that is not a Request, or of "
+                                                 "a Request §5.4 step 31 has not reached, was asked for");
+    return d->headers;
+}
+
+BodyState *request_body(JSValueConst v)
+{
+    BodyState *b = request_body_of(v);
+
+    DCHECK(b != NULL, "the body of something that is not a Request was asked for");
+    return b;
+}
+
 /* THE BRAND — see request.h. The same `JS_GetOpaque` against this file's class id that every accessor here
    already uses to decide whether it is holding one of ours; it is public because a UNION resolves on exactly
    this question and the answer may not be duck-typed at the call site. */

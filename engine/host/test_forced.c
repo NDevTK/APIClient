@@ -27029,8 +27029,8 @@ TF_UNIT void probes_hdrclass(const char *js, Probe *tab, int *n) {
     /* The control: bytes appended to the Request's Headers object reach the request at all. */
     fold_row(&me_tt, &me_why, tf_seen_content("https://x.test/api/hc-members ", "[\"x-own\",\"bytes\",\"concrete\"]"),
              "a header appended to a Request's Headers object after construction was not shown on the request "
-             "fetch() made from that Request: the object's writes do not reach the request's header list, which "
-             "is a different fact from what a value's class is");
+             "fetch() made from that Request: Fetch §5.4 step 12's copy of the input request's header list, "
+             "which is the list its Headers object writes (step 31), did not reach the fetch");
     fold_row(&me_tt, &me_why, tf_seen_content("https://x.test/api/hc-members ", "[\"x-lang\",\"en-US\",\"example\"]"),
              "Fetch §5.1's set over an unknown with an example did not carry the example's bytes and the class "
              "`example` to the request whose Headers object it wrote");

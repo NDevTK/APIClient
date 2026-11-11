@@ -5,6 +5,7 @@
 
 #include "quickjs.h"
 #include "core/idl_args.h"
+#include "core/fetch/body.h"
 #include "core/url/url.h"
 
 void request_init(JSContext *ctx);
@@ -34,6 +35,12 @@ JSValueConst request_blob_entry(JSValueConst v);
    Over an unknown input it is a derivation of the unknown URL record, so its injection identity is the input's:
    the serialization is a function of the input and the base, and a candidate lands at the input. Owned. */
 JSValue request_url(JSContext *ctx, JSValueConst v);
+
+/* A Request's Headers object, whose header list is its request's (§5.4 Request class, new Request(input, init)
+   step 31), and its request's body: what §5.6 Fetch methods' fetch() carries forward from a Request input,
+   since it performs the constructor inline. Borrowed; both assert `v` is a Request. */
+JSValueConst request_headers(JSValueConst v);
+BodyState *request_body(JSValueConst v);
 
 /* §5.4 step 5's parsed URL of a Request built from an unknown input string: the unknown URL record, or
    JS_UNDEFINED where the URL is stated. `*pgrounded` is the URL a fetch of it sends where the input's example

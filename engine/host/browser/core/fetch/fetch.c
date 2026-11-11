@@ -2246,19 +2246,13 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             JS_FreeValue(ctx, cb_result);
             return -1;
         }
-        /* §5.4 STEPS 10-27, THROUGH THE ONE IMPLEMENTATION OF THEM (request.h). Five stages stood here instead
-           — a dictionary-shape test and four property reads and coercions — and between them they covered
-           three of `RequestInit`'s seventeen members. None of this can park: the declaration converted every
-           member before this machine's first stage ran, so there is no page code left in the span.
-           §5.4 STEP 12'S CARRY-FORWARD IS NULL HERE, AND THAT IS A RESIDUAL AND NOT A DEFAULT. `from` is the
-           input Request's own record, and step 12 carries THIRTEEN of its properties forward — including its
-           HEADER LIST and, at steps 34/41, its BODY through Streams §9.5 Piping's create-a-proxy. Passing the
-           scalar half alone would turn today's `fetch(new Request(u, {method:"POST", body:b}))` — a GET with no
-           body — into a POST with no body, which is a state-mutating request reported without the payload that
-           makes it one, and §What-the-tool-produces cares about that payload. WHAT THE NEXT DIFF BUILDS: the
-           whole of step 12 at once, which is §5.6 step 2's real [[Construct]] and which request.h's residual
-           already names the blocker for. ITS ABSENCE SHOWS as `fetch(new Request(u, {method:"POST"}))` being
-           recorded on the endpoint surface as a GET. */
+        /* §5.4 steps 10-27 through the one implementation of them (request.h). None of this can park: the
+           declaration converted every member before this machine's first stage ran. A Request input's record
+           is step 12's carry-forward; its header list is carried below and its body at FETCH_BODY.
+           Named residual. Not covered: a Request input's signal (step 6.3), so this request's signal follows
+           init["signal"] alone. Next diff builds: step 29's « signal » holding the input's signal where
+           init["signal"] does not replace it, at the two reads of init["signal"] below. Absence shows as a
+           fetch of a Request whose own signal was aborted being sent. */
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* §5.4 STEP 5, the string arm, through the constructor's own implementation: a string the URL parser
@@ -2333,8 +2327,24 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             JS_FreeValue(ctx, s->req_url);
             s->req_url = v;
         }
-        if (request_init_apply(rctx, init, /*from*/ NULL, &s->rec) < 0)
+        if (request_init_apply(rctx, init, request_record_of(s->input), &s->rec) < 0)
             return -1;
+        /* §5.4 step 12's "A copy of request's header list" for a Request input, whose Headers object's list
+           is its request's (step 31), so a header the page wrote through `request.headers` is on it. It is
+           re-appended under this request's guard as step 33.4 does and dropped where init["headers"] exists
+           (steps 33.2-33.3), which request.c's constructor states the equivalence of. */
+        if (request_is(s->input)) {
+            JSValue hv = idl_dict_get(ctx, init, "headers");
+            bool given = !JS_IsUndefined(hv);
+
+            JS_FreeValue(ctx, hv);
+            if (!given &&
+                header_pairs_append_guarded(ctx, s->hdrs,
+                                            request_str_is(ctx, s->rec.mode, "no-cors")
+                                                ? HEADERS_GUARD_REQUEST_NO_CORS : HEADERS_GUARD_REQUEST,
+                                            headers_pairs_of(request_headers(s->input))) < 0)
+                return -1;
+        }
         headers_fill_init(&s->fill);
         hdr->stage = FETCH_HEADERS;
     }
@@ -2376,18 +2386,23 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     if (hdr->stage == FETCH_BODY) {
         JSValue bv = idl_dict_get(ctx, init, "body");
         bool init_body = !JS_IsUndefined(bv) && !JS_IsNull(bv);
+        /* §5.4 step 34: "Let inputBody be input's request's body if input is a Request object; otherwise
+           null." */
+        BodyState *input_body = request_is(s->input) ? request_body(s->input) : NULL;
 
+        if (input_body && !input_body->has) input_body = NULL;
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
+        /* §5.4 step 35: a body with a GET or a HEAD is a TypeError, whether it is the init's or the input
+           Request's. The method is the record's, so this is the test the constructor makes. */
+        if ((init_body || input_body) &&
+            (request_str_is(ctx, s->rec.method, "GET") || request_str_is(ctx, s->rec.method, "HEAD"))) {
+            JS_FreeValue(ctx, bv);
+            JS_ThrowTypeError(ctx, "a fetch with a GET or HEAD method cannot have a body");
+            return -1;
+        }
         if (init_body) {
             char *mime = NULL;
-            /* §5.4 step 35: a body with a GET or a HEAD is a TypeError. The method is the record's, so this is
-               the same test the constructor makes rather than a second reading of `init`. */
-            if (request_str_is(ctx, s->rec.method, "GET") || request_str_is(ctx, s->rec.method, "HEAD")) {
-                JS_FreeValue(ctx, bv);
-                JS_ThrowTypeError(ctx, "a fetch with a GET or HEAD method cannot have a body");
-                return -1;
-            }
             /* §5.4 step 37's "with keepalive set to request's keepalive" — the value step 24 read out of the
                dictionary, not a constant. It WAS the constant `false`, with a comment beside it saying the
                member "is a member neither RequestInit nor Request installs here": that stopped being true when
@@ -2434,6 +2449,29 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             }
         }
         JS_FreeValue(ctx, bv);
+        /* §5.4 steps 38-41: the input Request's body is this request's only where the init supplied none. */
+        if (!init_body && input_body) {
+            bool locked = false;
+
+            /* Step 39.2, for a body whose source is null (§5.2's ReadableStream arm). */
+            if (input_body->source_null && !request_str_is(ctx, s->rec.mode, "same-origin") &&
+                !request_str_is(ctx, s->rec.mode, "cors")) {
+                JS_ThrowTypeError(ctx, "a fetch with a ReadableStream body must have mode \"same-origin\" "
+                                       "or \"cors\"");
+                return -1;
+            }
+            /* Step 41.1: "If inputBody is unusable, then throw a TypeError", §2.2.4 Bodies' disturbed or
+               locked. */
+            readable_stream_query(input_body->stream, NULL, &locked);
+            if (input_body->used || readable_stream_disturbed(input_body->stream) || locked) {
+                JS_ThrowTypeError(ctx, "a Request whose body is disturbed or locked cannot be fetched");
+                return -1;
+            }
+            /* Step 41.2: "Set finalBody to the result of creating a proxy for inputBody", which leaves the
+               input Request's body disturbed (core/fetch/body.h). */
+            if (body_create_proxy(ctx, s->input, input_body, &s->body) < 0)
+                return -1;
+        }
         hdr->stage = FETCH_CALL;
     }
 
