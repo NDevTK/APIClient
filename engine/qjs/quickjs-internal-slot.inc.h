@@ -150,7 +150,7 @@ static int js_step_slot_check(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSSl
     return 0;
 }
 
-/* THE BUILT-INS WHOSE WHOLE ALGORITHM IS THE RECEIVER CHECK AND ONE STEP OVER ITS VALUE, as one machine, so the
+/* The built-ins whose whole algorithm is the receiver check and one step over its value, as one machine, so the
    check over an unknown carrier can fork: §20.3.3.2 Boolean.prototype.toString, §20.3.3.3 valueOf, §20.4.3.3
    Symbol.prototype.toString, §20.4.3.4 valueOf, §20.4.3.5 [ %Symbol.toPrimitive% ], §21.1.3.7
    Number.prototype.valueOf, §21.2.3.4 BigInt.prototype.valueOf, §22.1.3.29 String.prototype.toString and
