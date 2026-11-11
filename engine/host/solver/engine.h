@@ -534,12 +534,10 @@ void engine_pending_fetch_cancel(JSContext *ctx, JSValueConst deliver);
    (solver/pending_index.c) at the drop that empties the pair; nothing outside a live session, whose teardown
    releases every flow. */
 void engine_pending_withdrawn(const PendRequestKey *k);
-/* The same park for a dynamic `import()`, which is owed source text: the drain settles `resolve` with the
-   reply's body, not with the reply record `fetch()` builds a Response from. A failed load settles `reject`:
-   HTML §8.1.6.7.3 "HostLoadImportedModule(referrer, moduleRequest, loadState, payload)" makes a null
-   moduleScript "ThrowCompletion(a new TypeError)", and ECMAScript §13.3.10.3 "ContinueDynamicImport (
-   promiseCapability, moduleCompletion )" calls "promiseCapability.[[Reject]]" with it. */
-void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueConst reject, const char *url);
+/* The same park for an import's module fetch (HTML §8.1.6.7.3 HostLoadImportedModule's fetch a single imported
+   module script), issued only for a module map entry the map does not hold: the delivery calls `settle`, the
+   entry's processResponseConsumeBody (core/loader/module_map.h), with the reply record or a failure's null. */
+void engine_pending_module_url(JSContext *ctx, JSValueConst settle, const char *url);
 /* The same park for a browser algorithm's own subresource fetch: HTML §4.2.4.3 "Fetching and processing a
    resource from a link element"'s built link types and HTML §4.8.4.3.5 "Updating the image data". The reply
    record goes to that algorithm's completion steps and nothing is queued as a program (solver/pending.h's

@@ -34,6 +34,7 @@
 #include "core/css/css_style_declaration.h" /* …the parse a resting build of its rules steps */
 #include "solver/rest_unit.h"   /* the rest units the process steps rest at */
 #include "core/encoding/encoding.h" /* …and CSS Syntax 3 §3.2's decode of the bytes that become its rules */
+#include "core/loader/module_map.h"   /* §4.6.8.12 step 14 fetches into the document's module map */
 #include "core/loader/script_fetch.h" /* §8.1.4.2's own "response's status is not an ok status" — the same
                                          test the solver's script deliveries make, spelled once */
 #include "solver/concolic.h"        /* §2.5.6's slot holds a JS value, so a nonce can be unknown input */
@@ -757,7 +758,7 @@ static char *link_url_absolute(JSContext *ctx, const char *href, size_t href_n)
 static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueConst wrap, const char *abs,
                                const char *destination, CspParserMetadata parser_metadata,
                                FetchCredentialsMode credentials, FetchMode mode, JSCFunctionData *deliver,
-                               int deliver_stepid)
+                               int deliver_stepid, JSValueConst deliver_extra)
 {
     char *upgraded;
     size_t integrity_n = 0;
@@ -861,7 +862,7 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
     if (fetch_main_blocked(ctx, abs, destination, metadata, mode)) {
         /* The network error goes to the type's own processing steps, called with the host's null, so a
            stylesheet runs its steps 3, 5 and 7 (remove the sheet, fire `error`, unblock rendering). */
-        JSValueConst data[2], none = JS_NULL;
+        JSValueConst data[3], none = JS_NULL;
         JSValue urlv = JS_NewString(ctx, abs);
 
         CHECK(!JS_IsException(urlv), "§4.2.4.3: OOM carrying a blocked link request's URL to its processing");
@@ -870,13 +871,14 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
         JS_FreeValue(ctx, nonce_slot);
         data[0] = wrap;
         data[1] = urlv;
+        data[2] = deliver_extra;
         JS_FreeValue(ctx, deliver(ctx, JS_UNDEFINED, 1, &none, 0, data));
         JS_FreeValue(ctx, urlv);
         return;
     }
 
     {
-        JSValueConst data[2];
+        JSValueConst data[3];
         JSValue d, urlv;
         FetchRequest req = {0};
 
@@ -896,8 +898,9 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
         CHECK(!JS_IsException(urlv), "§4.2.4.3: OOM carrying a link request's URL to its processResponse steps");
         data[0] = wrap;
         data[1] = urlv;
-        d = deliver_stepid >= 0 ? JS_NewStepClosure(ctx, deliver_stepid, 1, 2, data)
-                                : JS_NewCFunctionData(ctx, deliver, 1, 0, 2, data);
+        data[2] = deliver_extra;   /* the caller's own datum, JS_UNDEFINED for a type with none */
+        d = deliver_stepid >= 0 ? JS_NewStepClosure(ctx, deliver_stepid, 1, 3, data)
+                                : JS_NewCFunctionData(ctx, deliver, 1, 0, 3, data);
         JS_FreeValue(ctx, urlv);
         CHECK(!JS_IsException(d), "§4.2.4.3: OOM allocating a link request's processResponse steps");
         req.method = "GET";
@@ -1200,7 +1203,8 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
        Mixed Content §4.1's three upgradeable, so this type reaches step 6 for real. */
     link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_EMPTY,
                        cors_potential_request_credentials(cors_settings_attribute_state(el)),
-                       cors_potential_request_mode(cors_settings_attribute_state(el)), link_deliver, -1);
+                       cors_potential_request_mode(cors_settings_attribute_state(el)), link_deliver, -1,
+                       JS_UNDEFINED);
     JS_FreeValue(ctx, wrap);
     free(abs);
 }
@@ -1209,74 +1213,36 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
 /* ---- §4.6.8.12 Link type "modulepreload" ------------------------------------------------------------------ */
 
 /* §4.6.8.12's step 14 onComplete, "with the following steps given result": step 14.1 "If result is null, then
- * fire an event named `error` at el, and return", step 14.2 "Fire an event named `load` at el."
- *
- * WHAT MAKES `result` NULL IS "fetch a single module script"'S OWN processResponseConsumeBody, NOT A NETWORK
- * ERROR ALONE — and that is the whole difference between this delivery and the preload one above it, rather
- * than an inconsistency between them. §8.1.4.2 "Fetching scripts" answers null in three ways this engine can
- * see. Two are stated together: "If any of the following are true: bodyBytes is null or failure; or response's
- * status is not an ok status, then … For each callback of callbacks: run callback given null." The third is
- * the initialisation "Let moduleScript be null" standing over a list of arms of which only a matching MIME
- * type sets it — for this caller "If mimeType is a JavaScript MIME type and moduleType is
- * `javascript-or-wasm`, then set moduleScript to the result of creating a JavaScript module script", because
- * "fetch a modulepreload module script graph" hands "fetch a single module script" NO moduleRequest and its
- * step 1 therefore leaves moduleType at "javascript-or-wasm".
- * So a 404 fires `error` here and `load` at the preload beside it. Both are their own standard's answer:
- * §4.6.8.20's steps branch on network-error-or-not and on nothing else, and its own note says that is not what
- * browsers ship, while §4.6.8.12 reaches a module script or does not.
- *
- * NAMED RESIDUAL — `application/wasm`. §8.1.4.2's arm above the JavaScript one is "If mimeType's essence is
- * `application/wasm` and moduleType is `javascript-or-wasm`, then set moduleScript to the result of creating a
- * WebAssembly module script given bodyBytes, settingsObject, response's URL, and options", and this engine has
- * no WebAssembly module scripts at all — so a wasm-typed reply is answered `error` on this line where a
- * browser answers `load`. WHAT THE NEXT DIFF BUILDS: creating a WebAssembly module script, whose consumer is
- * the same module map a modulepreload populates, after which this arm admits that essence beside the
- * JavaScript one. HOW ITS ABSENCE SHOWS: `<link rel=modulepreload href=x.wasm>` runs the page's `onerror`
- * path instead of its `onload` path, so a bundle that feature-detects wasm chunks through this link type takes
- * the branch it takes with wasm switched off. */
+ * fire an event named `error` at el, and return", step 14.2 "Fire an event named `load` at el." `result` is the
+ * module map entry's (core/loader/module_map.h), and onComplete is a reaction on its promise: `magic` 1 is the
+ * fulfilled arm (a module script), 0 the rejected one (null). The fire is queued in el's own document's realm,
+ * the realm whose element the event is about. */
+static JSValue link_module_complete(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                    int magic, JSValueConst *func_data)
+{
+    JSValueConst el = func_data[0];
+    lxb_dom_node_t *n = node_of(el);
+    JSContext *realm = n ? document_realm_of(n) : NULL;
+
+    (void)ctx; (void)this_val; (void)argc; (void)argv;
+    DCHECK(realm != NULL, "a modulepreload's onComplete reached a link element with no document realm — the "
+                          "reaction holds the element it was attached for");
+    link_queue_fire(realm, el, magic ? "load" : "error",
+                    TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.12 step 14 fires BARE, unlike its step 3 */
+    return JS_UNDEFINED;
+}
+
+/* The modulepreload fetch's processResponseConsumeBody (HTML §8.1.4.2 fetch a single module script step 13):
+   the reply record, or a network error's null, goes to the module map entry the fetch was issued for
+   (func_data[2]), which decides whether a module script was created and settles every waiter. */
 static JSValue link_module_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                    int magic, JSValueConst *func_data)
 {
-    JSValueConst el = func_data[0];
-    bool created = false;
-
     (void)this_val; (void)magic;
-    DCHECK(argc >= 1, "a modulepreload reply was delivered with no response — the host calls this with the "
-                      "reply record or with null for a network error, and never with nothing");
-    DCHECK(argc < 1 || JS_IsObject(argv[0]) || JS_IsNull(argv[0]),
-           "a modulepreload reply arrived as something other than the host's reply record — every host builds "
-           "one with fetch_reply_new or parses the trusted zone's JSON into one, and a bare string here is a "
-           "host still delivering only bytes");
-    if (argc >= 1 && !JS_IsNull(argv[0])) {
-        /* "or response's status is not an ok status". Fetch §2.2.3 "Statuses": "An ok status is a status in
-           the range 200 to 299, inclusive." A network error is the JSON `null` handled by the test above, and
-           §2.2.6 "Responses" gives one "status is 0" — so the two absences are told apart here rather than
-           averaged into one number, which is what a reader of a bare 0 would have to do.
-           THE RANGE IS core/loader/script_fetch.h's AND WAS A LITERAL HERE. §8.1.4.2 states this test in all
-           three of its fetch algorithms and this delivery is one of their consumers, so a second spelling of
-           it beside the solver's — which had no spelling at all and compiled 404 bodies as programs — is two
-           right answers to one question, which is the shape that drifts. */
-        if (script_fetch_status_ok(fetch_reply_status(ctx, argv[0]))) {
-            HeaderList hl = { 0 };
-            char *content_type;
-            MimeType mt;
-
-            /* "Let mimeType be the result of extracting a MIME type from response's header list" — Fetch
-               §3.5's EXTRACT over the joined field value, which is the same read core/loader/script_fetch.c's
-               classic entry makes of the same header of the same reply, through the same component. A response
-               carrying no `Content-Type` at all is Fetch's "values is null", which is FAILURE, and a failure
-               is not a JavaScript MIME type — so an unlabelled body answers `error`, which is what a browser
-               does with a module and is the point of the check: these bytes were going to be RUN. */
-            fetch_reply_header_list(ctx, argv[0], &hl);
-            content_type = header_list_get(&hl, "content-type");
-            created = mime_type_extract(&mt, content_type) && mime_type_is_javascript(&mt);
-            mime_type_free(&mt);
-            free(content_type);
-            header_list_free(&hl);
-        }
-    }
-    link_queue_fire(ctx, el, created ? "load" : "error",
-                    TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.12 step 14 fires BARE, unlike its step 3 */
+    DCHECK(argc >= 1 && (JS_IsObject(argv[0]) || JS_IsNull(argv[0])),
+           "a modulepreload reply arrived as something other than the host's reply record or a network error's "
+           "null — every host builds one with fetch_reply_new or parses the trusted zone's JSON into one");
+    module_map_settle(ctx, func_data[2], argv[0]);
     return JS_UNDEFINED;
 }
 
@@ -1300,19 +1266,9 @@ static JSValue link_module_deliver(JSContext *ctx, JSValueConst this_val, int ar
  * calls a set of them "a sort of `manifest` of the application's modules". CLAUDE.md §What-the-tool-produces
  * names the lazy chunk as a headline target, and this is the one place a bundle writes its chunk graph down.
  *
- * WHAT IS NOT COVERED — STEP 14's MODULE MAP, which is a NAMED RESIDUAL rather than a stub, and is narrower
- * than the spec in exactly one observable. Step 14 ends at "Fetch a modulepreload module script graph", whose
- * own step 1 is "Fetch a single module script … and with the following steps given result: Run onComplete
- * given result" — the callback this file supplies — and whose only other effect is that "fetch a single module
- * script" sets `moduleMap[(url, moduleType)]` to the module script it created. This engine has no module map
- * to set: its module loading is ECMAScript §16.2.1.10 HostLoadImportedModule reaching
- * core/loader/module_loader.c, which parks each specifier as the importing flow asks for it. WHAT THE NEXT
- * DIFF BUILDS: a settings object's module map, keyed by (url, module type), written here and READ by that
- * loader before it parks — the two halves in one diff, because a map with no reader is a producer nothing
- * consumes and a reader with no writer is the same defect from the other side. HOW ITS ABSENCE SHOWS: a
- * document that preloads `app.mjs` and then `import()`s it issues TWO requests for it instead of one, which is
- * what a browser does on a preload MISS — the same modelled behaviour html_link.h already records for
- * §4.6.8.20's preload cache — and the `load` this fires is still the one the page's own handler waits for.
+ * STEP 14 asks this document's module map (core/loader/module_map.h): "Fetch a modulepreload module script
+ * graph" is "fetch a single module script" given no ModuleRequest, so the entry is (url, "javascript-or-wasm"),
+ * the one an import of url reads, and one fetch fills it for both.
  * Its step 1.3's "optionally fetch the descendants of and link result" is not in that residual and never was:
  * the standard makes it OPTIONAL in its own word, and its note explains that skipping it is a bandwidth
  * decision, so a graph that stops at the named module is a conforming graph. §4.6.8.12 says the same thing
@@ -1450,17 +1406,33 @@ static void link_modulepreload(JSContext *ctx, lxb_dom_element_t *el)
        settings attribute credentials mode for el's crossorigin attribute" — HTML §2.5.4 "CORS settings
        attributes"' table and not §2.5.1's algorithm, which is what makes a bare `<link rel=modulepreload>`
        `same-origin` where the identical `<link rel=preload>` is `include`.
-       STEP 14 IS THE CALL BELOW: this file's processResponse steps are `link_module_deliver`, which is step
-       14's "following steps given result", and the graph's own module-map effect is the named residual at
-       this function's banner. */
+       Step 14 is the module map ask below: its onComplete is `link_module_complete`, a reaction on the entry's
+       promise, and only a new entry issues this element's request, whose processResponse steps are
+       `link_module_deliver`. */
     /* §2.5.4's MODE IS NOT READ OFF THE ATTRIBUTE, and that is the standard's sentence rather than a
        simplification: its note says these are "more modern features, where the request's mode is always
        `cors`", and the attribute has been "repurposed … wherein they only impact the request's credentials
        mode". So the state decides the CREDENTIALS here and decides nothing about the mode. */
-    /* Fetch §4.1 steps 4, 6 and 7 run inside link_fetch_request. */
-    link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_NOT_PARSER_INSERTED,
-                       cors_settings_attribute_credentials(cors_settings_attribute_state(el)),
-                       FETCH_MODE_CORS, link_module_deliver, -1);
+    {
+        JSValue promise, fetch, on[2], derived;
+
+        /* Fetch §4.1 steps 4, 6 and 7 run inside link_fetch_request. */
+        if (module_map_ask(ctx, abs, MODULE_TYPE_JAVASCRIPT_OR_WASM, &promise, &fetch) == MODULE_MAP_FETCH)
+            link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_NOT_PARSER_INSERTED,
+                               cors_settings_attribute_credentials(cors_settings_attribute_state(el)),
+                               FETCH_MODE_CORS, link_module_deliver, -1, fetch);
+        on[0] = JS_NewCFunctionData(ctx, link_module_complete, 1, 1, 1, (JSValueConst *)&wrap);
+        on[1] = JS_NewCFunctionData(ctx, link_module_complete, 1, 0, 1, (JSValueConst *)&wrap);
+        CHECK(!JS_IsException(on[0]) && !JS_IsException(on[1]),
+              "§4.6.8.12: OOM minting a modulepreload's step 14 onComplete");
+        derived = JS_PerformPromiseThen(ctx, promise, on[0], on[1]);
+        CHECK(!JS_IsException(derived), "§4.6.8.12: OOM attaching a modulepreload's step 14 onComplete");
+        JS_FreeValue(ctx, derived);
+        JS_FreeValue(ctx, on[0]);
+        JS_FreeValue(ctx, on[1]);
+        JS_FreeValue(ctx, promise);
+        JS_FreeValue(ctx, fetch);
+    }
     JS_FreeValue(ctx, wrap);
     free(abs);
 }
@@ -2043,7 +2015,7 @@ static void link_stylesheet(JSContext *ctx, lxb_dom_element_t *el, bool by_parse
     link_fetch_request(ctx, el, wrap, abs, "style", CSP_PARSER_METADATA_EMPTY,
                        cors_potential_request_credentials(cors_settings_attribute_state(el)),
                        cors_potential_request_mode(cors_settings_attribute_state(el)),
-                       link_stylesheet_refused, g_sheet_stepid);
+                       link_stylesheet_refused, g_sheet_stepid, JS_UNDEFINED);
     JS_FreeValue(ctx, wrap);
     free(abs);
 }

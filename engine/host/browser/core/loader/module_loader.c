@@ -5,8 +5,8 @@
  * nothing at all — no module, no error, no record, and the `.then` never ran. A page asked to load code and the
  * engine answered silently, which is the one shape an unbuilt capability must not have.
  *
- * It PARKS the load, and the park is the whole of what it records. The trusted host fetches the address,
- * because SECURITY.md puts every byte of network behind safeFetch and this sandbox cannot reach it.
+ * It asks the module map first (core/loader/module_map.h) and parks only for an entry the map lacks. The trusted
+ * host fetches the address, because SECURITY.md puts every byte of network behind safeFetch.
  *
  * IT USED TO KEEP A SECOND REGISTER OF SPECIFIERS BESIDE THE PARK, and that register is deleted rather than
  * repaired. Its purpose was to tell the trusted zone that these particular addresses were CODE, so the reply
@@ -19,9 +19,9 @@
  * producer cannot answer for the others, and nothing about it could say so.
  * ECMAScript §16.2.1.10 HostLoadImportedModule lets the host finish a load asynchronously, and §16.2.1.11
  * FinishLoadingImportedModule is the completion it hands back — which is what a browser's module fetch is. So
- * the loader hands the engine a promise of the SOURCE TEXT and returns. The promise is the flow's own pending
- * register, exactly as core/fetch parks a request: qjs_provide settles it, and the load resumes on its
- * reaction — compile, link, evaluate, and the page's `await import(...)` continues from where it suspended.
+ * the loader hands the engine a promise of the SOURCE TEXT and returns. The promise is the map entry's, settled
+ * by its fetch's delivery, and the load resumes on its reaction — compile, link, evaluate, and the page's
+ * `await import(...)` continues from where it suspended.
  * Nothing re-runs; the importing scope is never re-entered, which would be a replay. */
 #include <string.h>
 #include <stdlib.h>
@@ -34,6 +34,7 @@
 #include "core/url/url.h"
 #include "core/loader/import_map.h"
 #include "core/loader/module_loader.h"
+#include "core/loader/module_map.h"
 #include "core/idl_args.h"
 #include "solver/concolic.h"
 #include "solver/reclaim.h"
@@ -249,42 +250,49 @@ static int module_import_meta(JSContext *ctx, JSModuleDef *m, JSValueConst meta)
     return JS_DefinePropertyValueStr(ctx, meta, "resolve", fn, JS_PROP_C_W_E) < 0 ? -1 : 0;
 }
 
-static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *opaque)
+/* HTML §8.1.4.2 "Fetching scripts"' module type from module request steps over the request's attributes:
+   "javascript-or-wasm" unless a `type` attribute names another. Owned; `free` it. An attribute value spelling
+   "javascript-or-wasm" is the steps' null, which fails the module type allowed steps.
+   Named residual. Not covered: HTML §8.1.6.7.3 HostLoadImportedModule's module type allowed check, so a type
+   outside "javascript-or-wasm", "css", "json" and "text" (and the null above) is fetched rather than rejected
+   with a TypeError. Next diff builds: that check before the map is asked, rejecting the load. Absence shows as:
+   `import(u, { with: { type: "x" } })` issuing a request a browser never makes. */
+static char *ml_module_type(JSContext *ctx, JSValueConst attributes)
 {
-    JSValue promise, resolving[2];
+    JSValue tv;
+    const char *t;
+    char *out;
+
+    if (!JS_IsObject(attributes)) return strdup(MODULE_TYPE_JAVASCRIPT_OR_WASM);
+    tv = JS_GetPropertyStr(ctx, attributes, "type");
+    CHECK(!JS_IsException(tv), "reading a module request's `type` attribute off the engine's own record threw");
+    if (!JS_IsString(tv)) { JS_FreeValue(ctx, tv); return strdup(MODULE_TYPE_JAVASCRIPT_OR_WASM); }
+    t = JS_ToCString(ctx, tv);
+    JS_FreeValue(ctx, tv);
+    CHECK(t != NULL, "OOM reading a module request's `type` attribute");
+    out = strdup(t);
+    JS_FreeCString(ctx, t);
+    return out;
+}
+
+/* ECMAScript §16.2.1.10 HostLoadImportedModule, as HTML §8.1.6.7.3 performs it: fetch a single imported module
+   script, whose module map steps are core/loader/module_map.c's. The load is handed a promise of the module's
+   source text (JS_ModuleLoadPending) and finishes on its reaction; a load the map already holds or has in flight
+   takes that entry's promise, and only a new entry parks a request on the importing flow. The park's delivery is
+   the map's processResponseConsumeBody, which settles every waiter, a failure as a TypeError rejection that
+   ECMAScript §13.3.10.3 ContinueDynamicImport passes to the page's `catch`. */
+static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *opaque, JSValueConst attributes)
+{
+    JSValue promise, settle;
+    char *type = ml_module_type(ctx, attributes);
 
     (void)opaque;
-    promise = JS_NewPromiseCapability(ctx, resolving);
-    if (JS_IsException(promise))
-        return NULL;   /* OOM building the capability: the throw is already in flight and rejects the import */
-    /* The URL goes on the FLOW's pending register, so the reaction that finishes the load belongs to the flow
-       that imported — and to its COW delta. The flow cannot finish while the chunk is owed, which is what keeps
-       a lazily-imported endpoint reachable. */
-    /* A dynamic import is a GET of the module's URL with no body, and what it is owed is SOURCE TEXT. It used
-       to park through engine_pending_fetch_url, which is the FETCH park: the two were indistinguishable while
-       a host delivered a bare body string, and stopped being so the moment a reply became the record
-       `fetch()` builds a Response out of — JS_ModuleLoadPending would have been handed that record to compile.
-       Its own kind settles this promise with the reply's body. */
-    /* FETCH §4.3 SCHEME FETCH IS ASKED BY THE PARK ITSELF, WHICH IS WHY THIS LINE IS NOT A CALL. §16.2.1.10
-       HostLoadImportedModule ends in HTML's "fetch a single module script", the same Fetch algorithm `fetch()`
-       runs — so §4.3's switch on the URL's scheme decides who answers `import("data:text/javascript,export
-       default 1")`, and the answer is a 200 built out of bytes already in this address space. This entry has
-       no `deliver` closure to run that answer through and needs none: §4.3's response is placed ON the pending
-       record and the flow's own delivery settles this promise from it, exactly as it settles from the trusted
-       zone's reply (solver/engine.c's pending_park_request). */
-    /* BOTH HALVES GO ON THE PARK, AND `resolving[1]` USED TO BE FREED HERE UNUSED — a capability minted and
-       dropped, which is the write-with-no-reader half of §Architecture's broken-contract pair and cost the
-       engine the whole of ECMAScript §13.3.10.3 "ContinueDynamicImport ( promiseCapability, moduleCompletion
-       )"'s abrupt arm. With only the resolve half recorded, a load the network failed or the trusted zone
-       refused left the delivery one thing it could do: settle SUCCESS with the empty source text, which
-       compiles and evaluates a valid EMPTY MODULE. `import(u).catch(h)` therefore never ran `h`, and a
-       bundle's fallback chunk — the code this tool exists to reach — was unreachable through the one door a
-       page opens it with. HTML §8.1.6.7.3 "HostLoadImportedModule(referrer, moduleRequest, loadState,
-       payload)"'s onSingleFetchComplete is what the park now has both halves for: "If moduleScript is null,
-       then set completion to ThrowCompletion(a new TypeError)". */
-    engine_pending_module_url(ctx, resolving[0], resolving[1], module_name);
-    JS_FreeValue(ctx, resolving[0]);
-    JS_FreeValue(ctx, resolving[1]);
+    CHECK(type != NULL, "OOM naming a module request's module type");
+    if (module_map_ask(ctx, module_name, type, &promise, &settle) == MODULE_MAP_FETCH) {
+        engine_pending_module_url(ctx, settle, module_name);
+        JS_FreeValue(ctx, settle);
+    }
+    free(type);
     JS_ModuleLoadPending(ctx, promise);   /* ownership transfers */
     return NULL;
 }
@@ -314,7 +322,7 @@ void module_loader_install(JSContext *ctx)
     DCHECK(g_module_rt == NULL, "the module loader is already installed for this agent — its release either "
                                 "did not run or did not give the runtime back, and a re-install would leave "
                                 "ECMAScript §16.2.1.10 HostLoadImportedModule pointing at the agent that went");
-    JS_SetModuleLoaderFunc(rt, module_normalize, module_load, NULL);
+    JS_SetModuleLoaderFunc2(rt, module_normalize, module_load, NULL, NULL);
     JS_SetModuleImportMetaFunc(rt, module_import_meta);
     g_module_rt = rt;
     /* §8.1.6.7.1's resolveFunction is CreateBuiltinFunction(steps, 1, "resolve", « »): one argument, which

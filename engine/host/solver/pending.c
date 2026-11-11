@@ -1575,7 +1575,7 @@ JSValue pending_fork(JSValueConst reg)
 
 JSValue pending_stand_ins(JSValueConst reg)
 {
-    static const int strip[] = { PEND_RESOLVE, PEND_REJECT, PEND_SCRIPT_EL, PEND_ADDRESS_VALUE, PEND_ADDRESS_URL };
+    static const int strip[] = { PEND_RESOLVE, PEND_SCRIPT_EL, PEND_ADDRESS_VALUE, PEND_ADDRESS_URL };
     JSValue out = JS_UNDEFINED;
     int n, i, k = 0;
 

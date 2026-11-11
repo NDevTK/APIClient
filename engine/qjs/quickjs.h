@@ -1995,6 +1995,10 @@ JS_EXTERN bool JS_IsPromise(JSValueConst val);
    an object settles it from a step machine through the flow instead; there is no C route and refusing is how
    that stays true. */
 JS_EXTERN JSValue JS_NewSettledPromise(JSContext *ctx, bool is_reject, JSValueConst value);
+/* Settles a capability JS_NewPromiseCapability minted, through its own resolving function `fn` (either half),
+   with `value`: ECMAScript §27.5.1.3 CreateResolvingFunctions' steps that run no page code. The same narrowing as
+   JS_NewSettledPromise: a resolution that is an Object is refused. Returns -1 with an exception pending, else 0. */
+JS_EXTERN int JS_SettleCapability(JSContext *ctx, JSValueConst fn, JSValueConst value);
 
 JS_EXTERN JSValue JS_NewSymbol(JSContext *ctx, const char *description, bool is_global);
 

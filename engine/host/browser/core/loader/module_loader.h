@@ -1,4 +1,5 @@
-/* Dynamic import — Blink core/loader. Parks every load forced execution reaches on the flow that asked. */
+/* Dynamic import — Blink core/loader. Asks the module map for every load forced execution reaches, and parks
+   the ones it does not hold on the flow that asked. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LOADER_MODULE_LOADER_H
 #define ENGINE_HOST_BROWSER_CORE_LOADER_MODULE_LOADER_H
 #include "quickjs.h"

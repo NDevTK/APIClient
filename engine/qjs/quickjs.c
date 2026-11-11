@@ -83465,6 +83465,15 @@ JSValue JS_NewSettledPromise(JSContext *ctx, bool is_reject, JSValueConst value)
     return js_promise_resolve_native(ctx, ctx->promise_ctor, 1, &value, is_reject);
 }
 
+int JS_SettleCapability(JSContext *ctx, JSValueConst fn, JSValueConst value)
+{
+    JSValue r = js_promise_settle_native(ctx, fn, &value);
+
+    if (JS_IsException(r)) return -1;
+    JS_FreeValue(ctx, r);
+    return 0;
+}
+
 static int js_create_resolving_functions(JSContext *ctx, JSValue *args,
                                          JSValueConst promise);
 

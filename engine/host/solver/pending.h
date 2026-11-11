@@ -52,12 +52,11 @@
    why the rendezvous is a REQUEST ID rather than a URL — two flows asking the same question in different
    worlds must get different answers, so answers are never shared the way a fetched body is. */
 #define FLOW_PENDING_HOSTREQ   3
-/* A DYNAMIC `import()`: call `resolve` with the reply's BODY, because what a module load is owed is SOURCE
-   TEXT and not a Response — JS_ModuleLoadPending compiles whatever the promise settles with. It shared
-   FLOW_PENDING_RESOLVE with fetch() while both were owed a bare body string; the moment a reply became a
-   RECORD the two stopped wanting the same value, and one kind answering two questions would have handed the
-   compiler `{status: 200, …}` to parse. Same register, same dedup, same stall accounting; only the delivery
-   differs, which is what the kind is for. */
+/* An import's module fetch (static or dynamic), issued only for a module map entry the map does not hold: call
+   `resolve`, the entry's processResponseConsumeBody (core/loader/module_map.h), with the reply RECORD or a
+   failure's null. It makes the source text JS_ModuleLoadPending compiles, so the delivery never compiles the
+   record itself. Same register, same dedup, same stall accounting as a fetch; only the delivery differs, which
+   is what the kind is for. */
 #define FLOW_PENDING_MODULE    4
 /* A BROWSER ALGORITHM'S OWN SUBRESOURCE FETCH, WHOSE REPLY THAT ALGORITHM CONSUMES RATHER THAN RUNS: call
    its completion steps with the reply RECORD, and queue NO program. HTML §4.2.4.3 "Fetching and processing a
@@ -78,14 +77,14 @@
    document writes its chunk graph down, so the RESOLVE arm compiled each preloaded ES module as a CLASSIC
    program and the parser answered `unsupported keyword: export` — a page-script compile failure, which is a
    DFAIL. The bytes were never the page's to run at that moment, and the graph reaches the same chunks by its
-   own route: the document's `<script type=module>` imports them, and THAT park is FLOW_PENDING_MODULE, whose
-   delivery compiles them as modules. The image half had nothing loud standing under it at all — CORB is asked
+   own route: the document's `<script type=module>` imports them, and the import takes the module map entry the
+   preload's fetch fills, compiling the source text as a module. The image half had nothing loud standing under it at all — CORB is asked
    of SCRIPT-LIKE destinations only (extension/lib/safe-fetch.js), so `image` is not a class it judges, and a
    JavaScript-typed reply to an `<img>` request reached that same compile.
    SAME REGISTER, SAME DEDUP, SAME STALL ACCOUNTING; only the delivery differs, which is what the kind is for.
    AND A FAILURE IS DELIVERED RATHER THAN DIVERTED, which is the one way this kind is not a program kind: a
-   null reply and a non-ok status are what HTML §4.6.8.12's step 14.1 fires `error` at the element FOR, and
-   `link_module_deliver` reads both itself. */
+   null reply and a non-ok status are what HTML §4.6.8.12's step 14.1 fires `error` at the element FOR, and a
+   modulepreload's delivery hands both to its module map entry (core/loader/module_map.h), which decides. */
 #define FLOW_PENDING_RESOURCE  5
 /* A STREAMED RESPONSE BODY'S NEXT PIECE: Fetch §5.6 "Fetch methods" resolves `fetch()` at the response's head
    and the body's bytes arrive afterwards, each enqueued into the Response's stream by a task of the networking
@@ -178,23 +177,6 @@ int pending_driven_compose(int kind, int path_driven);
  * own-property-count DCHECK — the assert at the origin CLAUDE.md §Architecture names, rather than a comment. */
 #define PEND_SHARE  0
 #define PEND_STRUCT 1
-/* `reject` IS THE CAPABILITY'S OTHER HALF, and it is on the record for the same reason `resolve` is: a park is
-   what a promise's settlement is owed FROM, and a promise has two settlements. It carries exactly one kind's
-   failure — a dynamic `import()`'s, whose network error is not an event at an element but a REJECTION: HTML
-   §8.1.6.7.3 "HostLoadImportedModule(referrer, moduleRequest, loadState, payload)"'s onSingleFetchComplete
-   makes a null moduleScript "ThrowCompletion(a new TypeError)", and ECMAScript §13.3.10.3 "ContinueDynamicImport
-   ( promiseCapability, moduleCompletion )" calls "promiseCapability.[[Reject]]" with it.
-   IT WAS MINTED AND THROWN AWAY, WHICH IS WHY THIS FIELD EXISTS RATHER THAN A SECOND REGISTER.
-   core/loader/module_loader.c builds the capability with JS_NewPromiseCapability and freed `resolving[1]`
-   unused, so nothing in this engine could produce that ThrowCompletion at all: a chunk whose load failed
-   settled `resolve` with the EMPTY SOURCE TEXT, which compiles and evaluates an empty module, so
-   `import(u).catch(h)` ran `h` never and a bundle's fallback chunk was unreachable. A capability half that is
-   minted and dropped is the write-with-no-reader half of §Architecture's broken-contract pair.
-   SHARE, for `resolve`'s reason exactly and in its own words: the already-resolved latch and the promise's
-   settlement are per-flow state the COW delta captures, which is what lets both arms settle one capability.
-   The two halves of one capability may not differ in this, or an arm would hold a reject for a promise whose
-   resolve it shares. Its default is JS_UNDEFINED — "this park owes no rejection", which is every kind but the
-   module load — and the delivery asserts the pair rather than defaulting past a missing half. */
 /* `completion` IS THE ANSWER'S OTHER HALF — ECMA-262 6.2.4 says a completion is a TYPE and a VALUE, and a
    register with a slot for the value and none for the type delivers a peer's THROW as `undefined`. It rides
    the record beside the value it belongs to, is SHARED for the same reason the value is (an answer that
@@ -342,8 +324,6 @@ int pending_driven_compose(int kind, int path_driven);
  * producer states the absence), never a hole a reader fills in. */
 #define PENDING_FIELDS(X)                    \
     X(RESOLVE,    "resolve",   PEND_SHARE,  JS_UNDEFINED)                              \
-    /* …and the OTHER HALF of the same capability, for the one kind whose failure is a REJECTION */ \
-    X(REJECT,     "reject",    PEND_SHARE,  JS_UNDEFINED)                              \
     X(VALUE,      "value",     PEND_SHARE,  JS_UNDEFINED)                              \
     /* no answer yet, so no completion type and no answering timeline */               \
     X(COMPLETION, "completion",PEND_SHARE,  JS_UNDEFINED)                              \

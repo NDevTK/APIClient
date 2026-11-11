@@ -619,10 +619,10 @@ void engine_pending_resource_cancel(JSContext *ctx, JSValueConst deliver) {
     pending_cancel_kind(ctx, deliver, FLOW_PENDING_RESOURCE);
 }
 
-/* Parks a dynamic `import()`. The same register and URL as a fetch, with a different delivery: a module load is
-   owed source text, so the delivery settles `resolve` with the reply's body rather than the reply record a
-   `fetch()` makes a Response from. */
-void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueConst reject, const char *url) {
+/* Parks an import's module fetch. The same register and URL as a fetch, with a different delivery: the reply
+   goes to the module map entry's processResponseConsumeBody, `settle`, which makes the module script or the
+   failure every waiter on that entry takes. */
+void engine_pending_module_url(JSContext *ctx, JSValueConst settle, const char *url) {
     Flow *f = flow_running();
     /* The destination is `script` (HTML §8.1.6.7.3 HostLoadImportedModule: "Let destination be `script`";
        loadState is undefined outside a worklet or service worker), which is what makes a chunk a code load at
@@ -663,16 +663,10 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
     DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
     e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f), flow_path_pinned(f), flow_path_driven(f),
                      /*parser_inserted*/0, flow_work_seq_next());   /* a dynamic `import()` — §16.2.1.8 is reached by RUNNING code */
-    pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
-    /* The reject half, which carries the load's failure: this is the only park whose failure is a rejection
-       rather than an event at an element. HTML §8.1.6.7.3 HostLoadImportedModule's onSingleFetchComplete makes
-       a null moduleScript "ThrowCompletion(a new TypeError)", and ECMAScript §13.3.10.3 ContinueDynamicImport
-       calls "promiseCapability.[[Reject]]" with it. Without this the delivery could only settle `resolve` with
-       empty source text, evaluating an empty module, so `import(u).catch(h)` would never run `h`. */
-    DCHECK(JS_IsFunction(ctx, reject),
-           "a dynamic import parked with no reject capability — JS_NewPromiseCapability mints both halves, and the "
-           "failure arm settles the import through this one");
-    pending_set(e, PEND_REJECT, JS_DupValue(ctx, reject));
+    DCHECK(JS_IsFunction(ctx, settle),
+           "an import's module fetch parked with no processResponseConsumeBody — module_map_ask mints it with the "
+           "entry this fetch fills, and the delivery calls it for a failure too");
+    pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, settle));
     /* And which document asked, as every other fetch park records it: the importing realm is the asking
        document's, and HTML §7.5.11 step 2 cancels this load with that document's other fetches. */
     pending_set_int(e, PEND_DOC, (int)document_environment_doc(ctx));
@@ -748,7 +742,12 @@ static void engine_pending_script_url_into(Flow *f, JSContext *ctx, const char *
     /* §8.1.4.2's fetch: the type decides the decode and the evaluation entry, not the request. The method is
        Fetch §2.2.5's `GET`, and the destination is `script` for both types: "fetch a classic script" creates the
        request with `script`, and "fetch an external module script graph" fetches a single module script with
-       `script` too. Either way the reply becomes a program, which is what CORB keeps cross-origin data out of. */
+       `script` too. Either way the reply becomes a program, which is what CORB keeps cross-origin data out of.
+       Named residual. Not covered: a module script element's fetch a single module script does not ask the
+       document's module map (core/loader/module_map.h), so its root module and the map's entry for the same
+       (url, "javascript-or-wasm") are two fetches. Next diff builds: the element's module fetch through
+       module_map_ask, its row filled from the entry's promise. Absence shows as: a document whose root module is
+       also named by a `<link rel=modulepreload>` or imported elsewhere asking for that address twice. */
     FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0,
                          /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED },
                          /* …and so is the credentials mode, off the same element */
@@ -4854,32 +4853,6 @@ static char *reply_source_text(JSContext *ctx, JSValueConst reply, ScriptType st
     return src;
 }
 
-/* HTML §8.1.4.2 Fetching scripts' fetch a single module script has a condition the classic algorithms lack.
-   After the shared two-item list ("bodyBytes is null or failure; or response's status is not an ok status") it
-   extracts a MIME type and sets moduleScript only "If mimeType is a JavaScript MIME type and moduleType is
-   "javascript-or-wasm"", so a non-JavaScript type leaves moduleScript null and §8.1.6.7.3 HostLoadImportedModule
-   turns it into a TypeError. There is no scheme exemption: the classic gate applies only to HTTP(S) URLs ("other
-   fetch schemes are exempted from MIME type checking for historical web compatibility reasons"), the module
-   one to every scheme, so `data:text/plain` fails where `data:text/javascript` loads. An absent `Content-Type` is
-   extraction failure (mime_type_extract's contract) and so a rejection. Nothing is asserted on the type: a
-   server chose it, so a refused type is the algorithm's own failure. */
-static bool module_reply_is_javascript(JSContext *ctx, JSValueConst reply)
-{
-    HeaderList hl = { 0 };
-    char *content_type;
-    MimeType mt;
-    bool ok;
-
-    fetch_reply_header_list(ctx, reply, &hl);
-    content_type = header_list_get(&hl, "content-type");   /* joined by "get a header", which is what extract takes */
-    mime_type_init(&mt);
-    ok = mime_type_extract(&mt, content_type) && mime_type_is_javascript(&mt);
-    mime_type_free(&mt);
-    free(content_type);
-    header_list_free(&hl);
-    return ok;
-}
-
 /* The program queue carries `len` bytes, NUL or not: `dyn_body_adopt` takes the decode's `(src, src_n)`, the row
    keeps both, and flow_step hands both to JS_FlowNew / JS_FlowCompileModule, so the length never becomes a `strlen`
    before the compiler. Real scripts contain U+0000 (ECMAScript §11.1 Source Text), and running one only to its
@@ -5035,49 +5008,18 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
            The status range is core/loader/script_fetch.h's (core/html/html_link.c asks the same); no assert
            stands on it, since a server chose it. `JS_IsNull` comes first: a network error has no record to read
            a status or headers off.
-           A module adds the MIME gate (module_reply_is_javascript), asked last as the only member reading
-           headers: a chunk served `application/json` must reject the load, so `import(u).catch(h)` runs `h`,
-           rather than throw a SyntaxError inside a module that loaded.
-           The fetch and `<link>` kinds are excluded: their failure is the answer (HTML §4.6.8.12 Link type
-           "modulepreload" step 14.1, §4.6.8.20 Link type "preload"'s network-error branch), read by
-           core/html/html_link.c's deliveries. The test stays negative so the DCHECK below can fail: a new kind
-           delivered with no arm of its own crashes on it. */
+           The fetch, `<link>` and module kinds are excluded: their failure is the answer (HTML §4.6.8.12 Link type
+           "modulepreload" step 14.1, §4.6.8.20 Link type "preload"'s network-error branch, read by
+           core/html/html_link.c's deliveries; fetch a single module script step 13's own failure test, run by
+           core/loader/module_map.c's processResponseConsumeBody). The test stays negative so the DCHECK below can
+           fail: a new kind delivered with no arm of its own crashes on it. */
         if (kind != FLOW_PENDING_RESOLVE && kind != FLOW_PENDING_RESOURCE && kind != FLOW_PENDING_HOSTREQ &&
-            kind != FLOW_PENDING_BODY &&
-            (JS_IsNull(pv) || !script_fetch_status_ok(fetch_reply_status(ctx, pv)) ||
-             (kind == FLOW_PENDING_MODULE && !module_reply_is_javascript(ctx, pv)))) {
-            DCHECK(kind == FLOW_PENDING_SCRIPT || kind == FLOW_PENDING_DOCSCRIPT ||
-                   kind == FLOW_PENDING_MODULE,
+            kind != FLOW_PENDING_BODY && kind != FLOW_PENDING_MODULE &&
+            (JS_IsNull(pv) || !script_fetch_status_ok(fetch_reply_status(ctx, pv)))) {
+            DCHECK(kind == FLOW_PENDING_SCRIPT || kind == FLOW_PENDING_DOCSCRIPT,
                    "a failed answer reached the program kinds' failure arm for another kind — a park of a new kind "
                    "is being delivered with no arm of its own");
-            if (kind == FLOW_PENDING_MODULE) {
-                /* The one program kind with no element to fire at, so its failure is a rejection. HTML
-                   §8.1.6.7.3 HostLoadImportedModule's onSingleFetchComplete sets "completion to
-                   ThrowCompletion(a new TypeError)" for a null moduleScript and performs ECMAScript §16.2.1.11
-                   FinishLoadingImportedModule, whose dynamic-import arm, §13.3.10.3 ContinueDynamicImport, calls
-                   "promiseCapability.[[Reject]]". The TypeError's message is this engine's (the standard gives
-                   none) and names the address, the one fact a handler cannot re-derive. Run as a flow, because
-                   the rejection triggers the page's `catch` reactions, where bundles keep fallback hosts. */
-                JSValue rej = pending_get(p, PEND_REJECT);
-                JSValue uv = pending_get(p, PEND_URL), err;
-                const char *u;
-
-                DCHECK(JS_IsFunction(ctx, rej),
-                       "a dynamic import's park carries no reject capability — engine_pending_module_url asserts "
-                       "both halves at the push, so another park pushed this record");
-                u = JS_IsString(uv) ? JS_ToCString(ctx, uv) : NULL;
-                JS_ThrowTypeError(ctx, "Failed to fetch dynamically imported module: %s",
-                                  u ? u : "(the park carried no address)");
-                err = JS_GetException(ctx);
-                if (u) JS_FreeCString(ctx, u);
-                JS_FreeValue(ctx, uv);
-                if (JS_CallAsFlow(ctx, rej, err) < 0) {
-                    JSValue exc = JS_GetException(ctx);
-                    JS_FreeValue(ctx, exc);   /* a rejected load is the page's to observe, not this step's */
-                }
-                JS_FreeValue(ctx, err);
-                JS_FreeValue(ctx, rej);
-            } else {
+            {
                 if (kind == FLOW_PENDING_DOCSCRIPT) {
                     /* The row is converted in place, never removed: a failed load still holds its element's
                        position against the scripts around it (flow_step's DYN_SCRIPT_FAILED arm is this engine's
@@ -5250,20 +5192,18 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
             JS_FreeCString(ctx, u);
             JS_FreeValue(ctx, uv);
         } else if (kind == FLOW_PENDING_MODULE) {
-            /* The reply is a module's source: the load's promise is settled with the text (not the bytes; "let
-               sourceText be the result of UTF-8 decoding bodyBytes" stands between them), and the import's own
-               reaction compiles, links and continues the flow that wrote `await import(...)`. */
-            size_t src_n = 0;
-            char *src = reply_source_text(ctx, pv, SCRIPT_TYPE_MODULE, ctx, &src_n);
-            JSValue sv = JS_NewStringLen(ctx, src, src_n);
-            JSValue resolve = pending_get(p, PEND_RESOLVE);
-            free(src);
-            if (JS_CallAsFlow(ctx, resolve, sv) < 0) {
-                JSValue exc = JS_GetException(ctx);
-                JS_FreeValue(ctx, exc);   /* a rejected load is the page's to observe, not this step's */
-            }
-            JS_FreeValue(ctx, resolve);
-            JS_FreeValue(ctx, sv);
+            /* An import's module fetch: the reply record, or a failure's null, goes to the module map entry's
+               processResponseConsumeBody, which makes the module script (or none) and settles the entry's promise,
+               on whose reactions every import waiting on that entry compiles, links and continues. */
+            JSValue settle = pending_get(p, PEND_RESOLVE);
+
+            DCHECK(JS_IsObject(pv) || JS_IsNull(pv),
+                   "an import's module fetch was answered with something other than the host's reply record or a "
+                   "network error's null");
+            CHECK(JS_CallAsFlow(ctx, settle, pv) == 0,
+                  "a module map entry's processResponseConsumeBody threw — it runs no page code and settles its "
+                  "promise with a string or a TypeError, so nothing in it can throw");
+            JS_FreeValue(ctx, settle);
         } else if (kind == FLOW_PENDING_HOSTREQ) {
             /* An async rendezvous (engine_host_request_async): the answer goes to the asker's processResponse
                as a task of this flow. A zone answer is a normal completion, a network error included. */

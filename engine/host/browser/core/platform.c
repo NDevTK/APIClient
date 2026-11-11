@@ -115,6 +115,7 @@
 #include "core/loader/cookie_jar.h"
 #include "core/loader/import_map.h"
 #include "core/loader/module_loader.h"
+#include "core/loader/module_map.h"
 #include "core/platform.h"
 #include "core/realm.h"
 #include "core/rendering/animation_frame.h"
@@ -333,6 +334,7 @@ static void d_xml_serializer(JSContext *c, const PlatformAgent *a) { (void)a; xm
 /* ECMAScript §16.2.1.10 HostLoadImportedModule is the runtime's hook, which is what an agent is. Without it
    `import(specifier)` resolves to nothing, neither a module nor an error. */
 static void d_import_map(JSContext *c, const PlatformAgent *a) { (void)a; import_map_init(c); }
+static void d_module_map(JSContext *c, const PlatformAgent *a) { (void)a; module_map_init(c); }
 static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; module_loader_install(c); }
 
 /* ---- the agent half, undone ----------------------------------------------------------------------------- */
@@ -592,6 +594,7 @@ static void r_indexed_db(JSRuntime *rt) { (void)rt; indexed_db_free(); }
 static void r_domparser(JSRuntime *rt) { (void)rt; domparser_free(); }
 static void r_xml_serializer(JSRuntime *rt) { (void)rt; xml_serializer_free(); }
 static void r_import_map(JSRuntime *rt) { import_map_free(rt); }
+static void r_module_map(JSRuntime *rt) { module_map_free(rt); }
 static void r_module_loader(JSRuntime *rt) { module_loader_free(rt); }
 /* The cross-agent seam, a group of four. §7.2.3's WindowProxy is the base whose per-realm prototype every reference
    `remote_object` mints chains to, and whose `location` member answers with a `remote_location` object, so it
@@ -1122,6 +1125,8 @@ static const PlatformComponent PLATFORM[] = {
     { "xml_serializer",      d_xml_serializer,      i_xml_serializer, r_xml_serializer },
     /* HTML §8.1.5.3's per-global import map, before the loader whose resolve a module specifier reads it. */
     { "import_map",          d_import_map,          NULL,        r_import_map },
+    /* HTML §8.1.3.2's per-settings-object module map, before the loader that asks it before it parks. */
+    { "module_map",          d_module_map,          NULL,        r_module_map },
     { "module_loader",       d_module_loader,       NULL,        r_module_loader },
 };
 static const int PLATFORM_N = (int)(sizeof PLATFORM / sizeof PLATFORM[0]);
