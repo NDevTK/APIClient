@@ -31,7 +31,8 @@
 #include "core/layout/scroll_container.h"
 #include "core/layout/text_run.h"
 #include "core/layout/used_value.h"
-#include "solver/metrics.h"   /* `_layoutFillRests` */
+#include "core/timing/thread_work.h"   /* the residency span a paid fill is re-derived in */
+#include "solver/metrics.h"   /* `_layoutFillRests`, `_layoutFillsShed`, `_layoutFillsRederived` */
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 #include "solver/reclaim.h"
 
@@ -1146,12 +1147,16 @@ typedef struct LbFill {
     struct LbFill *check;      /* the re-derivation, from LB_FILL_CHECK until its extents are compared */
 } LbFill;
 
+/* `fill` NULL is a paid key: the job completed this fill on its path and a shed released it
+   (line_box_record_shed). The `paid_` fields say how far its walks had gone, which its re-derivation retakes. */
 typedef struct LbEntry {
     lxb_dom_element_t *style;   /* NULL is empty; nothing is removed, so there are no tombstones */
     lxb_dom_node_t    *after, *end;
     bool               stated;
     double             px;      /* the stated width; 0 when not `stated` */
     LbFill            *fill;    /* owned, allocated apart so a consumer's pointer survives the table's growth */
+    size_t             paid_atomics;
+    bool               paid_extents, paid_span;
 } LbEntry;
 
 /* A fill at the start of its collection; every step after this is `lb_fill_lines_pull`'s. */
@@ -1302,12 +1307,39 @@ void line_box_record_release(LineBoxRecord *r)
             "a layout job's line box record holds %zu entries after %lld fills; each fill records exactly one "
             "new key", r->used, r->built);
     for (i = 0; i < r->cap; i++) {
-        if (r->tab[i].style == NULL) continue;
+        if (r->tab[i].style == NULL || r->tab[i].fill == NULL) continue;
         lb_fill_release(r->tab[i].fill);
         free(r->tab[i].fill);
     }
     free(r->tab);
     memset(r, 0, sizeof *r);
+}
+
+/* A fill no walk stands inside: its lines are laid and its extents and span are untaken or taken whole, so what it
+   holds is a function of its key and of how far those walks went. */
+static bool lb_fill_complete(const LbFill *f)
+{
+    return f->phase == LB_FILL_LINES && !f->stepping && !f->walking && f->partial == NULL && f->span != LB_SPAN_PART;
+}
+
+void line_box_record_shed(LineBoxRecord *r)
+{
+    size_t i;
+
+    for (i = 0; i < r->cap; i++) {
+        LbEntry *e = &r->tab[i];
+
+        if (e->style == NULL || e->fill == NULL || !lb_fill_complete(e->fill)) continue;
+        e->paid_atomics = e->fill->atomics;
+        /* A dev build's second derivation is compared and released by the extents walk, so a fill still holding
+           it has not had that walk asked (a banded fill holds facts from its lines). */
+        e->paid_extents = e->fill->facts != NULL && e->fill->check == NULL;
+        e->paid_span = e->fill->span == LB_SPAN_DONE;
+        lb_fill_release(e->fill);
+        free(e->fill);
+        e->fill = NULL;
+        METRIC_ADD(fills_shed, 1);
+    }
 }
 
 #if APICLIENT_DEV
@@ -1732,6 +1764,61 @@ static bool lb_fill_extents_pull(LbFill *f)
     return true;
 }
 
+/* The atomic inlines among the fill's items below `upto`, each asked for its walks. The scan holds its place in the
+   fill, so each item is looked at once whichever caller asks and however often it rests; an atomic whose walk was
+   deferred stays at the cursor and is asked again. */
+static bool lb_fill_atomics_pull(LbFill *f, size_t upto)
+{
+    while (f->atomics < upto) {
+        size_t i = f->atomics;
+
+        if (!lb_left()) {
+            METRIC_ADD(fill_rests, 1);
+            return false;
+        }
+        layout_job_line_items_spend(1);
+        if (text_run_measure_item_is_atomic(&f->m, i) && !lb_atomic_ask(text_run_measure_item_style(&f->m, i)))
+            return false;
+        f->atomics++;
+    }
+    return true;
+}
+
+static bool lb_span_pull(LbFill *f);
+
+/* A paid fill's walks retaken as far as its job had taken them, in order of their dependence. */
+static bool lb_fill_rederive_pull(LbFill *f, size_t atomics, bool extents, bool span)
+{
+    return lb_fill_lines_pull(f) && lb_fill_atomics_pull(f, atomics) && (!extents || lb_fill_extents_pull(f)) &&
+           (!span || lb_span_pull(f));
+}
+
+/* Re-derives the paid fill at `e` inside a residency span (core/timing/thread_work.h), on a drive nested at the ask
+   that takes no allowance and computes what its walks defer, so the asker is served as the job's no-pressure twin
+   was. The entry holds the fill before any walk runs, since a nested ask can grow the table under `e`. */
+static LbFill *lb_fill_rederive(LbEntry *e, lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)
+{
+    size_t atomics = e->paid_atomics;
+    bool extents = e->paid_extents, span = e->paid_span;
+    LbFill *f = lexbor_malloc(sizeof *f);
+    LayoutJobDrive d;
+
+    CHECK(f != NULL, "out of memory re-deriving one inline formatting context's line boxes");
+    lb_fill_init(f, style, run, avail, true);
+    e->fill = f;
+    thread_work_residency_begin();
+    layout_job_drive_begin(&d);
+    while (!lb_fill_rederive_pull(f, atomics, extents, span)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
+    thread_work_residency_end();
+    DCHECKF(f->atomics == atomics && (f->facts != NULL || f->n == 0 || !extents) &&
+                (f->span == LB_SPAN_DONE) == span,
+            "a paid fill was re-derived to %zu atomics against the %zu its job had taken, or without the walks its "
+            "job had taken", f->atomics, atomics);
+    METRIC_ADD(fills_rederived, 1);
+    return f;
+}
+
 /* The fill of `style`'s run at `avail`, held by the current job's record and created on the first ask. NULL
    when it would be begun with the resting drive's line box items spent. */
 static LbFill *lb_fill_of(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)
@@ -1750,7 +1837,7 @@ static LbFill *lb_fill_of(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAva
     if (r->cap != 0) {
         i = lb_key_probe(r->tab, r->cap, style, run, avail.stated, px);
         if (r->tab[i].style != NULL) {
-            f = r->tab[i].fill;
+            f = r->tab[i].fill != NULL ? r->tab[i].fill : lb_fill_rederive(&r->tab[i], style, run, avail);
             if (f->phase == LB_FILL_LINES) r->served++;
             else                           r->resumed++;
             return f;
@@ -1856,30 +1943,14 @@ static LbLines lb_reduce(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvai
 bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)
 {
     LbFill *f;
-    size_t items;
 
     f = lb_fill_of(style, run, avail);
     if (f == NULL || !lb_fill_lines_pull(f)) {
         METRIC_ADD(fill_rests, 1);
         return false;
     }
-    items = f->n == 0 ? 0 : f->lines[f->n - 1].to;
-    /* The item count is the partition's, which `text_run_fill_step` closes at the end of the collection. The
-       scan holds its place in the fill, so each item is looked at once whichever caller asks and however often
-       it rests; an atomic whose walk was deferred stays at the cursor and is asked again. */
-    while (f->atomics < items) {
-        size_t i = f->atomics;
-
-        if (!lb_left()) {
-            METRIC_ADD(fill_rests, 1);
-            return false;
-        }
-        layout_job_line_items_spend(1);
-        if (text_run_measure_item_is_atomic(&f->m, i) && !lb_atomic_ask(text_run_measure_item_style(&f->m, i)))
-            return false;
-        f->atomics++;
-    }
-    return true;
+    /* The item count is the partition's, which `text_run_fill_step` closes at the end of the collection. */
+    return lb_fill_atomics_pull(f, f->n == 0 ? 0 : f->lines[f->n - 1].to);
 }
 
 bool line_box_extents_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)

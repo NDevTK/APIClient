@@ -101,6 +101,10 @@ typedef struct {
     long long       asks, served, built, resumed, deferred;
 } LineBoxRecord;
 void line_box_record_release(LineBoxRecord *r);
+/* Releases every complete fill (its lines laid, each walk over them untaken or taken whole) and keeps its key as
+   paid, with how far its walks went; a fill a walk stands inside stays. An ask of a paid key re-derives the fill in
+   a residency span and is served, as the job's no-pressure twin was. The record must rest: no fill steps. */
+void line_box_record_shed(LineBoxRecord *r);
 
 /* CSS 2.2 §10.6.3's first bullet for the block container that establishes one inline formatting context, "the
    distance from its top content edge to the first applicable of the following", whose first bullet is "the
