@@ -1745,6 +1745,7 @@ static LbFill *lb_fill_of(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAva
     DCHECK(r != NULL,
            "CSS 2.2 §9.4.2's line boxes were asked with no layout job holding a record — no drive is open and no "
            "job is entered, and every ask and every reader is made under one (core/layout/layout_job.h)");
+    layout_job_context_taint();
     r->asks++;
     if (r->cap != 0) {
         i = lb_key_probe(r->tab, r->cap, style, run, avail.stated, px);

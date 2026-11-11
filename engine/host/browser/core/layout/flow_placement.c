@@ -178,7 +178,8 @@ static FpEntry *fp_entry_for_write(const lxb_dom_element_t *el)
     return r->tab[i].e;
 }
 
-/* The entry `el` holds, or NULL. */
+/* The entry `el` holds, or NULL, for a fact of the box tree's structure (its floats, whether it establishes an
+   inline formatting context, a scan's place), which no grid row context decides. */
 static const FpEntry *fp_entry_peek(const lxb_dom_element_t *el)
 {
     FlowPlacementRecord *r = layout_job_placement();
@@ -187,6 +188,13 @@ static const FpEntry *fp_entry_peek(const lxb_dom_element_t *el)
     if (r == NULL || r->cap == 0) return NULL;
     i = fp_probe(r->tab, r->cap, el);
     return r->tab[i].el == NULL ? NULL : r->tab[i].e;
+}
+
+/* The same for a position or an extent, which a context can decide (layout_job_context_taint). */
+static const FpEntry *fp_fact_peek(const lxb_dom_element_t *el)
+{
+    layout_job_context_taint();
+    return fp_entry_peek(el);
 }
 
 void flow_placement_record_release(FlowPlacementRecord *r)
@@ -241,7 +249,7 @@ bool flow_placement_peek(const lxb_dom_element_t *el, CssPx *out)
 
     DCHECK(el != NULL, "CSS 2.1 §9.4.1's placement record was asked about no box");
     DCHECK(out != NULL, "CSS 2.1 §9.4.1's placement record was asked with nowhere to put the answer");
-    e = fp_entry_peek(el);
+    e = fp_fact_peek(el);
     if (e == NULL || !e->has_top) return false;
     *out = e->top;
     return true;
@@ -254,7 +262,7 @@ bool flow_placement_origin_peek(const lxb_dom_element_t *el, FlowPoint *out, con
     DCHECK(el != NULL, "CSS 2 §8.1 \"Box dimensions\"' border-box origin record was asked about no box");
     DCHECK(out != NULL, "CSS 2 §8.1 \"Box dimensions\"' border-box origin record was asked with nowhere "
                         "to put the answer");
-    e = fp_entry_peek(el);
+    e = fp_fact_peek(el);
     if (e == NULL || !e->has_origin) return false;
     *out = e->origin;
     if (cb_out != NULL) *cb_out = e->origin_cb;
@@ -304,7 +312,7 @@ bool flow_placement_cb_width_peek(const lxb_dom_element_t *el, CssPx *out, const
     DCHECK(el != NULL, "CSS 2.1 §10.1 \"Definition of 'containing block'\"' width record was asked about no "
                        "box");
     DCHECK(out != NULL, "CSS 2.1 §10.1's width record was asked with nowhere to put the answer");
-    e = fp_entry_peek(el);
+    e = fp_fact_peek(el);
     if (e == NULL || !e->has_cb_width) return false;
     *out = e->cb_width;
     if (cb_out != NULL) *cb_out = e->cb_width_cb;
@@ -347,7 +355,7 @@ bool flow_placement_anon_peek(const lxb_dom_element_t *el, const BlockFlowAnonBo
 
     DCHECK(el != NULL && v != NULL && n != NULL,
            "CSS 2.2 §9.2.1.1's anonymous-box record was asked about no box or with nowhere to answer");
-    e = fp_entry_peek(el);
+    e = fp_fact_peek(el);
     if (e == NULL || !e->has_anon) return false;
     *v = e->anon;
     *n = e->anon_n;
@@ -428,7 +436,7 @@ bool flow_placement_run_peek(const lxb_dom_element_t *container, const lxb_dom_e
     const FpEntry *e;
 
     DCHECK(container != NULL && out != NULL, "a run start was asked for no container or with nowhere to put it");
-    e = fp_entry_peek(after != NULL ? after : container);
+    e = fp_fact_peek(after != NULL ? after : container);
     if (e == NULL || !(after != NULL ? e->has_run_after : e->has_run_first)) return false;
     *out = after != NULL ? e->run_after : e->run_first;
     return true;
@@ -456,7 +464,7 @@ bool flow_placement_run_top_peek(const lxb_dom_element_t *container, const lxb_d
     const FpEntry *e;
 
     DCHECK(container != NULL && out != NULL, "a run's line box top was asked for no container or nowhere");
-    e = fp_entry_peek(after != NULL ? after : container);
+    e = fp_fact_peek(after != NULL ? after : container);
     if (e == NULL || !(after != NULL ? e->has_run_top_after : e->has_run_top_first)) return false;
     *out = after != NULL ? e->run_top_after : e->run_top_first;
     return true;
@@ -536,7 +544,7 @@ bool flow_placement_float_box_peek(const lxb_dom_element_t *f, FlowFloatBox *out
     const FpEntry *e;
 
     DCHECK(f != NULL && out != NULL, "a float's placement was asked for no float or with nowhere to put it");
-    e = fp_entry_peek(f);
+    e = fp_fact_peek(f);
     if (e == NULL || !e->has_float_box) return false;
     *out = e->float_box;
     return true;
@@ -563,7 +571,7 @@ bool flow_placement_bfc_entry_peek(const lxb_dom_element_t *el, FlowBfcEntry *ou
     const FpEntry *e;
 
     DCHECK(el != NULL && out != NULL, "a box's place in its formatting context was asked for no box or nowhere");
-    e = fp_entry_peek(el);
+    e = fp_fact_peek(el);
     if (e == NULL || !e->has_bfc_entry) return false;
     *out = e->bfc_entry;
     return true;
@@ -588,7 +596,7 @@ bool flow_placement_bfc_frame_peek(const lxb_dom_element_t *el, CssPx *top)
     const FpEntry *e;
 
     DCHECK(el != NULL && top != NULL, "a box's content edge in its formatting context was asked for no box or nowhere");
-    e = fp_entry_peek(el);
+    e = fp_fact_peek(el);
     if (e == NULL || !e->has_bfc_frame) return false;
     *top = e->bfc_top;
     return true;
@@ -614,7 +622,7 @@ bool flow_placement_float_avoid_peek(const lxb_dom_element_t *el, FlowFloatAvoid
     const FpEntry *e;
 
     DCHECK(el != NULL && out != NULL, "a box's placement beside floats was asked for no box or nowhere");
-    e = fp_entry_peek(el);
+    e = fp_fact_peek(el);
     if (e == NULL || !e->has_float_avoid) return false;
     *out = e->float_avoid;
     return true;
@@ -728,7 +736,7 @@ bool flow_placement_table_box_peek(const lxb_dom_element_t *table, CssPx *out)
     const FpEntry *e;
 
     DCHECK(table != NULL && out != NULL, "a table box position was asked for no table or with nowhere to put it");
-    e = fp_entry_peek(table);
+    e = fp_fact_peek(table);
     if (e == NULL || !e->has_table_box) return false;
     *out = e->table_box_top;
     return true;

@@ -88,6 +88,7 @@ struct LayoutJob {
     size_t    memo_used;
     uint64_t  gen;       /* starts at 1, so a zeroed slot is never live */
     uint64_t  rests;
+    uint64_t  taints;    /* the context reads made under the job (layout_job_context_taint) */
     const char *drive_file;   /* the innermost open drive's site */
     int         drive_line;
     LjContext **ctxs;    /* the grid row contexts entered since the job was made or shed, owned */
@@ -486,6 +487,26 @@ IntrinsicSizeRecord *layout_job_intrinsic_sizes(void)
     return lj_context(job) != NULL ? &lj_context(job)->intrinsic : &job->intrinsic;
 }
 
+IntrinsicSizeRecord *layout_job_intrinsic_sizes_shared(void)
+{
+    LayoutJob *job = lj_held();
+
+    return job != NULL && lj_context(job) != NULL ? &job->intrinsic : NULL;
+}
+
+void layout_job_context_taint(void)
+{
+    LayoutJob *job = lj_held();
+
+    if (job == NULL || APICLIENT_UNPRICED_OPEN()) return;
+    job->taints++;
+}
+
+uint64_t layout_job_context_taints(void)
+{
+    return lj_current()->taints;
+}
+
 /* ---- grid row contexts ---------------------------------------------------------------------------------- */
 
 unsigned layout_job_grid_rows_enter(const lxb_dom_element_t *container)
@@ -873,6 +894,7 @@ bool layout_job_ask(LayoutQuestion q, LayoutAnswer *out)
            "reader that cannot propagate \"not yet\" is itself a drive, so a drive is always beneath it");
     METRIC_ADD(stacked_asks, 1);
     if (bf) METRIC_ADD(bf_asks, 1);
+    layout_job_context_taint();
     if (job->memo_cap != 0) {
         s = lj_probe(job->memo, job->memo_cap, job->gen, q, job->ctx);
         if (s->gen == job->gen) {

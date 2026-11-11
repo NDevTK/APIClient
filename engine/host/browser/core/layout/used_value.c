@@ -2141,7 +2141,10 @@ bool used_value_height_behaves_as_auto(lxb_dom_element_t *el)
        this purpose", the layout after track sizing. While the container's rows are being sized the area's
        height is what they compute, and css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized
        Boxes" has a percentage cyclic through it "behave as auto". */
-    if (cb.box == UV_CB_GRID_AREA) return layout_job_grid_rows_sizing(cb.element);
+    if (cb.box == UV_CB_GRID_AREA) {
+        layout_job_context_taint();
+        return layout_job_grid_rows_sizing(cb.element);
+    }
     /* §17.4's WRAPPER ANSWERS TRUE OUTRIGHT AND THE RECURSION STOPS AT IT, which is the section's own
        parenthesis rather than an assumption about tables: `height` is a non-inheritable property §17.4 does
        NOT list as the wrapper's, so "the initial values are used instead" — and the initial value of `height`
@@ -2208,6 +2211,7 @@ bool used_value_containing_block_height(lxb_dom_element_t *el, CssPx *out)
     /* css-grid-1 §3.3's grid area, whose height is its rows' (core/layout/grid_track.h): definite once they are
        sized, and no basis while they are, as the predicate above states. */
     if (cb.box == UV_CB_GRID_AREA) {
+        layout_job_context_taint();
         if (layout_job_grid_rows_sizing(cb.element)) return false;
         *out = grid_item_area_block_size(cb.element, el);
         return true;

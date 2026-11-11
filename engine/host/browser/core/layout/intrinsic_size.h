@@ -139,6 +139,7 @@ CssPx intrinsic_label_width(lxb_dom_element_t *el, const lxb_char_t *text, size_
    Created zeroed on the first call for `el`; the record owns it. */
 typedef struct {
     bool begun, answered, sized;
+    bool pure;                   /* once `sized`: its computation made no context read */
     lxb_dom_node_t *at;
     IntrinsicInlineSizes sizes;
 } IntrinsicSizeWalk;

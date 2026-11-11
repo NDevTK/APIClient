@@ -54,6 +54,7 @@
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_LAYOUT_JOB_H
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "quickjs-step.h"
 
@@ -176,6 +177,17 @@ CssCascadeRecord *layout_job_cascade(void);
 LineBoxRecord *layout_job_line_boxes(void);
 /* The same for css-sizing-3 §5.1's intrinsic size record (core/layout/intrinsic_size.h). */
 IntrinsicSizeRecord *layout_job_intrinsic_sizes(void);
+/* The job's own intrinsic size record while a grid row context is current, and NULL otherwise: the store of
+   answers that read nothing a context decides, which every context serves (core/layout/intrinsic_size.c). */
+IntrinsicSizeRecord *layout_job_intrinsic_sizes_shared(void);
+
+/* A layout read whose answer a grid row context can decide: a grid area's block size or its definiteness, a
+   stacked question's answer, a line box fill, or a placement fact other than the box tree's own structure, all
+   of which each context holds apart. `taint` counts one on the held job; `taints` reads the count, so a
+   measurement whose span counted none read nothing a context decides. Inside an unpriced span `taint` counts
+   nothing, as a charge does. */
+void layout_job_context_taint(void);
+uint64_t layout_job_context_taints(void);
 
 /* Grid row contexts. While `container`'s rows are being sized (core/layout/grid_track.h), its items' grid
    areas have no block size yet: css-grid-1 §11 "Grid Layout Algorithm" makes an area definite for the layout

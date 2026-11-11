@@ -525,13 +525,18 @@ IntrinsicInlineSizes flex_intrinsic_inline_sizes(lxb_dom_element_t *el)
     layout_job_drive_begin(&d);
     w = intrinsic_size_walk_of(el);
     if (!w->sized) {
+        uint64_t taints = layout_job_context_taints();
         ThreadWorkSpan tw;
 
         thread_work_begin(&tw);
         w->sizes = fis_inline_sizes(el);
         w->sized = true;
+        w->pure = layout_job_context_taints() == taints;
         thread_work_end(&tw, THREAD_WORK_LAYOUT_BOX, 1);
         thread_work_charge(THREAD_WORK_LAYOUT_BOX, 1);
+    } else if (!w->pure) {
+        /* A held pair a grid row context decided is a context read for its reader. */
+        layout_job_context_taint();
     }
     out = w->sizes;
     layout_job_drive_end(&d);
