@@ -26243,9 +26243,9 @@ TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
              "shape into the URL's query as bytes, so the fetch of that URL is recorded, and sent, as an address "
              "the run determined");
     const char *uv_why = NULL; int uv_tt = 1;
-    fold_row(&uv_tt, &uv_why, !!strstr(js, "\"https://x.test/api/uspa-ex\""),
-             "NOT REACHED: there is no /api/uspa-ex record, so the URL given `lang` was never fetched");
-    fold_row(&uv_tt, &uv_why, param_value_is(js, "https://x.test/api/uspa-ex", "lang", "en-US"),
+    fold_row(&uv_tt, &uv_why, !!strstr(js, "https://x.test/api/uspa-ex"),
+             "NOT REACHED: no record names /api/uspa-ex, so the URL given `lang` was never fetched");
+    fold_row(&uv_tt, &uv_why, !!strstr(js, "\"validValues\":[\"https://x.test/api/uspa-ex?lang=en-US\"]"),
              "the URL whose appended value has an example was not fetched at the address that example "
              "serializes to: its query holds the value's display shape, or nothing");
     const char *uw_why = NULL; int uw_tt = 1;
