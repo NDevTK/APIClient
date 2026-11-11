@@ -52297,13 +52297,14 @@ static __exception int js_parse_regexp_begin(JSParseState *s)
    (or an escape's two). A lookahead passes false: it cannot park, and its scan is its caller's stint. */
 static int js_parse_regexp_step(JSParseState *s, bool can_rest)
 {
-    const uint8_t *p = s->pd_rx.p, *p_next;
+    const uint8_t *p = s->pd_rx.p, *p_next, *unit_at;
     StringBuffer *b = &s->pd_rx.body, *b2 = &s->pd_rx.flags;
     uint32_t c;
     JSValue body_str, flags_str;
 
     DCHECK(s->pd_rx.live, "a regexp literal's scan was stepped with no scan held");
     while (!s->pd_rx.in_flags) {
+        unit_at = p;
         if (p >= s->buf_end) {
         eof_error:
             js_parse_error(s, "unexpected end of regexp");
@@ -52359,6 +52360,9 @@ static int js_parse_regexp_step(JSParseState *s, bool can_rest)
             goto fail;
         s->pd_rx.p = p;
         g_flow_compile_work += js_parse_count_bytes_to(s, p);
+        DCHECK(p > unit_at && p - unit_at <= 1 + UTF8_CHAR_LEN_MAX,
+               "a regexp literal's scan reached its rest point having consumed no code point, or more than one "
+               "code point and its escape, since the last: the rest is offered once per such unit");
         if (can_rest && js_parse_want_yield(s))
             return 1;
     }
@@ -54604,10 +54608,12 @@ static int js_parse_skip_step(JSParseState *s, bool can_rest, int *pbits, bool *
 {
     int c, tok_len, tok = TOK_EOF;
     char *state;
+    const uint8_t *tok_at;
 
     DCHECK(s->pd_skip.live, "a bracket lookahead was stepped with none held");
     *prested = false;
     for (;;) {
+        tok_at = s->token.ptr;
         state = js_parse_skip_stack(s);
         switch(s->token.val) {
         case '(':
@@ -54699,6 +54705,8 @@ static int js_parse_skip_step(JSParseState *s, bool can_rest, int *pbits, bool *
                 tok = '\n';
             break;
         }
+        DCHECK(s->token.ptr > tok_at, "a bracket lookahead reached its rest point without reading a token "
+               "since the last: the rest is offered once per token, so a resume could rest again without progress");
         if (can_rest && js_parse_want_yield(s)) {
             *prested = true;
             return 0;
