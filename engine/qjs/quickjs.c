@@ -259,8 +259,11 @@ typedef struct JSGCCycle {
     size_t seed, seed_end, scopes_after;
     uint64_t work_begin;
     /* A collection is owed: the allocation threshold was crossed in a runtime whose embedder drives the steps
-       (JSRuntime.gc_driven). Cleared when the collection begins. */
-    bool owed;
+       (JSRuntime.gc_driven), or (`owed_host`) the embedder owed one for a reason of its own (JS_GCOwe). Both are
+       cleared when a whole-heap collection begins. `path` is whether the standing whole-heap collection answers
+       the program's own crossing: only such a collection moves the threshold, so where the next one is owed is a
+       function of the program's path and not of what the embedder's residency released. */
+    bool owed, owed_host, path;
     /* Which collection the trial counts belong to; raised at every begin and restart, never 0. */
     uint32_t serial;
     /* gc_mut_reading when the trial began: any change since then restarts it (JS_GCStep). */
@@ -272,6 +275,8 @@ typedef struct JSGCCycle {
     /* The most work one object's visit did: what a step can exceed its budget by. */
     uint64_t object_work_max;
     uint64_t scoped_done, scoped_work;
+    /* Whole-heap collections the embedder owed (JS_GCOwe) that answered no crossing, finished. */
+    uint64_t host_done;
 } JSGCCycle;
 
 typedef struct JSMallocState {
@@ -11179,9 +11184,10 @@ static void gc_trial_begin(JSRuntime *rt, bool whole)
     init_list_head(&c->scan_done);
     c->step = JS_GC_CYCLE_DECREF;
     c->scoped = !whole;
+    c->path = whole && c->owed;
     c->work_begin = c->work;
     if (whole)
-        c->owed = false;
+        c->owed = c->owed_host = false;
     gc_trial_seed(rt);
 }
 
@@ -11524,18 +11530,19 @@ void JS_GCOwe(JSRuntime *rt)
 {
     DCHECK(rt->gc_driven, "a collection was owed in a runtime whose embedder does not drive its steps — nothing would "
                           "pay it, so the debt would stand until the next threshold crossing ran one inline");
-    rt->gc_cycle.owed = true;
+    rt->gc_cycle.owed_host = true;
 }
 
 bool JS_GCOwed(JSRuntime *rt)
 {
-    return rt->gc_cycle.owed || rt->gc_cycle.scope_head < rt->gc_cycle.scope_n ||
+    return rt->gc_cycle.owed || rt->gc_cycle.owed_host || rt->gc_cycle.scope_head < rt->gc_cycle.scope_n ||
            rt->gc_cycle.step != JS_GC_CYCLE_IDLE;
 }
 
 void JS_GCBegin(JSRuntime *rt)
 {
-    gc_trial_begin(rt, rt->gc_cycle.owed || rt->gc_cycle.scope_head == rt->gc_cycle.scope_n);
+    gc_trial_begin(rt, rt->gc_cycle.owed || rt->gc_cycle.owed_host ||
+                       rt->gc_cycle.scope_head == rt->gc_cycle.scope_n);
 }
 
 /* The work done since `work0`, folded into one phase's lifetime step maximum when the step is one a scheduler
@@ -11568,8 +11575,12 @@ static bool gc_step(JSRuntime *rt, uint64_t budget, bool rests)
             /* The allocation threshold is a whole-heap trial's to move: this one surveyed one neighbourhood. */
             c->scoped_done++;
             c->scoped_work += c->work - c->work_begin;
-        } else {
+        } else if (c->path) {
             gc_cycle_finished(rt);
+        } else {
+            /* The embedder's: a crossing made while it stood is still owed, as it is in a run that owed none. */
+            c->collections++;
+            c->host_done++;
         }
         return true;
     }
@@ -11603,6 +11614,8 @@ void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out)
 {
     out->step = (int)rt->gc_cycle.step;
     out->owed = rt->gc_cycle.owed;
+    out->path = rt->gc_cycle.step != JS_GC_CYCLE_IDLE && !rt->gc_cycle.scoped && rt->gc_cycle.path;
+    out->host = rt->gc_cycle.host_done;
     out->work = rt->gc_cycle.work;
     out->steps = rt->gc_cycle.steps;
     out->restarts = rt->gc_cycle.restarts;
@@ -11624,8 +11637,10 @@ void JS_RunGC(JSRuntime *rt)
     if (rt->gc_cycle.step != JS_GC_CYCLE_IDLE && (rt->gc_cycle.scoped || rt->gc_cycle.step == JS_GC_CYCLE_FREE))
         while (!gc_step(rt, UINT64_MAX, false))
             ;
-    if (rt->gc_cycle.step == JS_GC_CYCLE_IDLE)
+    if (rt->gc_cycle.step == JS_GC_CYCLE_IDLE) {
+        rt->gc_cycle.owed = true;   /* asked of the program's own runtime, so it moves the threshold as a crossing does */
         gc_trial_begin(rt, true);
+    }
     while (!gc_step(rt, UINT64_MAX, false))
         ;
 }

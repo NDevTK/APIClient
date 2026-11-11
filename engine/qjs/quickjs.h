@@ -708,6 +708,10 @@ typedef struct JSGCCycleStats {
     uint64_t free_step_max;                    /* lifetime: the most work one step of a freeing did */
     uint64_t object_work_max;                  /* lifetime: the most work one object's visit did */
     uint64_t scoped, scoped_work;              /* lifetime: scoped collections finished, and their work */
+    /* The standing collection answers the program's own threshold crossing: a whole-heap one begun while the
+       crossing was owed. A scoped one, or one only JS_GCOwe owed, answers the embedder's residency. */
+    bool path;
+    uint64_t host;         /* lifetime: whole-heap collections only JS_GCOwe owed, finished */
 } JSGCCycleStats;
 JS_EXTERN void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out);
 JS_EXTERN bool JS_IsLiveObject(JSRuntime *rt, JSValueConst obj);

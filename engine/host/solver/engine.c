@@ -14702,13 +14702,23 @@ static long long g_host_turns;
 long long engine_host_turns(void) { return g_host_turns; }
 long long engine_gc_us(void) { return (long long)g_gc_us; }
 
+/* The collector work residency caused, in the instance's unit: the scoped collections a sale owes and the
+   whole-heap ones only RAM pressure owed (JS_GCOwe). It is the residency system's, never a flow's or the
+   instance's service, so a run that relocated nothing banks none of it and the same schedule otherwise. Lifetime. */
+static int64_t g_residency_work;
+/* The collector work this collector slice did, in the instance's unit and whoever's it is, kept across a host turn
+   that interrupted the slice, which ends at the quantum on it. */
+static int64_t g_collect_slice_units;
+int64_t engine_residency_work(void) { return g_residency_work; }
+
 /* A slice the collector holds: it begins an owed collection, then takes steps of rest_unit_items(REST_UNIT_GC_WORK)
-   units until nothing is owed or the slice's work reaches the quantum, going on from one finished collection to
-   the next owed, and handing the host its turn between two steps (ENGINE_STEP_HOST, resumed as the same slice). No
-   flow runs in it, so nothing separates two steps but the host's own time between slices. Each step's work is
-   banked in the instance's currency at THREAD_WORK_UNITS_PER_KI_GC, so the slice ends at the quantum like any
-   other and Level 1 sees the instance's collection as service. It answers YIELD: every flow is where it was.
-   `resume` is a slice a host turn interrupted, which is not counted again. */
+   units until nothing is owed or the slice's collector work reaches the quantum, going on from one finished
+   collection to the next owed, and handing the host its turn between two steps (ENGINE_STEP_HOST, resumed as the
+   same slice). No flow runs in it, so nothing separates two steps but the host's own time between slices. Each
+   step's work is priced at THREAD_WORK_UNITS_PER_KI_GC: a collection that answers the program's own threshold
+   crossing is banked in the instance's currency, so Level 1 sees it as service; one residency owed is banked as
+   residency work (g_residency_work). It answers YIELD: every flow is where it was. `resume` is a slice a host turn
+   interrupted, which is not counted again. */
 static int engine_collect_slice(JSRuntime *rt, int resume) {
     const uint64_t budget = rest_unit_items(REST_UNIT_GC_WORK);
     int64_t t0 = quantum_thread_us();
@@ -14717,38 +14727,47 @@ static int engine_collect_slice(JSRuntime *rt, int resume) {
     bool done;
 
     DCHECK(JS_GCOwed(rt), "a collector slice was opened with no collection owed or standing");
-    if (!resume) g_gc_slices++;
+    if (!resume) {
+        g_gc_slices++;
+        g_collect_slice_units = 0;
+    }
     JS_GCCycleStats(rt, &st);
     if (st.step == 0)
         JS_GCBegin(rt);
     w0 = st.work;
     do {
         uint64_t units;
+        int64_t *bank;
 
+        /* Whose this step is, read while the collection stands: the step that finishes it leaves it idle. */
+        JS_GCCycleStats(rt, &st);
+        DCHECK(st.step != 0, "a collector step was about to be taken with no collection standing");
+        bank = st.path ? &g_service_work : &g_residency_work;
         done = JS_GCStep(rt, budget);
         JS_GCCycleStats(rt, &st);
         DCHECKF(st.work >= w0, "the collector's lifetime work fell from %llu to %llu across one step",
                 (unsigned long long)w0, (unsigned long long)st.work);
         units = ((st.work - w0) * THREAD_WORK_UNITS_PER_KI_GC + 1023) / 1024;
-        DCHECKF(units <= (uint64_t)(INT64_MAX - g_service_work),
-                "banking %llu collector units would overflow the instance's work counter (%lld)",
-                (unsigned long long)units, (long long)g_service_work);
-        g_service_work += (int64_t)units;
+        DCHECKF(units <= (uint64_t)(INT64_MAX - *bank) && units <= (uint64_t)(INT64_MAX - g_collect_slice_units),
+                "banking %llu collector units would overflow a work counter (bank %lld, slice %lld)",
+                (unsigned long long)units, (long long)*bank, (long long)g_collect_slice_units);
+        *bank += (int64_t)units;
+        g_collect_slice_units += (int64_t)units;
         if (g_pressure_batch > 0) g_gc_sale_work += st.work - w0;   /* a sold batch awaits this collection */
         w0 = st.work;
         /* A sale's collection is small, and a batch owes one per member: the slice goes on to the next. */
-        if (done && JS_GCOwed(rt) && engine_slice_work() < ENGINE_QUANTUM_WORK) {
+        if (done && JS_GCOwed(rt) && g_collect_slice_units < ENGINE_QUANTUM_WORK) {
             JS_GCBegin(rt);
             done = false;
         }
-        if (!done && engine_slice_work() < ENGINE_QUANTUM_WORK && quantum_host_wants_thread()) {
+        if (!done && g_collect_slice_units < ENGINE_QUANTUM_WORK && quantum_host_wants_thread()) {
             g_gc_us += quantum_thread_us() - t0;
             g_turn_resume = 2;
             return ENGINE_STEP_HOST;
         }
-    } while (!done && engine_slice_work() < ENGINE_QUANTUM_WORK);
+    } while (!done && g_collect_slice_units < ENGINE_QUANTUM_WORK);
     g_gc_us += quantum_thread_us() - t0;
-    if (engine_slice_work() > g_gc_slice_work_max) g_gc_slice_work_max = engine_slice_work();
+    if (g_collect_slice_units > g_gc_slice_work_max) g_gc_slice_work_max = g_collect_slice_units;
     return ENGINE_STEP_YIELD;
 }
 

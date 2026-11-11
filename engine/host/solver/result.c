@@ -1772,6 +1772,7 @@ char *result_cold_json(void) {
     METRIC_SET(step_us, r.step_us);
     METRIC_SET(step_work, r.step_work);
     METRIC_SET(service_work, r.service_work);
+    METRIC_SET(residency_work, engine_residency_work());
     METRIC_SET(instance_us, r.instance_us);
     METRIC_SET(loop_us, r.loop_us);
     METRIC_SET(between_slices_us, r.between_slices_us);

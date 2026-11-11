@@ -347,6 +347,10 @@ METRIC(step_us, "stepUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
    is asserted at engine_step_unit_runs. */
 METRIC(step_work, "stepWork", LIFETIME, "unit", PROCESS, "solver/engine.c", INT)
 METRIC(service_work, "serviceWork", LIFETIME, "unit", PROCESS, "solver/engine.c", INT)
+/* …and the collector work residency caused (a sale's scoped collections, a whole-heap one only RAM pressure owed),
+   banked apart from `serviceWork`: memory decides where a flow lives, so a run that relocated nothing has none of
+   it and the same `serviceWork`. */
+METRIC(residency_work, "residencyWork", LIFETIME, "unit", PROCESS, "solver/engine.c", INT)
 /* …and what that total is a share of: the thread measure this instance consumed since its
    dispatch loop first ran. `stepUs` counts only turns taken, so a small `stepUs/steps` is a cheap
    loop or one barely entered. Both sides are one clock, `quantum_thread_us()` (named on
