@@ -76802,10 +76802,10 @@ static const JSTrampStepDef js_error_set_stack_def = { sizeof(JSIterSetter), js_
                                                       .steps = js_error_set_stack_steps };
 static const char *const js_instanceof_steps[];
 static const JSTrampStepDef js_instanceof_def  = { sizeof(JSInstanceOf), js_instanceof_step, js_instanceof_fini, INSTOF_OPERATOR, .visit = js_instanceof_visit,
-                        .algorithm = "13.10.2 InstanceofOperator", .steps = js_instanceof_steps };
+                        .algorithm = "13.10.2 InstanceofOperator", .steps = js_instanceof_steps, .plain_rest = 1 };
 static const JSTrampStepDef js_ordinary_hasinst_def = { sizeof(JSInstanceOf), js_instanceof_step, js_instanceof_fini, INSTOF_ORDINARY, .visit = js_instanceof_visit,
                         .algorithm = "20.2.3.6 Function.prototype [ %Symbol.hasInstance% ], which is 7.3.21 OrdinaryHasInstance",
-                        .steps = js_instanceof_steps, .result_types = JS_LANG_TYPE_BOOLEAN };
+                        .steps = js_instanceof_steps, .result_types = JS_LANG_TYPE_BOOLEAN, .plain_rest = 1 };
 static const JSTrampStepDef js_obj_tolocale_def = { sizeof(JSObjToLocale), js_object_tolocale_step, js_object_tolocale_fini, 0, .visit = js_object_tolocale_visit,
                       .algorithm = "20.1.3.5 Object.prototype.toLocaleString",
                       .steps = js_obj_tolocale_steps };
@@ -77034,7 +77034,7 @@ static const JSTrampStepDef js_date_toPrim_def = { sizeof(JSDateToPrim), js_date
                      .steps = js_date_toPrim_steps };
 static const JSTrampStepDef js_date_toISO_def = { sizeof(JSDateToISO), js_date_toiso_step, js_date_toiso_fini, 0, .visit = js_date_toiso_visit,
                      .algorithm = "21.4.4.36 Date.prototype.toISOString ( )",
-                     .steps = js_date_toISO_steps, .result_types = JS_LANG_TYPE_STRING };
+                     .steps = js_date_toISO_steps, .result_types = JS_LANG_TYPE_STRING, .plain_rest = 1 };
 /* the captured half of an Atomics operation: the length ValidateAtomicAccess reads at step 1, held across the
    index's own coercion, plus the argument vector the body will read. */
 typedef struct JSAtomics {
