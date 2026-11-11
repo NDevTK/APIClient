@@ -414,8 +414,10 @@ static void po_push_frame(PaintOrderCursor *c, const PoFrame *f)
 static void po_push_context(PaintOrderCursor *c, lxb_dom_element_t *ce, bool pseudo)
 {
     PoFrame f;
+    /* Asked as work in both builds: the root's first ask builds its cascade, which later priced asks read. */
+    bool forms = pseudo || stacking_context_forms(ce);
 
-    DCHECK(pseudo || stacking_context_forms(ce),
+    DCHECK(forms,
            "CSS 2.1 §E.2's painting order was walked for an element that neither forms a stacking context nor "
            "is one CSS 2.1 §E.2 says to treat as if it did. CSS 2.1 §E.2 is stated as \"The painting order for the "
            "descendants of an element generating a stacking context\", so there is no order to state for any "
