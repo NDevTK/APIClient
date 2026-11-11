@@ -1474,23 +1474,23 @@ char *result_cold_json(void) {
            "writer of one of them and the partition this pair exists to be is no longer one");
     {
         /* A preferred take is a take. The two counts come from different mechanisms (a runtime field bumped in the
-           walk, and `g_orphans_driven` raised by the visitor it calls), so the inequality is what ties them to
-           one walk: it fires on a take that marks a body and returns without the visitor. `od` is read only
-           for these asserts. */
-        long od, oa;
+           walk, and engine_orphan_seed's take count, raised after the visitor it calls has recorded the body), so
+           the inequality is what ties them to one walk: it fires on a take that marks a body and returns without
+           the visitor. The drives are not the bound: a take a recorded drive claims (routed) or whose document is
+           gone (retired) seeds no flow. */
+        const long took = engine_orphan_exits().took;
 
-        engine_orphan_census(&od, &oa);
-        DCHECKF(orph_pref >= 0 && orph_pref <= od,
-                "the orphan walk reports %ld PREFERRED takes against %ld drives — a preferred take is a take, "
+        DCHECKF(orph_pref >= 0 && orph_pref <= took,
+                "the orphan walk reports %ld PREFERRED takes against %ld takes — a preferred take is a take, "
                 "so a numerator above this denominator means the walk marked a body `entered` and returned "
-                "without its visitor seeding a flow, which loses that body for the life of the instance and "
-                "publishes an order that fired over work that never happened", orph_pref, od);
+                "without its visitor recording it, which loses that body for the life of the instance and "
+                "publishes an order that fired over work that never happened", orph_pref, took);
         /* The fairness witness's containment, asserted apart so the abort names which witness disagreed: a script
            enters the take table only when a take is charged to it. */
-        DCHECKF(orph_scripts >= 0 && orph_scripts <= od,
-                "the orphan walk reports takes charged to %ld distinct SCRIPTS against %ld drives — a script is "
+        DCHECKF(orph_scripts >= 0 && orph_scripts <= took,
+                "the orphan walk reports takes charged to %ld distinct SCRIPTS against %ld takes — a script is "
                 "charged only when a take is made, so a numerator above this denominator means the per-script "
-                "take table gained a row for a body that was never handed to a visitor", orph_scripts, od);
+                "take table gained a row for a body that was never handed to a visitor", orph_scripts, took);
     }
     DCHECKF(fk_pinned >= 0 && fk_pinned <= fk_total,
             "forks taken over an already-proved subject (%ld) outnumber the forks this session took (%ld) — "
