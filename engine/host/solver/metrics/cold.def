@@ -171,9 +171,10 @@ METRIC(resumed_binary_differs, "resumedBinaryDiffers", CONSTANT, "rebuild", AGEN
 METRIC(resumed_baseline_differs, "resumedBaselineDiffers", CONSTANT, "rebuild", AGENT, "solver/cold.c", INT)
 METRIC(resumed_same_build, "resumedSameBuild", CONSTANT, "rebuild", AGENT, "solver/cold.c", INT)
 /* What this document's parks wrote, by whether a same-build resume could restore it without replay (cold.h's
-   ColdParkCross): never-run members and replaying ones, which sum to the park's flows and candidates, and the
+   ColdParkCross): never-run members, restorable ones and replaying ones, which sum to the park's flows and candidates, and the
    replaying ones' parts with no cross-session writer, one count per member per kind: the writers' work queue. */
 METRIC(park_cross_unstarted, "parkCrossUnstarted", LIFETIME, "member", AGENT, "solver/cold.c", INT)
+METRIC(park_cross_restorable, "parkCrossRestorable", LIFETIME, "member", AGENT, "solver/cold.c", INT)
 METRIC(park_cross_replays, "parkCrossReplays", LIFETIME, "member", AGENT, "solver/cold.c", INT)
 METRIC(park_cross_gaps, "parkCrossGaps", LIFETIME, "member", AGENT, "solver/cold.c", OBJECT)
 /* The path half's verdict rows, lifetime counts. Units differ: `replayHits` and `replayLeftArms`

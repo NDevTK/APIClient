@@ -32532,7 +32532,13 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
     ColdParkCross tf_cross;
     cold_park_cross(&tf_cross);
     int cold_park_cross_rp = g_sess == SESS_PARK && tf_cross.replays > 0 &&
-                             tf_cross.unstarted + tf_cross.replays == g_cp.flows + g_cp.cands;
+                             tf_cross.unstarted + tf_cross.restorable + tf_cross.replays == g_cp.flows + g_cp.cands;
+    /* The heap slots in the cross-session form: written at the park (some member's head) and, at the resume of
+       the same build, every such record read against the fresh seal and written again byte for byte. */
+    int cold_park_cross_slots = g_sess == SESS_PARK && g_cp.heads > 0;
+    int cold_resumed_cross_slots = g_sess == SESS_RESUME && g_cr.same_build && g_cr.heads > 0 &&
+                                   g_cr.cross_identical == g_cr.born + g_cr.heapsegs + g_cr.heads &&
+                                   g_cr.cross_differs == 0 && g_cr.cross_refused == 0;
     /* AND BENEATH ALL THREE OF THEM, THE PARK'S REACHABILITY LADDER — because every row above is an OUTCOME
        row and `park-wrote=0` is ONE column over a CONJUNCTION. solver/cold.h has already counted what that
        column folds: FOUR conjuncts, hence fifteen non-satisfying states, every one of them reported as the
@@ -33131,9 +33137,11 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
         { "park-deep", cold_park_deep, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "park-cand", cold_park_cand, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "park-cross-replays", cold_park_cross_rp, "state.code", SESS_PARK, .gate = "park-wrote" },
+        { "park-cross-slots", cold_park_cross_slots, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "resumed", cold_resumed_any, "state.code", SESS_RESUME },
         { "resumed-segs", cold_resumed_segs, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-same-build", cold_resumed_same, "state.code", SESS_RESUME, .gate = "resumed" },
+        { "resumed-cross-slots", cold_resumed_cross_slots, "state.code", SESS_RESUME, .gate = "resumed-same-build" },
         { "resumed-cand", cold_resumed_cand, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-fired", cold_fired, "state.code", SESS_RESUME },
         { "resumed-keyed-fired", cold_kfired, "state.code", SESS_RESUME },

@@ -542,6 +542,7 @@ static int cow_room_for_one(CowDelta *d, const char *why) {
 }
 
 static CowDelta *g_current = NULL;   /* the flow whose writes are captured right now (scheduler-owned) */
+static int g_heads_applied;          /* deltas whose head is on the heap (head_applied), 0 or 1 */
 
 CowDelta *cow_delta_new(void) {
     CowDelta *d = reclaim_calloc(1, sizeof *d);
@@ -2023,6 +2024,7 @@ void cow_unapply(JSContext *ctx, CowDelta *d) {
     cow_swap_begin();
     cow_unapply_entries(ctx, d->e, d->n);
     d->head_applied = 0;
+    g_heads_applied--;
     cow_swap_end();
     DCHECK(g_cow_installed == d->base,
            "the applied heap chain is not the running flow's — a delta was swapped without going through "
@@ -2136,6 +2138,7 @@ void cow_apply(JSContext *ctx, CowDelta *d) {
     cow_install_chain(ctx, d->base);
     cow_apply_entries(ctx, d->e, d->n, "cow_apply: this flow's own head");
     d->head_applied = 1;
+    g_heads_applied++;
     cow_swap_end();
 }
 
@@ -3021,4 +3024,31 @@ void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork, uint64_t (*time
     HOOKS.timeline_handle = timeline_handle;
     HOOKS.timeline_continues = timeline_continues;
     JS_SetTimeTravelHooks(&HOOKS);
+}
+
+bool cow_baseline_shown(void) { return g_cow_installed == NULL && g_heads_applied == 0; }
+
+const void *cow_delta_chain(const CowDelta *d) { return d->base; }
+const void *cow_seg_below(const void *seg) { return ((const CowSeg *)seg)->base; }
+
+typedef struct { void (*visit)(const CowSlotView *v, void *arg); void *arg; int at; } CowSlotWalk;
+static void cow_slot_chunk(CowEntry *e, int n, void *arg) {
+    CowSlotWalk *w = arg;
+
+    for (int i = 0; i < n; i++, w->at++) {
+        CowSlotView v;
+
+        if (e[i].is_gendata || e[i].is_map || e[i].is_state || e[i].vref) continue;
+        v = (CowSlotView){ w->at, e[i].existed, e[i].cur_state, e[i].obj, e[i].atom, &e[i].base, &e[i].cur };
+        w->visit(&v, w->arg);
+    }
+}
+
+void cow_slot_each(const CowDelta *d, const void *seg, void (*visit)(const CowSlotView *v, void *arg), void *arg) {
+    CowSlotWalk w = { visit, arg, 0 };
+
+    DCHECK(seg != NULL || (d != NULL && !d->head_applied),
+           "a head's slots were read while it is on the heap — its current values are the live heap's");
+    if (seg) cow_seg_each(seg, cow_slot_chunk, &w);
+    else cow_slot_chunk(d->e, d->n, &w);
 }

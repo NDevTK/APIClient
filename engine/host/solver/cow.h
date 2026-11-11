@@ -609,4 +609,22 @@ void   cow_delta_head_drop(JSContext *ctx, CowDelta *d);
    back in the order it handed them (`vals`, n of them, whose references it takes). Returns how many it took. */
 int    cow_delta_head_read(JSContext *ctx, CowDelta *d, const uint8_t *bytes, size_t n, JSValue *vals, int n_vals);
 
+/* The cross-session writer's reads of a delta (solver/cold.c). A property slot entry: its index among the entries
+   of its head or segment, whether the slot existed before the write, the recorded state of `cur` (COW_CUR_*), the
+   owner, the key, and the two descriptors, all borrowed. Not covered: a cell, map, coroutine or state entry, which
+   cow_slot_each skips and cold.c's census names. */
+typedef struct {
+    int index, existed, cur_state;
+    JSValueConst obj;
+    JSAtom atom;
+    const JSPropertyDescriptor *base, *cur;
+} CowSlotView;
+/* Each slot entry of `d`'s head (`seg` NULL; the head is not on the heap) or of frozen segment `seg`, in order. */
+void cow_slot_each(const CowDelta *d, const void *seg, void (*visit)(const CowSlotView *v, void *arg), void *arg);
+/* `d`'s nearest frozen segment and a segment's own base, NULL past the chain's end: identities, borrowed. */
+const void *cow_delta_chain(const CowDelta *d);
+const void *cow_seg_below(const void *seg);
+/* Whether the heap shows the baseline: no chain installed and no head applied. */
+bool cow_baseline_shown(void);
+
 #endif

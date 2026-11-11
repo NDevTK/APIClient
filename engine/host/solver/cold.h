@@ -716,6 +716,10 @@ typedef struct {
        it is a row of ColdPreview below, so a host chooses a moment that does not contain one rather than
        discovering it at the abort. */
     long delivers;
+    /* 'b', 'h' and 'p': the heap slots in the cross-session form (cold.c's park_heap_slots) — shared born objects,
+       frozen heap segments and members' heads. The first two are written once per document, so neither is
+       bounded by the members; a 'p' is a field of the flow record before it, at most one per member. */
+    long born, heapsegs, heads;
 } ColdParked;
 void cold_parked(ColdParked *out);
 
@@ -899,16 +903,17 @@ void cold_set_binary_digest(uint64_t digest);
 void cold_set_baseline_digest(uint64_t digest);
 
 /* Which parked members a same-build resume could restore without replay, counted by cold_park_flow over every
-   member it writes: `unstarted` (a member that never ran, whose recipe is empty) and `replays` (the rest, each
-   replaying its recipe since no member is written in the cross-session form yet), which sum to the parked flows
-   and candidates. `gaps` tallies each replaying member once per kind of part with no cross-session
-   writer: its heap delta by entry kind (`heap slot|cell|coro|map|state`), `dom`, `frame`, `agents`,
+   member it writes: `unstarted` (a member that never ran, whose recipe is empty), `restorable` (one every part of
+   which is written in the cross-session form) and `replays` (the rest), which sum to the parked flows and
+   candidates. `gaps` tallies each replaying member once per kind of part with no cross-session
+   writer: its heap delta by entry kind (`heap cell|coro|map|state`, and `heap slot` when its slots were not
+   written, beside `heap slot ` and each cross-session gap that stopped them), `dom`, `frame`, `agents`,
    `register`, `pins`, and the cross-session graph survey of its values (`graph ` and the survey's gap name).
    The survey reads a shared object as the heap holds it with no member switched in, so it names kinds, not
    contents. Named residual. Not covered: the rest of a member's record (its timers, program rows, source cuts,
    user acts) is not asked. Next diff builds: each such part's kind beside the cross-session writer of the
    parts above. Absence shows as: a member whose gaps are all built still failing its restore. */
-typedef struct { long unstarted, replays; } ColdParkCross;
+typedef struct { long unstarted, restorable, replays; } ColdParkCross;
 void cold_park_cross(ColdParkCross *out);
 /* …its `gaps` as a JSON object, `{}` for none; the caller frees it. */
 char *cold_park_cross_gaps_json(void);
@@ -984,6 +989,14 @@ typedef struct {
        decided in this order: either binary digest unstated, the binary digests differ, the baselines' digests
        differ, or the same build. Exactly one is 1 when a residue was rebuilt, and none otherwise. */
     long build_unstated, binary_differs, baseline_differs, same_build;
+    /* The 'b', 'h' and 'p' records read, and what became of each: under the same build, read against this
+       session's seal and written again, identical to the record's bytes or not, or refused by the read (a name
+       this seal holds no thing of its kind for); under another build, skipped. The four outcomes sum to the
+       three kinds. Named residual. Not covered: a read record is checked and dropped, never restored into the
+       member. Next diff builds: the member's delta rebuilt from them once every part has a writer. Absence shows
+       as: `parkCrossRestorable` members still replaying in the session that resumes them. */
+    long born, heapsegs, heads;
+    long cross_identical, cross_differs, cross_refused, cross_skipped;
 } ColdResumed;
 void cold_resumed(ColdResumed *out);
 

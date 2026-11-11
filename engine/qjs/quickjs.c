@@ -47368,6 +47368,7 @@ struct JSFlowGraph {
        no collector edge reports: a pair is read back whole or built whole. */
     FGRes *res;
     uint32_t n_res, cap_res;
+    const JSFlowGraphCross *cross;   /* a cross-session read's: its rebuilt objects go to `built` */
 };
 
 static void *fg_grow(void *p, size_t n)
@@ -47634,7 +47635,8 @@ typedef struct {
     uint8_t **held;     /* host copies of flattened ropes the string table names, freed with the writer */
     uint32_t n_held;
     bool survey;        /* record a case no writer has (JS_FlowGraphSurvey) rather than stopping on it */
-    bool cross;         /* a survey of the cross-session form (JSFlowGraphRoots.cross_session) */
+    bool cross;         /* the cross-session form (JSFlowGraphRoots.cross_session, JS_FlowGraphCross*) */
+    const JSFlowGraphCross *x;   /* a cross-session write's born names, NULL for none */
     JSObject **order;
     uint32_t n_order, cap_order;
     uint32_t n_strs;
@@ -47673,7 +47675,25 @@ static bool fg_sealed(FGWriter *w, const void *gp)
     return bl_name(w->ctx->rt->baseline, gp) != 0;
 }
 
-/* Whether a cross-session survey's anchor `v` (an object at or below the floor, a body, a symbol) has a name
+/* A cross-session part with no name: a survey records it, and a write was owed a survey that found none. */
+static void fg_cross_gap(FGWriter *w, FGBuf *out, int pl)
+{
+    if (!w->survey) {
+        DCHECKF(false, "flow graph: a cross-session write met a part named only in this process (processLocal %d) "
+                "— its caller writes only roots whose JS_FlowGraphCrossSurvey found no gap", pl);
+        FG_NO_WRITER();
+    }
+    fg_gap(w, out, FG_GAP_PROCESS_LOCAL, pl);
+}
+
+/* The caller's name for an object born after the seal (JSFlowGraphCross.born_name), 0 for none. */
+static uint32_t fg_born_name(FGWriter *w, JSValueConst v)
+{
+    if (!w->x || JS_VALUE_GET_TAG(v) != JS_TAG_OBJECT || JS_VALUE_GET_OBJ(v)->flow_gen == 0) return 0;
+    return w->x->born_name(v, w->x->opaque);
+}
+
+/* Whether a cross-session anchor `v` (an object at or below the floor or born-named, a body, a symbol) has a name
    another process of this build gives the same thing; when not, its gap is recorded in `out`. */
 static bool fg_cross_named(FGWriter *w, FGBuf *out, JSValueConst v)
 {
@@ -47683,13 +47703,13 @@ static bool fg_cross_named(FGWriter *w, FGBuf *out, JSValueConst v)
     if (JS_VALUE_GET_TAG(v) == JS_TAG_SYMBOL) {
         if (js_get_atom_index(w->ctx->rt, JS_VALUE_GET_PTR(v)) < JS_ATOM_END) return true;
         pl = FG_PL_SYMBOL;
-    } else if (JS_BaselineName(w->ctx->rt, v)) {
+    } else if (JS_BaselineName(w->ctx->rt, v) || fg_born_name(w, v)) {
         return true;
     } else {
         pl = JS_VALUE_GET_TAG(v) == JS_TAG_FUNCTION_BYTECODE ? FG_PL_BODY
            : JS_VALUE_GET_OBJ(v)->flow_gen > 0 ? FG_PL_SHARED_BORN : FG_PL_UNSEALED;
     }
-    fg_gap(w, out, FG_GAP_PROCESS_LOCAL, pl);
+    fg_cross_gap(w, out, pl);
     return false;
 }
 
@@ -47779,7 +47799,7 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
     case JS_TAG_OBJECT: {
         JSObject *p = JS_VALUE_GET_OBJ(v);
         uint32_t i;
-        if (p->flow_gen <= w->floor) {
+        if (p->flow_gen <= w->floor || (w->cross && fg_born_name(w, v))) {
             if (fg_cross_named(w, out, v)) { fg_u8(out, 'A'); fg_u32(out, fg_anchor(w, v)); }
             return;
         }
@@ -47852,7 +47872,7 @@ static uint32_t fg_realm(FGWriter *w, JSContext *realm)
     for (uint32_t i = 0; i < g->n_realms; i++)
         if (g->realms[i] == realm) return i;
     if (w->cross && !fg_sealed(w, realm))
-        fg_gap(w, NULL, FG_GAP_PROCESS_LOCAL, FG_PL_REALM);
+        fg_cross_gap(w, NULL, FG_PL_REALM);
     g->realms = fg_grow(g->realms, sizeof *g->realms * (g->n_realms + 1));
     g->realms[g->n_realms] = JS_DupContext(realm);
     return g->n_realms++;
@@ -47983,8 +48003,8 @@ static void fg_cell(FGWriter *w, FGBuf *out, JSVarRef *vr)
                "cell as its frame's slot so the closure names it");
         FG_NO_WRITER();
     }
-    if (vr->flow_gen <= w->floor && w->cross && !fg_sealed(w, vr)) {
-        fg_gap(w, out, FG_GAP_PROCESS_LOCAL, FG_PL_CELL);
+    if (w->cross && !fg_sealed(w, vr) && (vr->flow_gen <= w->floor || (w->x && w->x->defines_shared))) {
+        fg_cross_gap(w, out, FG_PL_CELL);
         return;
     }
     if (vr->flow_gen <= w->floor) {
@@ -48035,7 +48055,7 @@ static void fg_cdata(FGWriter *w, FGBuf *out, JSObject *p)
     JSCFunctionDataRecord *s = p->u.c_function_data_record;
 
     DCHECK(s != NULL && s->realm != NULL, "flow graph: a C function with data holds no record or no realm");
-    if (w->cross) fg_gap(w, NULL, FG_GAP_PROCESS_LOCAL, FG_PL_CFUNC);
+    if (w->cross) fg_cross_gap(w, NULL, FG_PL_CFUNC);
     fg_put(out, &s->func, sizeof s->func);
     fg_put(out, &s->step_def, sizeof s->step_def);
     fg_u8(out, s->length);
@@ -48100,17 +48120,19 @@ static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
 
 /* The frames are walked after the value roots and before the bodies, so a body's open cell finds the frame it
    aliases and an object only a frame reaches is written. */
-static JSFlowGraph *fg_write(JSContext *ctx, const JSFlowGraphRoots *r, uint32_t floor, bool survey, bool hold)
+static JSFlowGraph *fg_write(JSContext *ctx, const JSFlowGraphRoots *r, uint32_t floor, bool survey, bool hold,
+                             const JSFlowGraphCross *x)
 {
     FGWriter w = { 0 };
     FGBuf rbuf = { 0 }, bbuf = { 0 };
     JSFlowGraph *g = calloc(1, sizeof *g);
 
     CHECK(g != NULL, "flow graph: OOM allocating a serialized graph");
-    DCHECK(!r->cross_session || (survey && r->n_frames == 0 && r->n_parked == 0),
-           "a flow graph was asked for its cross-session form outside a survey of values — the cross-session writer "
-           "and its frames are not built (solver/cold.h's residual)");
-    w.ctx = ctx; w.floor = floor; w.g = g; w.survey = survey; w.cross = r->cross_session;
+    DCHECK(!r->cross_session || (!hold && r->n_frames == 0 && r->n_parked == 0),
+           "a flow graph was asked for its cross-session form over frames or as a held write — the cross-session "
+           "writer of frames is not built (solver/cold.h's residual)");
+    DCHECK(!x || r->cross_session, "a flow graph was handed born names outside a cross-session write");
+    w.ctx = ctx; w.floor = floor; w.g = g; w.survey = survey; w.cross = r->cross_session; w.x = x;
     for (int i = 0; i < r->n_vals; i++) fg_value(&w, &rbuf, r->vals[i]);
     if (r->n_frames || r->n_parked) fg_frames(&w, r);
     for (uint32_t i = 0; i < w.n_order; i++) fg_body(&w, &bbuf, i);
@@ -48125,6 +48147,8 @@ static JSFlowGraph *fg_write(JSContext *ctx, const JSFlowGraphRoots *r, uint32_t
     fg_u32(&g->bytes, g->frames.bases);
     if (w.fbuf.len) fg_put(&g->bytes, w.fbuf.b, w.fbuf.len);
     if (bbuf.len) fg_put(&g->bytes, bbuf.b, bbuf.len);
+    if (x && x->built && !survey)
+        for (uint32_t i = 0; i < w.n_order; i++) x->built(JS_MKPTR(JS_TAG_OBJECT, w.order[i]), x->opaque);
     if (hold) {   /* the write's own references, given back or kept by JS_FlowGraphSettle */
         DCHECK(!survey, "flow graph: a survey held what it wrote — a survey's graph is never read");
         g->holding = true;
@@ -48158,17 +48182,164 @@ bool JS_FlowGraphNames(const JSFlowGraph *g, JSValueConst v)
 JSFlowGraph *JS_FlowGraphWrite(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor)
 {
     JSFlowGraphRoots r = { .vals = roots, .n_vals = n };
-    return fg_write(ctx, &r, floor, false, false);
+    return fg_write(ctx, &r, floor, false, false, NULL);
 }
 
 JSFlowGraph *JS_FlowGraphWriteFlow(JSContext *ctx, const JSFlowGraphRoots *roots, uint32_t floor)
 {
-    return fg_write(ctx, roots, floor, false, roots->released);
+    return fg_write(ctx, roots, floor, false, roots->released, NULL);
 }
 
 JSFlowGraph *JS_FlowGraphSurvey(JSContext *ctx, const JSFlowGraphRoots *roots, uint32_t floor)
 {
-    return fg_write(ctx, roots, floor, true, false);
+    return fg_write(ctx, roots, floor, true, false, NULL);
+}
+
+JSFlowGraph *JS_FlowGraphCrossSurvey(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor,
+                                     const JSFlowGraphCross *x)
+{
+    JSFlowGraphRoots r = { .vals = roots, .n_vals = n, .cross_session = true };
+    return fg_write(ctx, &r, floor, true, false, x);
+}
+
+/* What a reader checks a baseline name resolves to: an object's class, a body's code length. */
+static uint32_t fg_cross_shape(JSValueConst a)
+{
+    return JS_VALUE_GET_TAG(a) == JS_TAG_OBJECT ? JS_VALUE_GET_OBJ(a)->class_id
+         : 0x80000000u | (uint32_t)((JSFunctionBytecode *)JS_VALUE_GET_PTR(a))->byte_code_len;
+}
+
+/* The thing the seal named `name`, if it is alive and of GC type `type`. */
+static JSGCObjectHeader *bl_thing_at(JSRuntime *rt, uint32_t name, int type)
+{
+    JSGCObjectHeader *gp;
+    DCHECK(rt->baseline != NULL, "a baseline name was read before the seal named anything");
+    if (name == 0 || name > rt->baseline->n) return NULL;
+    gp = rt->baseline->objs[name - 1];
+    return gp && JS_GC_TYPE(gp) == type ? gp : NULL;
+}
+
+/* The cross-session form's header, before the graph's own bytes: the root count, then each anchor ('g', a
+   baseline name and the shape the reader checks it against; 'y' and a predefined atom; 'b' and a born name), each
+   baseline cell's name and each realm's. */
+uint8_t *JS_FlowGraphCrossWrite(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor,
+                                const JSFlowGraphCross *x, size_t *len)
+{
+    JSFlowGraphRoots r = { .vals = roots, .n_vals = n, .cross_session = true };
+    JSFlowGraph *g = fg_write(ctx, &r, floor, false, false, x);
+    JSRuntime *rt = ctx->rt;
+    FGBuf o = { 0 };
+
+    fg_u32(&o, g->n_roots);
+    fg_u32(&o, g->n_anchors);
+    for (uint32_t i = 0; i < g->n_anchors; i++) {
+        JSValueConst a = g->anchors[i];
+        uint32_t v;
+
+        if (JS_VALUE_GET_TAG(a) == JS_TAG_SYMBOL) {
+            v = js_get_atom_index(rt, JS_VALUE_GET_PTR(a));
+            DCHECK(v < JS_ATOM_END, "flow graph: a cross-session anchor is a symbol no build predefines");
+            fg_u8(&o, 'y');
+        } else if ((v = JS_BaselineName(rt, a)) != 0) {
+            fg_u8(&o, 'g');
+            fg_u32(&o, v);
+            v = fg_cross_shape(a);
+        } else {
+            v = x && JS_VALUE_GET_TAG(a) == JS_TAG_OBJECT ? x->born_name(a, x->opaque) : 0;
+            DCHECK(v != 0, "flow graph: a cross-session anchor has neither a baseline nor a born name");
+            fg_u8(&o, 'b');
+        }
+        fg_u32(&o, v);
+    }
+    fg_u32(&o, g->n_cells);
+    for (uint32_t i = 0; i < g->n_cells; i++) {
+        uint32_t v = bl_name(rt->baseline, g->cells[i]);
+        DCHECK(v != 0, "flow graph: a cross-session write holds a closed cell the seal did not name");
+        fg_u32(&o, v);
+    }
+    fg_u32(&o, g->n_realms);
+    for (uint32_t i = 0; i < g->n_realms; i++) {
+        uint32_t v = bl_name(rt->baseline, g->realms[i]);
+        DCHECK(v != 0, "flow graph: a cross-session write holds a realm the seal did not name");
+        fg_u32(&o, v);
+    }
+    fg_put(&o, g->bytes.b, g->bytes.len);
+    JS_FlowGraphFree(ctx, g);
+    *len = o.len;
+    return o.b;
+}
+
+int JS_FlowGraphCrossRead(JSContext *ctx, const uint8_t *bytes, size_t len, const JSFlowGraphCross *x,
+                          JSValue *roots, int n)
+{
+    JSRuntime *rt = ctx->rt;
+    JSFlowGraph *g = calloc(1, sizeof *g);
+    const uint8_t *p = bytes, *end = bytes + len;
+    uint32_t k;
+    int ret = -1;
+
+#define FGX_U32(dst) do { if ((size_t)(end - p) < 4) goto done; memcpy(&(dst), p, 4); p += 4; } while (0)
+    CHECK(g != NULL, "flow graph: OOM allocating a cross-session read");
+    FGX_U32(g->n_roots);
+    if (g->n_roots != (uint32_t)n) goto done;
+    FGX_U32(k);
+    if (k > len) goto done;
+    g->anchors = fg_grow(NULL, sizeof *g->anchors * (k + 1));
+    for (; g->n_anchors < k; g->n_anchors++) {
+        uint8_t t;
+        uint32_t v;
+        JSValue a = JS_UNDEFINED;
+        JSGCObjectHeader *gp;
+
+        if (p == end) goto done;
+        t = *p++;
+        FGX_U32(v);
+        if (t == 'y') {
+            if (v == JS_ATOM_NULL || v >= JS_ATOM_END ||
+                rt->atom_array[v]->atom_type != JS_ATOM_TYPE_SYMBOL) goto done;
+            a = JS_AtomToValue(ctx, v);
+        } else if (t == 'g') {
+            uint32_t shape;
+            FGX_U32(shape);
+            if ((gp = bl_thing_at(rt, v, JS_GC_OBJ_TYPE_JS_OBJECT)) != NULL)
+                a = js_dup(JS_MKPTR(JS_TAG_OBJECT, gp));
+            else if ((gp = bl_thing_at(rt, v, JS_GC_OBJ_TYPE_FUNCTION_BYTECODE)) != NULL)
+                a = js_dup(JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, gp));
+            if (!JS_IsUndefined(a) && fg_cross_shape(a) != shape) { JS_FreeValue(ctx, a); a = JS_UNDEFINED; }
+        } else if (t == 'b' && x && x->born_value) {
+            a = x->born_value(v, x->opaque);
+        }
+        if (JS_IsUndefined(a)) goto done;
+        g->anchors[g->n_anchors] = a;
+    }
+    FGX_U32(k);
+    if (k > len) goto done;
+    g->cells = fg_grow(NULL, sizeof *g->cells * (k + 1));
+    for (; g->n_cells < k; g->n_cells++) {
+        uint32_t v;
+        JSGCObjectHeader *gp;
+        FGX_U32(v);
+        if ((gp = bl_thing_at(rt, v, JS_GC_OBJ_TYPE_VAR_REF)) == NULL) goto done;
+        g->cells[g->n_cells] = (JSVarRef *)gp;
+        JS_REF_COUNT(gp)++;
+    }
+    FGX_U32(k);
+    if (k > len) goto done;
+    g->realms = fg_grow(NULL, sizeof *g->realms * (k + 1));
+    for (; g->n_realms < k; g->n_realms++) {
+        uint32_t v;
+        JSGCObjectHeader *gp;
+        FGX_U32(v);
+        if ((gp = bl_thing_at(rt, v, JS_GC_OBJ_TYPE_JS_CONTEXT)) == NULL) goto done;
+        g->realms[g->n_realms] = JS_DupContext((JSContext *)gp);
+    }
+    fg_put(&g->bytes, p, (size_t)(end - p));
+    g->cross = x;
+    ret = fg_read(ctx, g, roots, NULL);
+done:
+#undef FGX_U32
+    JS_FlowGraphFree(ctx, g);
+    return ret;
 }
 
 /* JS_FlowGraphSettle's neighbourhood of the write: every GC object the collector's mark reaches from what the
@@ -49154,6 +49325,8 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
                   "flow graph: a rebuilt heap frame's function is not the one its frame was written against");
         fg_rchain_cells((JSAsyncFunctionState *)frames[i]);
     }
+    if (g->cross && g->cross->built)
+        for (uint32_t i = 0; i < r.n_objs; i++) g->cross->built(r.objs[i], g->cross->opaque);
     for (uint32_t i = 0; i < r.n_objs; i++) JS_FreeValue(ctx, r.objs[i]);
     for (uint32_t i = 0; scratch && i < r.n_objs; i++)
         if (g->named_objs[i]) JS_FreeValue(ctx, scratch[i]);

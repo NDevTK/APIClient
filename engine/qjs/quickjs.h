@@ -3956,6 +3956,30 @@ JS_EXTERN uint32_t JS_FlowGraphGap(JSContext *ctx, const JSFlowGraph *g, uint32_
    heap frames, and the continuation records and step machines waiting on those frames. */
 typedef struct { uint32_t bases, heap, depth, links; } JSFlowGraphFrames;
 JS_EXTERN void JS_FlowGraphFrameCensus(const JSFlowGraph *g, JSFlowGraphFrames *out);
+/* A value graph in the cross-session form: JS_FlowGraphWrite's bytes with its anchors, cells and realms named so
+   a later process of the same build reads it against its own seal. A thing born at generation 0 is named by
+   JS_BaselineName, a symbol by its predefined atom, and an object born after the seal by `born_name` (nonzero
+   when the caller has written it already; such an object is an anchor even above the floor). Every object a
+   write builds by content is handed to `built` in written order, and the read hands the rebuilt ones to it in the
+   same order, so a caller can name them. `defines_shared` marks a write of objects siblings share: a closed cell
+   it would build by content is shared too and is a gap (cells have no born names). */
+typedef struct JSFlowGraphCross {
+    uint32_t (*born_name)(JSValueConst v, void *opaque);
+    JSValue (*born_value)(uint32_t name, void *opaque);   /* the read's: a new reference, JS_UNDEFINED for none */
+    void (*built)(JSValueConst obj, void *opaque);
+    void *opaque;
+    bool defines_shared;
+} JSFlowGraphCross;
+/* The survey of a cross-session write: its gaps (JS_FlowGraphGap), each a part no name reaches. */
+JS_EXTERN JSFlowGraph *JS_FlowGraphCrossSurvey(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor,
+                                               const JSFlowGraphCross *x);
+/* The write, for roots whose survey found no gap (asserted): the bytes, the caller's to free with free(). */
+JS_EXTERN uint8_t *JS_FlowGraphCrossWrite(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor,
+                                          const JSFlowGraphCross *x, size_t *len);
+/* The read into `roots` (n of them, as written). The bytes are input: -1 when a name has no thing of its kind in
+   this runtime's seal or the root count differs, with nothing rebuilt; 0 otherwise. */
+JS_EXTERN int JS_FlowGraphCrossRead(JSContext *ctx, const uint8_t *bytes, size_t len, const JSFlowGraphCross *x,
+                                    JSValue *roots, int n);
 /* Why a SUSPENDED flow (or the runtime's parked set) cannot be forked at this instant, or NULL: the first step
    machine on its chain whose JSTrampStepDef.unforkable answers. A fork that may wait asks this before cloning
    and waits for the operation to end; a clone of a flow that answers non-NULL aborts. */

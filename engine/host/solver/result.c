@@ -1708,11 +1708,12 @@ char *result_cold_json(void) {
 
         cold_park_cross(&cross);
         cold_parked(&parked);
-        DCHECKF(cross.unstarted + cross.replays == parked.flows + parked.cands,
+        DCHECKF(cross.unstarted + cross.restorable + cross.replays == parked.flows + parked.cands,
                 "the cross-session census counted %ld members against %ld flows and candidates parked — "
-                "cold_park_flow counts each member it writes once", cross.unstarted + cross.replays,
-                parked.flows + parked.cands);
+                "cold_park_flow counts each member it writes once",
+                cross.unstarted + cross.restorable + cross.replays, parked.flows + parked.cands);
         METRIC_SET(park_cross_unstarted, cross.unstarted);
+        METRIC_SET(park_cross_restorable, cross.restorable);
         METRIC_SET(park_cross_replays, cross.replays);
         METRIC_SET_OBJECT(park_cross_gaps, park_gaps);
     }
