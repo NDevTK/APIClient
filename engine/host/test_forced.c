@@ -1435,7 +1435,68 @@ static int tf_dk_holds(const char *line) {
            (g_tf_dk.rework && tf_line_same_request(line, g_tf_dk.rework)) ||
            (g_tf_dk.replied && tf_line_same_request(line, g_tf_dk.replied));
 }
-static int tf_provider_holds(const char *line) { return tf_replytwice_holds(line) || tf_dk_holds(line); }
+/* The zone's lag for the replypath document (fixture/replypath.h): the `late` arm's answer is owed from the bill
+   that shows it until /api/rpathbusy, the busy sibling's last request, has been answered. */
+#define TF_RPLATE_URL "https://x.test/api/rpathlate"
+#define TF_RPBUSY_URL "https://x.test/api/rpathbusy"
+static struct {
+    char *pair[7];    /* the identity the owed answer is written under, in PendRequestKey's order, or NULL */
+    int busy;         /* /api/rpathbusy was answered */
+    int held, paid;   /* bills that showed the owed pair, and answers written for it */
+} g_tf_rp = { { NULL }, 0, 0, 0 };
+
+static int tf_rp_hold(const char *abs, const char *const pair[7]) {
+    if (strcmp(abs, TF_RPLATE_URL)) return 0;
+    g_tf_rp.held++;
+    if (g_tf_rp.pair[0] != NULL) return 1;
+    for (int k = 0; k < 7; k++) {
+        g_tf_rp.pair[k] = strdup(pair[k]);
+        CHECK(g_tf_rp.pair[k] != NULL, "the fixture could not record the request it owes an answer for");
+    }
+    return 1;
+}
+
+static int tf_rp_holds(const char *line) {
+    const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
+    const char *referrer_policy, *referrer, *headers_key, *body_key, *address, *askers;
+    char *one = strdup(line);
+    int held;
+
+    CHECK(one != NULL, "the fixture could not read a bill line it was asked about");
+    engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
+                         &mode, &referrer_policy, &referrer, &headers_key, &body_key, &address, &askers, &url);
+    held = g_tf_rp.pair[0] != NULL && !strcmp(method, g_tf_rp.pair[0]) && !strcmp(url, g_tf_rp.pair[6]);
+    free(one);
+    return held;
+}
+
+/* Writes the owed answer once the busy sibling's last request has been answered. */
+static int tf_rp_pay(JSContext *ctx) {
+    static const char rbody[] = "{\"region\":\"us-west-2\"}";
+    const char *const list[1] = { TF_RPLATE_URL };
+    HeaderList eh = { 0 };
+    JSValue reply;
+    int filled;
+
+    if (g_tf_rp.pair[0] == NULL || !g_tf_rp.busy) return 0;
+    header_list_append(&eh, "x-echo-method", g_tf_rp.pair[0]);
+    reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody), list, 1, "application/json", "basic");
+    header_list_free(&eh);
+    {
+        PendRequestKey key = { g_tf_rp.pair[0], g_tf_rp.pair[1], g_tf_rp.pair[2], g_tf_rp.pair[3],
+                               g_tf_rp.pair[4], g_tf_rp.pair[5], g_tf_rp.pair[6] };
+
+        filled = engine_provide(ctx, &key, TF_REPLY_HOW, TF_REPLY_REACH, reply);
+    }
+    JS_FreeValue(ctx, reply);
+    g_tf_rp.paid++;
+    for (int k = 0; k < 7; k++) { free(g_tf_rp.pair[k]); g_tf_rp.pair[k] = NULL; }
+    return filled;
+}
+
+static int tf_provider_holds(const char *line) {
+    return tf_replytwice_holds(line) || tf_dk_holds(line) || tf_rp_holds(line);
+}
 
 /* Writes the owed refusal and the owed reply once each is due. */
 static int tf_dk_pay(JSContext *ctx) {
@@ -1741,6 +1802,9 @@ static int fixture_provide(JSContext *ctx) {
         if (tf_replytwice_hold(abs, (const char *const[7]){ method, mode, referrer_policy, referrer, headers_key,
                                                              body_key, url })) {
             /* Owed, and written by tf_replytwice_pay below once its lag has passed. */
+        } else if (tf_rp_hold(abs, (const char *const[7]){ method, mode, referrer_policy, referrer, headers_key,
+                                                          body_key, url })) {
+            /* Owed, and written by tf_rp_pay below once the busy sibling has run. */
         } else if (tf_dk_hold(abs, whole, provenance)) {
             /* Owed, and written by tf_dk_pay below once it is due. */
         } else if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
@@ -1799,6 +1863,7 @@ static int fixture_provide(JSContext *ctx) {
             if (!strcmp(abs, TF_DK_URL) && strcmp(provenance, PENDING_PROVENANCE_FORCED)) g_tf_dk.answered++;
             if (!strcmp(abs, TF_DKREV_URL)) g_tf_dk.rev_answered++;
             if (!strcmp(abs, TF_DKREV_PRE_URL)) g_tf_dk.rev_pre_at = g_tf_payments;
+            if (!strcmp(abs, TF_RPBUSY_URL)) g_tf_rp.busy = 1;
         }
         free(abs);
         free(whole);
@@ -1809,6 +1874,7 @@ static int fixture_provide(JSContext *ctx) {
     url_record_free(&base);
     filled += tf_replytwice_pay(ctx);
     filled += tf_dk_pay(ctx);
+    filled += tf_rp_pay(ctx);
     /* THE PEER'S POST IS NOT ROUTED HERE ANY MORE, AND THE MOVE IS A REPAIR RATHER THAN A TIDY-UP — the
        reasoning that put it here is kept because it is what a reader re-derives. It said: a commitment is
        written when a timeline RECEIVES, so the record has to be in the document before the moment can ever be
@@ -1949,6 +2015,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/navigator.h"
 #include "fixture/abort.h"
 #include "fixture/races.h"
+#include "fixture/replypath.h"
 #include "fixture/statesinks.h"
 #include "fixture/navigation.h"
 #include "fixture/idlindex.h"
@@ -2775,6 +2842,7 @@ TF_DOCS[] = {
     { "navigator", HTML_NAVIGATOR },
     { "abort", HTML_ABORT },
     { "races", HTML_RACES },
+    { "replypath", HTML_REPLYPATH },
     { "statesinks", HTML_STATESINKS },
     { "navigation", HTML_NAVIGATION },
     { "idlindex", HTML_IDLINDEX },
@@ -14113,6 +14181,29 @@ static int param_undriven_count(const char *js, const char *url, const char *pna
         }
         for (v = param_values_in(&r[i], pname); v && (v = param_value_next(v, &b, &n)) != NULL; )
             if (!val || (n == m && memcmp(b, val, m) == 0)) k++;
+    }
+    return k;
+}
+
+/* The values of one param over the undriven records, comma-separated into `buf` (at most `cap` bytes,
+   truncated); answers how many there were. */
+static int param_undriven_values(const char *js, const char *url, const char *pname, char *buf, size_t cap) {
+    EmittedRec r[EMITTED_REC_MAX];
+    const char *v, *b;
+    size_t n, at = 0;
+    int cnt = emitted_records(js, url, r, EMITTED_REC_MAX), i, k = 0;
+
+    DCHECK(cap > 0, "a value list was asked into no buffer");
+    buf[0] = '\0';
+    for (i = 0; i < cnt; i++) {
+        if (!memmem(r[i].b, r[i].n, "\"driven\":false", 14)) continue;
+        for (v = param_values_in(&r[i], pname); v && (v = param_value_next(v, &b, &n)) != NULL; k++) {
+            if (at + n + 2 >= cap) continue;
+            if (at) buf[at++] = ',';
+            memcpy(buf + at, b, n);
+            at += n;
+            buf[at] = '\0';
+        }
     }
     return k;
 }
@@ -30870,24 +30961,48 @@ TF_UNIT void probes_races(const char *js, Probe *tab, int *n) {
              "NOT REACHED or wrong: a 50 ms timer beside a fetch() whose reaction issues a second one did not run "
              "in each of the three orders against the two arrivals, or an arm recorded another order");
     /* The race before each arrival of two requests issued together: the timer before, between and after the
-       two reactions. Which reply the host answers first is the host's order, so both are admitted. */
+       two reactions. The replies land in the order of their due points on the path, which is the order they
+       were asked in, whatever order the host answered them in. */
     const char *xpair_why = NULL;
     int xpair_tt = 1;
-    const int xp_first = param_undriven_count(js, "/api/xpairorder", "v", "timer-a-b") +
-                         param_undriven_count(js, "/api/xpairorder", "v", "timer-b-a");
-    const int xp_mid = param_undriven_count(js, "/api/xpairorder", "v", "a-timer-b") +
-                       param_undriven_count(js, "/api/xpairorder", "v", "b-timer-a");
-    const int xp_last = param_undriven_count(js, "/api/xpairorder", "v", "a-b-timer") +
-                        param_undriven_count(js, "/api/xpairorder", "v", "b-a-timer");
+    const int xp_first = param_undriven_count(js, "/api/xpairorder", "v", "timer-a-b");
+    const int xp_mid = param_undriven_count(js, "/api/xpairorder", "v", "a-timer-b");
+    const int xp_last = param_undriven_count(js, "/api/xpairorder", "v", "a-b-timer");
     fold_row(&xpair_tt, &xpair_why,
              xp_first > 0 && xp_mid > 0 && xp_last > 0 &&
              xp_first + xp_mid + xp_last == param_undriven_count(js, "/api/xpairorder", "v", NULL),
              "NOT REACHED or wrong: a 50 ms timer beside two fetch() calls issued together did not run before, "
-             "between and after their two reactions, or an arm recorded an order that is not those three");
+             "between and after their two reactions in the order they were asked, or an arm recorded another "
+             "order");
     const Probe rows[] = {
         { "deadline-race", xrace_tt, "/api/xraceorder", SESS_EXPLORE, xrace_why },
         { "deadline-race-pair", xpair_tt, "/api/xpairorder", SESS_EXPLORE, xpair_why },
         { "deadline-race-chain", xchain_tt, "/api/xchainorder", SESS_EXPLORE, xchain_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `replypath` document (fixture/replypath.h). reply-path-point: the `fast` arm, answered at
+   once, and the `late` arm, answered only after its busy sibling ran, take their replies after the same number
+   of their own message tasks, and that number is above one, so the reply waited on each flow's own path. */
+TF_UNIT void probes_replypath(const char *js, Probe *tab, int *n) {
+    const char *rp_why = NULL;
+    int rp_tt = 1;
+    char fast[64], late[64];
+    const int nf = param_undriven_values(js, "/api/rpathnfast", "n", fast, sizeof fast);
+    const int nl = param_undriven_values(js, "/api/rpathnlate", "n", late, sizeof late);
+
+    fold_row(&rp_tt, &rp_why, g_tf_rp.held >= 1 && g_tf_rp.paid == 1 && nf >= 1 && nl >= 1,
+             "NOT REACHED: the `late` arm's request was not held and paid once, or an arm recorded no count");
+    fold_row(&rp_tt, &rp_why, !strchr(fast, ',') && !strchr(late, ',') && !strcmp(fast, late),
+             "the `fast` and `late` arms took their replies after different numbers of their own tasks (or one "
+             "arm recorded several), so where a reply lands depends on when the host paid it or what its "
+             "sibling ran");
+    fold_row(&rp_tt, &rp_why, atoi(fast) > 1,
+             "the reply landed after at most one task of its flow, so it did not wait for its due point on the "
+             "flow's path");
+    const Probe rows[] = {
+        { "reply-path-point", rp_tt, "/api/rpathnfast", SESS_EXPLORE, rp_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -33868,6 +33983,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_css(js, probes, &np);
     probes_abort(js, probes, &np);
     probes_races(js, probes, &np);
+    probes_replypath(js, probes, &np);
     probes_scripts(js, probes, &np);
     probes_platform(js, probes, &np);
     probes_rejection(js, probes, &np);
@@ -46100,11 +46216,13 @@ static void abi_host_declined(unsigned id, const char *reason, int matched)
 
 /* The round in which this host is paid, after `stalled` or `poll`; it counts the records it applied, and what
    a zero means is the caller's to read.
-   After `stalled`, every member is parked and the zone answers the sends due at the earliest due point, so a
-   zero is the zone declining: nothing more is coming.
-   After `poll`, members are runnable and the zone answers exactly the sends due at or before the work the poll
-   stated (engine/trusted.mjs's `readAt`), in due-point order, waiting for any that has not arrived. A zero
-   there is "nothing is due yet", which the caller drops: reading it as a refusal would end a live session. */
+   After `stalled`, every member is parked and the zone answers what the wire has produced, waiting for it, or
+   the peer records due at the instance's earliest such due point, so a zero is the zone declining: nothing more
+   is coming.
+   After `poll`, members are runnable and the zone answers every send the wire has produced and the peer records
+   due at the work the poll stated (engine/trusted.mjs's `readAt`); each answer lands at its due point on its
+   flow's path (solver/engine.h's engine_reply_clock). A zero there is "nothing has arrived yet", which the caller
+   drops: reading it as a refusal would end a live session. */
 /* WHAT `abi_pay` ANSWERS WHERE THE CHANNEL ITSELF IS OVER, WHICH IS NOT A COUNT AND SO IS NOT A VALUE OF
    `paid`. The two are different facts and the callers act on them differently: a round that PAID NOTHING is
    the zone REFUSING — a statement it made, and the one thing that ends a live session — while a channel at its
@@ -46117,10 +46235,10 @@ static void abi_host_declined(unsigned id, const char *reason, int matched)
 static char **g_abi_joined;
 static int    g_abi_joined_n;
 
-/* The instance's engine work at this round's read, stated on `poll` and `stalled`: the clock the zone stamps
-   each newly announced send with and compares due points against. It is the banked counter, since between
-   steps the running flow's count has been banked and what stands in the interpreter is a finished flow's
-   residue that the next switch-in discards. It never decreases across reads. */
+/* The instance's engine work at this round's read, stated on `poll` and `stalled`: its clock on the cluster's
+   timeline, which the zone stamps a peer record's due point with and compares it against. It is the banked
+   counter, since between steps the running flow's count has been banked and what stands in the interpreter is a
+   finished flow's residue that the next switch-in discards. It never decreases across reads. */
 static int64_t g_abi_read_work = -1;
 
 static int64_t abi_read_work(void)
@@ -46128,8 +46246,8 @@ static int64_t abi_read_work(void)
     int64_t w = engine_service_work();
 
     DCHECKF(w >= 0 && w >= g_abi_read_work,
-            "the instance's work went from %lld at the last read to %lld at this one — the zone's due points are "
-            "on this clock, so a decrease would deliver a reply before the work it waits for",
+            "the instance's work went from %lld at the last read to %lld at this one — the zone's peer due points "
+            "are on this clock, so a decrease would deliver a peer record before the work it waits for",
             (long long)g_abi_read_work, (long long)w);
     g_abi_read_work = w;
     return w;
@@ -47532,10 +47650,10 @@ TF_UNIT int abi_main(int argc, char **argv)
            queue is empty, so without this read a frontier with any runnable member is never paid. It keeps
            `abi_announce`'s deadlock argument: the zone writes only in answer to a line this host wrote asking
            to read, and `poll` is such a line as `stalled` is.
-           Each read states the instance's work (`abi_read_work`), and the zone answers exactly the sends due
-           at or before it, so where a reply lands is a function of the work and never of how fast the wire
-           answered. A zero is "nothing is due yet" and is dropped; `abi_stalled`'s sentence stays where the
-           frontier is out of work.
+           Each read states the instance's work (`abi_read_work`); the zone answers every send the wire has
+           produced, which lands at its due point on its flow's path, and the peer records due at that work. A
+           zero is "nothing has arrived yet" and is dropped; `abi_stalled`'s sentence stays where the frontier is
+           out of work.
            At every slice, owed or not: a peer instance's records are delivered against every instance's clock
            (engine/trusted.mjs's `clusterSafe`), so an instance that read only when owed would hold its peers at
            its last read for as long as it ran. */

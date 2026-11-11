@@ -13,6 +13,7 @@
 #include "solver/reply_decode.h"
 #include "solver/pending.h"
 #include "solver/flow.h"
+#include "solver/engine.h"
 #include "solver/cow.h"
 #include "solver/reclaim.h"
 #include "core/fetch/fetch.h"
@@ -306,6 +307,9 @@ void reply_body_park(JSContext *ctx, JSValueConst reply, JSValueConst deliver, i
     pending_set(e, PEND_SOURCE, JS_DupValue(ctx, src));
     pending_set_int(e, PEND_ITEM, item);
     pending_set_int(e, PEND_DOC, (int64_t)doc);
+    /* Each piece is a network answer of its own, due a latency along this flow's path after the read that asks
+       for it, whether or not the zone has already written it. */
+    pending_set_int(e, PEND_DUE, engine_reply_due(f));
     if ((uint32_t)item < rb_len(ctx, items)) {
         rb_answer(ctx, e, items, (uint32_t)item);
     } else {

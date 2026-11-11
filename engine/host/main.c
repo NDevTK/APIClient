@@ -2036,24 +2036,6 @@ QJS_EXPORT void qjs_set_host_turn(unsigned ms)
     quantum_set_host_turn_us((int64_t)ms * 1000);
 }
 
-/* This instance's engine work, the banked counter engine_service_work reads: the clock the trusted zone stamps a
-   send's due point with and delivers its answer against (extension/lib/reply-schedule.js), read once per service
-   round. Between steps the running flow's count has been banked, so it is the whole of the instance's work, and it
-   never decreases. A double, the type the renderer interface carries numbers in, so it is exact up to 2^53. */
-QJS_EXPORT double qjs_service_work(void)
-{
-    int64_t work;
-
-    DCHECK(g_begun, "qjs_service_work was asked of an engine whose frontier was never seeded");
-    DCHECK(!quantum_slice_open(), "qjs_service_work was asked inside a slice — the running flow's count is not "
-                                  "banked there, so the zone would stamp a due point off a partial reading");
-    work = engine_service_work();
-    CHECKF(work >= 0 && work <= ((int64_t)1 << 53),
-           "the instance's work %lld is not exactly representable as the double the interface carries — the "
-           "zone's due points would round", (long long)work);
-    return (double)work;
-}
-
 /* RAM pressure, from the one zone that can see it: the host holds every live engine and the summed working set,
    so the decision is the host's and the timing the engine's. The park is taken at the next step boundary with no
    flow switched in, when every flow's state is a snapshot; that step answers DONE and the residue leaves in the

@@ -242,6 +242,9 @@ typedef struct Flow {
        every ENGINE_QUANTUM_WORK of it. Both inherited at a fork with `path_work`, so both arms rest at the same
        points of the prefix they share. */
     int64_t framed_work, stand_next;
+    /* The work an idle flow's reply clock moved to reach its next due point (engine.h's engine_reply_clock): the
+       wait a browser spends while a request is in flight, a function of the path. Inherited at a fork. */
+    int64_t reply_skip;
     /* How many address parks the path has made: the next park's slot is this plus one (engine.c's
        pending_park_request). Inherited at a fork. */
     int64_t park_slots;

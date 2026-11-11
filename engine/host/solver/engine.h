@@ -568,6 +568,17 @@ int engine_runnable(void);
 /* The engine work this instance's flows have retired over every slice: the service Level 1 divides a
    document's novel value by. A lifetime counter, never reset at a session boundary. */
 int64_t engine_service_work(void);
+/* The modelled network latency in engine work: a network answer is due this far along its flow's reply clock past
+   the point that asked for it, whole, whatever its size. A placeholder heuristic with no evidence: 50 ms at
+   core/timing/event_loop.h's EVENT_LOOP_WORK_PER_MS. The evidence that would set it is the distribution of
+   request-to-response-end times in the Chromium captures of real target pages, converted at that rate. */
+#define ENGINE_REPLY_LATENCY_WORK 5000000
+struct Flow;
+/* A flow's reply clock (Flow.path_work plus Flow.reply_skip, plus what the open step has run for the running
+   flow): where on its own path its network answers land, so a reply's arrival point does not depend on what its
+   siblings run or how fast the wire answered. `engine_reply_due` is the due point of an answer asked now. */
+int64_t engine_reply_clock(const struct Flow *f);
+int64_t engine_reply_due(const struct Flow *f);
 /* The work residency caused, banked apart from engine_service_work: the collector's past a path collection's
    price and all of a residency-owed one (solver/engine.c's engine_collect_slice), and the host work of residency
    spans (core/timing/thread_work.h), lifetime. */

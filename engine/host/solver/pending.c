@@ -503,7 +503,7 @@ int pending_blocked(JSValueConst reg) { return pend_rv_owed(reg, PEND_RV_SYNC) >
    the answer away from it. */
 static int pend_deliverable(JSValueConst e)
 {
-    return pending_get_int(e, PEND_HAVE_VALUE) != 0 &&
+    return pending_get_int(e, PEND_HAVE_VALUE) != 0 && pending_get_int(e, PEND_DUE) == 0 &&
            (pending_get_int(e, PEND_KIND) != FLOW_PENDING_HOSTREQ || pending_get_int(e, PEND_ASYNC));
 }
 
@@ -546,6 +546,81 @@ void pending_restamp_answered(JSValueConst reg, uint64_t (*next)(void))
         pending_set_int(e, PEND_WORK_SEQ, (int64_t)next());
         JS_FreeValue(pend_ctx(), e);
     }
+}
+
+void pending_land_due(JSValueConst reg, int64_t now, uint64_t (*next)(void))
+{
+    DCHECK(next != NULL && now >= 0, "answers were landed with no clock to stamp them, or at a negative point");
+    /* In due order, a tie by index; an unanswered entry the host owes stops the walk, since everything due after
+       it arrives after it. */
+    for (;;) {
+        int n = pend_len(reg), i, at = -1, answered = 0;
+        int64_t best = 0;
+        JSValue e;
+
+        for (i = 0; i < n; i++) {
+            int64_t due;
+            int have;
+
+            e = pending_entry(reg, i);
+            due = pending_get_int(e, PEND_DUE);
+            have = (int)pending_get_int(e, PEND_HAVE_VALUE);
+            if (due > 0 && due <= now && (have || pending_entry_host_owed(e)) && (at < 0 || due < best)) {
+                at = i;
+                best = due;
+                answered = have;
+            }
+            JS_FreeValue(pend_ctx(), e);
+        }
+        if (at < 0 || !answered) return;
+        e = pending_unshare(reg, at);
+        pending_set_int(e, PEND_DUE, 0);
+        pending_set_int(e, PEND_WORK_SEQ, (int64_t)next());
+        JS_FreeValue(pend_ctx(), e);
+    }
+}
+
+int pending_answer_ahead(JSValueConst reg)
+{
+    int n = pend_len(reg), i, hit = 0;
+
+    for (i = 0; i < n && !hit; i++) {
+        JSValue e = pending_entry(reg, i);
+        hit = pending_get_int(e, PEND_DUE) > 0 && pending_get_int(e, PEND_HAVE_VALUE);
+        JS_FreeValue(pend_ctx(), e);
+    }
+    return hit;
+}
+
+int64_t pending_next_due(JSValueConst reg)
+{
+    int n = pend_len(reg), i;
+    int64_t best = 0;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(reg, i);
+        int64_t due = pending_get_int(e, PEND_DUE);
+
+        if (due > 0 && (pending_get_int(e, PEND_HAVE_VALUE) || pending_entry_host_owed(e)) &&
+            (best == 0 || due < best))
+            best = due;
+        JS_FreeValue(pend_ctx(), e);
+    }
+    return best;
+}
+
+int pending_due_owed(JSValueConst reg, int64_t now)
+{
+    int n = pend_len(reg), i, hit = 0;
+
+    for (i = 0; i < n && !hit; i++) {
+        JSValue e = pending_entry(reg, i);
+        int64_t due = pending_get_int(e, PEND_DUE);
+
+        hit = due > 0 && due <= now && pending_entry_host_owed(e);
+        JS_FreeValue(pend_ctx(), e);
+    }
+    return hit;
 }
 
 int pending_ready(JSValueConst reg)
@@ -704,7 +779,8 @@ int pending_arrival_outstanding(JSValueConst reg)
                "an arrival is outstanding on an entry its flow does not wait on — an entry the host can still "
                "answer and a refusal whose arms are not forked both carry no value, so a refused record took a "
                "reply before flow_decline_fork marked its copy");
-        hit = hit || pend_deliverable(e);
+        /* an answer still ahead on this flow's path arrives later, as an unanswered one does */
+        hit = hit || pend_deliverable(e) || (pending_get_int(e, PEND_DUE) > 0 && pending_get_int(e, PEND_HAVE_VALUE));
         JS_FreeValue(pend_ctx(), e);
     }
     return hit;

@@ -541,6 +541,7 @@ static void pending_park_request(JSContext *ctx, Flow *f, JSValue e, const Fetch
        engine here, past §4.1's upgrade and blocking steps, which is the point a request fire reads. */
     case SCHEME_FETCH_NETWORK:
         request_observe_park(&sf);
+        pending_set_int(e, PEND_DUE, engine_reply_due(f));
         free(up_url);
         return;
     /* §4.3 built the whole response inside this agent. It is the same reply record a host delivers and goes
@@ -5601,6 +5602,22 @@ static int64_t g_step_open_compile;   /* …and on quickjs's compile-work counte
 static int64_t g_step_open_frameless; /* …and on its frameless-work counter */
 static int g_in_step;
 
+/* See engine.h. The open step's part is the fork's coordinate at a branch (engine_sibling_assemble). */
+int64_t engine_reply_clock(const Flow *f) {
+    int64_t at = f->path_work + f->reply_skip;
+
+    if (f == flow_running() && g_in_step > 0)
+        at += g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
+              - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile);
+    DCHECKF(at >= 0 && f->reply_skip >= 0, "a flow's reply clock is %lld (skip %lld) — both parts only climb",
+            (long long)at, (long long)f->reply_skip);
+    return at;
+}
+
+int64_t engine_reply_due(const Flow *f) {
+    return engine_reply_clock(f) + ENGINE_REPLY_LATENCY_WORK;
+}
+
 /* Banks to the site the running member stands at what its open step has retired under a page frame and not yet
    banked, before the member moves off it: the compile and the frameless work left out, as the step's closing charge
    reads the same three counters (flow_age_running). The rest of the step is charged at its end to wherever the
@@ -5677,7 +5694,8 @@ static int step_unit_forced_act(StepUnit u) {
     case STEP_UNIT_PARSE_SPIN: case STEP_UNIT_PARSE_SPIN_RENDERING: case STEP_UNIT_ROUTED_DELIVERY:
     case STEP_UNIT_ROUTED_NOT_MINE: case STEP_UNIT_ROUTED_PARENT_TOOK: case STEP_UNIT_ROUTED_ARM_OWED:
     case STEP_UNIT_ROUTED_TARGET_DESTROYED: case STEP_UNIT_CROSS_AGENT_OP: case STEP_UNIT_CROSS_AGENT_OP_NOT_MINE:
-    case STEP_UNIT_MICROTASK: case STEP_UNIT_DELIVER_REPLY: case STEP_UNIT_RUN_TASK: case STEP_UNIT_LIFECYCLE:
+    case STEP_UNIT_MICROTASK: case STEP_UNIT_DELIVER_REPLY: case STEP_UNIT_AWAIT_DUE_REPLY:
+    case STEP_UNIT_REPLY_CLOCK_MOVE: case STEP_UNIT_RUN_TASK: case STEP_UNIT_LIFECYCLE:
     case STEP_UNIT_RENDERING: case STEP_UNIT_TIMER: case STEP_UNIT_TIMER_ARRIVED: case STEP_UNIT_TIMER_RACED:
     case STEP_UNIT_RENDERING_RACED: case STEP_UNIT_IDLE_PERIOD: case STEP_UNIT_START_PROGRAM:
     case STEP_UNIT_EVALUATE_MODULE: case STEP_UNIT_NO_COMPILE: case STEP_UNIT_COMPILE_YIELDED:
@@ -6811,7 +6829,7 @@ static int engine_outstanding_runs_page_code(JSContext *ctx, Flow *f, int seq_aw
        behind. Either way it is in flight to the timeline, as it was when the recording asked this gate, so it is
        judged by its kind as an owed one is; a stricter answer for a held one refuses a drive the record took
        before that reply landed. */
-    ready = arm == GATE_NONE && flow_pending_ready(f);
+    ready = arm == GATE_NONE && (flow_pending_ready(f) || pending_answer_ahead(f->pending));
     n = arm == GATE_NONE ? pending_count(f->pending) : 0;
     for (i = 0; i < n && arm == GATE_NONE; i++) {
         JSValue e = pending_entry(f->pending, i);
@@ -10127,6 +10145,7 @@ typedef enum {
     NEXT_TURN_DONE,             /* a continued pass: the task is done and its checkpoint has drained */
     NEXT_PARSE_END,
     NEXT_TIMER_ARRIVED,
+    NEXT_AWAIT_DUE_REPLY,       /* a reply's due point is reached and its bytes have not arrived */
     NEXT_DEADLINE_RACE,         /* the deadline race is asked; its other answer is NEXT_DELIVER_REPLY */
     NEXT_DELIVER_REPLY,
     NEXT_SCRIPT_LOAD_FAILED,
@@ -10208,6 +10227,13 @@ static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry
     if (task_done) { nu.arm = NEXT_TURN_DONE; return nu; }
     stack_empty = flow_stack_empty(f);
     if (stack_empty && g_parse_end_due && g_parse_end_due(ctx)) { nu.arm = NEXT_PARSE_END; return nu; }
+    /* A network answer reaches the flow at its due point on the flow's own path (engine.h's engine_reply_clock),
+       landed by flow_step in due order; past the point of one whose bytes the host has not produced, the flow runs
+       nothing of its own until they arrive, so where it takes them does not depend on how fast the wire was. */
+    if (stack_empty && pending_due_owed(f->pending, engine_reply_clock(f))) {
+        nu.arm = NEXT_AWAIT_DUE_REPLY;
+        return nu;
+    }
     deliv_seq = stack_empty ? flow_pending_ready_next_seq(f) : 0;
     timer_seq = stack_empty && g_timer_due_hook ? g_timer_due_hook(ctx) : 0;
     if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq) && !flow_reply_held(f)) {
@@ -10301,6 +10327,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
     /* Whether this call began with a live frame, read once before the loop: the question is about the call, and its
        one consumer is the `!framed_at_entry` assert beside `g_unframed_steps++`. The loop may move `flow_frame(f)`, and
        the two disagreeing is what makes that assert a check. In release it is only type-checked inside `sizeof`. */
+    /* The answers whose due points this flow's path has reached arrive first, in due order. */
+    pending_land_due(f->pending, engine_reply_clock(f), flow_work_seq_next);
     /* The rest point between two steps, where the scheduler names the agent this step runs. */
     FlowNextUnit nu = flow_next_unit(ctx, f);
     /* A reply held for the replay has not arrived in this timeline: its arrival is the moment the hold ends, so
@@ -10315,6 +10343,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
     for (int pass = 0;; pass++) {
         /* The rung this pass takes, read before it performs anything (flow_next_unit_pass); the entry's answer is
            the one read above unless the agent choice moved. Every arm below is guarded by it. */
+        if (pass > 0) pending_land_due(f->pending, engine_reply_clock(f), flow_work_seq_next);
         if (pass > 0 || nu.arm == NEXT_AGENT) nu = flow_next_unit_pass(ctx, f, /*entry*/ 0, turn_task_done);
         /* A rung that begins a task begins a unit (Flow.unit_seq); a resumption or a fork continues the one the
            flow is in. A job mints its own at flow_run_one_job. */
@@ -10543,6 +10572,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * whole life. A per-member rate over `live` measures neither population (framed members never reach
              * this ladder); read solver/flow.h's `deliv_ready`/`deliv_framed`/`deliv_owed`, and `stepUnitRuns`
              * beside @COLD's `live`/`framed`, before blaming this arm for a frozen `deepest`. */
+            if (nu.arm == NEXT_AWAIT_DUE_REPLY) {
+                g_step_unit = STEP_UNIT_AWAIT_DUE_REPLY;
+                return FLOW_STEP_OWED;
+            }
             /* The timer source's due task, older than the reply or task this step would take (timer_stamp_due's
                arrival, compared by flow_next_unit), fires without moving the clock. */
             if (nu.arm == NEXT_TIMER_ARRIVED) {
@@ -10924,6 +10957,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * predicate, so the state is impossible in release too, where the exit's no-held-work DCHECK is
              * compiled out and reads `jobs` rather than `dyn`. It also decides the name, being a fact about the
              * flow's own sequence. */
+            /* An answer still ahead on this path and nothing else to run: the flow waits for it, its reply clock
+               moving to the earliest due point (the landing at the next step's entry takes it, or the due rung
+               waits on the host for it). */
+            else if (pending_next_due(f->pending) > engine_reply_clock(f)) {
+                f->reply_skip += pending_next_due(f->pending) - engine_reply_clock(f);
+                g_step_unit = STEP_UNIT_REPLY_CLOCK_MOVE;
+                return 0;
+            }
             /* An arrival held for the replay (flow_decline_fork_at, flow_reply_held), with nothing in flight and
                nothing left to run: it is due on the next step. Where the record still takes it ahead of the
                cursor, nothing this timeline can run reaches that point, so the replay has gone off its recorded

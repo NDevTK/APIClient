@@ -38,8 +38,8 @@ static const char HTML_RACES[] =
     "}, 9500);"
     "</script>"
     /* Two requests issued together, which the host answers in one payment: the delivery arm races the 50 ms
-       deadline before each arrival, so the timer runs before, between and after the two reactions, in
-       whichever order the host answered them (`timer-a-b`, `a-timer-b`, `a-b-timer`, or with `b` first). */
+       deadline before each arrival, so the timer runs before, between and after the two reactions
+       (`timer-a-b`, `a-timer-b`, `a-b-timer`). `a` is asked first, so its due point on the path comes first. */
     "<script>"
     "setTimeout(function () {"
     " var seen = [];"

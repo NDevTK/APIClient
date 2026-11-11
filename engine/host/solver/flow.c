@@ -2559,11 +2559,13 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     /* And the path's coordinate, park count and reply trail, facts about the prefix both arms share. The
        coordinate is the parent's at its step's entry; the assembly adds what the open step ran before the
        branch (engine.c). */
-    DCHECK(sib->path_work == 0 && sib->park_slots == 0 && sib->trail == NULL && sib->trail_seen == 0,
+    DCHECK(sib->path_work == 0 && sib->reply_skip == 0 && sib->park_slots == 0 && sib->trail == NULL &&
+               sib->trail_seen == 0,
            "a forked sibling ran, parked or took a reply before inheriting its parent's path");
     sib->path_work = parent->path_work;
     sib->framed_work = parent->framed_work;
     sib->stand_next = parent->stand_next;
+    sib->reply_skip = parent->reply_skip;
     sib->park_slots = parent->park_slots;
     sib->trail = reply_trail_share(parent->trail);
     sib->trail_seen = parent->trail_seen;
@@ -3244,7 +3246,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
        naming its window. Zero matches the fresh account minted below, whose `emit_gen` is also zero, so an
        uncharged flow reads a current window holding nothing. */
     f->val = 0.0; f->work = 0; f->work_gen = 0; f->visits = 0; f->orphan_seen = 0;
-    f->path_work = 0; f->park_slots = 0; f->trail = NULL; f->trail_seen = 0;
+    f->path_work = 0; f->reply_skip = 0; f->park_slots = 0; f->trail = NULL; f->trail_seen = 0;
     f->framed_work = 0; f->stand_next = ENGINE_QUANTUM_WORK;
     /* And the dispatch count, which nothing else writes to zero: a member arrives never-chosen and the number only
        rises. */
@@ -3405,6 +3407,7 @@ void flow_arrive_on_snapshot(Flow *sib, const Flow *snap, FlowPathMarks at_cut) 
     sib->path_work = snap->path_work;
     sib->framed_work = snap->framed_work;
     sib->stand_next = snap->stand_next;
+    sib->reply_skip = snap->reply_skip;
     sib->park_slots = snap->park_slots;
     sib->trail = reply_trail_share(snap->trail);
     sib->trail_seen = snap->trail_seen;

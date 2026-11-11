@@ -166,6 +166,11 @@
     X(CROSS_AGENT_OP_NOT_MINE, "cross-agent-operation-not-this-timeline", ABOVE)  \
     X(MICROTASK,          "microtask-checkpoint", ABOVE)                          \
     X(DELIVER_REPLY,      "deliver-one-reply", ABOVE)                             \
+    /* a reply's due point on the flow's path is reached and its bytes are not */ \
+    /* here: only this flow waits on the host (engine.h's engine_reply_clock)  */ \
+    X(AWAIT_DUE_REPLY,    "await-a-reply-at-its-due-point", ABOVE)                \
+    /* an idle flow's reply clock moves to its next due point                  */ \
+    X(REPLY_CLOCK_MOVE,   "move-to-the-next-reply-due-point", BELOW)              \
     /* NO `scheme-fetch-answered` ROW, AND ITS ABSENCE IS A STATEMENT. It named */ \
     /* the exit a flow took when the park it made AT ITS OWN CURSOR answered    */ \
     /* itself — Fetch §4.3 Scheme fetch building a `data:` script's response    */ \

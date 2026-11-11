@@ -449,7 +449,10 @@ int pending_driven_compose(int kind, int path_driven);
     /* an address park's ordinal on its flow's path, from 1, and the reply record that answered it  \
        (solver/reply_record.h); 0 names neither */                                     \
     X(SLOT,       "slot",      PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))                \
-    X(REPLY_ID,   "replyId",   PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))
+    X(REPLY_ID,   "replyId",   PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))                \
+    /* a network answer's due point on its flow's reply clock (engine.h's engine_reply_due); 0 once it has \
+       landed on the path, or for an answer made inside the park                         */ \
+    X(DUE,        "due",       PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))
 
 enum {
 #define PEND_ENUM(id, name, copy, dflt) PEND_##id,
@@ -783,6 +786,16 @@ uint64_t pending_ready_next_seq(JSValueConst reg);
    order, so they stay younger than a task queued just before and keep their order among themselves. The
    deadline race's deadline-first arm calls it after its timer fires. */
 void pending_restamp_answered(JSValueConst reg, uint64_t (*next)(void));
+/* A network answer reaches its flow at its due point on that flow's path (PEND_DUE), never when the zone wrote
+   it. `pending_land_due` lands the entries due at or before `now` in due order, up to the first one the host has
+   not answered: each a private copy, its due cleared and its arrival stamped by `next`, so it arrives after every
+   task its flow queued before that point. `pending_answer_ahead` asks whether an answered entry has not landed yet; `pending_next_due` answers
+   the earliest due point of an entry not yet landed that the host can still answer or has answered (0 for
+   none); `pending_due_owed` whether a host-owed entry's due point is at or before `now`. */
+void pending_land_due(JSValueConst reg, int64_t now, uint64_t (*next)(void));
+int pending_answer_ahead(JSValueConst reg);
+int64_t pending_next_due(JSValueConst reg);
+int pending_due_owed(JSValueConst reg, int64_t now);
 
 /* Set a field. `v` is consumed. `pending_set_int` is the same for the numeric ones.
    IT REFUSES ONE WRITE: `PEND_HAVE_VALUE` on a SYNCHRONOUS request. See `pending_answer_rendezvous` below — this

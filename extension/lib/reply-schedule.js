@@ -1,23 +1,24 @@
-// lib/reply-schedule.js — the work point at which a send's answer reaches the engine instance that issued it.
+// lib/reply-schedule.js — how a send's answer is handed to the engine instance that issued it, and the
+// cluster timeline a record one instance causes in another is delivered on.
 //
-// A reply lands at a function of the instance's own engine work, never of how fast the wire answered, so two
-// runs of one document deliver every reply at the same point of every path. Each read of an instance states
-// its work (solver/engine.h's engine_service_work): `poll` and `stalled` on the native ABI host, GetServiceWork
-// on a renderer. A send first issued at a read is due at that read's clock plus REPLY_LATENCY_WORK; a read
-// delivers exactly the answers due at or before its clock, by due point and then issue ordinal, waiting for any
-// the wire has not produced. A stalled instance runs nothing while it waits, so its clock first moves to its
-// earliest due point. bridge.js (the extension) and engine/trusted.mjs (the native host's zone) both keep their
-// instances' clocks through this file, so the two hosts deliver by one rule. An instance's clock starts at its
-// origin, the point on its cluster's timeline at which it was provisioned, so the clocks of one cluster's
-// instances are comparable (engine/trusted.mjs delivers cross-instance records on them).
-// An answer is records (replyStream*) of fixed byte ranges of its body, each due a latency after the one before,
-// never the wire's reads: Fetch §4.7 "HTTP-network fetch" enqueues whatever bytes "have been transmitted" when
-// the stream pulls, so reads are the host's network timing and would move a reply's delivery point with it.
+// A network answer lands at its due point on the path of the flow that asked for it (solver/engine.h's
+// engine_reply_clock), which the engine computes, so the zone hands an answer over as soon as the wire has produced
+// it and never schedules it: a non-streamed answer whole once it has settled, a streamed one record by record as
+// each lands (replyStream*). bridge.js (the extension) and engine/trusted.mjs (the native host's zone) both hand
+// answers over through this file, so the two hosts deliver by one rule.
+// A record one instance's read causes in a peer (engine/trusted.mjs's `crossSend`) is due on the cluster's
+// timeline: each instance's clock is its origin, the point on that timeline at which it was provisioned, plus the
+// engine work its reads state (`poll` and `stalled`) plus what its stalls skipped, and the record is due
+// PEER_RECORD_LATENCY_WORK after the causing read.
+// A streamed answer's records are fixed byte ranges of its body, never the wire's reads: Fetch §4.7 "HTTP-network
+// fetch" enqueues whatever bytes "have been transmitted" when the stream pulls, so reads are the host's network
+// timing and would move a reply's content per record with it.
 
-/* The modelled network latency in engine work: 50 ms at browser/core/timing/event_loop.h's EVENT_LOOP_WORK_PER_MS
-   (100000 units a ms), about 93 slices of ENGINE_QUANTUM_WORK and about 1.1 s of native dev thread time, so a
-   read rarely waits on the wire. A calibration, not a bound: no flow runs less far under any value. */
-var REPLY_LATENCY_WORK = 5000000;
+/* The latency of a record one instance causes in a peer, on the cluster's timeline. A placeholder heuristic with no
+   evidence, set to the engine's ENGINE_REPLY_LATENCY_WORK (50 ms at core/timing/event_loop.h's
+   EVENT_LOOP_WORK_PER_MS); the evidence that would set it is the delivery time of cross-origin messages measured in
+   Chrome. */
+var PEER_RECORD_LATENCY_WORK = 5000000;
 
 /* The body bytes one record carries. A heuristic: Chrome 155's fetch body reader, reading ten large resources of
    excalidraw.com, tldraw.com and regex101.com through this project's container proxy, yielded 75 chunks from 10
@@ -53,9 +54,9 @@ function replyClockFloor(clock) {
   return clock.work === null ? clock.origin : replyClockNow(clock);
 }
 
-/* The due point of a send first issued at the clock's current read. */
+/* The due point of a record caused at the clock's current read. */
 function replyClockDue(clock) {
-  return replyClockNow(clock) + REPLY_LATENCY_WORK;
+  return replyClockNow(clock) + PEER_RECORD_LATENCY_WORK;
 }
 
 /* The next issue ordinal, the tie-break between equal due points. */
@@ -63,38 +64,16 @@ function replyClockOrdinal(clock) {
   return ++clock.ordinal;
 }
 
-/* The entries (each `{due, ordinal}`, due null while unstamped) due at the clock, in delivery order. */
-function replyDueEntries(clock, entries) {
-  var now = replyClockNow(clock);
-  return entries.filter(function (x) { return x.due !== null && x.due <= now; })
-                .sort(function (a, b) { return a.due - b.due || a.ordinal - b.ordinal; });
-}
-
-/* A stall: the clock moves to the earliest of `dues` (the stamped due points of everything owed) when that is
-   later than now, and answers how much work it skipped. */
-function replyClockStall(clock, dues) {
-  var now = replyClockNow(clock), next = Infinity;
-  for (var i = 0; i < dues.length; i++) {
-    DCHECK(Number.isSafeInteger(dues[i]), "a stalled instance owes an answer with no stamped due point: " + dues[i]);
-    if (dues[i] < next) next = dues[i];
-  }
-  if (next === Infinity || next <= now) return 0;
-  clock.skip += next - now;
-  return next - now;
-}
-
-/* A send's answer as records of its decoded body: record k carries bytes [(k-1)·REPLY_RECORD_BYTES,
-   k·REPLY_RECORD_BYTES), record 1 also the head, and the last record is the one the body ends in, so an answer of
-   L bytes is max(1, ⌈L / REPLY_RECORD_BYTES⌉) records whatever reads the wire answered it in. Record k has landed
-   once the body has run past it or the whole answer has arrived; it is the last when the answer arrived with no
-   byte past it. A streamed `text/event-stream` body is cut at its events instead (replyStreamHead).
-   A streamed entry (the caller's `stream` token, for a `fetch()` whose engine resolves at the head) writes every
-   record at its due point (replyStreamPiece), the last saying how the body ended (solver/reply_body.h). Any
-   other entry is handed its answer whole: a record due that has landed and is not the last moves the entry's
-   `due` a latency on and writes nothing, and the last is the whole answer, written at its due point.
-   The fields live on the caller's entry (`due`, `ordinal`, a streamed entry's `chunks` array and the caller's
-   own beside them): `bytes` (the body bytes the wire has delivered), `record` (the 1-based record now owed),
-   `settled`, `next` (the waiter of the next landing) and, once a streamed entry's head is stated, `events`. */
+/* A send's answer. A streamed entry (the caller's `stream` token, for a `fetch()` whose engine resolves at the
+   head) is records of its decoded body: record k carries bytes [(k-1)·REPLY_RECORD_BYTES, k·REPLY_RECORD_BYTES),
+   record 1 also the head, and the last record is the one the body ends in. Record k has landed once the body has
+   run past it or the whole answer has arrived; it is the last when the answer arrived with no byte past it. A
+   `text/event-stream` body is cut at its events instead (replyStreamHead). Each landed record is written in turn
+   (replyStreamPiece), the last saying how the body ended (solver/reply_body.h). Any other entry is one record, its
+   whole answer, landed once it has settled.
+   The fields live on the caller's entry (`ordinal`, a streamed entry's `chunks` array and the caller's own beside
+   them): `bytes` (the body bytes a streamed entry has kept), `record` (the 1-based record now owed), `settled`,
+   `next` (the waiter of the next landing) and, once a streamed entry's head is stated, `events`. */
 function replyStreamOpen(entry) {
   DCHECK(entry.bytes === undefined, "a reply stream was opened twice on one entry");
   entry.bytes = 0;
@@ -122,16 +101,6 @@ function replyStreamHead(entry, headers) {
   var ct = headers["content-type"];
   entry.events = typeof ct === "string" && _mimeEssence(ct) === "text/event-stream"
     ? { cuts: [], ci: 0, ends: [], lineEmpty: true, prevCR: false, crEmpty: false, bom: 0 } : null;
-}
-
-/* The wire answered one more body read of `length` bytes for a send whose answer is handed over whole. */
-function replyStreamRead(entry, length) {
-  DCHECK(!entry.settled, "a body read was reported for a send whose answer was already produced: " + entry.bytes);
-  DCHECK(entry.events === undefined, "a streamed send's body read was counted without its bytes");
-  DCHECK(Number.isSafeInteger(length) && length >= 0,
-         "a body read was reported with the length " + length + " — safeFetch states each read's byte length");
-  entry.bytes += length;
-  _replyStreamWake(entry);
 }
 
 /* One read of a streamed send's body (safeFetch's `onChunk`), a byte view the caller owns, kept on the entry. */
@@ -219,15 +188,6 @@ function replyStreamLast(entry) {
   return entry.settled && entry.bytes <= entry.record * REPLY_RECORD_BYTES;
 }
 
-/* Whether every record of `entry` due at `now` has landed: the one now owed and each later one whose due point
-   (a latency apart) is at or before `now`, so a read that writes a streamed entry's records in turn never meets
-   one the wire has not produced. */
-function replyStreamDueLanded(entry, now) {
-  DCHECK(Number.isSafeInteger(entry.due) && entry.due <= now,
-         "a reply's due records were asked of an entry that is not due: " + entry.due + " at " + now);
-  return _replyRecordLanded(entry, entry.record + Math.floor((now - entry.due) / REPLY_LATENCY_WORK));
-}
-
 /* The body bytes of a streamed entry's landed record now owed, copied out of its kept chunks (byte views of any
    realm). */
 function replyStreamPiece(entry) {
@@ -257,12 +217,11 @@ function replyStreamPiece(entry) {
   return out;
 }
 
-/* The landed record now owed is not the last: the next one is owed, due a latency later. */
+/* A streamed entry's landed record now owed is written and is not the last: the next one is owed. */
 function replyStreamAdvance(entry) {
-  DCHECK(replyStreamLanded(entry) && !replyStreamLast(entry) && Number.isSafeInteger(entry.due),
-         "a reply record was passed over that has not landed, is the answer's last, or has no due point");
+  DCHECK(Array.isArray(entry.chunks) && replyStreamLanded(entry) && !replyStreamLast(entry),
+         "a reply record was advanced past that is not a streamed entry's, has not landed, or is the answer's last");
   entry.record++;
-  entry.due += REPLY_LATENCY_WORK;
 }
 
 /* A promise of the entry's next landing (a read or the answer). */

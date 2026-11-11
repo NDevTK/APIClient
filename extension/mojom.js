@@ -623,15 +623,6 @@
                  "and ranks a non-runnable instance last" },
           WORKING_SET] },
 
-      { ordinal: 34, name: "GetServiceWork",
-        params: [],
-        reply: [
-          { name: "work", type: "double",
-            why: "qjs_service_work: the instance's engine work at this read, the clock lib/reply-schedule.js " +
-                 "stamps each send's due point with and delivers its answer against. A count, exact as a double " +
-                 "up to 2^53, which the entry CHECKs; the zone refuses a value that is not one or that decreases" },
-          WORKING_SET] },
-
       { ordinal: 12, name: "RequestPark",
         params: [],
         reply: [WORKING_SET] },
