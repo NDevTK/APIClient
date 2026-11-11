@@ -3909,11 +3909,11 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       /* `driven` is the engine's drive mark off the same line (solver/engine.h's PENDING_DRIVEN_*), relayed:
          the chokepoint's `actor` row reads it. */
       /* `address` is the line's address class (core/fetch/fetch.h), relayed for the `address` row. */
-      /* The method, header list and body are the page's own (Fetch §2.2.5 "Requests"); an empty list is stated
-         as none, and a null body states no class. */
+      /* The method, header list and body are the page's own (Fetch §2.2.5 "Requests"); an empty list is
+         left unstated, as an XHR's is, and a null body states no class. */
       const opts = { pageOrigin: eng.origin, method, body: content.body, destination, mode, provenance, pinned,
                      driven, address, credentials, actor: "page", useCorsPreflight: false,
-                     headers: content.headers.length ? content.headers : null,
+                     headers: content.headers.length ? content.headers : undefined,
                      ...(content.body === null ? {} : { bodyClass: content.bodyClass }),
                      doc, credentialed: false, signal, onBodyRead, onHead, onChunk,
                      identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, "engine:" + eng.docId, abs, credentials, mode,

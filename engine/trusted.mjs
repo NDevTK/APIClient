@@ -134,7 +134,7 @@ import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
-import { createContext } from 'node:vm';
+import { createContext, runInContext } from 'node:vm';
 import { topLevelFactFields as topLevelFacts, TOP_LEVEL_FACT_NAMES } from './top_level_facts.mjs';
 import { NAVIGABLE_NOTICE, navigableNoticeField } from './noticegen.mjs';
 import { siteRegistrableDomains } from './psl.mjs';
@@ -200,8 +200,9 @@ function wireAgent() {
 export function trustedZone() {
   /* `Response` is what lib/http-cache.js answers a hit with, as the wire's own fetch answers a send;
      `ReadableStream` and `AbortController` are what lib/send-coalesce.js replays a recorded reply with and ends
-     a document's sends with; the timers are the wire's idle end (safe-fetch.js's _wireWatched). */
-  const sandbox = { console, URL, TextDecoder, TextEncoder, Response, ReadableStream, AbortController, atob,
+     a document's sends with; the timers are the wire's idle end (safe-fetch.js's _wireWatched); `btoa` is what
+     its send key spells a request body's bytes with (_b64OfBytes). */
+  const sandbox = { console, URL, TextDecoder, TextEncoder, Response, ReadableStream, AbortController, atob, btoa,
                     setTimeout, clearTimeout };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
@@ -252,6 +253,9 @@ export function trustedZone() {
 /* This process keeps no store between sessions, so its HTTP cache restores nothing and writes nothing back. */
 export const ZONE = trustedZone();
 ZONE.httpCacheStated(null, null);
+/* The zone realm's own Uint8Array: safe-fetch.js asks `instanceof` of a request body, so the bytes this host
+   hands it are minted in its realm. */
+const ZONE_BYTES = runInContext('Uint8Array', ZONE);
 /* The record of a document a person named at `url`: the seed and the root it becomes. Nothing created it, so
    its policy container is a new one with its response's IP address space (Local Network Access §3.5). */
 const observedDoc = (url) => ZONE.docRecord('observed', 'undriven', 'unpinned', NAVIGABLE_NOTICE.sandbox.none,
@@ -408,7 +412,7 @@ function fetchContent(headersKey, bodyKey, field, line) {
   if ((q.body === null) !== (bodyKey === '-') || (q.body === null) !== (q.bodyClass === 'none'))
     throw bad('body contradicts its digest word or its own class');
   if (q.body !== null && typeof q.body !== 'string') throw bad('body is not base64 text');
-  return { headers: q.headers, body: q.body === null ? null : new Uint8Array(Buffer.from(q.body, 'base64')),
+  return { headers: q.headers, body: q.body === null ? null : new ZONE_BYTES(Buffer.from(q.body, 'base64')),
            bodyClass: q.bodyClass };
 }
 
@@ -1457,7 +1461,7 @@ async function main() {
     let raw;
     try {
       raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, method, body: content.body, destination, mode,
-                                        headers: content.headers.length ? content.headers : null,
+                                        headers: content.headers.length ? content.headers : undefined,
                                         ...(content.body === null ? {} : { bodyClass: content.bodyClass }),
                                         provenance, pinned, driven, address, credentials, useCorsPreflight: false,
                                         actor: 'page', signal: send.controller.signal,

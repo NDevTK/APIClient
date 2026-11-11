@@ -90,7 +90,7 @@ const ROWS = [
     ['how the zone answered them', said(sends('POST', '/api/two')), 'sent/default | sent/default']]],
   ['a POST on a forced path is recorded and not sent',
    [['POST /api/forced', got('POST', '/api/forced').length, 0],
-    ['how the zone answered it', said(sends('POST', '/api/forced')), 'not-sent/none blocked-signal:provenance=forced']]],
+    ['how the zone answered it', said(sends('POST', '/api/forced')), 'not-sent/none provenance=forced']]],
   ['a forced POST identical to one the unforced run sent is answered from that send\'s record',
    [['POST /api/same', got('POST', '/api/same').length, 1],
     ['how the zone answered the two asks', said(sends('POST', '/api/same')),

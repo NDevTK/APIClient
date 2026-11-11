@@ -1,18 +1,14 @@
 // The egress default and the fired-send record (extension/lib/safe-fetch.js) as engine/trusted.mjs's zone runs
 // them: every row is a safeFetch, or a firing question, through that zone against a loopback server that counts
-// what reached it. A row reads the reply record's `egress` list (one entry per send the request asked for: the
-// signal vector judged, what admitted it, whether the wire was reached) beside the server's count. The control
-// runs first: an unforced page request reaches the server, so a later zero is the policy.
-// Second group, the default: a request leaves an unwidened origin only as the page's own act on its unforced run
-// (provenance and the asking document's reach not forced, witness unpinned, actor page), whatever its
-// destination; the seed is the one load this zone composes that leaves; a refusal names the fact that decided.
-// Third: a refused request byte-identical to a send the same document's unforced run made is answered from that
-// send's record, and the server's count does not move. Fourth, the address class: the engine's word for whether
-// the address is bytes the page computed or its unknown's example is shown and decides nothing by default; an
-// address with no bytes never leaves. Fifth, the method: the page's own non-GET on its unforced run is sent with
-// the method, header list and body the page composed; no widening sends one; a redirect rewrites it (Fetch §4.5).
-// Sixth, the body class: the engine's word for whether a request body is bytes the page computed, its unknown's
-// example, or a display shape with no bytes, shown as the `body` signal; a body with no bytes never leaves.
+// what reached it. A row reads the reply record's `egress` list (one entry per send asked for: the signal vector
+// judged, what admitted it, whether the wire was reached) beside the server's count. The control runs first: an
+// unforced page request reaches the server, so a later zero is the policy. The groups, in order:
+// the default (a request leaves an unwidened origin only as the page's own act on its unforced run, whatever
+// its destination; the seed is the one load this zone composes that leaves; a refusal names the fact that
+// decided); the record (a refused request byte-identical to a send the document's unforced run made is answered
+// from that send's record); the address class (shown, deciding nothing by default; an address with no bytes
+// never leaves); the method (the page's own non-GET on its unforced run is sent as composed, no widening sends
+// one, a redirect rewrites it as Fetch §4.5 says); the body class (judged as the address class is).
 //
 //   node testing/egress_rows.mjs
 "use strict";
