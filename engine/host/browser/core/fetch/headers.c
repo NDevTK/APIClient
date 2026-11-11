@@ -996,6 +996,19 @@ static void header_list_step_destroy(JSContext *ctx, void *root)
 
 const JSStepTreeOps header_list_step_ops = { header_list_step_clone, header_list_step_destroy };
 
+/* Whether a header named `name` (any case) holds an unknown's display shape where a read wants its value. */
+static bool header_list_names_shape(const HeaderList *l, const char *name)
+{
+    char *lo = header_lower(name);
+    bool yes = false;
+    int i;
+
+    for (i = 0; i < l->n; i++)
+        if (l->e[i].shape && !strcmp(l->e[i].name, lo)) yes = true;
+    free(lo);
+    return yes;
+}
+
 enum { HDR_APPEND = 0, HDR_SET, HDR_DELETE, HDR_GET, HDR_HAS, HDR_GETSETCOOKIE, HDR_MEMBER_N };
 /* THE AGENT'S POOL ENTRIES, one per §5.1 Headers class operation — the OBJECTS they are installed as are each realm's. */
 static int g_id[HDR_MEMBER_N];
@@ -1019,8 +1032,13 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
         int i;
         if (JS_IsException(arr)) return arr;
         for (i = 0; i < l->n; i++)
-            if (!strcmp(l->e[i].name, "set-cookie"))
+            if (!strcmp(l->e[i].name, "set-cookie")) {
+                if (l->e[i].shape)
+                    DFAIL("Fetch §5.1 getSetCookie() would answer an unknown value's display shape as a "
+                          "String: the entry holds the shape and not the unknown, so build the entry that "
+                          "holds the value and answer it here");
                 JS_SetPropertyUint32(ctx, arr, k++, JS_NewString(ctx, l->e[i].value));
+            }
         return arr;
     }
     DCHECK(argc >= 1, "a Headers member was declared with fewer arguments than its IDL lists");
@@ -1254,6 +1272,10 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
     default: {
         char *v;
         DCHECK(magic == HDR_GET, "a Headers member was declared with a magic this component does not answer");
+        if (header_list_names_shape(l, name))
+            DFAIL("Fetch §5.1 get() would answer an unknown value's display shape as a String: the entry "
+                  "holds the shape and not the unknown, so build the entry that holds the value and answer "
+                  "it, or the derivation that combines it with its neighbours (§2.2.2 get), here");
         v = header_list_get(l, name);
         r = v ? JS_NewString(ctx, v) : JS_NULL;   /* §5.1: absent is null, not "" */
         free(v);
@@ -1335,6 +1357,11 @@ static void headers_pair_at(JSContext *ctx, JSValueConst target, int i, JSValue 
     DCHECK(src != NULL, "a Headers iterator outlived the Headers it holds a reference to");
     header_sort_and_combine(src, &combined);
     DCHECK(i < combined.n, "a Headers pair was asked for past the end of the combined list");
+    if (header_list_names_shape(src, combined.e[i].name))
+        DFAIL("Fetch §5.1's iteration would yield an unknown value's display shape as a String, which a fill "
+              "over the pairs then states as a request's bytes: the entry holds the shape and not the "
+              "unknown, so build the entry that holds the value and have §2.2.2's sort and combine yield it "
+              "or the derivation that combines it");
     *key = JS_NewString(ctx, combined.e[i].name);
     *value = JS_NewString(ctx, combined.e[i].value);
     header_list_free(&combined);
