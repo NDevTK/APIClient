@@ -286,8 +286,7 @@ static JSValue js_option_set_selected(JSContext *ctx, JSValueConst this_val, JSV
  *
  * STEP 3 IS AN APPEND AND NOT `textContent =`. On a freshly created element the two have the same effect, and
  * they are still not the same algorithm — DOM §4.4 "Interface Node"'s string replace all removes the children
- * first — so this is the append the standard names, through the mutation chokepoint that owns the per-flow
- * delta. The empty-string test is the spec's own: `new Option()` has NO child node at all, which a page reading
+ * first — so this is the append the standard names. The empty-string test is the spec's own: `new Option()` has NO child node at all, which a page reading
  * `firstChild` or `childNodes.length` can see. */
 static JSValue js_option_factory(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
@@ -342,8 +341,12 @@ static JSValue js_option_factory(JSContext *ctx, JSValueConst this_val, int argc
                              "not be there, and `option.text` would answer the empty string for a page that "
                              "asked for one with content");
         if (text) {
-            dom_cow_note_created(lxb_dom_interface_node(text));   /* this flow made it: the delta owns it */
-            dom_cow_append_child(lxb_dom_interface_node(el), lxb_dom_interface_node(text));
+            /* One node into the element this call created, so the tree is bounded by the call's own arguments
+               and no other flow, range, observer or slot can name either node: DOM §4.2.3 insert has nothing to
+               run here, and the element's creation record owns the Text node as a clone's copy owns its
+               interior. */
+            dom_cow_insert_private(lxb_dom_interface_node(el), lxb_dom_interface_node(el),
+                                   lxb_dom_interface_node(text));
         }
     }
     if (owned_cstr) JS_FreeCString(ctx, str);

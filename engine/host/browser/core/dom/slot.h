@@ -33,9 +33,8 @@ lxb_dom_node_t *slot_assigned_at(JSContext *ctx, const lxb_dom_node_t *slot, siz
    same parse already put in place. */
 void slot_assign_for_a_tree(JSContext *ctx, lxb_dom_node_t *root);
 
-/* §4.2.3's SLOT-RELATED MUTATION STEPS, called from the tree-hook list in the standard's own order. `parent` is
-   the node's parent — passed rather than read off the node, because the REMOVE half runs AFTER the detach and
-   the node has no parent left to read by then. */
+/* DOM §4.2.3's slot-related mutation steps as whole walks, for move's steps 14-16 and 21-23. `parent` is the
+   node's parent, passed rather than read off the node, because the remove half runs after the detach. */
 void slot_insert_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent);
 void slot_removed_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent);
 /* The same remove half in the parts a resting removal drives: steps 8-9, and whether step 10 can change anything

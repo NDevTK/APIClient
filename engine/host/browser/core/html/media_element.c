@@ -1719,20 +1719,9 @@ void media_element_parsed(JSContext *ctx, lxb_dom_node_t *root)
  * site below that spelled it §4.8.2 with the section's own title beside it was the file's only correct one,
  * and diffing the siblings against each other is what found the other eight.
  *
- * IT IS NOT A node_add_tree_hook, AND THAT IS A STATEMENT ABOUT WHAT THAT LIST IS. Its members are the DOM's
- * own step families — §5.5's live-range pre-remove, §6.1's NodeIterator pre-remove, §4.2.2's slot steps,
- * §4.3's mutation records, insert step 7.7.3's custom element reaction enqueue — plus the RECORDER that feeds
- * §4.2.3's drain. Every HTML ELEMENT INSERTION STEPS entry lives in that drain instead (html_script_prepare,
- * iframe_create_navigable), for three things a hook cannot give: the drain runs in the INSERTED NODE'S document
- * realm rather than in whichever realm performed the write, it runs per node at a rest point that can yield and
- * fork, and it runs at §4.2.3 insert step 7 — BEFORE step 8's mutation record, which a hook registered after
- * mutation_observer_tree_steps would run after.
- * WHAT IS ON THE LIST IS NOT DECIDED BY THE WORD "STEPS" IN A HEADING, and step 7.7.3 is the case that proves
- * it: the custom-element enqueue is not an insertion step at all, and it is on the list because it can neither
- * park nor fork AND because §4.2.3 numbers it between two things that are already members. The test is the two
- * halves together — where the standard numbers it, and whether it can rest. (The list's bound is real and not a
- * truncation: node_add_tree_hook CHECKs it in dev and in release, so a registrant past the end would abort at
- * registration rather than be dropped.) */
+ * It runs from DOM §4.2.3's drain, as every HTML element insertion steps entry does (html_script_prepare,
+ * iframe_create_navigable): the drain runs in the inserted node's document realm rather than in whichever
+ * realm performed the write, per node at a rest point that can yield and fork. */
 void media_element_source_inserted(JSContext *ctx, lxb_dom_element_t *el)
 {
     lxb_dom_node_t *parent;

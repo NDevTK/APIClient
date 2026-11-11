@@ -604,38 +604,6 @@ void mutation_observer_transient_for_removal(JSContext *ctx, lxb_dom_node_t *nod
     JS_FreeValue(ctx, nwrap);
 }
 
-void mutation_observer_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
-{
-    JSValue list, wrap;
-    int inserted = phase == NODE_TREE_INSERTED;
-
-    if (!g_ready || !g_any_observer || !n) return;
-    /* NODE_TREE_REMOVED is the phase AFTER the detach, which exists for the slot steps: §4.2.3's removal record
-       carries oldPreviousSibling and oldNextSibling, bound at steps 5-6 before the node leaves, so by then
-       there is nothing left to read and nothing for this to say. */
-    if (phase != NODE_TREE_INSERTED && phase != NODE_TREE_REMOVING) return;
-    /* THE TARGET IS THE PARENT, which is what makes a node with none not a childList mutation of anything —
-       the chokepoint is also how a flow-private tree is built, and a node being attached to nothing has no
-       registered observer list above it to reach. */
-    if (!parent) return;
-    if (!inserted)                                  /* remove STEP 15, before step 16's record */
-        mutation_observer_transient_for_removal(ctx, n, parent);
-    wrap = node_wrap(ctx, n);
-    if (JS_IsNull(wrap)) { JS_FreeValue(ctx, wrap); return; }
-    list = JS_NewArray(ctx);
-    CHECK(!JS_IsException(list), "a tree mutation record's node list could not be allocated");
-    JS_SetPropertyUint32(ctx, list, 0, wrap);
-    /* "QUEUE A TREE MUTATION RECORD for target with addedNodes, removedNodes, previousSibling and
-       nextSibling" — §4.3.2's own wrapper, which is a `childList` record with null name, namespace and old
-       value. Its assert ("either addedNodes or removedNodes is not empty") holds by construction here: one of
-       the two IS this node. */
-    mutation_observer_queue_record(ctx, MR_TYPE_CHILD_LIST, parent, NULL, NULL, NULL, 0,
-                                   inserted ? list : JS_UNDEFINED,
-                                   inserted ? JS_UNDEFINED : list,
-                                   n->prev, n->next);
-    JS_FreeValue(ctx, list);
-}
-
 void mutation_observer_removal_record(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent,
                                       lxb_dom_node_t *old_prev, lxb_dom_node_t *old_next)
 {

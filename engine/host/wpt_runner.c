@@ -2517,9 +2517,8 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     /* The scope the endpoint surface qualifies its identities by: a request a test makes is recorded like any
        other, and solver/novelty.h refuses an identity asked before an instance names its origin. */
     novelty_set_scope(origin);
-    /* The DOM chokepoint's context. §4.2.3's insertion and removing steps are fired from the solver's tree
-       chokepoint, which needs the runtime they run in; without it no <script> is prepared, no custom element
-       upgrades and no §4.8.5 child navigable is created. */
+    /* The DOM chokepoint's context: the attribute and character-data hooks run in it, and the delta's taint
+       shadow dups and frees its values through it. */
     dom_cow_set_ctx(ctx);
     /* This host's network edge: who answers, the one thing that is this runner's rather than the platform's. An
        edge is a parameter, and fetch.c aborts on a fetch issued with none. What it does with the flow is the

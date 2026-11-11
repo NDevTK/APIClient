@@ -210,9 +210,9 @@ void html_image_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *
    changes what every `img` after it under the same `picture` selects from, so it updates those and not itself.
    THE REMOVING AND MOVING STEPS OF THE SAME SENTENCE ARE NOT WIRED, and the reason is a CONTRACT and not an
    omission this file could close. core/dom/element.c's tree-steps drain does run a removing side (§4.8.5's
-   `iframe` destroys its child navigable there), but it is DEFERRED: the entry it queues carries the removed
-   node and nothing else, and core/dom/node.h says in as many words why the parent has to be PASSED — "by
-   NODE_TREE_REMOVED there is none left to read". §4.8.4.3.2's removing case is precisely the one that needs it:
+   `iframe` destroys its child navigable there), but it is deferred: the entry it queues carries the removed
+   node and nothing else, and after the detach the node has no parent left to read, so the parent has to be
+   passed. §4.8.4.3.2's removing case is precisely the one that needs it:
    the img elements a removed `source` moved are its FOLLOWING SIBLINGS under its OLD parent, and by the time
    the deferred steps run its `parent` and `next` are already NULL. So this belongs to that drain's record
    carrying the old parent — a core/dom change, in spec order before this one — and not to a sibling walk here

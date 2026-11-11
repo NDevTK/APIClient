@@ -69,13 +69,6 @@ void node_install_interface_ctor(JSContext *ctx, JSValueConst global, const char
                                  JSValue ctor);
 /* The class id every node wrapper shares — components that need JS_NewObjectClass for one. */
 JSClassID node_class_id(void);
-/* What to do with a node once it is inserted (a <script> is PREPARED per HTML 4.12.1) — element.c's rule, asked
-   for here so the base does not have to know what a script is. */
-/* §4.2.3's INSERTION and REMOVING STEPS. Registered by the element component, fired by the DOM-mutation
-   chokepoint itself, so a tree write cannot reach the tree without them — the same structural guarantee the
-   chokepoint already gives time-travel capture. `inserted` is 1 for a node that entered a document and 0 for
-   one that is about to leave it; the callee walks the SUBTREE, because inserting a subtree connects every
-   element in it. */
 /* DOM §4.2.8 Mixin ChildNode and §4.2.6 Mixin ParentNode — the convenience mixins, installed on the interfaces
    whose IDL INCLUDES them. Not on Node.prototype: `document.remove()` is not a member of anything.
    (These read "§4.2.7 ChildNode and §4.2.8 ParentNode"; §4.2.7 is Mixin NonDocumentTypeChildNode and §4.2.8 is
@@ -100,54 +93,17 @@ void node_install_non_doctype_child_mixin(JSContext *ctx, JSValueConst proto);
    RECEIVER, for the reason ParentNode's members are: a mixin is what the IDL says these are. */
 void node_install_nonelement_parent_mixin(JSContext *ctx, JSValueConst proto);
 void node_install_parent_mixin(JSContext *ctx, JSValueConst proto);
-/* §4.2.3's insertion/removing steps, as the LIST the standard writes: a component REGISTERS one and the
-   chokepoint runs them all, in registration order.
-   THREE PHASES, not two, because §4.2.3's `remove` has work on BOTH sides of the detach and one of them cannot
-   be moved. Steps 3-4's live-range and NodeIterator pre-remove steps read the node's position and must run
-   BEFORE it leaves (step 7 is the detach); steps 8-10's SLOT steps recompute a slot's assigned nodes and must
-   run AFTER, or the recomputation still finds the node being removed and nothing changes — so the removal
-   fires no `slotchange`.
-   `parent` is the node's parent, PASSED rather than read off the node, because by NODE_TREE_REMOVED there is
-   none left to read.
-   A removal through core/dom/node_remove.h's machine reaches none of them: it runs the same steps itself, in
-   remove's order, one node per rest. */
-enum { NODE_TREE_REMOVED = -1, NODE_TREE_REMOVING = 0, NODE_TREE_INSERTED = 1 };
-typedef void (*NodeTreeHook)(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase);
-void node_add_tree_hook(NodeTreeHook fn);
-
-/* THE LIST IS NOT ONLY THE INSERTION AND REMOVING STEPS — it is everything §4.2.3 numbers at a tree change, in
-   that order, which is why §4.3's mutation record (insert step 8) is on it too. This entry is `insert` step
-   7.7.3 and `remove` steps 13/14.2: the CUSTOM ELEMENT REACTION ENQUEUE, which is a SIBLING of step 7.7.1's
-   insertion steps rather than one of them, and on the removal side is two top-level steps away from them.
-   IT IS ON THIS LIST AND NOT IN THE DEFERRED DRAIN because it can neither park nor fork — it allocates a
-   reaction and pushes it — and because §4.5 adopt step 3.3.3's `adoptedCallback` cannot be deferred at all
-   (`adoptNode` on a parentless node performs no tree change, so no drain would ever see it). Deferring one of
-   that pair and not the other is what ordered a cross-document move « adopted, disconnected, connected ».
-   REGISTER IT BETWEEN the recorder that feeds the drain and §4.3's mutation record; see core/dom/node.c. */
-void node_custom_element_reactions_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent,
-                                             int phase);
-
 /* §4.2.3's CHILDREN CHANGED STEPS — "specifications may define children changed steps for all or some nodes.
  * The algorithm is passed no argument and is called from insert, remove, and replace data."
  *
- * A THIRD LIST, not a phase of the one above, because it is a different family asked a different question. The
- * insertion and removing steps are about THE NODE that moved and run once per node; the children changed steps
- * are about ITS PARENT and are how HTML §4.2.6's update a style block, §4.12.1's script element and §4.2.5's
- * title element learn that their own contents were rewritten. Folding them into the tree hook would mean every
- * registrant of that list re-deriving "whose children changed" from a phase, and would still miss the third
- * caller entirely — `replace data` is not a tree mutation at all, so no tree hook can ever see
- * `styleEl.firstChild.data = '...'`.
+ * A list of its own, because it is a different family asked a different question. The insertion and removing
+ * steps are about the node that moved and run once per node; the children changed steps are about its parent
+ * and are how HTML §4.2.6's update a style block, §4.12.1's script element and §4.2.5's title element learn
+ * that their own contents were rewritten, `replace data` included, which is no tree mutation at all.
  *
- * IT RUNS ONCE PER NODE INSERTED OR REMOVED, WHERE §4.2.3 RUNS IT ONCE PER BATCH, and that is a statement about
- * the DOM mutation chokepoint rather than a shortcut: `insert` reaches Lexbor one child at a time, so a
- * fragment of N children is N chokepoint calls and N runs. Every children-changed-steps algorithm the standards
- * define is a pure recomputation from the parent's CURRENT children — that is what "passed no argument" means —
- * so N runs and one run compute the same answer, and a registrant for which they would not is a registrant that
- * has misread which family it belongs to.
- *
- * `ctx` IS THE MUTATING REALM, exactly as it is for the tree hooks, and a registrant that builds an object
- * resolves the PARENT'S document realm itself (document_realm_of) — two same-origin documents are one agent, so
- * the flow performing the write is routinely not in the realm the parent belongs to. */
+ * `ctx` is the mutating realm, and a registrant that builds an object resolves the parent's document realm
+ * itself (document_realm_of): two same-origin documents are one agent, so the flow performing the write is
+ * routinely not in the realm the parent belongs to. */
 typedef void (*NodeChildrenChangedHook)(JSContext *ctx, lxb_dom_node_t *parent);
 void node_add_children_changed_hook(NodeChildrenChangedHook fn);
 /* Run that list for `parent` (nothing when it is NULL), for an algorithm that runs its own steps. */
@@ -157,12 +113,11 @@ void node_children_changed(JSContext *ctx, lxb_dom_node_t *parent);
  * passed a node movedNode, a boolean isSubtreeRoot, and a node oldAncestor as indicated in the move algorithm
  * below."
  *
- * A FOURTH LIST, and it exists because the move algorithm's own note says the other lists must not run: "Because
- * the move algorithm is a separate primitive from insert and remove, it does not invoke the insertion steps or
- * removing steps for inclusiveDescendant." A move that reused the tree-hook list would destroy an `<iframe>`'s
- * child navigable and reset the document's focused area — BROWSER-owned state `moveBefore()` exists to
- * preserve. So the two lists are disjoint by construction, which is the only way that guarantee can be made
- * rather than remembered.
+ * A list of its own, because the move algorithm's own note says the insertion and removing steps must not
+ * run: "Because the move algorithm is a separate primitive from insert and remove, it does not invoke the
+ * insertion steps or removing steps for inclusiveDescendant." A move that ran them would destroy an `<iframe>`'s
+ * child navigable and reset the document's focused area, browser-owned state `moveBefore()` exists to
+ * preserve.
  *
  * A CUSTOM ELEMENT'S disconnectedCallback/connectedCallback PAIR IS NOT ONE OF THEM AND THIS LIST USED TO NAME
  * IT, which is a guarantee this list cannot make and no spec step asks it to. That pair is AUTHOR-owned state
@@ -177,8 +132,8 @@ void node_children_changed(JSContext *ctx, lxb_dom_node_t *parent);
  * local-name ones it dispatches to (`source` and `img` ask whether the old ancestor was a `picture`) are stated
  * over both, so a hook handed only the node could not implement them at all.
  *
- * `ctx` IS THE MUTATING REALM, exactly as it is for the tree hooks, and a registrant that needs the node's own
- * document realm resolves it itself (document_realm_of). */
+ * `ctx` is the mutating realm, and a registrant that needs the node's own document realm resolves it itself
+ * (document_realm_of). */
 typedef void (*NodeMovingHook)(JSContext *ctx, lxb_dom_node_t *moved, bool is_subtree_root,
                                lxb_dom_node_t *old_ancestor);
 void node_add_moving_hook(NodeMovingHook fn);

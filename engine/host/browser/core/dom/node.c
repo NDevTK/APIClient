@@ -440,11 +440,6 @@ static JSValue node_element_interface_proto(JSContext *ctx, lxb_dom_element_t *e
     return element_proto(ctx);
 }
 
-/* THE TREE HOOK IS INSTALLED INTO THE CHOKEPOINT, not called from each mutation site, and the difference is a
-   bug this file had: `element_on_inserted` was invoked from appendChild and NOWHERE else, so an element that
-   entered the tree by insertBefore, by replaceChild, or by an innerHTML parse was never prepared and never
-   upgraded. Eleven sites mutate the tree; one remembered. The chokepoint is the one place that cannot be
-   forgotten, which is the same argument that put capture there. */
 /* DOM §4.8's HOST OF A SHADOW ROOT, wrapped — the one climb the standard has that leaves a tree for the thing
    containing it, and TWO §4.8 sentences make it: a shadow root's get the parent answers with its host, and
    retargeting step 2 sets A to its root's host. Written once because the ASSERTION is the reason: node_wrap
@@ -610,20 +605,6 @@ static const EventTargetTree NODE_EVENT_TREE = {
     node_event_is_shadow_including_inclusive_ancestor, node_event_shadow_host
 };
 
-/* §4.2.3's INSERTION AND REMOVING STEPS ARE A LIST, not a slot. The standard's own `remove` runs several
-   independent things in order — the live-range pre-remove steps, then §6.1's NodeIterator pre-remove steps,
-   then each interested party's removing steps — and this was ONE function pointer, so the second component to
-   need it would have had to be called from inside the first. That is the hand-copied list CLAUDE.md warns
-   about, one layer down: a component added without editing whoever happens to hold the slot is a component
-   whose steps silently never run.
-   The ORDER is the registration order, which is the standard's order because the components register in it —
-   which is why `insert`'s and `remove`'s OWN steps join it too and are not called around it: step 7.7.3's
-   enqueue is numbered between step 7.7.1's insertion steps and step 8's mutation record, and a call placed
-   before or after the whole loop cannot be between two of its members. */
-#define NODE_TREE_HOOKS_MAX 8
-static NodeTreeHook g_tree_hooks[NODE_TREE_HOOKS_MAX];
-static int g_tree_hook_n;
-
 /* §4.2.3's CHILDREN CHANGED STEPS — see node.h for why they are their own list. Fired from the three callers
    the standard names: `insert` and `remove` below, and §4.10's `replace data` (node_cd_replace_data, and §4.4
    normalize's step 4, which IS a replace data written out). */
@@ -651,129 +632,9 @@ void node_add_children_changed_hook(NodeChildrenChangedHook fn)
     g_cc_hooks[g_cc_hook_n++] = fn;
 }
 
-/* DOM §4.2.3 "Mutation algorithms" — `insert`'s AND `remove`'s OWN CUSTOM-ELEMENT STEPS, WHICH ARE NOT
- * INSERTION OR REMOVING STEPS AND THEREFORE MUST NOT TRAVEL WITH THEM.
- *
- * The distinction is the standard's own numbering and it decides the order every lifecycle callback arrives in.
- * Step 7.7 is a loop with four sub-steps and only the FIRST is a hook another standard defines. Step 7.7.1 is
- * "Run the insertion steps with inclusiveDescendant"; 7.7.2 is "If inclusiveDescendant is not connected, then
- * continue"; 7.7.3 opens "If inclusiveDescendant is an element and inclusiveDescendant's custom element
- * registry is non-null"; and under it 7.7.3.2 is "If inclusiveDescendant is custom, then enqueue a custom
- * element callback reaction with inclusiveDescendant, callback name "connectedCallback", and « »" with 7.7.3.3
- * "Otherwise, try to upgrade inclusiveDescendant".
- * `remove` separates the two further still — there the enqueue is a TOP-LEVEL step of its own. Step 11 is "Run
- * the removing steps with node, true, and parent"; step 12 is "Let isParentConnected be parent's connected";
- * step 13 is "If node is custom and isParentConnected is true, then enqueue a custom element callback reaction
- * with node, callback name "disconnectedCallback", and « »"; and step 14 is "For each shadow-including
- * descendant descendant of node, in shadow-including tree order", whose 14.1 is "Run the removing steps with
- * descendant, false, and parent" and whose 14.2 is "If descendant is custom and isParentConnected is true, then
- * enqueue a custom element callback reaction with descendant, callback name "disconnectedCallback", and « »".
- * (Counted with LIST DEPTH TRACKED against the fetched text: `insert` has 12 top-level steps and `remove` 17;
- * step 7.7's four sub-steps and step 14's two are nested lists, not peers of the steps that hold them.)
- *
- * WHY THAT MATTERS HERE AND NOT MERELY ON PAPER: the insertion and removing steps are DEFERRED by this engine,
- * because they can park (a `<script>`'s preparation) and fork (§6.6.7's autofocus asks about activation), and a
- * chokepoint is a C body with no flow base under it. The custom-element enqueue can do neither — it allocates a
- * reaction array and pushes it — so deferring it too bought nothing and COST THE ORDER. §4.5 `adopt` step 3.3.3
- * enqueues `adoptedCallback` from inside the walk, synchronously, because adopt has no deferred half to hide in
- * and needs none: `document.adoptNode(el)` on a parentless node performs NO TREE CHANGE AT ALL, so there is no
- * record for any drain to find. So the two enqueues could not both be deferred even in principle, and while one
- * was and the other was not, every cross-document move produced « adopted, …, disconnected, connected » where
- * the two standards' own numbering gives « disconnected, adopted, connected »: §4.2.3 `insert` puts step 7.1,
- * "Adopt node into parent's node document", ahead of step 7.7, and §4.5 "Interface Document"'s `adopt` puts its
- * step 2, "If node's parent is non-null, then remove node", ahead of its step 3 — so `remove`'s enqueue runs
- * inside adopt step 2, adopt's own runs at its step 3.3.3, and `insert`'s runs last at step 7.7.3.
- *
- * THE PHASES ARE THE STEP NUMBERS, AND SO IS THE REGISTRATION POSITION. On the insert side the enqueue is step
- * 7.7.3: AFTER the recorder that feeds step 7.7.1's drain and BEFORE §4.3's step 8 mutation record, which is a
- * place only a member of the hook list can occupy — a call placed around the loop would sit before every
- * member or after every member, and step 8's record is one of them. On the removal side steps 12-14 come AFTER
- * step 7's detach, which is why this answers at NODE_TREE_REMOVED and not NODE_TREE_REMOVING: step 12 reads
- * `parent`'s connected precisely because the node no longer has one to be asked for, and `parent` is passed to
- * this list for that reason. One walk answers both sides — step 7.7's set is the shadow-including INCLUSIVE
- * descendants, and step 13 (the node) followed by step 14 (its shadow-including DESCENDANTS) is that same set
- * in that same order, written from the other end.
- *
- * THE REALM IS THE NODE'S DOCUMENT'S, never this hook's `ctx`: dom_cow holds ONE context set at init, so using
- * it would answer every document's insertion out of whichever realm happened to run first — CLAUDE.md
- * §A-PER-REALM-FACT. document.h states the same rule for §4.2.3's steps in its own words. A node document with
- * no realm is a parse in progress and has no reaction queue to join. */
-static lxb_dom_document_t *node_document_of(lxb_dom_node_t *n);
-
-void node_custom_element_reactions_tree_steps(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_node_t *parent,
-                                             int phase)
-{
-    JSContext *rctx;
-    lxb_dom_node_t *n;
-    lxb_dom_document_t *doc;
-
-    /* NODE_TREE_REMOVING is `remove` BEFORE step 7's detach. Steps 12-14 are numbered after it, and step 12's
-       isParentConnected would have no parent to be read off — so this phase is not one of the two, and the
-       other phase of a removal is where the answer is. */
-    (void)ctx;
-    if (phase == NODE_TREE_REMOVING) return;
-    DCHECK(phase == NODE_TREE_INSERTED || phase == NODE_TREE_REMOVED,
-           "§4.2.3's custom-element enqueue ran at a phase the tree-steps list does not have");
-    if (!root) return;
-    /* Insert step 7.7.2 ("If inclusiveDescendant is not connected, then continue") and remove step 12 ("Let
-       isParentConnected be parent's connected") are ONE question asked of two different nodes, because by
-       NODE_TREE_REMOVED the node is detached and the parent is the only end of the edge still in the tree.
-       Every node this walk reaches shares the answer: it is bounded by `root`, and a shadow-including inclusive
-       descendant of a connected node is connected. */
-    if (phase == NODE_TREE_INSERTED) {
-        if (!node_is_connected(root)) return;
-    } else {
-        if (!parent || !node_is_connected(parent)) return;
-        DCHECK(root->parent == NULL,
-               "§4.2.3 `remove` step 13 was reached with the node still attached — steps 12-14 are numbered "
-               "after step 7's \"remove node from its parent's children\", and running them before it would "
-               "read isParentConnected off an edge the algorithm has already cut");
-    }
-    rctx = document_realm_of(root);
-    if (!rctx) return;
-    doc = node_document_of(root);
-    for (n = root; n; n = shadow_root_next_in_shadow_including(rctx, n, root)) {
-        DCHECK(node_document_of(n) == doc,
-               "§4.2.3's shadow-including walk left the node document it started in — a shadow root's node "
-               "document is its host's, so one realm answers the whole subtree, and a descendant in another "
-               "document means this batch needs one realm per node rather than one per walk");
-        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        if (phase == NODE_TREE_INSERTED)
-            custom_elements_element_connected(rctx, lxb_dom_interface_element(n));   /* STEP 7.7.3 */
-        else
-            custom_elements_disconnected(rctx, lxb_dom_interface_element(n));        /* STEPS 13 and 14.2 */
-    }
-}
-
-static void node_tree_hooks_run(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
-{
-    int i;
-    DCHECK(phase >= NODE_TREE_REMOVED && phase <= NODE_TREE_INSERTED,
-           "the tree-steps list was run at a phase §4.2.3 does not have");
-    for (i = 0; i < g_tree_hook_n; i++)
-        g_tree_hooks[i](ctx, n, parent, phase);
-    /* §4.2.3 numbers the children changed steps AFTER the insertion steps and after step 8's mutation record,
-       and after the detach on the removal side — which is exactly here, past the whole hook list, on the two
-       phases that leave the parent's child list changed. NODE_TREE_REMOVING is the pre-detach phase and the
-       children have not changed yet, so it is not one of them. */
-    if (phase == NODE_TREE_INSERTED || phase == NODE_TREE_REMOVED)
-        node_children_changed(ctx, parent);
-}
-
-void node_add_tree_hook(NodeTreeHook fn)
-{
-    DCHECK(fn != NULL, "a tree-steps hook was registered as nothing");
-    CHECK(g_tree_hook_n < NODE_TREE_HOOKS_MAX,
-          "more §4.2.3 tree-steps hooks were registered than the list holds — a dropped one is a component "
-          "whose insertion or removing steps silently never run");
-    g_tree_hooks[g_tree_hook_n++] = fn;
-    dom_cow_set_tree_hook(node_tree_hooks_run);
-}
-
-/* §4.2.3's MOVING STEPS — see node.h. It is NOT reached from the DOM-mutation chokepoint, and that is the
-   whole difference between this list and the one above: the chokepoint fires the insertion and removing steps
-   for every tree write there is, and a move is the one tree write that must reach neither. So the move
-   algorithm calls this list by name, at its own step 24.2, and nothing else can. */
+/* §4.2.3's moving steps (see node.h). A move is the one tree write that must reach neither the insertion nor
+   the removing steps, so the move algorithm calls this list by name, at its own step 24.2, and nothing else
+   can. */
 #define NODE_MOVING_HOOKS_MAX 4
 static NodeMovingHook g_moving_hooks[NODE_MOVING_HOOKS_MAX];
 static int g_moving_hook_n;
@@ -1093,8 +954,7 @@ bool node_ensure_pre_insert_valid(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_
  * destroy the child navigable (so `frame.contentDocument` becomes a fresh blank document) and HTML §2.1.4's
  * removing steps clear the document's focused area. A `moveBefore` written as remove-then-insert therefore ends
  * with the tree in the right SHAPE and the state gone, and nothing throws: the plausible wrong answer, which is
- * why this is its own algorithm down to its own chokepoint pair (solver/dom_cow.h's move_out/move_in, which
- * fire no tree hook at all).
+ * why this is its own algorithm down to its own chokepoint pair (solver/dom_cow.h's move_out/move_in).
  *
  * A CUSTOM ELEMENT'S disconnectedCallback/connectedCallback PAIR IS NOT ON THAT LIST, AND THIS PARAGRAPH USED
  * TO PUT IT THERE. The two examples above are BROWSER-owned state, the pair is AUTHOR-owned, and the standard
@@ -1463,9 +1323,8 @@ static bool mixin_names_node(int argc, JSValueConst *argv, const lxb_dom_node_t 
    by the HTMLSelectElement ancestor interface Element" — routes to these two steps rather than carrying a
    second copy of them. See node.h.
    THE PARENT TEST IS STEP 1 AND NOT A GUARD. A node with no parent has nothing to be removed from and that
-   is a NO-OP rather than an error, which is what lets a page call `el.remove()` twice; `dom_cow_remove_child`
-   is the removal chokepoint every other mutation in this file goes through, so the per-flow delta captures
-   this one exactly as it captures theirs. */
+   is a no-op rather than an error, which is what lets a page call `el.remove()` twice. The removal is
+   core/dom/node_remove.h's machine, as every other removal in this file is. */
 void node_child_node_remove_start(JSStepHdr *hdr, NodeRemoveState *s, lxb_dom_node_t *n, int base, int after)
 {
     DCHECK(n != NULL, "ChildNode's remove() was started on no node");
@@ -1914,8 +1773,8 @@ static JSValue cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offse
     if (!pi_attrs_already_updated && n->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
         pi_update_attributes_from_data(ctx, n);
     /* THE LAST STEP — "if node's parent is non-null, then run the children changed steps for node's parent".
-       It is §4.2.3's third caller and the ONLY one no tree hook can stand in for: nothing moved in the tree, so
-       `styleEl.firstChild.data = '…'` is invisible to every mutation chokepoint and visible here. */
+       It is §4.2.3's third caller: nothing moved in the tree, so `styleEl.firstChild.data = '…'` reaches no
+       insert or remove and is visible here. */
     node_children_changed(ctx, n->parent);
     return JS_UNDEFINED;
 }
@@ -6208,41 +6067,12 @@ void node_init(JSContext *ctx)
        member of the DOM group's cascade and then runs agent_state_undo("element"), so `element` is whose
        release undoes these and that call is now what does it.
 
-       DECLARED HERE RATHER THAN BESIDE THE LINE THAT SETS EACH ONE, which is that header's usual rule, because
-       three of them are not set by this function at all: a hook-list LENGTH is written by its registrar, which
-       runs once per REGISTRANT, and a declaration must run once per AGENT. node_init is this component's
-       once-per-agent point — it is latched on g_protos_ready above — so it is the only place a registrar's
-       slot can be named exactly once.
-
-       THE TWO THAT WERE NEVER GIVEN BACK, WHICH IS WHY THIS IS NOT BOOKKEEPING. node_free reset g_tree_hook_n
-       by hand and reset neither of the other two lists, though all three are the same state written by three
-       copies of one registrar — so a second agent in one process appended its registrations to the first
-       agent's. §4.2.3's children-changed list carries TWO registrants (core/html/html_style_element.c and
-       core/html/html_script.c) against a table of four: agent two fills it and runs BOTH hooks TWICE at every
-       children-changed step, silently, and agent three meets node_add_children_changed_hook's ALWAYS-FATAL
-       `CHECK` with the table full and aborts IN RELEASE. The moving list carries one against four — doubled at
-       agent two, fatal at agent five. The tree list carries SEVEN against eight and would have aborted on
-       agent two's SECOND registration; it did not, because it is the one of the three somebody remembered.
-       That is the argument for deriving the undo from the declarations rather than writing it out a second
-       time: the hand-maintained member is the one that stayed right and its two siblings are what a
-       hand-maintained list does.
-
-       AN AGENT HAS BEEN SECOND, AND THE SENTENCE THAT STOOD HERE SAID OTHERWISE — it read that no agent has
-       ever been second, so nothing here fires and this is armed rather than exercised, on the ground that
-       `git grep JS_NewRuntime engine/host` answers one per host and main.c's shipped entry refuses a second
-       root outright ("qjs_init ran twice in one WASM instance"). The main.c half is still exactly true and the
-       first half is not: a fixture in this tree brings up a SECOND agent in one process — a second JSRuntime,
-       `platform_agent_init` over it, and this component's `element` row declared a second time — so the derived
-       undo above is EXERCISED rather than armed, and the three lists it gives back are given back. It is
-       rewritten rather than deleted because the grep is what a reader re-runs, and `one per host` reads as
-       refuted the moment they do: the two runtimes are SEQUENTIAL, the fixture freeing the first before it
-       brings the second up, so what is true is that no host holds two AT ONCE and the per-host count is not.
-       A concurrent agent never appends here: HTML §10.2.4 "Processing model" step 4's worker agent is an Agent
-       Record and a realm in its owner's runtime (core/platform.c), so it shares these registrations rather
-       than declaring them again, and only a sequential second runtime runs the undo.
-       ALL OF THEM OR NONE: core/dom/selection.c records what a short count buys — a release that is the
-       inverse of five of seventeen slots leaves the other twelve with no check at all, wearing the same number
-       a component holding nothing would produce. */
+       Declared here rather than beside the line that sets each one, which is that header's usual rule, because
+       two of them are not set by this function at all: a hook-list length is written by its registrar, which
+       runs once per registrant, and a declaration must run once per agent. node_init is this component's
+       once-per-agent point, latched on g_protos_ready above. A fixture brings up a second agent in one
+       process, sequentially, so the derived undo is exercised: without it the second agent appends its
+       registrations to the first agent's and a hook table fills. */
     agent_state_flag("element", &g_protos_ready, "the DOM interface table, and this component's declaration latch");
     agent_state_ptr("element", &g_agent_rt, "the one runtime §4.4's classes and the wrapper map were declared in");
     agent_state_atom("element", &g_atom_pi_attrs, "DOM §4.13's attribute-map slot key, interned");
@@ -6253,26 +6083,11 @@ void node_init(JSContext *ctx)
     agent_state_ptr("element", &g_rwraps, "the per-realm lists of the wrapper identity table's entries");
     agent_state_flag("element", &g_rwrap_n, "how many realms own wrapper entries");
     agent_state_flag("element", &g_rwrap_cap, "the per-realm wrapper list table's extent");
-    agent_state_flag("element", &g_tree_hook_n, "DOM §4.2.3's insertion- and removing-steps list, its length");
     agent_state_flag("element", &g_cc_hook_n, "DOM §4.2.3's children-changed-steps list, its length");
     agent_state_flag("element", &g_moving_hook_n, "DOM §4.2.3's moving-steps list, its length");
-    /* AND THE THREE LISTS THEMSELVES, NOT ONLY THEIR LENGTHS — core/agent_state.h's agent_state_zeroed, whose
-       image is the zero bytes because each of these carries no initialiser. THE LENGTH AND THE TABLE ARE TWO
-       OBLIGATIONS: a length back at 0 makes a stale entry UNREADABLE, and only clearing the table makes it
-       GONE. Those are not the same thing here, because what a stale entry holds is a FUNCTION POINTER INTO
-       ANOTHER COMPONENT — every registrar is some other file's `_init` handing this one its §4.2.3 steps —
-       and core/agent_state.h's own account of what a dropped release loses names exactly that as the silent
-       case: a malloc'd block reaches no census with an assert over it, and a hook this component holds for
-       another leaves a DANGLING CALLBACK rather than memory, which nothing anywhere reports. The paragraph
-       three lines up says ALL OF THEM OR NONE, and a table whose length is checked while the table is not is
-       the short count it is about.
-       BOTH HALVES ARE RESET BY THE ONE UNDO, so there is no instant at which a length outlives its table or a
-       table its length: element_free's last line writes every slot carrying this row's name, and
-       node_tree_hooks_run — the only reader of any of the three — is gated on the length that goes back with
-       them. */
-    agent_state_zeroed("element", g_tree_hooks,
-                       "DOM §4.2.3's insertion- and removing-steps list — the hooks themselves, each a "
-                       "function pointer another component handed this one");
+    /* And the two lists themselves, not only their lengths (core/agent_state.h's agent_state_zeroed): a length
+       back at 0 makes a stale entry unreadable and only clearing the table makes it gone, and what a stale
+       entry holds is a function pointer into another component. */
     agent_state_zeroed("element", g_cc_hooks,
                        "DOM §4.2.3's children-changed-steps list — the hooks themselves");
     agent_state_zeroed("element", g_moving_hooks,
@@ -6587,13 +6402,11 @@ void node_install_interfaces(JSContext *ctx, JSValueConst global)
 void node_free(JSRuntime *rt)
 {
     int i;
-    /* THE THREE SLOTS THIS FILE CLAIMED IN OTHER COMPONENTS, GIVEN BACK. Each is a C function pointer that
-       another component holds and that names code in THIS one, so a release that kept it would leave the
-       solver and the events layer calling into a DOM group the cascade above has already torn down — the
-       defect core/agent_state.h found in idb_transaction, three more times. The claimant releases, the
-       receiver asserts; core/platform.c's reverse-declaration order is what runs `element` before
-       `event_target`, and solver_agent_free runs after the whole platform. */
-    dom_cow_set_tree_hook(NULL);
+    /* The two slots this file claimed in other components, given back. Each is a C function pointer that
+       another component holds and that names code in this one, so a release that kept it would leave the
+       solver and the events layer calling into a DOM group the cascade above has already torn down. The
+       claimant releases, the receiver asserts; core/platform.c's reverse-declaration order is what runs
+       `element` before `event_target`, and solver_agent_free runs after the whole platform. */
     event_target_set_tree(NULL);
     engine_set_wrap_stats(NULL);
     for (int ns = 0; ns < LXB_NS__LAST_ENTRY; ns++)
@@ -6601,12 +6414,8 @@ void node_free(JSRuntime *rt)
                "a namespace's element-interface resolver was still registered when the node layer was released — "
                "core/html/html_element.c and core/svg/svg_element.c claim theirs and give them back at their "
                "frees, which the DOM group's own cascade runs first");
-    /* §4.2.3's THREE HOOK-LIST LENGTHS ARE NOT RESET HERE. `g_tree_hook_n = 0` stood on this line and its two
-       siblings stood nowhere, which is the drift a release written as a second copy of a declaration produces;
-       all three are declared to core/agent_state.h in node_init, so agent_state_undo("element") puts them back
-       and agent_state_check_released asserts it. Being later costs nothing: the sole reader of any of the three
-       is node_tree_hooks_run, whose only registration is the dom_cow_set_tree_hook above, and that call has
-       already handed it back — so nothing between this line and that undo can read one. */
+    /* §4.2.3's two hook-list lengths are not reset here: both are declared to core/agent_state.h in node_init,
+       so agent_state_undo("element") puts them back and agent_state_check_released asserts it. */
     /* BEFORE the walk, because the walk is what would do the damage: every entry below holds a reference
        belonging to the runtime that declared this layer, and freeing them through a different one is a heap
        corruption the walk cannot report afterwards. `g_agent_rt == NULL` is the idempotent second call

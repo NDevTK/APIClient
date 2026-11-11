@@ -371,8 +371,8 @@ void custom_elements_enqueue_form_callback(JSContext *ctx, JSValueConst wrap, in
    THE DISTINCTION IS LOAD-BEARING AND NOT PEDANTRY: this engine DEFERS the insertion and removing steps,
    because they park and fork, and it must NOT defer this — §4.5 adopt step 3.3.3's `adoptedCallback` is
    enqueued synchronously (adopt on a parentless node performs no tree change at all, so it has no deferred half
-   to live in), and deferring only one of the pair reordered every cross-document move. Called from the DOM
-   mutation chokepoint; see core/dom/node.c's node_custom_element_reactions_tree_steps. */
+   to live in), and deferring only one of the pair reordered every cross-document move. Called from the insert
+   machine's step 7.7 walk (core/dom/node_insert.c). */
 void custom_elements_element_connected(JSContext *ctx, lxb_dom_element_t *el);
 /* DOM §4.2.3 `remove` STEPS 13 and 14.2 — §4.13.3's disconnected reaction, the twin of the above, for an
    element LEAVING a document. `remove` separates it from the removing steps by NUMBER rather than by loop

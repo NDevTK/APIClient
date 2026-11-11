@@ -231,28 +231,11 @@ static void dom_capture_end(void) {
 
 void dom_cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
 
-/* §4.2.3's insertion/removing steps. Fired from the chokepoint so a tree write cannot reach the tree without
-   them: the browser layer registers what they MEAN and this file guarantees they run.
- *
- * THE GUARANTEE WAS `if (g_tree_hook && g_cow_ctx)`, AND THAT SECOND TERM UNDID IT. A host that registered the
- * hook but never named its context ran NO insertion steps and NO removing steps at all — no <script>
- * preparation, no custom-element upgrade, no §7.3.1.3 Child navigables' child navigable — and nothing said so, because a skipped
- * step looks exactly like a tree with nothing in it that needed one. That is what the WPT runner did for its
- * whole life: `document.body.appendChild(iframe)` produced an element with no navigable, and the failure
- * surfaced three layers away as `contentWindow` being null. The context is now ASSERTED rather than tested, and
- * the hook is called unconditionally, so a host that forgets crashes at the write instead of quietly running a
- * different DOM. */
-static void (*g_tree_hook)(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase);
-
-#define TREE_HOOK_NO_CTX \
-    "a tree write reached the insertion/removing steps with no context — dom_cow_set_ctx names the runtime " \
-    "they run in, and a host that registers the hook without it runs NO insertion steps at all: no <script> " \
-    "preparation, no custom-element upgrade, no child navigable, and nothing to say so"
-
-void dom_cow_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase))
-{
-    g_tree_hook = fn;
-}
+/* The character-data hook runs in the runtime dom_cow_set_ctx names; a host that registers the hook without
+   naming one would run no replace-data steps and say nothing. */
+#define CDATA_HOOK_NO_CTX \
+    "a character-data write reached DOM §4.10 replace data's hook with no context: dom_cow_set_ctx names the " \
+    "runtime it runs in, and a host that registers the hook without it queues no characterData record"
 
 static void (*g_attr_hook)(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
                            const char *old_val, size_t old_len, const char *val, size_t val_len);
@@ -1327,27 +1310,6 @@ static uint64_t g_dom_version = 1;
 
 uint64_t dom_cow_version(void) { return g_dom_version; }
 
-/* Remove a node that the baseline may own. Capture its position FIRST, then detach — the same order the
-   attribute and insert chokepoints use, so a removal cannot bypass the per-flow delta either. */
-void dom_cow_remove_child(lxb_dom_node_t *node) {
-    DOM_WRITE_OUTSIDE_LAYOUT();
-    if (!node) return;
-    g_dom_version++;
-    /* BEFORE the detach, because "was it connected" has no answer afterwards. */
-    DCHECK(!g_tree_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
-    if (g_tree_hook) g_tree_hook(g_cow_ctx, node, node->parent, 0);
-    dom_remove_capture(node, 0);
-    {
-        /* §4.2.3 remove step 3 detaches, and steps 4-7 run AFTER it — the slot steps recompute a slot's
-           assigned nodes, and doing that while the node is still a child finds it again and reports no change.
-           The old parent is carried across the detach because the node no longer has one to be asked for. */
-        lxb_dom_node_t *was = node->parent;
-
-        lxb_dom_node_remove(node);
-        if (g_tree_hook) g_tree_hook(g_cow_ctx, node, was, -1);
-    }
-}
-
 /* Depth of a tree link or unlink whose subtree's name-index upkeep is carried per element (kind 9). */
 static int g_dom_index_apart;
 bool dom_cow_name_index_apart(void) { return g_dom_index_apart > 0; }
@@ -2176,7 +2138,7 @@ void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len) {
     cd = lxb_dom_interface_character_data(node);
     /* BEFORE the write and before the capture, because §4.10's replace data queues its record with the node's
        CURRENT data and there is no answer to that once the bytes are gone. */
-    DCHECK(!g_cdata_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
+    DCHECK(!g_cdata_hook || g_cow_ctx, CDATA_HOOK_NO_CTX);
     if (g_cdata_hook)
         g_cdata_hook(g_cow_ctx, node, (const char *)cd->data.data, cd->data.length);
     if (g_dom_capture) {
@@ -2531,46 +2493,8 @@ bool dom_cow_owns_tree_construction(void)
     return lxb_html_tree_dom() == &g_cow_tc_ops;
 }
 
-void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
-    DOM_WRITE_OUTSIDE_LAYOUT();
-    g_dom_version++;
-    dom_insert_capture(child);   /* record the insertion FIRST so it reverts per-flow (detached on unapply) */
-    lxb_dom_node_insert_child(parent, child);
-    DCHECK(!g_tree_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
-    /* THE SUBTREE THE HOOK IS TOLD ABOUT IS THE ONE THIS CALL PLACED, ASSERTED AT THE PLACEMENT. DOM §4.2.3
-       "Mutation algorithms"' insert step 7.7 walks "each shadow-including inclusive descendant of node", so
-       every registrant's walk is bounded by the node named here and by nothing else — the bound is only as
-       good as this argument. Asked at the chokepoint because this is the one place that knows both what was
-       asked for and where Lexbor put it; a registrant can only re-read what it was handed. */
-    DCHECK(child->parent == parent && child->next == NULL,
-           "§4.2.3's append chokepoint is about to name a node that is not where it just put it — the tree "
-           "hooks run the insertion steps over this node's subtree, so a node reported before it is the "
-           "parent's last child would run them over a tree nobody built");
-    if (g_tree_hook) g_tree_hook(g_cow_ctx, child, child->parent, 1);   /* AFTER: connectedness is the new tree's */
-}
-/* §4.2.3 "insert before": the same capture, at a POSITION. The insert entry remembers where it landed at
-   unapply time rather than at capture time, so this differs from append only in the Lexbor call — which is
-   exactly why insertBefore must come through here and not reach lxb_dom_node_insert_before directly. */
-void dom_cow_insert_before(lxb_dom_node_t *ref, lxb_dom_node_t *child) {
-    DOM_WRITE_OUTSIDE_LAYOUT();
-    g_dom_version++;
-    dom_insert_capture(child);
-    lxb_dom_node_insert_before(ref, child);
-    DCHECK(!g_tree_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
-    /* THE SAME ASSERTION AS THE APPEND ABOVE, AND THIS IS THE SIDE THAT MATTERS. `child->next` is `ref` rather
-       than NULL here, which is exactly the shape a registrant's walk must not read as licence to keep going:
-       a subtree root WITH a next sibling is what an insert-before produces and an append never does, so a
-       walker whose bound is tested only on the climb out escapes on this path and on no other. Naming the node
-       and its landing place here is what lets that walk be judged against something. */
-    DCHECK(child->parent == ref->parent && child->next == ref,
-           "§4.2.3's insert-before chokepoint is about to name a node that is not where it just put it — the "
-           "tree hooks run the insertion steps over this node's subtree, so a node reported before it sits "
-           "immediately before the reference child would run them over a tree nobody built");
-    if (g_tree_hook) g_tree_hook(g_cow_ctx, child, child->parent, 1);
-}
-
-/* DOM §4.2.3 "MOVE" STEPS 13 AND 19-20 — the same two captures the remove and insert chokepoints push, and NO
-   TREE HOOK. See dom_cow.h for why the absence of the hook is the whole operation rather than an omission.
+/* DOM §4.2.3 move steps 13 and 19-20: the captures a removal's unlink and an insert's link push, and none of
+   remove's or insert's steps (see dom_cow.h).
    THE PAIR IS ASSERTED, in dev, through one file-static: a `_move_out` whose `_move_in` never came is a node
    taken out of the tree with no removing steps run for it, which is a leak of live tree from every walk in the
    engine and shows up nowhere. Nothing between the two can run the page's code (§4.2.3's steps 14-18 are slot
@@ -2620,9 +2544,8 @@ void dom_cow_move_in(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_
     else     lxb_dom_node_insert_child(parent, node);
 }
 
-/* THE BASELINE WRITE — see dom_cow.h for why the missing tree hook IS the operation, for the release-build
-   failure it closes, and for the named residual it leaves. The captures are byte-for-byte the chokepoint's,
-   so a baseline write time-travels exactly like any other write and only the §4.2.3 record is absent. */
+/* The baseline write: see dom_cow.h for the named residual it leaves. The captures are an insert's link's and a
+   removal's unlink's, so a baseline write time-travels like any other write. */
 void dom_cow_append_baseline(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
     DCHECKF(layout_job_alive() == 0,
             "a host-time BASELINE write was made while %zu layout jobs are alive — a driven job rests inside a "
@@ -2634,7 +2557,7 @@ void dom_cow_append_baseline(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
            "a BASELINE tree write was made while a flow held the thread — this entry exists for HOST TIME, "
            "before any flow, where there is no declared member for DOM §4.2.3's steps to be owed to and the "
            "tree being written is the one every flow starts from. A write from inside a slice is a FLOW's "
-           "mutation: it must go through dom_cow_append_child, whose tree hook records §4.2.3's steps for the "
+           "mutation: it must run core/dom/node_insert.h's machine, which runs §4.2.3's steps and records the "
            "member's own drain, and taking this door instead would silently skip an inserted <script>'s "
            "preparation, an <iframe>'s child navigable and a custom element's upgrade");
     g_dom_version++;
@@ -2657,8 +2580,8 @@ void dom_cow_remove_baseline(lxb_dom_node_t *node) {
     if (!node) return;
     DCHECK(!quantum_slice_open(),
            "a BASELINE tree removal was made while a flow held the thread — see dom_cow_append_baseline for "
-           "why this entry is host time's and why a flow's removal must go through dom_cow_remove_child, "
-           "whose tree hook records §4.2.3's removing steps for the member's own drain");
+           "why this entry is host time's and why a flow's removal must run core/dom/node_remove.h's machine, "
+           "which runs §4.2.3's removing steps");
     g_dom_version++;
     dom_remove_capture(node, 0);
     lxb_dom_node_remove(node);

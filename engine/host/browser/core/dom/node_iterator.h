@@ -16,9 +16,8 @@ void node_iterator_free(JSRuntime *rt);
    object; both are BORROWED. */
 JSValue node_iterator_new(JSContext *ctx, JSValueConst root, uint32_t what, JSValueConst filter);
 
-/* §6.1's PRE-REMOVE STEPS, run by §4.2.3's remove for every NodeIterator whose root's node document is the
-   removed node's. Registered as a tree hook so the one place a node leaves the tree is the one place this
-   happens. */
+/* DOM §6.1's NodeIterator pre-remove steps, run by §4.2.3 remove's step 4 (core/dom/node_remove.h) for every
+   NodeIterator whose root's node document is the removed node's. */
 void node_iterator_pre_remove(JSContext *ctx, lxb_dom_node_t *to_be_removed);
 
 #endif

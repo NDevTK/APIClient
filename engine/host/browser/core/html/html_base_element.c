@@ -216,33 +216,6 @@ static void base_element_process(lxb_dom_document_t *document, lxb_dom_element_t
     set_the_frozen_base_url(realm, first);
 }
 
-/* Does this subtree contain a base element with an href? The tree-steps hook is handed the node that moved and
-   the whole SUBTREE moves with it, so inserting `<div><base href=x></div>` inserts a base element. Asked before
-   the walk from the document root because that walk is O(document) and every tree write reaches this hook. */
-static bool subtree_has_base_with_href(lxb_dom_node_t *n)
-{
-    lxb_dom_node_t *d;
-
-    for (d = n; d; d = node_next_in(d, n))
-        if (base_with_href(d)) return true;
-    return false;
-}
-
-void html_base_element_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
-{
-    (void)ctx;
-    (void)parent;
-    /* NODE_TREE_REMOVING is the PRE-detach phase and the node is still in the tree, so a recompute there would
-       find the element that is leaving and freeze to it; NODE_TREE_REMOVED is the phase after the detach, which
-       is where "the base element in front of it left, so a later one becomes first" is true. */
-    if (phase == NODE_TREE_REMOVING) return;
-    if (!n || !n->owner_document || !subtree_has_base_with_href(n)) return;
-    /* A subtree moved WITHIN a detached tree reaches here too, and the walk from the document root simply finds
-       the same first element — the recompute is the answer, and the connectedness test the spec writes ("in its
-       Document") is the walk itself rather than a second predicate that could disagree with it. */
-    base_element_process(n->owner_document, NULL);
-}
-
 void html_base_element_removing_steps(lxb_dom_node_t *n)
 {
     DCHECK(n != NULL && n->owner_document != NULL, "a base element's removing steps ran for no node or one in no "

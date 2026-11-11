@@ -4562,9 +4562,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                "SLICE: a raw JS_CFUNC_DEF mutated the tree — DECLARE THAT MEMBER, so it converges on this "
                "machine, which is the only thing that drains them. ON HOST TIME, with no flow anywhere: there "
                "is no member to declare, and the write belongs in solver/dom_cow.h's dom_cow_append_baseline "
-               "/ dom_cow_remove_baseline, which fire no tree hook for the same reason HTML §13.2.6 \"Tree "
-               "construction\"'s own writes fire none — a baseline write is part of the tree every flow "
-               "starts from rather than a flow's mutation of it");
+               "/ dom_cow_remove_baseline, which run none of DOM §4.2.3's steps for the same reason HTML "
+               "§13.2.6 \"Tree construction\"'s own writes run none — a baseline write is part of the tree "
+               "every flow starts from rather than a flow's mutation of it");
         /* WEB IDL §3.7 Interfaces' IMPLEMENTATION-CHECK, WHICH IS THE ONE ALGORITHM §3.7.7 Operations' and
          * §3.7.6 Attributes' opening steps both spell out — the security check and the receiver's brand, in
          * that order. It is asked HERE because here is where every declared member converges: see

@@ -2168,8 +2168,8 @@ enum {
  * step 7.7.1's insertion steps without being one of them, and `remove` states the same fact by NUMBERING
  * instead: its step 11 runs the removing steps and its step 13 enqueues disconnectedCallback. What decides
  * where a step runs here is not which phase it resembles but whether it can PARK — an enqueue cannot, so it
- * belongs at the chokepoint (core/dom/node.c's node_custom_element_reactions_tree_steps), where §4.5 adopt step 3.3.3's
- * `adoptedCallback` already was and had to be.
+ * belongs inside the insert and remove machines' own walks (core/dom/node_insert.c, core/dom/node_remove.c),
+ * beside §4.5 adopt step 3.3.3's `adoptedCallback`.
  *
  * THE LIST IS MATERIALIZED, NOT RE-WALKED, and step 10's own note is the reason: "We collect all nodes before
  * calling the post-connection steps on any one of them, instead of calling the post-connection steps while
@@ -2223,35 +2223,6 @@ typedef struct {
 
 static TreeStepEntry *g_ts;
 static int g_ts_n, g_ts_cap;
-
-/* §4.2.3's LIVE-RANGE steps, both directions: the pre-remove steps before a node leaves the tree, and insert's
-   step 5 after one enters it. */
-static void element_range_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
-{
-    (void)parent;
-    if (phase == NODE_TREE_INSERTED)      range_did_insert(ctx, n);
-    else if (phase == NODE_TREE_REMOVING) range_pre_remove(ctx, n);
-}
-
-/* §4.2.3's remove, step "for each NodeIterator object iterator whose root's node document is node's node
-   document, run the NodeIterator pre-remove steps". It is a tree hook of its own rather than a line inside the
-   one below, because they are two independent steps of the standard's algorithm and the one below returns early
-   for a node that is not connected — which a NodeIterator rooted at a detached subtree very much is. */
-static void element_iterator_pre_remove(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
-{
-    (void)parent;
-    if (phase == NODE_TREE_REMOVING) node_iterator_pre_remove(ctx, n);
-}
-
-/* §4.2.3's SLOT steps, both sides of the detach — `insert`'s three (steps 7.4/7.5/7.6) and `remove`'s three
-   (steps 8/9/10). Registered between the pre-remove steps and the removing steps because that is where the
-   standard's own `remove` runs them: after step 7's "remove node from its parent's children" and before step
-   11's removing steps. */
-static void element_slot_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
-{
-    if (phase == NODE_TREE_INSERTED)     slot_insert_steps(ctx, n, parent);
-    else if (phase == NODE_TREE_REMOVED) slot_removed_steps(ctx, n, parent);
-}
 
 /* HTML §2.1.4 DOM trees — "THE MOVING STEPS FOR THE HTML STANDARD, given movedNode, isSubtreeRoot, and
  * oldAncestor", registered on DOM §4.2.3's moving-steps list (core/dom/node.h). TWO STEPS.
@@ -2409,20 +2380,6 @@ void element_insertion_steps(lxb_dom_node_t *n)
            "insertedNode participates in\"");
 }
 
-/* DOM §4.2.3 insert step 7.7.1 for an insert through the chokepoint, run HERE because the chokepoint is inside
-   insert's per-node loop: Lexbor is handed one node of `nodes` at a time, so a later node of the same insert is
-   not yet in the tree. Each node is one THREAD_WORK_DOM_WALK unit. */
-static void tree_steps_insertion_steps(lxb_dom_node_t *root)
-{
-    lxb_dom_node_t *n;
-
-    for (n = root; n; ) {
-        element_insertion_steps(n);
-        thread_work_charge(THREAD_WORK_DOM_WALK, 1);
-        n = shadow_root_next_in_shadow_including(document_realm_of(n), n, root);
-    }
-}
-
 void element_removing_steps(lxb_dom_node_t *n)
 {
     JSContext *ctx = document_realm_of(n);
@@ -2448,36 +2405,7 @@ void element_removing_steps(lxb_dom_node_t *n)
     JS_FreeValue(ctx, w);
 }
 
-/* DOM §4.2.3 `remove` step 11, "Run the removing steps with node, true, and parent", and step 14.1's for each
-   shadow-including descendant: after step 7's detach and before step 13's disconnectedCallback (node.c's CE hook,
-   registered after this one), for a removal that does not rest (core/dom/node_remove.h's machine drives
-   element_removing_steps itself). */
-static void tree_steps_removing_steps(lxb_dom_node_t *root)
-{
-    lxb_dom_node_t *n;
-
-    for (n = root; n; n = shadow_root_next_in_shadow_including(document_realm_of(n), n, root))
-        element_removing_steps(n);
-}
-
 static void tree_steps_push(lxb_dom_node_t *root);
-
-static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_node_t *parent, int phase)
-{
-    (void)ctx;
-    /* The pre-detach phase is §4.2.3 `remove`'s steps 3-4, the live-range and iterator steps, which are other
-       hooks'. The removing steps are step 11 and are asked of the parent, since the node is detached by then. */
-    if (phase == NODE_TREE_REMOVING || !root) return;
-    if (phase == NODE_TREE_REMOVED) {
-        DCHECK(root->parent == NULL, "remove's removing steps were reached with the node still attached");
-        if (parent && node_is_connected(parent) && tree_steps_can_run(parent)) tree_steps_removing_steps(root);
-        return;
-    }
-    if (!node_is_connected(root)) return;
-    if (!tree_steps_can_run(root)) return;
-    tree_steps_insertion_steps(root);
-    tree_steps_push(root);
-}
 
 void element_tree_steps_record_insert(lxb_dom_node_t *root)
 {
@@ -2637,7 +2565,7 @@ static void tree_steps_list_append(JSContext *ctx, TreeStepBuf *b, lxb_dom_node_
            "same walk, so a mutation here leaves the list disagreeing with the tree it was taken from. Work "
            "that modifies the tree is a POST-CONNECTION step (insert step 12) and belongs in the second phase");
     DCHECK(node_is_connected(n),
-           "§4.2.3 insert step 11 reached a node that is not connected — element_tree_changed records only "
+           "§4.2.3 insert step 11 reached a node that is not connected — the insert records only "
            "connected roots and step 7.7's walk stays inside one, so a disconnected node here means the tree "
            "moved under the walk");
     tree_steps_list_push(ctx, b, n);
@@ -2713,8 +2641,8 @@ static int tree_steps_post_connection(JSContext *ctx, TreeStepBuf *b, JSValue in
        entry's post-connection steps may have removed this one. HTML §4.12.1.1 "Processing model" is the worked
        example: `body.append(script1, script2)` where script1 removes script2 prints nothing, "Because the
        second script is no longer connected, its HTML element post-connection steps do not run, and it does not
-       get prepared." element_tree_changed's test at the write is the answer for DOM §4.2.3 insert step 7.7 and is the WRONG
-       answer here — it was taken before any of these steps ran. */
+       get prepared." The record's test at the insert is the answer for DOM §4.2.3 insert step 7.7 and is the
+       wrong answer here: it was taken before any of these steps ran. */
     if (node_is_connected(n) && n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         /* §4.2.3's STEPS RUN IN THE NODE'S DOCUMENT'S REALM, not the mutating member's. Two same-origin
@@ -2848,7 +2776,7 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
        then treats it exactly like a node insert step 11 collected, connectedness re-read and all.
        IT DOES NOT GO THROUGH tree_steps_list_append, whose two assertions are step 11's own: this node is not
        reached by a walk from a recorded root, and its connectedness was tested by the children changed steps'
-       step 1 at the moment the standard tests it rather than by element_tree_changed at the write. */
+       step 1 at the moment the standard tests it rather than by the record at the insert. */
     if (e->pc_only) {
         DCHECK(n == e->root && b->nphase == TS_NODE_EFFECTS && b->ua_phase == 0,
                "a children-changed entry was resumed mid-node — it has no per-node steps to park inside, so "
@@ -2864,8 +2792,8 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
     if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         {
-            /* The node's other insertion steps ran at the chokepoint (tree_steps_insertion_steps); only §6.6.7's,
-               which can fork, is left to this walk. */
+            /* The node's other insertion steps ran at the insert's step 7.7 (core/dom/node_insert.h); only
+               §6.6.7's, which can fork, is left to this walk. */
             if (b->nphase == TS_NODE_EFFECTS) b->nphase = TS_NODE_AUTOFOCUS;
             DCHECK(b->nphase == TS_NODE_AUTOFOCUS,
                    "§4.2.3's insertion steps resumed in a phase this walk never parks in — the only rest point "
@@ -2920,11 +2848,9 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
        first, then its shadow-including descendants, which is one walk over the shadow-including INCLUSIVE
        descendants.
        THE SAME SET IS WALKED A SECOND TIME, EARLIER AND ELSEWHERE, and that is not duplication: step 7.7.3 and
-       steps 13/14.2 are stated over these same nodes in this same order and belong at the chokepoint, because
-       they cannot rest and must not be reordered against §4.5 adopt's enqueue. See
-       core/dom/node.c's node_custom_element_reactions_tree_steps, which is the same successor and the same
-       bound as this one — the two walks agree because they call one primitive, never because two loops were
-       written to match.
+       steps 13/14.2 are stated over these same nodes in this same order and belong to the insert and remove
+       machines' walks (core/dom/node_insert.c, core/dom/node_remove.c), because they must not be reordered
+       against §4.5 adopt's enqueue. Those walks use the same successor and the same bound as this one.
        A PLAIN `first_child`/`next`/`parent` WALK IS A DIFFERENT NODE SET, not a cheaper spelling of this one:
        it stops at every shadow host, so a custom element the page built inside a shadow tree got neither
        callback when its HOST was inserted or removed — the element was live, its constructor had run, and the
@@ -2939,7 +2865,7 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
     /* §4.8 "Interface ShadowRoot"'s shadow-including tree order — which is where the term is DEFINED, §4.2
        "Node tree" being where plain tree order is — NEVER LEAVES THE SUBTREE THE RECORD NAMED, and the
        successor is what
-       the whole batch's connectedness rests on: element_tree_changed recorded this root because it was
+       the whole batch's connectedness rests on: the insert recorded this root because it was
        connected, and every node this walk reaches is connected exactly because it is a shadow-including
        inclusive descendant of that root. A successor outside it would be a node whose insertion steps this
        member never caused, run under a realm resolved from the wrong document — and step 11's own
@@ -2947,7 +2873,7 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
        that fed it. Asserted HERE, at the advance, which is the only place that knows both ends. */
     DCHECK(n == NULL || shadow_root_is_shadow_including_inclusive_ancestor(e->root, n),
            "§4.2.3's tree-steps walk stepped to a node that is not a shadow-including inclusive descendant of "
-           "the subtree element_tree_changed recorded — the successor is bounded by that root by construction, "
+           "the subtree the insert recorded — the successor is bounded by that root by construction, "
            "so the tree moved under the walk, which §4.2.3 forbids the insertion steps to do");
     e->cursor = n;
     if (n) return JS_STEP_YIELD;
@@ -3388,36 +3314,13 @@ void element_init(JSContext *ctx)
     selector_match_init();
     collections_init(ctx);      /* NodeList and HTMLCollection, which childNodes and children are */
     dom_token_list_init(ctx);   /* its class must exist before classList names it */
-    /* §6's TRAVERSERS, before the tree hooks below: §4.2.3's remove runs §6.1's pre-remove steps BEFORE the
-       removing steps, and the hook list runs in registration order, so the order here IS the standard's. */
+    /* DOM §6's traversers, which §4.2.3's remove asks at its step 4. */
     node_iterator_init(ctx);
     tree_walker_init(ctx);
     range_init(ctx);
-    /* §4.2.3's remove runs the LIVE RANGE pre-remove steps FIRST, then §6.1's, then the removing steps — and
-       the hook list runs in registration order, so this order IS the standard's. */
-    node_add_tree_hook(element_range_steps);
-    node_add_tree_hook(element_iterator_pre_remove);
-    node_add_tree_hook(element_slot_steps);
-    /* …AND THE MOVING STEPS, which are a DIFFERENT list and deliberately not one of the three above: DOM
-       §4.2.3's move runs none of the insertion or removing steps, so the two lists share no registrant and a
-       component that belongs on both says so twice. */
+    /* The moving steps: DOM §4.2.3's move runs none of the insertion or removing steps. */
     node_add_moving_hook(element_moving_steps);
-    /* HTML §4.2.3's FIRST SITUATION, BEFORE element_tree_changed. That hook PREPARES an inserted `<script>`,
-       which resolves its `src` against the document base URL — so inserting `<div><base href=x><script
-       src=y></div>` must freeze the base before the script is prepared, or the one script the markup put
-       after the base is the one script that does not see it. */
-    node_add_tree_hook(html_base_element_tree_steps);
-    node_add_tree_hook(element_tree_changed);
-    /* §4.2.3 insert step 7.7.3 and remove steps 13/14.2 — the CUSTOM ELEMENT REACTION ENQUEUE, AFTER the
-       recorder above (which stands for step 7.7.1's insertion steps) and BEFORE §4.3's record below. It is the
-       one thing at a tree change that is neither an insertion/removing step nor a mutation record, and this
-       line is the only place its position between the two can be stated. */
-    node_add_tree_hook(node_custom_element_reactions_tree_steps);
-    /* §4.3's RECORD IS QUEUED LAST, which is where §4.2.3 numbers it: insert step 8 follows step 7's insertion
-       steps and custom-element reactions, and remove steps 15-16 follow the removing steps and the
-       disconnectedCallback. The hook list runs in registration order, so this line IS that ordering. */
     mutation_observer_init(ctx);
-    node_add_tree_hook(mutation_observer_tree_steps);
     dom_cow_set_cdata_hook(mutation_observer_character_data);
     idl_set_tree_steps(&ELEMENT_TREE_STEPS);
     dom_cow_set_attr_hook(element_attr_changed);
@@ -3453,9 +3356,8 @@ void element_init(JSContext *ctx)
     css_rule_init(ctx);
     css_rule_list_init(ctx);     /* CSSOM §6.4.1 CSSRuleList, the collection §6.1.2's cssRules hands back */
     style_sheet_list_init(ctx);  /* CSSOM §6.2's collections, which §6.1's create adds every sheet to */
-    /* HTML §4.2.6's association between the two. AFTER the sheet interface it creates, and after
-       node_add_tree_hook's list above, because its own registration is on §4.2.3's children-changed family and
-       the standard numbers that family after the mutation record the list's last entry queues. */
+    /* HTML §4.2.6's association between the two, after the sheet interface it creates. It registers on
+       §4.2.3's children-changed family. */
     html_style_element_init(ctx);
     html_element_init(ctx);   /* the HTML half, which builds HTMLElement and the per-tag interfaces on this */
     svg_element_init(ctx);    /* SVG 2's SVGElement, after the HTML half whose mixin installer it calls */
@@ -3663,8 +3565,7 @@ void element_free(JSRuntime *rt)
        LAST, AND THAT ORDER IS THE CONTRACT (core/agent_state.h). Two things above depend on it: the assert at
        the top reads g_element_rt, and §5.5's live-range walk reaches its records through
        abstract_range_of, which is a JS_GetOpaque over §5.3's walk — so a release that undid first would
-       answer its own check and would empty that walk while the tree hooks node_free clears are still
-       installed. It is called BY this component rather than from core/platform.c's release column
+       answer its own check and would empty that walk too early. It is called by this component rather than from core/platform.c's release column
        deliberately: a column that undid every component automatically would leave
        agent_state_check_released nothing to catch. */
     agent_state_undo("element");

@@ -197,10 +197,11 @@ static JSValue js_impl_create_html_document(JSContext *ctx, JSValueConst this_va
         text = lxb_dom_document_create_text_node(lxb_dom_interface_document(dom), (const lxb_char_t *)s, len);
         CHECK(text != NULL, "createHTMLDocument: OOM building step 6's Text node");
         JS_FreeCString(ctx, s);
-        dom_cow_note_created(lxb_dom_interface_node(title));
-        dom_cow_note_created(lxb_dom_interface_node(text));
-        dom_cow_append_child(lxb_dom_interface_node(title), lxb_dom_interface_node(text));
-        dom_cow_append_child(head, lxb_dom_interface_node(title));
+        /* Step 6's two appends put two nodes into the Document this call parsed a statement ago, a private
+           tree whose root owns every node in it (solver/dom_cow.h): bounded by the call's own arguments, and
+           nothing DOM §4.2.3 insert runs steps for can name the document yet. */
+        dom_cow_insert_private(node_of(doc), head, lxb_dom_interface_node(title));
+        dom_cow_insert_private(node_of(doc), lxb_dom_interface_node(title), lxb_dom_interface_node(text));
     }
     return doc;
 }
@@ -220,15 +221,15 @@ static JSValue js_impl_create_html_document(JSContext *ctx, JSValueConst this_va
  * `[LegacyNullToEmptyString] DOMString qualifiedName` means a `null` argument is the EMPTY STRING and therefore
  * step 3's "not the empty string" is false — `createDocument(null, null)` is a document with no document
  * element, which is exactly the shape dom/common.js builds. */
-static JSValue js_impl_create_document(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                       int magic)
+/* Steps 1-3 and 7: the new document's wrapper (owned) with `*element` step 3's element or JS_UNDEFINED, or
+   JS_EXCEPTION. Steps 4-5's appends are the member's machine. */
+static JSValue impl_create_document_start(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                          JSValue *out_element)
 {
     lxb_html_document_t *dom;
     JSValue doc, element = JS_UNDEFINED;
-    lxb_dom_node_t *doctype = argc > 2 ? node_of(argv[2]) : NULL;
     const char *ns = NULL, *type;
 
-    (void)magic;
     if (!impl_doc(ctx, this_val)) return JS_EXCEPTION;   /* §3.7.7's brand check; see createHTMLDocument */
     if (argc > 0 && !JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0])) {
         ns = JS_ToCString(ctx, argv[0]);
@@ -268,22 +269,97 @@ static JSValue js_impl_create_document(JSContext *ctx, JSValueConst this_val, in
         }
         JS_FreeCString(ctx, qname);
     }
-    if (doctype) {                                       /* step 4 */
-        /* The declaration brands this position against the node class AND narrows it with document_type_is, so
-           §3.2.15's TypeError has already been thrown for a node of any other kind — which is what the class
-           test alone could not do, since every DOM node wrapper is one class. */
-        DCHECK(doctype->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE,
-               "createDocument was handed a Node that is not a DocumentType — §4.5.1 declares the position "
-               "`DocumentType?` and the declaration narrows the node-class brand with document_type_is, so "
-               "§3.2.15 owes the TypeError before step 1 and this cannot be reached");
-        dom_cow_append_child(node_of(doc), doctype);
-    }
-    if (!JS_IsUndefined(element)) {                      /* step 5 */
-        dom_cow_append_child(node_of(doc), node_of(element));
-        JS_FreeValue(ctx, element);
-    }
+    *out_element = element;
     return doc;
 }
+
+/* createDocument as a machine: steps 4 and 5 are DOM §4.2.3 appends, and step 4's doctype is the page's node,
+   which may stand in another document's tree, so each is core/dom/node_insert.h's pre-insert. */
+#define IMPL_CD_STAGES(X) \
+    X(IMPL_CD_START,   "DOM §4.5.1 createDocument(namespace, qualifiedName, doctype) steps 1-4 and 7 " \
+                       "(document; element; append doctype to document; content type)") \
+    NODE_INSERT_ALGO_STAGES(X, IMPL_CD_IN, "DOM §4.5.1 createDocument steps 4-5 → DOM §4.2.3 pre-insert step 4") \
+    X(IMPL_CD_ELEMENT, "DOM §4.5.1 createDocument step 5 (append element to document)") \
+    X(IMPL_CD_DONE,    "DOM §4.5.1 createDocument steps 6 and 8 (origin; return document)")
+enum { IDL_STEP_STAGE_BASE(IMPL_CD_STAGES) IMPL_CD_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const IMPL_CD_STEPS[] = { IMPL_CD_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSValue doc, element;   /* step 1's document and step 3's element (or undefined); owned */
+    NodeInsertState in;
+} ImplCdState;
+
+static void impl_cd_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    ImplCdState *s = st;
+
+    v->val(ctx, &s->doc);
+    v->val(ctx, &s->element);
+    node_insert_visit(ctx, &s->in, v);
+}
+
+static const char *impl_cd_script_forbidden(int stage, const void *st)
+{
+    (void)st;
+    return node_insert_script_forbidden(stage, IMPL_CD_IN_TAKE);
+}
+
+static int js_impl_create_document(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                   JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    ImplCdState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    STEP_DISPATCH(IMPL_CD_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(IMPL_CD_START);
+    {
+        lxb_dom_node_t *doctype = argc > 2 ? node_of(argv[2]) : NULL;
+
+        s->doc = s->element = JS_UNDEFINED;
+        s->in.nodes_js = JS_UNDEFINED;
+        s->doc = impl_create_document_start(ctx, hdr->this_val, argc, argv, &s->element);
+        if (JS_IsException(s->doc)) { s->doc = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        if (doctype) {                                   /* step 4 */
+            /* The declaration brands this position against the node class and narrows it with
+               document_type_is, so Web IDL §3.2.15's TypeError is thrown before step 1 for any other node. */
+            DCHECK(doctype->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE,
+                   "createDocument was handed a Node that is not a DocumentType, which its declaration's "
+                   "document_type_is narrowing refuses before step 1");
+            if (!node_pre_insert_start(ctx, hdr, &s->in, doctype, node_of(s->doc), NULL, IMPL_CD_IN_TAKE,
+                                       IMPL_CD_ELEMENT))
+                return JS_STEP_ABRUPT;
+            return JS_STEP_YIELD;
+        }
+        hdr->stage = IMPL_CD_ELEMENT;
+        return JS_STEP_YIELD;
+    }
+
+    NODE_INSERT_ALGO_STAGES(JS_STEP_STAGE_ARM, IMPL_CD_IN, "")
+    return node_insert_run(ctx, hdr, &s->in, IMPL_CD_IN_TAKE);
+
+    STEP_ARM(IMPL_CD_ELEMENT);
+    if (!JS_IsUndefined(s->element)) {                   /* step 5 */
+        if (!node_pre_insert_start(ctx, hdr, &s->in, node_of(s->element), node_of(s->doc), NULL, IMPL_CD_IN_TAKE,
+                                   IMPL_CD_DONE))
+            return JS_STEP_ABRUPT;
+        return JS_STEP_YIELD;
+    }
+    hdr->stage = IMPL_CD_DONE;
+    return JS_STEP_YIELD;
+
+    STEP_ARM(IMPL_CD_DONE);
+    *presult = JS_DupValue(ctx, s->doc);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl IMPL_CD_DECL = {
+    js_impl_create_document, sizeof(ImplCdState), impl_cd_visit, NULL,
+    "DOM §4.5.1 createDocument(namespace, qualifiedName, doctype)", IMPL_CD_STEPS,
+    .script_forbidden = impl_cd_script_forbidden
+};
 
 /* §4.5.1 `hasFeature()` — "return true". The spec says so in those words, and its own note explains why: it is
    kept alive only because pages test it and every implementation answers true. */
@@ -338,7 +414,7 @@ void dom_implementation_init(JSContext *ctx)
            NULL for a non-object, so step 4 is skipped for the null the type now admits. */
         static const IdlArgType CREATE_DOC[3] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRING_NULLABLE,
                                                   IDL_INTERFACE_NULLABLE };
-        g_id_document = idl_method_id(ctx, CREATE_DOC, 3, js_impl_create_document, 0);
+        g_id_document = idl_method_id_step(ctx, CREATE_DOC, 3, NULL, 0, &IMPL_CD_DECL, 0);
         idl_iface_brand(node_class_id());
         /* AND `DocumentType` IS NARROWER THAN "A NODE", which a class id cannot say: every node wrapper is one
            class, so the brand above crossed `createDocument(null, "x", document.createElement("div"))` as

@@ -16,7 +16,7 @@
  * and all five of this engine's markup members (innerHTML, outerHTML, insertAdjacentHTML, setHTML,
  * setHTMLUnsafe) are §13.4 with no scriptingMode argument.
  * With no flag there was nothing for §4.12.1.1 step 1 to return on, and the fragment machine's placement puts
- * every parsed node through dom_cow_append_child, which runs §4.2.3's insertion steps, which prepare an
+ * every parsed node through DOM §4.2.3 insert, which runs the insertion steps, which prepare an
  * inserted `<script>`. So `el.innerHTML = "<script>…</script>"` EXECUTED that script and `<script src=…>`
  * RECORDED an endpoint no browser would ever fetch — a fidelity bug in both halves at once: the browser half
  * ran code a browser does not run, and the solver half reported a request the page cannot make. element.c said

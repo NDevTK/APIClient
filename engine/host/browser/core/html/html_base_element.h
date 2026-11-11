@@ -44,11 +44,8 @@ void html_base_element_install(JSContext *ctx, JSValueConst proto);
 /* The agent-lifetime release — see the definition for why it takes no runtime. */
 void html_base_element_free(void);
 
-/* §4.2.3's FIRST SITUATION, reached through DOM §4.2.3's insertion and removing steps — registered on
-   core/dom/node.h's tree-steps list, so a tree write cannot reach the tree without it. */
-void html_base_element_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase);
-/* The first situation for one node of a subtree removed from a connected parent (DOM §4.2.3 remove steps 11 and
-   14.1), for a removal that drives its descendants one per step. */
+/* HTML §4.2.3's first situation for one node of a subtree removed from a connected parent (DOM §4.2.3 remove
+   steps 11 and 14.1), which core/dom/node_remove.h's machine drives one descendant per step. */
 void html_base_element_removing_steps(lxb_dom_node_t *n);
 /* The same for one node of a subtree inserted into a connected parent (DOM §4.2.3 insert step 7.7.1), for an
    insert that drives its descendants one per step. */

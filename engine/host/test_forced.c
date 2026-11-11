@@ -578,29 +578,73 @@ static JSValue js_get_body_attr(JSContext *ctx, JSValueConst this_val, int argc,
     return r;
 }
 
-/* the DOM NODE-INSERT host-edge (appendChild stands in for body.appendChild(el)): create a <span data-mark=..>
-   and attach it through the insert chokepoint, so the appended subtree is per-flow TIME-TRAVEL state (tree
-   structure, not just attributes). The mark attribute rides the inserted subtree — reverting the insertion
-   removes the whole node, so it needs no separate capture. */
-static JSValue js_append_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic) {
-    (void)this_val; (void)magic;
-    if (argc < 1 || !g_body) return JS_UNDEFINED;
-    const char *mark = JS_ToCString(ctx, argv[0]);
-    if (mark) {
-        lxb_dom_document_t *doc = lxb_dom_interface_node(g_body)->owner_document;
-        /* THE HTML NAMESPACE, NAMED — see core/dom/document.h's document_create_element_html. The vendor
-           entry this used to call decides the namespace from `lxb_dom_document_t::type`, which nothing in this
-           engine writes, so a fixture asking it was asking a field with no writer. */
-        lxb_dom_element_t *span = document_create_element_html(doc, "span", 4);
-        if (span) {
-            lxb_dom_element_set_attribute(span, (const lxb_char_t *)"data-mark", 9,
-                                          (const lxb_char_t *)mark, strlen(mark));   /* part of the inserted subtree */
-            dom_cow_append_child(lxb_dom_interface_node(g_body), lxb_dom_interface_node(span));   /* chokepoint */
-        }
-        JS_FreeCString(ctx, mark);
-    }
-    return JS_UNDEFINED;
+/* The fixture's `appendChild(mark)`, standing in for body.appendChild(el): a new `<span data-mark=mark>` appended
+   to the body by DOM §4.2.3 pre-insert on core/dom/node_insert.h's machine, so the appended node is per-flow tree
+   state. The mark attribute rides the inserted node. */
+#define TF_APPEND_STAGES(X) \
+    X(TF_APPEND_START, "the fixture's appendChild(mark) (the span; DOM §4.2.3 pre-insert steps 1-3)") \
+    NODE_INSERT_ALGO_STAGES(X, TF_APPEND_IN, "the fixture's appendChild(mark)") \
+    X(TF_APPEND_DONE,  "the fixture's appendChild(mark) (return)")
+enum { IDL_STEP_STAGE_BASE(TF_APPEND_STAGES) TF_APPEND_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TF_APPEND_STEPS[] = { TF_APPEND_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static void tf_append_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    node_insert_visit(ctx, st, v);
 }
+
+static const char *tf_append_script_forbidden(int stage, const void *st)
+{
+    (void)st;
+    return node_insert_script_forbidden(stage, TF_APPEND_IN_TAKE);
+}
+
+static int js_append_child(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeInsertState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    STEP_DISPATCH(TF_APPEND_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(TF_APPEND_START);
+    {
+        const char *mark;
+        lxb_dom_document_t *doc;
+        lxb_dom_element_t *span;
+
+        s->nodes_js = JS_UNDEFINED;
+        if (argc < 1 || !g_body) return JS_STEP_DONE;
+        mark = JS_ToCString(ctx, argv[0]);
+        if (!mark) return JS_STEP_ABRUPT;
+        doc = lxb_dom_interface_node(g_body)->owner_document;
+        /* The HTML namespace, named: see core/dom/document.h's document_create_element_html. */
+        span = document_create_element_html(doc, "span", 4);
+        CHECK(span != NULL, "the fixture's appendChild could not create its span");
+        lxb_dom_element_set_attribute(span, (const lxb_char_t *)"data-mark", 9,
+                                      (const lxb_char_t *)mark, strlen(mark));
+        JS_FreeCString(ctx, mark);
+        dom_cow_note_created(lxb_dom_interface_node(span));   /* this flow made it: the delta owns it */
+        if (!node_pre_insert_start(ctx, hdr, s, lxb_dom_interface_node(span), lxb_dom_interface_node(g_body), NULL,
+                                   TF_APPEND_IN_TAKE, TF_APPEND_DONE))
+            return JS_STEP_ABRUPT;
+        return JS_STEP_YIELD;
+    }
+
+    NODE_INSERT_ALGO_STAGES(JS_STEP_STAGE_ARM, TF_APPEND_IN, "")
+    return node_insert_run(ctx, hdr, s, TF_APPEND_IN_TAKE);
+
+    STEP_ARM(TF_APPEND_DONE);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl TF_APPEND_DECL = {
+    js_append_child, sizeof(NodeInsertState), tf_append_visit, NULL,
+    "the fixture's appendChild(mark)", TF_APPEND_STEPS,
+    .script_forbidden = tf_append_script_forbidden
+};
 /* `gcNow()`: run one whole collection of the session's runtime (JS_RunGC) in whichever timeline is applied. The
    fixture runner drives no collector slices of its own, so a row that needs a collection at a known point asks for
    it. A fixture's own surface. */
@@ -10266,7 +10310,7 @@ TF_UNIT void tf_agent_init(JSContext *ctx, const char *origin, const char *top_l
     g_id_host_read = idl_method_id_step(ctx, HR_ARGS, 1, NULL, 0, &HOSTREQ_DECL, 0);
     /* A DECLARED member, like every DOM member — this host-edge mutates the tree, and §4.2.3's insertion steps
        are drained by the machine every declared member converges on. */
-    g_id_append_child = idl_method_id(ctx, ONE_STR, 1, js_append_child, 0);
+    g_id_append_child = idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, &TF_APPEND_DECL, 0);
     /* THIS FIXTURE'S EDGES — WHO answers, which is the half that is legitimately per-host. */
     { static const FetchProvider P = { engine_pending_fetch_url, engine_pending_fetch_cancel };
       fetch_set_provider(&P); }
@@ -40737,15 +40781,8 @@ static bool tf_box_paint(JSContext *ctx, lxb_dom_element_t *root, DisplayList *o
 /* ONE PAINT of the fixture's own active document, with `<p style=STYLE>TEXT</p>` appended to its body and
    removed again. A NULL `style` is the BASE paint — the same document with no paragraph in it, which is what
    makes "the tail of the list is the paragraph's" a checked statement rather than an assumption.
-   THE BORROW IS A BASELINE WRITE AND NOT THE CAPTURING CHOKEPOINT, WHICH THIS FILE HAD WRONG AND WHICH COST A
-   WHOLE RUN. It used dom_cow_append_child/dom_cow_remove_child, and those fire the tree hook: this document's
-   realm is installed by the time a paint can be asked for at all, so core/dom/element.c's element_tree_changed
-   RECORDED DOM §4.2.3 "Mutation algorithms"' steps for every node this function placed and for the removal
-   after it. Only a declared IDL member's step machine drains that list, this function is C running on HOST
-   TIME with no member and no flow anywhere, and so the FIRST declared member the run reached anywhere aborted
-   at core/idl_args.c's stage-0 assert — with a message whose remedy ("declare that member") names no site,
-   because there is no member here to declare. solver/dom_cow.h's baseline write is the entry for a host-time
-   write into the tree every flow starts from, and it states what it does and does not owe. */
+   The borrow is a baseline write (solver/dom_cow.h): this function is C on host time with no member and no
+   flow, and DOM §4.2.3's steps are run and drained only by a declared member's machine. */
 static bool tf_pt_paint(JSContext *ctx, lxb_html_document_t *dom, const char *style, const char *text,
                         DisplayList *out, unsigned *offers)
 {
@@ -42107,8 +42144,8 @@ TF_UNIT void stacking_clip_path_selftest(JSContext *ctx)
 
 /* `<p>` WITH AN INLINE BOX IN IT, BUILT INTO THE FIXTURE'S OWN ACTIVE DOCUMENT AND TAKEN OUT AGAIN — the
    same borrow `tf_pt_paint` above makes, through the same two BASELINE-WRITE entries and for the reason that
-   function's banner now states: a host-time write into the presented tree may not go through the capturing
-   chokepoint, whose tree hook records §4.2.3's steps for a member that does not exist here.
+   function's banner states: a host-time write into the presented tree runs none of DOM §4.2.3's steps, which
+   belong to a member that does not exist here.
    THE HTML NAMESPACE IS NAMED for the reason that function states: the vendor entry decides it from
    `lxb_dom_document_t::type`, which nothing in this engine writes. */
 static lxb_dom_element_t *tf_ib_box(lxb_dom_document_t *d, lxb_dom_node_t *parent, const char *name,
@@ -46477,23 +46514,8 @@ int main(int argc, char **argv) {
 
     concolic_init(ctx);
     flow_registry_init("fixture");   /* one document in this fixture; the world namespace is named by it */
-    /* THE DOM CHOKEPOINT'S CONTEXT, NAMED BY THIS HOST IN ITS OWN INIT — the third host to owe it, and the
-       second to have forgotten. DOM §4.2.3 Mutation algorithms' insertion and removing steps are fired from
-       the solver's tree chokepoint, which needs the runtime they run in; `dom_cow_set_tree_hook` is called
-       for this host the moment `element_init` registers the first of them, so from `tf_agent_init` onward
-       the hook is LIVE. This host named no context at all and rode `engine_sched_begin`'s call, which is at
-       the very END of the run — so every line between the agent and the run was a window in which a
-       DOM-API tree write ran with the hook live and no context. Nothing here had ever made one (the
-       document parse takes the tree-construction ops, which fire no hook), so the window was invisible
-       until a fixture appended an element to the body — and the same window was open on a second road, since
-       the chokepoint's attribute-removal path asserts this context DIRECTLY, so an `el.removeAttributeNode(x)`
-       in here would have found it just as well and named the taint shadow instead of the insertion steps.
-       IT IS THE HOST'S TO STATE AND NOT THE ENGINE'S TO INFER, which is what `engine/host/wpt_runner.c`
-       records at its own copy of this line: that runner ran NO insertion steps for its whole life — no
-       <script> preparation, no custom-element upgrade, no child navigable — and the failure surfaced three
-       layers away as an iframe whose `contentWindow` was null. Beside `flow_registry_init` because that is
-       where that host states it, and BEFORE the agent for the reason the assert exists: the hook goes live
-       inside the agent's own init, so a context named after it is a context named too late. */
+    /* The DOM chokepoint's context, named by this host in its own init: the attribute and character-data
+       hooks run in it and go live inside the agent's own init, so it is named before the agent. */
     dom_cow_set_ctx(ctx);
     world_registry_selftest(ctx);   /* the peer half: worlds minted as if by another document */
     flow_job_selftest(ctx);         /* §8.1.7's two queues, §7.5.10 step 5, and the fork's copy-on-nothing */

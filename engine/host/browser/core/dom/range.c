@@ -2362,8 +2362,8 @@ void range_free(JSRuntime *rt)
        return before re-registering it — and the pool entries still go back to -1 because the pool they index
        is the agent's. Only WHEN moves, and it moves LATER, which is the safe direction here: nothing between
        this line and element_free's last reads any of them, both collector entries reach their record through
-       JS_GetAnyOpaque rather than through g_range_class, and §5.5's live-range walk keeps answering while the
-       tree hooks node_free clears are still installed.
+       JS_GetAnyOpaque rather than through g_range_class, and §5.5's live-range walk keeps answering until
+       then.
        `g_live_closed` IS NOT AMONG THEM and stays here: it is the one slot whose value at the release column
        must be 1, so it is not declared to core/agent_state.h at all and range_live_drop's last finalizer is
        what winds it back — see the comment above that function. */

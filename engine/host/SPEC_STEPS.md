@@ -4429,7 +4429,7 @@ reason is not the same for the two parsers, and the sentence here used to give o
 made it a claim about §7.5.2 wearing the shape of a claim about every load. §7.5.2's Lexbor HTML
 parse never reaches `core/dom/node.h`'s `insert`, so nothing is recorded to begin with. §7.5.3's XML
 parse *does* reach it — `core/xml/xml_tree.c`'s `DOM_PARSE_ROOT_SHARED` arm — and is refused one step
-later by `element_tree_changed`'s `tree_steps_can_run`, because §4.2.3's steps run in the **node's
+later by the insert record's `tree_steps_can_run`, because §4.2.3's steps run in the **node's
 document's realm** and this engine installs that realm after the parse. So for a parsed document
 there is no moment at which a reset *could* have run, and
 reading an absent slot as "the owner is null" would empty `form.elements` and every entry list for

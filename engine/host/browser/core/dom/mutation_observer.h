@@ -40,18 +40,8 @@ void mutation_observer_queue_record(JSContext *ctx, int type, lxb_dom_node_t *ta
  * numbered in. */
 void mutation_observer_transient_for_removal(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent);
 
-/* §4.2.3's INSERT step 8 and REMOVE steps 15-16 — "queue a TREE mutation record for parent", registered into
-   node.h's tree-steps list so it fires from the ONE chokepoint every tree write goes through. It answers at
-   NODE_TREE_INSERTED and at NODE_TREE_REMOVING and at neither other phase: the record carries
-   oldPreviousSibling and oldNextSibling, which §4.2.3's remove binds at its steps 5-6, BEFORE the detach — so
-   the post-detach phase (which exists for the slot steps) has no siblings left to read and nothing to say.
-   It is registered LAST of the tree hooks, because the list runs in registration order and §4.2.3 numbers the
-   record AFTER the live-range steps, the NodeIterator pre-remove steps, the removing steps and the
-   custom-element reactions. */
-void mutation_observer_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase);
-
-/* §4.2.3's REMOVE step 16 for a removal that runs its own steps rather than the tree-steps list: the record for
-   `parent` with « », « node » and the siblings steps 5-6 bound before the detach. */
+/* DOM §4.2.3 remove step 16, for core/dom/node_remove.h's machine: the record for `parent` with « », « node »
+   and the siblings steps 5-6 bound before the detach. */
 void mutation_observer_removal_record(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent,
                                       lxb_dom_node_t *old_prev, lxb_dom_node_t *old_next);
 /* DOM §4.2.3 insert step 8 for one inserted node: queue a tree mutation record for `parent` with « node », « »,
@@ -63,12 +53,10 @@ void mutation_observer_insertion_record(JSContext *ctx, lxb_dom_node_t *node, lx
    oldPreviousSibling, and oldNextSibling" and "queue a tree mutation record for newParent with « node », « »,
    newPreviousSibling, and child".
  *
- * IT IS A CALL AND NOT THE TREE-HOOK REGISTRATION ABOVE, because a move fires no tree hook at all: §4.2.3's
- * move is a separate primitive from insert and remove and runs neither's steps, so the list that carries the
- * insertion and removing steps is exactly the list a move must not reach. What survives of the removal side is
- * these two records and nothing else — in particular NOT remove's step 15, whose transient registered
- * observers are absent from move's numbering, so a node moved out of a subtree an observer watches stops
- * reporting to it. That absence is the standard's, and reusing the hook would have silently added it back.
+ * §4.2.3's move is a separate primitive from insert and remove and runs neither's steps. What survives of the
+ * removal side is these two records and nothing else: remove's step 15, whose transient registered observers
+ * are absent from move's numbering, is not run, so a node moved out of a subtree an observer watches stops
+ * reporting to it. That absence is the standard's.
  *
  * TWO RECORDS FOR ONE NODE is what makes this its own entry rather than two calls at the caller: the node list
  * « node » is ONE array shared by both records, and building it is this component's private shape. The four

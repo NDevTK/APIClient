@@ -22,12 +22,9 @@ extern int g_dom_capture;
    dup/free the shadow's opaque JSValues without threading a context through every host-edge/scheduler call. */
 void dom_cow_set_ctx(JSContext *ctx);
 
-/* §4.2.3's INSERTION and REMOVING STEPS, fired BY the chokepoint. The browser layer owns what they mean (a
-   <script> is prepared, a custom element is upgraded, its disconnected reaction is enqueued); this file owns
-   the one place a tree write happens, which is the only place that cannot be forgotten. `inserted` is 1 after
-   a node entered the tree and 0 BEFORE one leaves it, because "was it connected" is only answerable then. */
-void dom_cow_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase));
-/* §4.9's ATTRIBUTE CHANGE STEPS, fired by the same chokepoint for the same reason. Called AFTER the write —
+/* DOM §4.2.3's insertion and removing steps are not fired from this file: core/dom/node_insert.h's and
+   core/dom/node_remove.h's machines run them, one node per rest, around the per-node primitives below. */
+/* §4.9's attribute change steps, fired by the attribute chokepoint so no write can forget them. Called after the write —
    §9.4.6 step 2 stores the value and step 3 handles the change, in that order — so BOTH values are passed and
    the old one is copied across the write rather than read back off an element that no longer has it. `val` is
    NULL for a removal and `old_val` is NULL for an attribute that was absent, which is the null a page's
@@ -88,9 +85,8 @@ bool dom_cow_restoring(void);
        `prev`. It is handed `(node, old_parent)` — so the parent survives and THE OLD NEXT SIBLING DOES NOT. A
        kind-2 entry built from it restores the node as its parent's LAST child instead of at the index the
        baseline had. That is not a gap to fill, it is the wrong shape: the position has to be read BEFORE the
-       unlink, which is what dom_cow_remove_child does and what no after-the-fact hook can.
-   Those callbacks are DOM §4.2.3's insertion/removing STEPS, which this file already routes through
-   dom_cow_set_tree_hook. They are the right home for the steps and they are not the capture. */
+       unlink, which is what dom_cow_remove_detach does and what no after-the-fact hook can.
+   Those callbacks are lexbor's own per-tag element steps. They are not the capture. */
 /* VALUE AND TAINT ARE ONE WRITE, and the identity that keys both is resolved HERE. They were two calls every
    caller made in agreement over a key each computed for itself: a caller that made one and not the other left a
    stale taint on a fresh value or dropped the provenance of a stored source, and `toggleAttribute(name, true)`
@@ -129,22 +125,14 @@ JSValue dom_cow_attr_taint_ns(lxb_dom_element_t *el, const char *ns, const char 
    walking the element's own list and has no qualified name to spell. See the definition for why re-spelling
    one would be a fourth chance for the read and the write to disagree about §4.9's key. */
 JSValue dom_cow_attr_taint_node(lxb_dom_element_t *el, const lxb_dom_attr_t *a);
-/* node-insert chokepoint — the tree-structure twin of dom_cow_set_attribute: capture the insertion THEN attach
-   the child, so a subtree a flow appends reverts per-flow (detached on context-switch, re-attached on resume). */
-void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child);
-/* the same insert AT A POSITION — §4.2.3 insertBefore, and the reference child's own re-parenting. */
-void dom_cow_insert_before(lxb_dom_node_t *ref, lxb_dom_node_t *child);
-/* Detach a node the BASELINE may own — captured so it comes back on revert/unapply. innerHTML= needs it:
-   it REPLACES children, and an uncaptured removal leaks the old subtree across a context switch. */
-void dom_cow_remove_child(lxb_dom_node_t *node);
 /* DOM §4.2.3 remove's per-node primitives, for core/dom/node_remove.h's machine, which runs the steps around
    them. `_index_element` takes one element of the subtree out of `doc`'s name index while the subtree is still
-   linked, captured; `_detach` is step 7's unlink, captured, which then walks no index and runs no tree hook. */
+   linked, captured; `_detach` is step 7's unlink, captured, which then walks no index. Capture comes first, so
+   a subtree a flow removes comes back on unapply. */
 void dom_cow_remove_index_element(lxb_dom_document_t *doc, lxb_dom_element_t *el);
 void dom_cow_remove_detach(lxb_dom_node_t *node);
 /* DOM §4.2.3 insert's, for core/dom/node_insert.h's machine: `_link` is steps 7.2-7.3, captured, which walks no
-   index and runs no tree hook; `_index_element` then adds one element of the linked subtree to `doc`'s name
-   index, captured. */
+   index; `_index_element` then adds one element of the linked subtree to `doc`'s name index, captured. */
 void dom_cow_insert_link(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref);
 void dom_cow_insert_index_element(lxb_dom_document_t *doc, lxb_dom_element_t *el);
 /* Whether the tree link or unlink in progress carries its subtree's name-index upkeep per element, so lexbor's
@@ -156,9 +144,9 @@ bool dom_cow_name_index_apart(void);
    and remove, it does not invoke the insertion steps or removing steps for inclusiveDescendant." Those steps
    are what destroy a child navigable's document, reset a focused area, hide a popover and re-fire a custom
    element's connected/disconnected pair — every piece of state `moveBefore()` exists to preserve. So a move
-   that reached `dom_cow_remove_child` + `dom_cow_insert_before` would be a state-PRESERVING member built out
-   of the two calls that destroy the state, and nothing would say so: the tree would end up right and the
-   iframe would be blank.
+   that ran DOM §4.2.3's remove and then its insert would be a state-preserving member built out of the two
+   algorithms that destroy the state, and nothing would say so: the tree would end up right and the iframe
+   would be blank.
    THE DELTA ENTRIES ARE EXACTLY THE TWO A REMOVE AND AN INSERT PUSH, which is what makes a move time-travel
    with no new entry kind: the removal remembers (old parent, old next sibling) and the insertion remembers
    where it landed, so an unapply walks them head-first and puts the node back where the baseline had it.
@@ -168,38 +156,15 @@ bool dom_cow_name_index_apart(void);
    the same node, because a `_move_out` with no `_move_in` is a node removed with no removing steps. */
 void dom_cow_move_out(lxb_dom_node_t *node);
 void dom_cow_move_in(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref);
-/* A BASELINE TREE WRITE — the same two captures the append and remove chokepoints push, and NO TREE HOOK.
-   THE ABSENCE OF THE HOOK IS THE WHOLE OPERATION rather than an omission, exactly as it is for the move pair
-   above, and the reason is a different one: a move is a §4.2.3 primitive that runs no insertion or removing
-   steps, while this is a write made on HOST TIME, before any flow exists, into the tree every flow will start
-   from. HTML §13.2.6 "Tree construction" already writes that tree and reaches DOM §4.2.3 "Mutation
-   algorithms" at no point at all — the parse's cb table calls `lxb_dom_node_insert_child` directly — so a
-   baseline write that DID record would be the one write into the baseline document that owes a member's
-   drain, and there is no member on host time for it to be owed to.
-   WHAT GOES WRONG WITHOUT IT, MEASURED. core/dom/element.c's element_tree_changed records for every connected
-   insert whose document has a realm, and a host that installs the realm and THEN writes into the tree it
-   presents satisfies both tests — so the entries are made, nothing drains them (only a declared member's step
-   machine can), and the next declared member to start anywhere aborts at core/idl_args.c's stage-0 assert
-   with a message whose remedy names no site, because the mutator is not a member and cannot be declared as
-   one. In a release build, with that DCHECK compiled out, the entries are instead handed to whichever member
-   happens to run next, which walks them over nodes the borrow has since DETACHED.
-   THE SLICE IS ASSERTED AND IT IS AN ASSERTION, NEVER A BRANCH — solver/quantum.h's `quantum_slice_open` is
-   this engine's one spelling of host time, and a caller that BRANCHED on it would be choosing between a
-   scheduled path and an unscheduled one, which is the fallback CLAUDE.md §C-stack bans. Each caller statically
-   calls one entry or the other: a flow's mutation calls the chokepoint above, a host-time write calls this,
-   and nothing anywhere selects between them. The assert is what makes that structural rather than hoped.
-   NAMED RESIDUAL. WHAT IS NOT COVERED: §4.2.3's steps for the subtree this places never run, so a baseline
-   write of an `<iframe>` gets no child navigable, a `<script>` is never prepared, a `<style>` contributes no
-   sheet and a custom element is not upgraded. That is the state HTML §7.5.2 "Loading HTML documents"' own
-   parse has always been in — core/dom/document.c's document_install answers it for the parsed tree with the
-   parsed-walk family (html_base_element_parsed, html_script_parsed, declarative_shadow_parsed,
-   media_element_parsed, html_image_parsed, html_link_parsed, html_style_element_parsed,
-   iframe_document_parsed, autofocus_document_parsed) — so this makes a baseline write agree with the parse
-   beside it rather than narrowing either. WHAT THE NEXT DIFF BUILDS: the same walk over the subtree a
-   baseline write places, so a host-time write owes exactly what the parse owes and by the same family.
-   HOW ITS ABSENCE WOULD SHOW: a document whose baseline write places an element the parsed-walk family has a
-   member for renders as though that element were inert — the count a painter derives over it is right and the
-   navigable, the sheet or the program it should also have produced is absent, with no abort anywhere. */
+/* A baseline tree write: the captures an insert's link and a removal's unlink push, and none of DOM §4.2.3's
+   steps. It is host time's, made before any flow exists into the tree every flow starts from, as HTML §13.2.6
+   tree construction's writes are; a flow's mutation runs core/dom/node_insert.h's or node_remove.h's machine.
+   The entry asserts no slice is open and never branches on it: each caller statically calls one or the other.
+   Named residual. Not covered: DOM §4.2.3's steps for the subtree this places never run, so a baseline write
+   of an `<iframe>` gets no child navigable, a `<script>` is never prepared and a `<style>` contributes no
+   sheet, the state the parse beside it is in until core/dom/document.c's document_install runs its
+   parsed-walk family. Next: that same walk over the subtree a baseline write places. Absence shows as a
+   document whose baseline write places such an element rendering as though it were inert. */
 void dom_cow_append_baseline(lxb_dom_node_t *parent, lxb_dom_node_t *child);
 void dom_cow_remove_baseline(lxb_dom_node_t *node);
 /* A character-data node's VALUE (§4.10 `data`) — the third thing a flow can change about the tree, on a node
