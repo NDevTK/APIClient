@@ -8,7 +8,7 @@
  * inside any one of them it would be that caller's private idea of what a colour is, and the first thing to go
  * wrong is the two disagreeing about which strings are colours at all.
  *
- * LEXBOR OWNS THE GRAMMAR, EXCEPT FOR THE ONE PRODUCTION IT DOES NOT HAVE. Lexbor has the real CSS tokenizer
+ * Lexbor owns the grammar except §10.1's color() and Color 5's color-mix() (css_color_mix.h). Lexbor has the real CSS tokenizer
  * and most of the real `<color>` production — hex, `rgb()`, `rgba()`, `hsl()`, `hsla()`, `hwb()`, `lab()`,
  * `lch()`, `oklab()`, `oklch()`, the named colours, the system colours, `transparent` and `currentcolor` —
  * reached through `lxb_css_property_state_color`, the state function its property registry runs for the `color`
@@ -79,6 +79,14 @@ extern const CssColor CSS_COLOR_OPAQUE_BLACK;
    of the properties rather than against an element — `currentcolor` to the `color` property's initial value,
    CanvasText, and each `<system-color>` to this UA's own theme in css_system_color.h. */
 bool css_color_parse(const char *text, size_t len, CssColor *out);
+
+/* §4.5 for a caller that has a context element: `currentcolor`, whole or as a CSS Color 5 color-mix() argument,
+   is `*current` (§6.4 "The currentcolor keyword"'s used value of `color`). NULL is css_color_parse. */
+bool css_color_parse_in(const char *text, size_t len, const CssColor *current, CssColor *out);
+
+/* CSS Color 4 §10.1's `<predefined-rgb> | <xyz-space>` keyword `name`, ASCII case-insensitively, as the space
+   it names. False for any other ident, the lab family and the polar spaces included. */
+bool css_color_space_by_name(const char *name, size_t len, CssColorSpace *out);
 
 /* CSS Color 4 §11's CONVERTING COLORS, in place. Converting a colour to the space it is already in is NOT a
    conversion — §11 defines the algorithm only "where src and dest are different" — so it is an identity here,

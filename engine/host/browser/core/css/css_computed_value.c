@@ -3500,6 +3500,40 @@ static char *css_cv_used_color_value(lxb_dom_element_t *el, const char *name)
     return spec;
 }
 
+/* Does `spec` hold the ident `currentcolor` anywhere, ASCII case-insensitively — a CSS Color 5 color-mix()
+   argument the cascade's value carries inside a function, where css_cv_used_color_value's whole-value test
+   cannot see it. A false positive costs one used-colour derivation and changes no answer. */
+static bool css_cv_mentions_currentcolor(const char *spec)
+{
+    static const char KW[] = "currentcolor";
+    size_t i, k, n = strlen(spec);
+
+    for (i = 0; i + sizeof KW - 1 <= n; i++) {
+        for (k = 0; k < sizeof KW - 1 && tolower((unsigned char)spec[i + k]) == KW[k]; k++) {}
+        if (k == sizeof KW - 1) return true;
+    }
+    return false;
+}
+
+/* CSS Color 4 §6.4 "The currentcolor keyword" for an argument inside `name`'s value on `el`: the used `color`
+   of `el`, or, on the `color` property itself, the inherited one — its parent's, or the initial value at the
+   root, as css_cv_used_color_value resolves a whole-value `currentcolor`. */
+static bool css_cv_current_color(lxb_dom_element_t *el, const char *name, CssColor *out)
+{
+    lxb_dom_element_t *parent;
+    char *spec;
+    bool ok;
+
+    if (strcmp(name, "color") != 0) return css_used_color(el, "color", out);
+    parent = css_parent_element(el);
+    if (parent != NULL) return css_used_color(parent, "color", out);
+    spec = cssom_initial_value("color");
+    ok = css_color_parse(spec, strlen(spec), out);
+    DCHECK(ok, "`color`'s initial value is not a <color>; CSS Color 4 gives it `canvastext`");
+    free(spec);
+    return ok;
+}
+
 /* CSSOM §9 "Resolved Values"' USED COLOUR OF `name` ON `el`, answered as a `CssColor` — the SECOND ENTRY over
  * one derivation, and it exists for exactly the reason core/dom/element_view.h's `element_view_bounding_box_px`
  * exists beside `getBoundingClientRect`. That header states the argument and this is the same one a property
@@ -3517,6 +3551,7 @@ static char *css_cv_used_color_value(lxb_dom_element_t *el, const char *name)
  * `out` is written only on a true answer. */
 bool css_used_color(lxb_dom_element_t *el, const char *name, CssColor *out)
 {
+    CssColor current, *cur = NULL;
     char *spec;
 
     DCHECK(el != NULL, "CSSOM §9's used colour was asked for on no element — `currentcolor` resolves up the "
@@ -3558,15 +3593,18 @@ bool css_used_color(lxb_dom_element_t *el, const char *name, CssColor *out)
               "physical longhand it resolves to on this element");
         return false;
     }
-    if (!css_color_parse(spec, strlen(spec), out)) {
+    if (css_cv_mentions_currentcolor(spec)) {
+        if (!css_cv_current_color(el, name, &current)) { free(spec); return false; }
+        cur = &current;
+    }
+    if (!css_color_parse_in(spec, strlen(spec), cur, out)) {
         DFAIL("a colour-valued property's specified value is not a `<color>` CSS Color 4's grammar accepts. "
               "The value that reaches here past `currentcolor` and past §7's CSS-wide keywords is either "
               "css-ui-4's `outline-color: invert` — a real keyword whose used value is a COLOUR INVERSION "
               "of what is behind the outline, which no serialization can name and which every user agent "
-              "answers as the computed keyword instead — or a `color-mix()`, a `light-dark()` or a "
-              "relative-colour form the parse does not have. BUILD the missing production in "
-              "core/css/css_color.c, and give `invert` §9's computed-value escape, which is the one place "
-              "a used colour has no number");
+              "answers as the computed keyword instead — or a `light-dark()` or a relative-colour form the "
+              "parse does not have. BUILD the missing production in core/css/css_color.c, and give `invert` "
+              "§9's computed-value escape, which is the one place a used colour has no number");
         free(spec);
         return false;
     }
@@ -3930,6 +3968,10 @@ static JSValue css_resolved_longhand_held(JSContext *ctx, lxb_dom_element_t *el,
         /* A FALSE ANSWER LEAVES THE SWITCH, which is what each of the arms that moved into `css_used_color`
            already did: its two DFAILs name the absence in dev, and in release the `break` below is the same
            `break` this case had. */
+        /* Named residual: CSS Color 4 §16.2 "Serializing sRGB values" keeps the legacy form for the legacy
+           syntaxes only, so a color() or a CSS Color 5 color-mix() value is owed §16.5's `color()` form here.
+           The next diff carries whether a used colour came from a legacy syntax through css_used_color. Its
+           absence shows as a resolved colour reading `rgb(...)` for a value declared in a non-legacy form. */
         if (!css_used_color(el, name, &color)) break;
         css_color_serialize_srgb(&color, text);
         return JS_NewString(ctx, text);

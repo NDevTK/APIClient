@@ -41,6 +41,7 @@
 #include "check.h"
 #include "core/css/css_color.h"
 #include "core/css/css_color_convert.h"
+#include "core/css/css_color_mix.h"
 #include "core/css/css_system_color.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
@@ -161,7 +162,7 @@ static bool css_ascii_ci_eq(const char *a, size_t alen, const char *b)
     return b[alen] == '\0';
 }
 
-static bool css_color_space_by_name(const char *name, size_t len, CssColorSpace *out)
+bool css_color_space_by_name(const char *name, size_t len, CssColorSpace *out)
 {
     size_t i;
 
@@ -817,11 +818,49 @@ done:
 
 /* ---- the entry points ------------------------------------------------------------------------------------ */
 
+/* Is `text` the one keyword `currentcolor`, read as CSS Syntax 3 reads an ident so an escape spelling it counts. */
+static bool css_color_is_currentcolor(const char *text, size_t len)
+{
+    lxb_css_syntax_tokenizer_t *tkz = lxb_css_syntax_tokenizer_create();
+    const lxb_css_syntax_token_t *t;
+    bool is = false;
+
+    CHECK(tkz != NULL, "css color: the CSS tokenizer allocation failed");
+    CHECK(lxb_css_syntax_tokenizer_init(tkz) == LXB_STATUS_OK, "css color: the CSS tokenizer could not initialise");
+    lxb_css_syntax_tokenizer_buffer_set(tkz, (const lxb_char_t *)text, len);
+    t = css_color_peek(tkz);
+    if (t->type == LXB_CSS_SYNTAX_TOKEN_IDENT &&
+        css_ascii_ci_eq((const char *)lxb_css_syntax_token_ident(t)->data, lxb_css_syntax_token_ident(t)->length,
+                        "currentcolor")) {
+        lxb_css_syntax_token_consume(tkz);
+        is = css_color_peek(tkz)->type == LXB_CSS_SYNTAX_TOKEN__EOF;
+    }
+    lxb_css_syntax_tokenizer_destroy(tkz);
+    return is;
+}
+
 bool css_color_parse(const char *text, size_t len, CssColor *out)
 {
+    return css_color_parse_in(text, len, NULL, out);
+}
+
+bool css_color_parse_in(const char *text, size_t len, const CssColor *current, CssColor *out)
+{
     CssColorFnResult r;
+    CssColorMixResult m;
 
     DCHECK(out != NULL, "css color: a parse was asked for with nowhere to put the result");
+    if (current != NULL && css_color_is_currentcolor(text, len)) {
+        *out = *current;
+        return true;
+    }
+    m = css_color_mix_parse(text, len, current, out);
+    if (m != CSS_COLOR_MIX_NOT_A_MIX) {
+        DCHECK(!css_color_lexbor_accepts(text, len),
+               "lexbor's <color> grammar has gained CSS Color 5's color-mix(), which css_color_mix.c reads "
+               "itself; delete that reader's routing here and read the value out of lexbor's record");
+        return m == CSS_COLOR_MIX_PARSED;
+    }
     r = css_color_parse_function(text, len, out);
     if (r != CSS_COLOR_FN_NOT_A_COLOR_FUNCTION) {
         DCHECK(!css_color_lexbor_accepts(text, len),

@@ -2258,6 +2258,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/transform3d.h"
 #include "fixture/indivtransform.h"
 #include "fixture/transformmath.h"
+#include "fixture/colormix.h"
 #include "fixture/perspective.h"
 #include "fixture/perspectivew.h"
 #include "fixture/dommatrix.h"
@@ -3120,6 +3121,7 @@ TF_DOCS[] = {
     { "transform3d", HTML_TRANSFORM3D },
     { "indivtransform", HTML_INDIVTRANSFORM },
     { "transformmath", HTML_TRANSFORMMATH },
+    { "colormix", HTML_COLORMIX },
     { "perspective", HTML_PERSPECTIVE },
     { "perspectivew", HTML_PERSPECTIVEW },
     { "dommatrix", HTML_DOMMATRIX },
@@ -26854,6 +26856,41 @@ TF_UNIT void probes_transformmath(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `colormix` document (fixture/colormix.h): CSS Color 5 §3's color-mix() over CSS Color 4
+   §13's interpolation, read back as rounded components and an alpha. */
+TF_UNIT void probes_colormix(const char *js, Probe *tab, int *n) {
+    const char *cm_why = NULL; int cm_tt = 1;
+    const char *ca_why = NULL; int ca_tt = 1;
+#define CM_IS(k, v) param_value_is(js, "/api/colormix", k, v)
+    int reached = !!strstr(js, "\"/api/colormix\"");
+    const char *nr = "NOT REACHED: no /api/colormix record, so the document aborted before its fetch";
+    fold_row(&cm_tt, &cm_why, reached, nr);
+    fold_row(&ca_tt, &ca_why, reached, nr);
+    fold_row(&cm_tt, &cm_why, CM_IS("a", "128_0_128_1"),
+             "CSS Color 5 §3.3: color-mix(in srgb, red, blue) is not the 50% mix (128, 0, 128)");
+    fold_row(&cm_tt, &cm_why, CM_IS("v", "235_244_249_1"),
+             "CSS Color 5 §3.3: color-mix(in srgb, var(--accent) 8%, #fff) with --accent #0376b8 is not "
+             "(235, 244, 249)");
+    fold_row(&cm_tt, &cm_why, CM_IS("n", "191_128_191_1"),
+             "CSS Color 5 §3.3: a nested color-mix() argument is not mixed first");
+    fold_row(&cm_tt, &cm_why, CM_IS("c", "64_191_0_1"),
+             "CSS Color 4 §6.4: a currentcolor color-mix() argument is not the element's own used `color`");
+    fold_row(&cm_tt, &cm_why, CM_IS("r", "188_0_188_1"),
+             "CSS Color 4 §13.3: a mix in srgb-linear is not interpolated in linear light");
+    fold_row(&cm_tt, &cm_why, CM_IS("x", "0_0_0_0"),
+             "CSS Color 5 §3.2: a percentage over 100% does not make the declaration invalid");
+    fold_row(&ca_tt, &ca_why, CM_IS("t", "0_0_255_0.4"),
+             "CSS Color 4 §13.5: blue 40% with transparent is not premultiplied to rgba(0, 0, 255, 0.4)");
+    fold_row(&ca_tt, &ca_why, CM_IS("l", "128_0_128_0.6") && CM_IS("s", "255_0_0_0.5"),
+             "css-values-5 §6.1: percentages summing under 100% do not leave their leftover as alpha");
+#undef CM_IS
+    const Probe rows[] = {
+        { "color-mix-srgb", cm_tt, "/api/colormix", SESS_EXPLORE, cm_why },
+        { "color-mix-alpha", ca_tt, "/api/colormix", SESS_EXPLORE, ca_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `perspective` document (fixture/perspective.h): css-transforms-2 §8's perspective and §9's
    perspective-origin, through §4.1.1's perspective matrix. */
 TF_UNIT void probes_perspective(const char *js, Probe *tab, int *n) {
@@ -34274,6 +34311,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_transform3d(js, probes, &np);
     probes_indivtransform(js, probes, &np);
     probes_transformmath(js, probes, &np);
+    probes_colormix(js, probes, &np);
     probes_perspective(js, probes, &np);
     probes_perspectivew(js, probes, &np);
     probes_dommatrix(js, probes, &np);
