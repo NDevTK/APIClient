@@ -30,7 +30,7 @@
 #include "core/dom/node_insert.h"
 #include "core/dom/node_replace.h"
 
-/* WHERE THE PARSED NODES GO: the DOM §4.2.3 algorithm each member runs over the fragment, around `anchor`.
+/* Where the parsed nodes go: the DOM §4.2.3 algorithm each member runs over the fragment, around `anchor`.
    REPLACE_ALL is replace all within anchor (§8.5.4 step 5, §8.6.4 set and filter HTML's last step); REPLACE is
    replace anchor within its parent (§8.5.5 step 7); BEFORE, AFTER and FIRST_CHILD are §8.5.6 step 6's inserts
    and CHILDREN its append; RETURN places nothing (§8.5.7 returns the fragment). */

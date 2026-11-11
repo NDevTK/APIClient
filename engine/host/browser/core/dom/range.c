@@ -480,7 +480,7 @@ static int range_set_bp(JSContext *ctx, RangeBounds *b, JSValueConst nodev, uint
     return 0;
 }
 
-/* §5.5's FIFTEEN PLAIN OPERATIONS, EACH PAIRED WITH THE SENTENCE ITS OWN POOL ENTRY IS REPORTED BY. The enum
+/* §5.5's fifteen plain operations, each paired with the sentence its own pool entry is reported by. The enum
    below and the declaration loop in range_init are two readings of this ONE list, so a member §5.5 gains cannot
    acquire a pool entry whose forgotten release is then named after a neighbour — which is core/agent_state.h's
    whole complaint about one shared `what` for many slots. ORDER IS LOAD-BEARING and is §5.5's own IDL order:

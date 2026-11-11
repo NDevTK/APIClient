@@ -193,7 +193,7 @@ void fragment_parse_release(JSContext *ctx, void *st)
     /* §8.5.5 step 5's / §8.5.7 step 6's `body` IS NOT FREED HERE ANY MORE — it is declared, so the ONE list
        destroys it after this returns. Freeing it here as well is the second list, and the teardown's own
        fingerprint bracket around this call is what now measures that rather than trusting it. */
-    /* WHATEVER OF THE PARSE IS LEFT. Once FRAG_FRAGMENT has emptied the root this is NULL; a member torn down
+    /* Whatever of the parse is left. Once FRAG_FRAGMENT has emptied the root this is NULL; a member torn down
        before then, or a §8.6.4 set and filter HTML filter that threw, leaves the remainder here. */
     if (s->frag) {
         dom_cow_destroy_private(ctx, s->frag, /*with_children*/ true);
@@ -401,7 +401,7 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
         js_free(ctx, s->pc);
         s->pc = NULL;
         CHECK(s->frag != NULL, "the fragment parse produced no root element");
-        /* THE PARSE'S NODES BELONG TO THE REAL DOCUMENT, and everything after this line depends on it:
+        /* The parse's nodes belong to the real document, and everything after this line depends on it:
            FRAG_FRAGMENT links them into step 16's fragment with no §4.5 adopt, and their tag ids and attribute
            names are only meaningful against that document's hashes. It holds because §13.4's temporary
            document is created against this one and lxb_dom_document_init INHERITS its arenas — see
@@ -513,7 +513,7 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
         if (r != 0)
             return r;   /* YIELD, or ABRUPT having thrown §14.4 step 7's or step 8's "SyntaxError" */
         s->frag = xml_fragment_take(&s->xf);
-        /* THE SAME INVARIANT THE HTML ARM ASSERTS AT ITS OWN BOUNDARY, and for the same reason: FRAG_FRAGMENT
+        /* The same invariant the HTML arm asserts at its own boundary, and for the same reason: FRAG_FRAGMENT
            links these nodes into the fragment with no DOM §4.5 adopt, so their node document must ALREADY be
            the context's. §14.4's reading would put them in a Document of their own and adopt them at step 11's
            append; core/xml/xml_tree.h's two-argument entry is what lets them be created in the right document
