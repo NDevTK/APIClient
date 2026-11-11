@@ -382,9 +382,10 @@ function decline(reason) { return `decline\t${b64(reason)}`; }
    THE PAIR IS THE JOIN'S OWN, WHICH IS WHY IT IS `url` AND NEVER `abs`. The engine parked on the address it
    wrote on the pending line; `abs` is this zone resolving that address against the document in order to apply
    a policy to it, and a refusal that named the resolved form would refuse a request no register holds.
-   THE REASON IS BASE64 AND THE PAIR IS NOT, exactly as `provide` writes them: a method is a token and a URL has
-   had every tab and newline removed by URL Standard §4.4 "URL parsing", while a reason is a whole English
-   sentence this zone composed and the channel is line-oriented. */
+   The reason is the refusing party's own token, whole and unprefixed (`blocked-signal:<name>=<value>`,
+   `blocked-method:<verb>`, `blocked-asker:<role>-<reason>`): the engine counts refusals by the rule the token
+   names (solver/pending_index.h's PEND_DECLINE_RULES) and aborts on a reason that names none. The method and
+   address are the record's own key, so the reason repeats neither. It travels base64 as `provide`'s does. */
 function declineRequest(method, mode, referrerPolicy, referrer, url, reason) {
   return `decline-request\t${method}\t${mode}\t${referrerPolicy}\t${referrer}\t${url}\t${b64(reason)}`;
 }
@@ -1372,8 +1373,7 @@ async function main() {
        document that is not one of this instance's is declined, since no record of it exists here to judge by. */
     const asked = askerRecord(e, askers, 'asker');
     if (asked.refusal) {
-      settle(declineRequest(method, mode, referrerPolicy, referrer, url,
-                            `${method} ${abs} — ${askerRefusal(e, asked.refusal)}`));
+      settle(declineRequest(method, mode, referrerPolicy, referrer, url, asked.refusal.token));
       return;
     }
     const doc = asked.doc;
@@ -1392,11 +1392,7 @@ async function main() {
          the only way a wait can be spent badly: not at all. The flow keeps its park AND gets the arm that runs
          its failure path, which is the whole of what §Solver-half's both-arms means for an outcome nobody
          observed. */
-      settle(declineRequest(method, mode, referrerPolicy, referrer, url,
-                          `${method} ${abs} — ${methodRefusal.reason}. The chokepoint is GET-only by ` +
-                           'ABSENCE (SECURITY.md §Network), so this address can only be DERIVED and reported, ' +
-                           'never issued; answering it with a GET\'s body would be a wrong answer rather than ' +
-                           'a missing one'));
+      settle(declineRequest(method, mode, referrerPolicy, referrer, url, methodRefusal.reason));
       return;
     }
     /* THE CORB CLASS IS THE REQUEST'S OWN DESTINATION, PASSED THROUGH — never a keyword decided here. Fetch
@@ -1470,45 +1466,14 @@ async function main() {
        its failure path having been told the server could not be reached, which for a request nobody sent is a
        LIE about the world and teaches the flow something false. A decline settles nothing — the flow stays
        PARKED, exactly as §@S requires of a search not yet solved, and it fires the day the origin is widened.
-       IT IS DISCRIMINATED BY ASKING THE POLICY, NEVER BY MATCHING THE `statusText`. The reason string is for a
-       READER; a branch that parsed it would be a second copy of the rule written in a format nothing checks.
-       IT IS READ OFF THE RECORD NOW RATHER THAN RE-ASKED, AND THAT CLOSED A HOLE THIS PARAGRAPH DID NOT KNOW
-       IT HAD. The grade came from asking `_firingRefusal` a second time, which answers about the PROVENANCE
-       and about nothing else — so a `blocked-destructive:` refusal, which is equally a decline (no browser
-       refuses a GET to a logout path; this tool refuses to send one with the person's session), came back
-       `null` from that question and was relayed as a NETWORK ERROR. Re-deriving a grade can only ever answer
-       for the rule the re-derivation happens to know about; the chokepoint applied the rule, so the chokepoint
-       states which one fired. Every `network` status-0 (a blocked scheme, a private target, CORB, a refused
+       It is discriminated by the refusal's `kind`, which the chokepoint states, never by matching the reason.
+       Every `network` status-0 (a blocked scheme, a private target, CORB, a refused
        credentialed read) stays a network error, which is what a real browser makes of the same request.
-       THE SENTENCE IS STILL THIS HOST'S, and picking WHICH sentence is a policy question rather than a
-       `statusText` match: `safeFetchFiringRefusal` says whether a widening is what this park is waiting on, so
-       the `--explore` paragraph is written only where `--explore` is the answer. */
+       The reason relayed is the chokepoint's own token: it states which rule fired, so nothing here re-asks
+       the policy or words a second sentence. */
     if (raw.refusal && raw.refusal.kind === 'decline') {
-      /* THE SAME FACTS THE REQUEST ONE CALL BELOW STATES, for the reason the navigate arm gives: this is a
-         question about THAT request and not about a simpler one. `credentialed: false` is what `fetched`
-         passes and `headers: null` is what a park carries here. */
       if (streamed) entry.end = { state: 'decline', reason: raw.refusal.reason };
-      const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination, provenance, pinned,
-                                                    actor: 'page', driven, address,
-                                                    doc, credentialed: false, headers: null });
-      if (!refusal) {
-        settle(declineRequest(method, mode, referrerPolicy, referrer, url,
-                            `${method} ${abs} — ${raw.refusal.reason}. The chokepoint DECLINED to make this ` +
-                             'request: no browser refuses it, so there is nothing to hand the flow back and a ' +
-                             'network error would tell it the server was unreachable. The flow stays PARKED, ' +
-                             'and the address is DERIVED IN FULL and REPORTED, which §Attacker-sources says ' +
-                             'is not a gap in the report but IS the report'));
-        return;
-      }
-      settle(declineRequest(method, mode, referrerPolicy, referrer, url,
-                            `${method} ${abs} — ${raw.refusal.reason}. This origin's egress policy refuses ` +
-                            `it on \`${refusal}\`, which names the SIGNAL and the VALUE that held it: pass ` +
-                           '`--explore <origin>` to permit every value of every signal at that host, ' +
-                           'and note what that obliges — §@H makes the reply to a forced request evidence ' +
-                           'about what a server says to a request no client makes, so its values are carried ' +
-                           'as FORCED and never merged into the observed pool. Until then the request is ' +
-                           'DERIVED IN FULL and REPORTED, which §Attacker-sources says is not a gap in the ' +
-                           'report but IS the report'));
+      settle(declineRequest(method, mode, referrerPolicy, referrer, url, raw.refusal.reason));
       return;
     }
     const rec = replyRecord(raw, `the ${provenance} ${destination || 'data'} load ${abs}`);
