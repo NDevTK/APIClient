@@ -19452,7 +19452,8 @@ TF_UNIT void probes_rangerest(const char *js, Probe *tab, int *n) {
    sale-async-returns: as sale-forced-returns, for a member whose delta holds a pre-fork promise's settlement,
    and its report reads the value the restored settlement carries.
    sale-keep-same-record: as sale-forced-returns, for a member whose owed record a holder outside it names at the
-   act (g_tf_keep); the reply reached the held record, so the restore gave that record back and built no copy. */
+   act (g_tf_keep); the sale read the held record back as itself (`soldNamed`), the reply reached it, and the
+   restored register names it rather than a copy. */
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
     const char *cat = strstr(js, "\"saleCensus\":{\"n\":");
@@ -19462,6 +19463,8 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *wat = strstr(js, "\"soldRestores\":"), *rat = strstr(js, "\"restored\":");
     long wrote = wat ? strtol(wat + strlen("\"soldRestores\":"), NULL, 10) : -1;
     long restored = rat ? strtol(rat + strlen("\"restored\":"), NULL, 10) : -1;
+    const char *nat = strstr(js, "\"soldNamed\":");
+    long named = nat ? strtol(nat + strlen("\"soldNamed\":"), NULL, 10) : -1;
     int ft = 1, ot = 1, ct = 1, lt = 1, yt = 1, kt = 1;
     const char *awhy = NULL, *kwhy = NULL;
 
@@ -19503,6 +19506,9 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
              "a holder outside it named its record");
     fold_row(&kt, &kwhy, wrote > 0 && restored > 0,
              "no sold member was restored from its written bytes (`soldRestores`, `restored`)");
+    fold_row(&kt, &kwhy, named > 0,
+             "no sale read anything back as itself (`soldNamed`): the held record was written by content although "
+             "a holder outside the sold member still named it");
     fold_row(&kt, &kwhy, !g_tf_keep.split,
              "the restored member's register names another record for /api/sl-keep-owed than the one held: its "
              "bytes rebuilt a copy of an object a holder outside them still named");

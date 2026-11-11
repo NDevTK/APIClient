@@ -3865,6 +3865,14 @@ JS_EXTERN void JS_FlowGraphFree(JSContext *ctx, JSFlowGraph *g);
 struct JSFlowGraphRoots;
 JS_EXTERN JSFlowGraph *JS_FlowGraphWriteFlow(JSContext *ctx, const struct JSFlowGraphRoots *roots, uint32_t floor);
 JS_EXTERN int JS_FlowGraphReadFlow(JSContext *ctx, const JSFlowGraph *g, JSValue *vals, JSValue **frames);
+/* A flow write's settle, once every holder the flow itself had has given its reference back (a sale's release),
+   inside the release scope that owes the cycles it lets go. An object or closed cell the write built by content
+   that something outside the write still names, and everything such a one names in turn (by the collector's
+   mark edges, and a resolving function's pair), is read back by JS_FlowGraphReadFlow as itself; the write's
+   reference on every other is given back. Returns how many it kept. A flow write is read only once settled. */
+JS_EXTERN uint32_t JS_FlowGraphSettle(JSContext *ctx, JSFlowGraph *g);
+/* Whether a settled flow write reads `v` back as itself (an object the settle found named outside it). */
+JS_EXTERN bool JS_FlowGraphNames(const JSFlowGraph *g, JSValueConst v);
 /* A flow's roots, each list in the caller's order: its values, its bases (JS_FlowNew's and JS_FlowNewCall's
    handles) and its rings of parked bases (JS_TakeParkedFlows' handles, none NULL). All borrowed. */
 typedef struct JSFlowGraphRoots {

@@ -1320,6 +1320,7 @@ typedef struct {
     long sold_restores, sold_waits_unfunded, sold_waits_gap, sold_waits_other;
     long restored;            /* written stubs a pick read back */
     long sold_unwritten;      /* written stubs whose bytes the pager gave back at the floor */
+    long sold_named;          /* objects and cells written stubs read back as themselves (JS_FlowGraphSettle) */
     long sale_over_reserve;   /* funded sales whose allocations asked for more than the block they gave back */
     long sale_reserve_kib;    /* the sale reserve held now, 0 when the allocator refused it */
     long sale_need_max_kib;   /* the most one sale's allocations asked for (c_alloc.h's span) */

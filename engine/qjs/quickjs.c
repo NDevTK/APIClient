@@ -47187,6 +47187,7 @@ typedef struct { uint8_t *b; size_t len, cap; } FGBuf;
 /* What a survey found no writer for, with its count: an FG_GAP_* shape and the id within it, or for a step
    machine its declaration and for a park its site's name (`ref`, a static either way). */
 typedef struct { int what, id; const void *ref; uint32_t n; } FGGap;
+typedef struct { JSObject *obj; const void *rec; } FGRes;
 struct JSFlowGraph {
     FGBuf bytes;
     JSValue *anchors;
@@ -47197,6 +47198,21 @@ struct JSFlowGraph {
     FGGap *gaps;
     uint32_t n_gaps;
     JSFlowGraphFrames frames;
+    /* A flow write's hold (JS_FlowGraphWriteFlow): each object and closed cell it built by content, in written
+       order, one counted reference each, until JS_FlowGraphSettle. The settle leaves, by the same index, the
+       ones something outside the write still names (`named_*`, one counted reference each, NULL where the read
+       builds the object), which the read gives back as themselves. */
+    JSObject **held_objs;
+    JSVarRef **held_cells;
+    uint32_t n_held_cells, floor;
+    bool holding;
+    JSObject **named_objs, **named_list;   /* the list: the named objects alone, borrowed from named_objs */
+    JSVarRef **named_cells;
+    uint32_t n_named;
+    /* The resolving functions the write built and the already-resolved record each shares with its pair, which
+       no collector edge reports: a pair is read back whole or built whole. */
+    FGRes *res;
+    uint32_t n_res, cap_res;
 };
 
 static void *fg_grow(void *p, size_t n)
@@ -47713,7 +47729,7 @@ static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
 
 /* The frames are walked after the value roots and before the bodies, so a body's open cell finds the frame it
    aliases and an object only a frame reaches is written. */
-static JSFlowGraph *fg_write(JSContext *ctx, const JSFlowGraphRoots *r, uint32_t floor, bool survey)
+static JSFlowGraph *fg_write(JSContext *ctx, const JSFlowGraphRoots *r, uint32_t floor, bool survey, bool hold)
 {
     FGWriter w = { 0 };
     FGBuf rbuf = { 0 }, bbuf = { 0 };
@@ -47735,6 +47751,20 @@ static JSFlowGraph *fg_write(JSContext *ctx, const JSFlowGraphRoots *r, uint32_t
     fg_u32(&g->bytes, g->frames.bases);
     if (w.fbuf.len) fg_put(&g->bytes, w.fbuf.b, w.fbuf.len);
     if (bbuf.len) fg_put(&g->bytes, bbuf.b, bbuf.len);
+    if (hold) {   /* the write's own references, given back or kept by JS_FlowGraphSettle */
+        DCHECK(!survey, "flow graph: a survey held what it wrote — a survey's graph is never read");
+        g->holding = true;
+        g->floor = floor;
+        g->held_objs = fg_grow(NULL, sizeof *g->held_objs * (w.n_order + 1));
+        for (uint32_t i = 0; i < w.n_order; i++) { g->held_objs[i] = w.order[i]; JS_REF_COUNT(w.order[i])++; }
+        g->n_held_cells = w.n_priv_cells;
+        g->held_cells = fg_grow(NULL, sizeof *g->held_cells * (w.n_priv_cells + 1));
+        for (size_t j = 0; j < w.cells.cap; j++)
+            if (w.cells.s[j].k) {
+                g->held_cells[w.cells.s[j].v] = (JSVarRef *)w.cells.s[j].k;
+                JS_REF_COUNT(g->held_cells[w.cells.s[j].v])++;
+            }
+    }
     (free)(rbuf.b); (free)(bbuf.b); (free)(w.fbuf.b); (free)(w.order); (free)(w.kinds);
     for (uint32_t i = 0; i < w.n_held; i++) (free)(w.held[i]);
     (free)(w.held); (free)(w.objs.s); (free)(w.strs.s); (free)(w.anch.s); (free)(w.cells.s); (free)(w.cell_anch.s);
@@ -47742,20 +47772,174 @@ static JSFlowGraph *fg_write(JSContext *ctx, const JSFlowGraphRoots *r, uint32_t
     return g;
 }
 
+bool JS_FlowGraphNames(const JSFlowGraph *g, JSValueConst v)
+{
+    DCHECK(!g->holding, "flow graph: a write was asked what it names before its settle decided it");
+    if (JS_VALUE_GET_TAG(v) != JS_TAG_OBJECT) return false;
+    for (uint32_t i = 0; i < g->n_named; i++)
+        if (g->named_list[i] == JS_VALUE_GET_OBJ(v)) return true;
+    return false;
+}
+
 JSFlowGraph *JS_FlowGraphWrite(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor)
 {
     JSFlowGraphRoots r = { .vals = roots, .n_vals = n };
-    return fg_write(ctx, &r, floor, false);
+    return fg_write(ctx, &r, floor, false, false);
 }
 
 JSFlowGraph *JS_FlowGraphWriteFlow(JSContext *ctx, const JSFlowGraphRoots *roots, uint32_t floor)
 {
-    return fg_write(ctx, roots, floor, false);
+    return fg_write(ctx, roots, floor, false, true);
 }
 
 JSFlowGraph *JS_FlowGraphSurvey(JSContext *ctx, const JSFlowGraphRoots *roots, uint32_t floor)
 {
-    return fg_write(ctx, roots, floor, true);
+    return fg_write(ctx, roots, floor, true, false);
+}
+
+/* JS_FlowGraphSettle's neighbourhood of the write: every GC object the collector's mark reaches from what the
+   write built, stopping where the write names by anchor (born at or before the floor, code, realms). `in` is the
+   edges from inside the neighbourhood, `held` the write's own reference; what a node's count holds beyond them
+   is a holder outside. A shape and a coroutine are nodes too, so an edge through one counts as inside when
+   nothing outside holds it. */
+typedef struct {
+    JSRuntime *rt;
+    uint32_t floor;
+    FGMap ix;
+    JSGCObjectHeader **h;
+    uint32_t *in;
+    uint8_t *held, *named;
+    uint32_t n, cap, *work, n_work;
+    bool closing;   /* the second walk: a child of a named node is named */
+} FGSettle;
+static FGSettle *g_fg_settle;
+
+static bool fg_settle_reaches(const FGSettle *st, JSGCObjectHeader *gp)
+{
+    switch (JS_GC_TYPE(gp)) {
+    case JS_GC_OBJ_TYPE_JS_OBJECT: case JS_GC_OBJ_TYPE_VAR_REF:
+    case JS_GC_OBJ_TYPE_SHAPE: case JS_GC_OBJ_TYPE_ASYNC_FUNCTION:
+        return gc_born_after(gp, st->floor);
+    case JS_GC_OBJ_TYPE_FUNCTION_BYTECODE: case JS_GC_OBJ_TYPE_JS_CONTEXT:
+        return false;
+    }
+    DFAIL("flow graph: the settle met a GC object of a kind no enum names");
+    return false;
+}
+static uint32_t fg_settle_add(FGSettle *st, JSGCObjectHeader *gp, uint8_t held)
+{
+    uint32_t i;
+
+    if (fg_map_get(&st->ix, gp, &i)) return i;
+    if (st->n == st->cap) {
+        st->cap = st->cap ? st->cap * 2 : 64;
+        st->h = fg_grow(st->h, sizeof *st->h * st->cap);
+        st->in = fg_grow(st->in, sizeof *st->in * st->cap);
+        st->held = fg_grow(st->held, st->cap);
+        st->named = fg_grow(st->named, st->cap);
+        st->work = fg_grow(st->work, sizeof *st->work * st->cap);
+    }
+    i = st->n++;
+    st->h[i] = gp; st->in[i] = 0; st->held[i] = held; st->named[i] = 0;
+    fg_map_put(&st->ix, gp, i);
+    return i;
+}
+static void fg_settle_name(FGSettle *st, uint32_t i)
+{
+    if (st->named[i]) return;
+    st->named[i] = 1;
+    st->work[st->n_work++] = i;
+}
+static void fg_settle_edge(JSRuntime *rt, JSGCObjectHeader *gp)
+{
+    FGSettle *st = g_fg_settle;
+    uint32_t i;
+
+    (void)rt;
+    if (!fg_settle_reaches(st, gp)) return;
+    if (st->closing) { if (fg_map_get(&st->ix, gp, &i)) fg_settle_name(st, i); return; }
+    st->in[fg_settle_add(st, gp, 0)]++;
+}
+/* The promise family's record a resolving pair shares, and the references on it, defined beside its type. */
+static const void *fg_res_rec(JSObject *p);
+static int fg_res_refs(const void *rec);
+/* A resolving function named: its pair, which shares its already-resolved record, is named with it. */
+static void fg_settle_pairs(FGSettle *st, const JSFlowGraph *g, const void *rec)
+{
+    uint32_t i;
+
+    for (uint32_t k = 0; k < g->n_res; k++)
+        if (g->res[k].rec == rec && fg_map_get(&st->ix, g->res[k].obj, &i)) fg_settle_name(st, i);
+}
+
+uint32_t JS_FlowGraphSettle(JSContext *ctx, JSFlowGraph *g)
+{
+    JSRuntime *rt = ctx->rt;
+    const JSGCCycle *c = &rt->gc_cycle;
+    FGSettle st = { .rt = rt, .floor = g->floor };
+    uint32_t kept = 0, i;
+
+    DCHECK(g->holding && g_fg_settle == NULL, "flow graph: a settle was asked of a write that holds nothing, or "
+                                              "inside another settle");
+    g_fg_settle = &st;
+    for (i = 0; i < g->n_objs; i++) fg_settle_add(&st, &g->held_objs[i]->header, 1);
+    for (i = 0; i < g->n_held_cells; i++) fg_settle_add(&st, &g->held_cells[i]->header, 1);
+    for (i = 0; i < st.n; i++) mark_children(rt, st.h[i], fg_settle_edge);
+    /* A release scope's note is a reference the scope took for its trial, not a holder (gc_release_note). */
+    for (size_t k = c->rel_head; k < c->rel_n; k++)
+        if (fg_map_get(&st.ix, c->rel[k], &i)) st.in[i]++;
+    for (i = 0; i < st.n; i++) {
+        const int outside = JS_REF_COUNT(st.h[i]) - (int)st.in[i] - st.held[i];
+
+        DCHECKF(outside >= 0, "flow graph: a GC object of kind %d holds %d references against %u edges the "
+                "collector's mark reports into it and %u held by the write — an edge is reported with no reference "
+                "behind it", (int)JS_GC_TYPE(st.h[i]), JS_REF_COUNT(st.h[i]), st.in[i], st.held[i]);
+        if (outside > 0) fg_settle_name(&st, i);
+    }
+    for (uint32_t k = 0; k < g->n_res; k++) {
+        uint32_t namers = 0;
+        for (uint32_t m = 0; m < g->n_res; m++) namers += g->res[m].rec == g->res[k].rec;
+        if (fg_res_refs(g->res[k].rec) > (int)namers)
+            fg_settle_pairs(&st, g, g->res[k].rec);
+    }
+    st.closing = true;
+    while (st.n_work) {
+        JSGCObjectHeader *gp = st.h[st.work[--st.n_work]];
+        JSObject *p = (JSObject *)gp;
+
+        mark_children(rt, gp, fg_settle_edge);
+        if (JS_GC_TYPE(gp) == JS_GC_OBJ_TYPE_JS_OBJECT && (p->class_id == JS_CLASS_PROMISE_RESOLVE_FUNCTION ||
+                                                         p->class_id == JS_CLASS_PROMISE_REJECT_FUNCTION))
+            fg_settle_pairs(&st, g, fg_res_rec(p));
+    }
+    g_fg_settle = NULL;
+    /* The named keep the write's reference as the read's; the rest are given back, last, since a release frees. */
+    g->named_objs = fg_grow(NULL, sizeof *g->named_objs * (g->n_objs + 1));
+    g->named_cells = fg_grow(NULL, sizeof *g->named_cells * (g->n_held_cells + 1));
+    for (i = 0; i < g->n_objs; i++) {
+        uint32_t k;
+        CHECK(fg_map_get(&st.ix, g->held_objs[i], &k), "flow graph: a held object left the settle's neighbourhood");
+        g->named_objs[i] = st.named[k] ? g->held_objs[i] : NULL;
+        kept += st.named[k];
+    }
+    g->named_list = fg_grow(NULL, sizeof *g->named_list * (kept + 1));
+    for (i = 0; i < g->n_objs; i++)
+        if (g->named_objs[i]) g->named_list[g->n_named++] = g->named_objs[i];
+    for (i = 0; i < g->n_held_cells; i++) {
+        uint32_t k;
+        CHECK(fg_map_get(&st.ix, g->held_cells[i], &k), "flow graph: a held cell left the settle's neighbourhood");
+        g->named_cells[i] = st.named[k] ? g->held_cells[i] : NULL;
+        kept += st.named[k];
+    }
+    (free)(st.ix.s); (free)(st.h); (free)(st.in); (free)(st.held); (free)(st.named); (free)(st.work);
+    g->holding = false;
+    for (i = 0; i < g->n_objs; i++)
+        if (!g->named_objs[i]) JS_FreeValueRT(rt, JS_MKPTR(JS_TAG_OBJECT, g->held_objs[i]));
+    for (i = 0; i < g->n_held_cells; i++)
+        if (!g->named_cells[i]) free_var_ref(rt, g->held_cells[i]);
+    (free)(g->held_objs); g->held_objs = NULL;
+    (free)(g->held_cells); g->held_cells = NULL;
+    return kept;
 }
 
 uint32_t JS_FlowGraphObjects(const JSFlowGraph *g) { return g->n_objs; }
@@ -47974,6 +48158,14 @@ static void fg_rprops(FGReader *r, JSValueConst o, int extra)
 /* A record fg_record wrote, in the storage of the allocator its layout names: into `rec` for an inline array's
    element, freshly allocated otherwise. Each array is rebuilt at the count written, and the layout's own count is asserted against
    it once every field is back, since a count may read a field restored after it. */
+static void fg_rcell_put(FGReader *r, JSVarRef *vr)
+{
+    if (r->n_cells == r->cap_cells) {
+        r->cap_cells = r->cap_cells ? r->cap_cells * 2 : 16;
+        r->cells = fg_grow(r->cells, sizeof *r->cells * r->cap_cells);
+    }
+    r->cells[r->n_cells++] = vr;
+}
 static JSVarRef *fg_rcell(FGReader *r)
 {
     uint8_t t = fg_r8(r);
@@ -47991,15 +48183,19 @@ static JSVarRef *fg_rcell(FGReader *r)
     }
     CHECK(t == 'C', "flow graph: a closure's cell carries a tag this reader does not know");
     t = fg_r8(r);
+    if (r->g->named_cells && r->g->named_cells[r->n_cells]) {
+        /* a cell something outside the write names: itself, its written value read past */
+        vr = r->g->named_cells[r->n_cells];
+        JS_REF_COUNT(vr)++;
+        fg_rcell_put(r, vr);
+        JS_FreeValue(r->ctx, fg_rvalue(r));
+        return vr;
+    }
     vr = js_create_var_ref(r->ctx, true);
     CHECK(vr != NULL, "flow graph: OOM rebuilding a closure cell");
     vr->is_lexical = t & 1;
     vr->is_const = (t >> 1) & 1;
-    if (r->n_cells == r->cap_cells) {
-        r->cap_cells = r->cap_cells ? r->cap_cells * 2 : 16;
-        r->cells = fg_grow(r->cells, sizeof *r->cells * r->cap_cells);
-    }
-    r->cells[r->n_cells++] = vr;   /* before its value, which may name a closure over this cell */
+    fg_rcell_put(r, vr);   /* before its value, which may name a closure over this cell */
     vr->value = fg_rvalue(r);
     return vr;
 }
@@ -48329,15 +48525,22 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
     FGReader r = { 0 };
     const uint8_t *kinds;
     uint32_t n, n_bases;
+    JSValue *scratch;
 
     CHECK(g->n_gaps == 0, "flow graph: a survey's graph was handed to the reader — it holds placeholders for what no "
                           "writer could write, so it is not a graph");
+    CHECK(!g->holding, "flow graph: a flow write was read before its settle — an object something outside it still "
+                       "names would be built a second time");
     r.ctx = ctx; r.g = g;
     r.p = g->bytes.b; r.end = g->bytes.b + g->bytes.len;
     r.n_objs = fg_r32(&r);
     kinds = fg_take(&r, r.n_objs);
     r.objs = calloc(r.n_objs ? r.n_objs : 1, sizeof *r.objs);
     CHECK(r.objs != NULL, "flow graph: OOM rebuilding a graph's object table");
+    /* A named object (JS_FlowGraphSettle) is read back as itself; its written body is read into a scratch object
+       of its kind, which is freed, so the bytes after it read as written. */
+    scratch = g->named_objs ? calloc(r.n_objs ? r.n_objs : 1, sizeof *scratch) : NULL;
+    CHECK(!g->named_objs || scratch != NULL, "flow graph: OOM rebuilding a graph's object table");
     for (uint32_t i = 0; i < r.n_objs; i++) {
         JSClassID cid = kinds[i] == FG_ERROR ? JS_CLASS_ERROR : JS_CLASS_OBJECT;
 
@@ -48363,6 +48566,10 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
             fp->u.func.var_refs = NULL;
         }
         CHECK(!JS_IsException(r.objs[i]), "flow graph: OOM rebuilding an object");
+        if (scratch && g->named_objs[i]) {
+            scratch[i] = r.objs[i];
+            r.objs[i] = js_dup(JS_MKPTR(JS_TAG_OBJECT, g->named_objs[i]));
+        }
     }
     n = fg_r32(&r);
     CHECK(n == g->n_roots, "flow graph: the serialized root count disagrees with the graph's");
@@ -48378,7 +48585,7 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
         frames[i] = (JSValue *)(kind == 'b' ? fg_rbase_bytecode(&r) : fg_rbase_step_root(&r));
     }
     for (uint32_t i = 0; i < r.n_objs; i++) {
-        JSValue o = r.objs[i], proto = fg_rvalue(&r);
+        JSValue o = scratch && g->named_objs[i] ? scratch[i] : r.objs[i], proto = fg_rvalue(&r);
         uint8_t ext = fg_r8(&r);
         if (kinds[i] == FG_CLOSURE) fg_rclosure(&r, JS_VALUE_GET_OBJ(o));
         if (kinds[i] == FG_PROMISE) fg_rpromise(&r, JS_VALUE_GET_OBJ(o));
@@ -48434,6 +48641,9 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
         fg_rchain_cells((JSAsyncFunctionState *)frames[i]);
     }
     for (uint32_t i = 0; i < r.n_objs; i++) JS_FreeValue(ctx, r.objs[i]);
+    for (uint32_t i = 0; scratch && i < r.n_objs; i++)
+        if (g->named_objs[i]) JS_FreeValue(ctx, scratch[i]);
+    (free)(scratch);
     for (uint32_t i = 0; i < r.n_strs; i++) JS_FreeValue(ctx, r.strs[i]);
     (free)(r.objs); (free)(r.strs); (free)(r.cells); (free)(r.shared);
     return 0;
@@ -48450,6 +48660,14 @@ uint32_t JS_FlowGraphAnchors(const JSFlowGraph *g, const JSValue **anchors) { *a
 
 void JS_FlowGraphFree(JSContext *ctx, JSFlowGraph *g)
 {
+    for (uint32_t i = 0; g->holding && i < g->n_objs; i++) JS_FreeValue(ctx, JS_MKPTR(JS_TAG_OBJECT, g->held_objs[i]));
+    for (uint32_t i = 0; g->holding && i < g->n_held_cells; i++) free_var_ref(ctx->rt, g->held_cells[i]);
+    for (uint32_t i = 0; g->named_objs && i < g->n_objs; i++)
+        if (g->named_objs[i]) JS_FreeValue(ctx, JS_MKPTR(JS_TAG_OBJECT, g->named_objs[i]));
+    for (uint32_t i = 0; g->named_cells && i < g->n_held_cells; i++)
+        if (g->named_cells[i]) free_var_ref(ctx->rt, g->named_cells[i]);
+    (free)(g->held_objs); (free)(g->held_cells); (free)(g->named_objs); (free)(g->named_cells); (free)(g->res);
+    (free)(g->named_list);
     for (uint32_t i = 0; i < g->n_anchors; i++) JS_FreeValue(ctx, g->anchors[i]);
     for (uint32_t i = 0; i < g->n_cells; i++) free_var_ref(ctx->rt, g->cells[i]);
     (free)(g->cells);
@@ -83855,11 +84073,15 @@ static void fg_resolver(FGWriter *w, FGBuf *out, JSObject *p)
 
     DCHECK(s != NULL, "flow graph: a promise resolving function holds no record");
     fg_value(w, out, s->promise);
+    w->g->res = fg_room(w->g->res, w->g->n_res, &w->g->cap_res, sizeof *w->g->res);
+    w->g->res[w->g->n_res++] = (FGRes){ p, s->presolved };
     if (fg_map_get(&w->shared, s->presolved, &i)) { fg_u8(out, 'r'); fg_u32(out, i); return; }
     fg_map_put(&w->shared, s->presolved, w->n_shared++);
     fg_u8(out, 'R');
     fg_u8(out, s->presolved->already_resolved);
 }
+static const void *fg_res_rec(JSObject *p) { return p->u.promise_function_data->presolved; }
+static int fg_res_refs(const void *rec) { return ((const JSPromiseFunctionDataResolved *)rec)->ref_count; }
 static void fg_rpromise(FGReader *r, JSObject *p)
 {
     JSPromiseData *s;

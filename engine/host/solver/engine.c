@@ -12826,6 +12826,7 @@ static void engine_sale_reserve_retake(int funded) {
    back (a named reason). A member that waits returns next session by its recipe. `restored` counts the picks
    that read a written stub back. */
 static long g_sold_restores, g_sold_waits_unfunded, g_sold_waits_gap, g_sold_waits_other, g_restored;
+static long g_sold_named;   /* objects and cells written stubs read back as themselves (JS_FlowGraphSettle) */
 /* Written stubs whose bytes the pager gave back at the floor (flow_stub_unwrite), each then waiting for its recipe. */
 static long g_sold_unwritten;
 static void sale_tally(SaleTally **t, int *n, const char *name) {
@@ -13056,6 +13057,9 @@ static void engine_sale_release(Flow *tail) {
        the generation the member last forked at, and owes a collection over that neighbourhood (quickjs.h). */
     JS_GCReleaseScopeBegin(JS_GetRuntime(g_sess_ctx), tail->delta ? cow_delta_fork_gen(tail->delta) : 0);
     flow_release_bulk(g_sess_ctx, tail);
+    /* With the member's own references given back, what its bytes built that anything else still names is
+       read back as itself (JS_FlowGraphSettle); the rest is let go inside the scope, which owes its cycles. */
+    if (tail->sold) g_sold_named += JS_FlowGraphSettle(g_sess_ctx, tail->sold->g);
     JS_GCReleaseScopeEnd(JS_GetRuntime(g_sess_ctx));
     flow_sale_end(tail, stand_ins);
     g_flows_sold++;
@@ -15104,6 +15108,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->sold_waits_gap = g_sold_waits_gap;
     out->sold_waits_other = g_sold_waits_other;
     out->restored = g_restored;
+    out->sold_named = g_sold_named;
     out->sold_unwritten = g_sold_unwritten;
     out->sale_over_reserve = g_sale_over_reserve;
     out->sale_reserve_kib = g_sale_reserve ? (long)(g_sale_reserve_bytes / 1024) : 0;
