@@ -273,6 +273,10 @@ bool realm_built_interface_prototype_object(JSContext *ctx, const char *iface);
 /* Whether `obj` is the interface prototype object this realm built for `iface`. Asked of a live `obj`; an address
    a freed prototype left and `obj` reuses answers true. */
 bool realm_is_interface_prototype_object(JSContext *ctx, const char *iface, JSValueConst obj);
+/* The identifier this realm built `obj` as an interface prototype object for, found by address so the object's
+   class string is never read (a read materializes a lazily defined one); NULL for any other object. The census
+   owns the string. */
+const char *realm_interface_prototype_name(JSContext *ctx, JSValueConst obj);
 /* That object back, by identifier, read from the realm class slot that holds it: an interface whose prototype a
    check reads stores it with JS_SetClassProto, and one held by no slot fails. JS_UNDEFINED for an interface this
    realm never built. OWNED by the caller. */
@@ -285,7 +289,7 @@ void realm_census_release(JSContext *ctx);
    refusal is the standard answering and not a component failing to ask. */
 void realm_note_property_reference_asked(JSContext *ctx, const char *id);
 /* A §3.7.6/§3.7.7 member named `member` was installed on `target`. Recorded as `Interface.prototype.member` when
-   `target` is the interface prototype object this realm built for its class string; any other target (the
+   `target` is an interface prototype object this realm built, found by address; any other target (the
    global, an instance, a namespace) records nothing. Called by core/idl_args' installers after their
    continue-step. Relies on every component tagging its prototype before installing members (idl_interface_tag). */
 void realm_note_member_installed(JSContext *ctx, JSValueConst target, const char *member);

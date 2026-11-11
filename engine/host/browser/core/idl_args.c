@@ -8179,32 +8179,15 @@ static void idl_assert_receiver_is_target(JSContext *ctx, JSValueConst target, c
                                           const char *at_file, int at_line)
 {
     int idx = idl_member_of_step(stepid);
-    JSPropertyDescriptor d;
-    JSValue tag;
     const char *on;
-    int got;
 
     /* A member with no pool entry declares nothing (idl_install_step_method's population), and a member that
        states no receiver is the residual at idl_seal_check_receivers and not this question. */
     if (idx < 0 || idl_member(idx)->this_is == NULL) return;
-    /* OWN, not inherited: every interface prototype object in a chain carries §3.7.3's tag, and one found a
-       link up is the PARENT interface's answer to a question asked about this object. */
-    got = JS_GetOwnSlotDesc(ctx, &d, target, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG));
-    /* A throw is not an absence. This is an own-slot read of a plain data property, so the only way it fails is allocation, and taking
-       that for "no tag" would leave the exception PENDING on the context for whatever runs next. */
-    CHECK(got >= 0, "idl: OOM reading a Web IDL §3.7.3 class string at a member install");
-    if (got != 1) return;
-    tag = d.value;
-    JS_FreeValue(ctx, d.getter);
-    JS_FreeValue(ctx, d.setter);
-    /* The tag is a STRING by construction — idl_interface_tag and its two siblings write JS_NewString — but the
-       property is [[Configurable]], so a later define could have replaced it with something else; a non-string
-       is not this realm's §3.7.3 statement and is nothing to ask the census about. */
-    if (!JS_IsString(tag)) { JS_FreeValue(ctx, tag); return; }
-    on = JS_ToCString(ctx, tag);
-    JS_FreeValue(ctx, tag);
-    CHECK(on != NULL, "idl: OOM reading a Web IDL §3.7.3 class string at a member install");
-    if (realm_is_interface_prototype_object(ctx, on, target)) {
+    /* The interface this realm built `target` as, by address: never by reading the class string, a read that
+       would materialize a lazily defined one in a dev build only. */
+    on = realm_interface_prototype_name(ctx, target);
+    if (on != NULL) {
         DCHECKF(strcmp(on, idl_member(idx)->this_iface) == 0,
                 "%s:%d installs `%s` on \"%s\"'s Web IDL §3.7.3 Interface prototype object, and that member's "
                 "declaration names \"%s\" as the interface §3.7 Interfaces' implementation-check is against — "
@@ -8218,7 +8201,6 @@ static void idl_assert_receiver_is_target(JSContext *ctx, JSValueConst target, c
                 at_file, at_line, name ? name : "(unnamed member)", on, idl_member(idx)->this_iface,
                 on, idl_member(idx)->this_iface);
     }
-    JS_FreeCString(ctx, on);
 }
 #define IDL_RECEIVER_IS_TARGET(c, t, n, s, f, l) idl_assert_receiver_is_target((c), (t), (n), (s), (f), (l))
 #else

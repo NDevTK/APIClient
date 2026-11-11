@@ -533,6 +533,18 @@ bool realm_is_interface_prototype_object(JSContext *ctx, const char *iface, JSVa
     return c != NULL && census_has(&c->tagged, iface, &id) && id == (uintptr_t)JS_VALUE_GET_PTR(obj);
 }
 
+const char *realm_interface_prototype_name(JSContext *ctx, JSValueConst obj)
+{
+    const RealmCensus *c = realm_census(ctx, false);
+    uintptr_t at = (uintptr_t)JS_VALUE_GET_PTR(obj);
+    uint32_t i;
+
+    DCHECK(JS_IsObject(obj), "Web IDL §3.7.3 Interface prototype object's census was asked to name no object");
+    for (i = 0; c != NULL && i < c->tagged.cap; i++)
+        if (c->tagged.key[i] != NULL && c->tagged.id[i] == at) return c->tagged.key[i];
+    return NULL;
+}
+
 JSValue realm_interface_prototype_object(JSContext *ctx, const char *iface)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
@@ -567,20 +579,12 @@ void realm_note_property_reference_asked(JSContext *ctx, const char *id)
 
 void realm_note_member_installed(JSContext *ctx, JSValueConst target, const char *member)
 {
-    JSPropertyDescriptor d;
     const char *tag;
-    int r;
 
     DCHECK(JS_IsObject(target) && member != NULL && *member, "a member install was noted with no target or name");
-    r = JS_GetOwnPropertyNoUserCode(ctx, &d, target, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG));
-    CHECK(r >= 0, "realm: reading an install target's class string threw");
-    if (r == 0) return;   /* not an interface prototype object: a global, an instance or a namespace */
-    tag = JS_IsString(d.value) ? JS_ToCString(ctx, d.value) : NULL;
-    JS_FreeValue(ctx, d.value);
-    JS_FreeValue(ctx, d.getter);
-    JS_FreeValue(ctx, d.setter);
-    if (tag == NULL) return;
-    if (realm_is_interface_prototype_object(ctx, tag, target)) {
+    tag = realm_interface_prototype_name(ctx, target);
+    if (tag == NULL) return;   /* not an interface prototype object: a global, an instance or a namespace */
+    {
         size_t tn = strlen(tag), mn = strlen(member);
         char *key = malloc(tn + sizeof ".prototype." + mn);
 
@@ -591,7 +595,6 @@ void realm_note_member_installed(JSContext *ctx, JSValueConst target, const char
         census_put(&realm_census(ctx, true)->members, key, 0);
         free(key);
     }
-    JS_FreeCString(ctx, tag);
 }
 
 void realm_assert_interface_objects_asked(JSContext *ctx)
