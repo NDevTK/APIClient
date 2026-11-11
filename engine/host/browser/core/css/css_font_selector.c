@@ -423,8 +423,9 @@ static double sel_style_distance(CssFontFaceStyle want, CssFontFaceStyle have)
     double sign = (want.slant == CSS_FONT_FACE_OBLIQUE && want.angle.lo < 0.0) ? -1.0 : 1.0;
     double a = sign * want.angle.lo, lo = sign > 0 ? have.angle.lo : -have.angle.hi,
            hi = sign > 0 ? have.angle.hi : -have.angle.lo;
-    bool have_normal = have.slant == CSS_FONT_FACE_NORMAL || (have.slant == CSS_FONT_FACE_OBLIQUE && lo <= 0.0 && hi >= 0.0);
-    bool have_oblique = have.slant == CSS_FONT_FACE_OBLIQUE && hi > 0.0 && !(lo <= 0.0 && want.slant != CSS_FONT_FACE_OBLIQUE);
+    bool spans_zero = have.slant == CSS_FONT_FACE_OBLIQUE && lo <= 0.0 && hi >= 0.0;
+    bool have_normal = have.slant == CSS_FONT_FACE_NORMAL || spans_zero;
+    bool have_oblique = have.slant == CSS_FONT_FACE_OBLIQUE && hi > 0.0;
 
     if (want.slant == CSS_FONT_FACE_NORMAL) {
         if (have_normal) return 0.0;

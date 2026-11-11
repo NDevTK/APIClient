@@ -177,6 +177,11 @@ char *cssom_serialize_declarations(const char *text, size_t len, CssomBlockConte
  * meaning. */
 char *cssom_declared_value(const char *text, size_t len, const char *name);
 
+/* The same question of a descriptor body (`context` is one, asserted): the block is read under its own
+   context, so a descriptor's value is what its grammar serialized. Read as an unrestricted block, a
+   descriptor that is no property is re-spelled from its tokens, and `U+0-7F` comes back `U0-7F`. Owned. */
+char *cssom_declared_descriptor_value(const char *text, size_t len, const char *name, CssomBlockContext context);
+
 /* §6.4.3's `style`: a CSSStyleProperties whose DECLARATIONS are `rule`'s — computed flag unset, readonly flag
    unset, parent CSS rule the rule, owner node null. Every read and every write goes back through the rule's own
    record, so two flows disagree about `rule.style.color` exactly as they disagree about an inline style.

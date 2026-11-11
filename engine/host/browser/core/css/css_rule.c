@@ -5142,8 +5142,8 @@ static void cascade_emit_font_face(JSContext *ctx, CascadeEmit *e, const CssRule
     DCHECK(JS_IsString(r->block_text), "an `@font-face` record lacks the block text its constructor always writes");
     block = rule_field_cstr(ctx, r->block_text);
     len = strlen(block);
-    family = cssom_declared_value(block, len, "font-family");
-    f.src = cssom_declared_value(block, len, "src");
+    family = cssom_declared_descriptor_value(block, len, "font-family", CSSOM_BLOCK_FONT_FACE);
+    f.src = cssom_declared_descriptor_value(block, len, "src", CSSOM_BLOCK_FONT_FACE);
     if (family == NULL || f.src == NULL) {
         free(family);
         free(f.src);
@@ -5167,12 +5167,12 @@ static void cascade_emit_font_face(JSContext *ctx, CascadeEmit *e, const CssRule
     f.family = names.v[0].name;
     names.v[0].name = NULL;
     css_font_family_list_free(&names);
-    f.unicode_range = cssom_declared_value(block, len, "unicode-range");
-    f.weight = cssom_declared_value(block, len, "font-weight");
-    f.style = cssom_declared_value(block, len, "font-style");
+    f.unicode_range = cssom_declared_descriptor_value(block, len, "unicode-range", CSSOM_BLOCK_FONT_FACE);
+    f.weight = cssom_declared_descriptor_value(block, len, "font-weight", CSSOM_BLOCK_FONT_FACE);
+    f.style = cssom_declared_descriptor_value(block, len, "font-style", CSSOM_BLOCK_FONT_FACE);
     /* css-fonts-4 §4.4.1: `font-stretch` is the legacy name alias of the `font-width` descriptor. */
-    f.width = cssom_declared_value(block, len, "font-width");
-    if (f.width == NULL) f.width = cssom_declared_value(block, len, "font-stretch");
+    f.width = cssom_declared_descriptor_value(block, len, "font-width", CSSOM_BLOCK_FONT_FACE);
+    if (f.width == NULL) f.width = cssom_declared_descriptor_value(block, len, "font-stretch", CSSOM_BLOCK_FONT_FACE);
     free(block);
     if (JS_IsObject(r->parent_style_sheet)) {
         JSValue loc = css_style_sheet_location(ctx, r->parent_style_sheet);

@@ -1283,6 +1283,21 @@ char *cssom_declared_value(const char *text, size_t len, const char *name)
     return cssd_value_in_block(text, len, name, NULL);
 }
 
+char *cssom_declared_descriptor_value(const char *text, size_t len, const char *name, CssomBlockContext context)
+{
+    CssDecls d = { 0 };
+    char *out;
+
+    DCHECK(g_ready, "a descriptor block was read before cssom_init built the parser it goes through");
+    DCHECK(name != NULL && cssd_block_is_descriptor_body(context),
+           "a descriptor was asked of no name, or of a block whose context declares properties");
+    d.context = context;
+    cssd_decls_from_text(text, len, &d);
+    out = cssd_value_in_decls(&d, name, NULL);
+    cssd_decls_free(&d);
+    return out;
+}
+
 /* §6.6.1's GET PROPERTY VALUE over a block's text, including the step that is only reachable now that the
    longhand->shorthand direction exists: "if property is a shorthand property ... for each longhand property
    longhand that property maps to, in canonical order ... if declaration is null, then return the empty string
