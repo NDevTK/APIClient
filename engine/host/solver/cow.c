@@ -2601,18 +2601,34 @@ void cow_chain_split_begin(void) { g_split_gen += 2; }
 /* A segment's bytes into `acc`: its entries while they are here, and the component bytes and records they own,
    which stay here when the entries move (read back a chunk at a time for a segment on the disk tier). The blocks
    are the C library's (cow_state_free frees them with free), so their size is the allocator's. */
+static CowRecClass *cow_split_rec_class(CowChainBytes *acc, uint32_t cls) {
+    for (int k = 0; k < acc->n_cls; k++)
+        if (acc->cls[k].cls == cls) return &acc->cls[k];
+    if (acc->n_cls == COW_SPLIT_REC_CLASSES) return &acc->rec_other;
+    acc->cls[acc->n_cls].cls = cls;
+    return &acc->cls[acc->n_cls++];
+}
 static void cow_split_chunk(CowEntry *e, int n, void *arg) {
     CowChainBytes *acc = arg;
 
     for (int i = 0; i < n; i++) {
         long b = 0;
+        CowRecClass *k;
 
         if (!e[i].is_state || (e[i].state_kind != COW_STATE_HOST && e[i].state_kind != COW_STATE_BODY &&
                                e[i].state_kind != COW_STATE_HOST_REC))
             continue;
         if (e[i].a_base) b += (long)malloc_usable_size(e[i].a_base);
         if (e[i].a_cur) b += (long)malloc_usable_size(e[i].a_cur);
-        if (e[i].state_kind == COW_STATE_HOST_REC) acc->rec += b; else acc->pod += b;
+        if (e[i].state_kind != COW_STATE_HOST_REC) { acc->pod += b; continue; }
+        acc->rec += b;
+        k = cow_split_rec_class(acc, JS_GetClassID(e[i].obj));
+        k->n++;
+        k->bytes += b;
+        if (e[i].a_base && e[i].a_cur && !memcmp(e[i].a_base, e[i].a_cur, e[i].rec->size)) {
+            k->same_n++;
+            k->same_bytes += b;
+        }
     }
 }
 static void cow_seg_split_bytes(const CowSeg *s, CowChainBytes *acc) {

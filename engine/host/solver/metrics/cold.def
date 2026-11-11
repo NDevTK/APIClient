@@ -141,6 +141,8 @@ METRIC(floor_chain_resident_kib, "floorChainResidentKiB", GAUGE, "KiB", PROCESS,
 METRIC(floor_chain_stub_kib, "floorChainStubKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
 METRIC(floor_chain_stub_pod_kib, "floorChainStubPodKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
 METRIC(floor_chain_stub_rec_kib, "floorChainStubRecKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
+/* …and those records by owner class: `[records, KiB, unwritten records, their KiB]` (engine_floor_rec_json). */
+METRIC(floor_chain_stub_rec_by_class, "floorChainStubRecByClass", GAUGE, "KiB", PROCESS, "solver/engine.c", OBJECT)
 METRIC(forks, "forks", LIFETIME, "fork", AGENT, "solver/engine.c", INT)
 /* `resumed` is the positive statement that a rebuild ran, always present: `resumed: 0` says
    no residue was handed over, so zeroes beside it are not a verdict. `resumedSegs`/`Flows`/

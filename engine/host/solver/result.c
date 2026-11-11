@@ -1266,6 +1266,8 @@ char *result_cold_json(void) {
        measures it instead. */
     char hist[STEP_UNITS_JSON_MAX];
     char runs[STEP_UNITS_JSON_MAX];
+    /* …`recs`: the floor's component records by owner class (engine_floor_rec_json). */
+    char recs[ENGINE_FLOOR_REC_JSON_MAX];
     /* …`ladder`: the same list restricted to members at the orphan ladder (solver/cold.h). */
     char ladder[STEP_UNITS_JSON_MAX];
     /* …`over`: restricted to the turns that overran the cooperative slice. */
@@ -1672,6 +1674,8 @@ char *result_cold_json(void) {
     METRIC_SET(floor_chain_stub_kib, e.floor_chain_stub_kib);
     METRIC_SET(floor_chain_stub_pod_kib, e.floor_chain_stub_pod_kib);
     METRIC_SET(floor_chain_stub_rec_kib, e.floor_chain_stub_rec_kib);
+    engine_floor_rec_json(recs, sizeof recs);
+    METRIC_SET_OBJECT(floor_chain_stub_rec_by_class, recs);
     METRIC_SET(forks, e.forks);
     METRIC_SET(resumed, ran);
     METRIC_SET(resumed_segs, resumed.segs);

@@ -534,8 +534,16 @@ long cow_chain_bytes(void);
 /* The chain's bytes by who stands on it, for a census at the RAM floor (engine.c's engine_floor_census): begin,
    add each resident delta's chain, then each stub's. A segment counts once, as resident when a resident chain
    reaches it, else under the first stub reaching it, its bytes split into its entries, the component bytes
-   (HOST, BODY) and the component records (HOST_REC) they own. Allocates nothing. */
-typedef struct { long entries, pod, rec; } CowChainBytes;
+   (HOST, BODY) and the component records (HOST_REC) they own. Allocates nothing. The records are also split by
+   their owner's class (the first COW_SPLIT_REC_CLASSES classes met; the rest in `rec_other`), each with the records
+   whose flow side equals their baseline: a capture no write followed. */
+#define COW_SPLIT_REC_CLASSES 48
+typedef struct { uint32_t cls; long n, bytes, same_n, same_bytes; } CowRecClass;
+typedef struct {
+    long entries, pod, rec;
+    int n_cls;
+    CowRecClass cls[COW_SPLIT_REC_CLASSES], rec_other;
+} CowChainBytes;
 void cow_chain_split_begin(void);
 void cow_chain_split_resident(const CowDelta *d, CowChainBytes *acc);
 void cow_chain_split_stub(const CowDelta *d, CowChainBytes *acc);
