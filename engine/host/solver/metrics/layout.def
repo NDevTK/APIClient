@@ -19,7 +19,10 @@
    update the rendering step 22's paint took between CSS 2.1 §E.2's offers, a subset of `_layoutJobRests`.
    `_layoutRunMeasures` counts css-sizing-3 §5.1 run measurements answered, and `_layoutRunMeasuredAgain` those
    whose run another record of the same job (its own or another grid row context's) already held answered: a
-   run no context decided is measured once per job, so a nonzero value on such a document is a lost share. */
+   run no context decided is measured once per job, so a nonzero value on such a document is a lost share.
+   `_cssParseUnitsReplayed` counts the work units of a style sheet parse a flow was charged as the parse table's
+   slot recorded them, another flow having run them, and `_cssParseRederived` the asks that ran again in a
+   residency span units the asking flow's path had paid and the slot no longer held. */
 METRIC(stacked_asks,       "_layoutStackedAsks",      LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(stacked_served,     "_layoutStackedServed",    LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(stacked_deferred,   "_layoutStackedDeferred",  LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
@@ -49,6 +52,9 @@ METRIC(scroll_area_rests,   "_layoutScrollAreaRests",   LIFETIME, "rest", AGENT,
 METRIC(paint_rests,         "_layoutPaintRests",         LIFETIME, "rest",  AGENT, "core/rendering/rendering.c", INT)
 METRIC(run_measures,        "_layoutRunMeasures",        LIFETIME, "measurement", AGENT, "core/layout/intrinsic_size.c", INT)
 METRIC(run_measured_again,  "_layoutRunMeasuredAgain",   LIFETIME, "measurement", AGENT, "core/layout/intrinsic_size.c", INT)
+METRIC(css_parse_units_replayed, "_cssParseUnitsReplayed", LIFETIME, "unit", AGENT,
+       "core/css/css_style_declaration.c", INT)
+METRIC(css_parse_rederived,  "_cssParseRederived",        LIFETIME, "ask", AGENT, "core/css/css_style_declaration.c", INT)
 IDENTITY_LE(stacked_served,     stacked_asks)
 IDENTITY_LE(fills_rederived,    fills_shed)
 IDENTITY_LE(answers_rederived,  answers_shed)

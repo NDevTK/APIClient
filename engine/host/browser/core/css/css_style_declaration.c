@@ -135,6 +135,8 @@
 #include "core/css/style_sheet_list.h"
 #include "solver/concolic.h"   /* §6.6.1's `item` takes an index unknown external input crosses AS ITSELF */
 #include "solver/dom_cow.h"
+#include "solver/flow.h"   /* the parse units the running flow's path paid for */
+#include "solver/metrics.h"   /* `_cssParseUnitsReplayed`, `_cssParseRederived` */
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 #include "solver/reclaim.h"
 #include "solver/rest_unit.h"
@@ -1420,26 +1422,34 @@ static void cssd_inline_collect(lxb_dom_element_t *el, CssCascadedStyle *s, CssL
  *
  * The match-result build re-parses each held sheet's emission for its selector lists and declaration blocks,
  * a round trip CSSOM §6.4's objects force because a rule holds only lexbor's serialization of itself. This
- * table holds one parse per sheet position (as Blink's StyleSheetContents), served while the emission is
- * byte-identical to the one parsed. It is keyed on content, and a parse is a function of the text alone (each
- * run has its own parser, core/css/css_sheet_parse.h), so no flow is served another's parse; two flows
- * alternating on one slot thrash it. An unfinished parse stays in its slot with its run, so a build asking for
- * the same bytes continues it and one asking for other bytes aborts it. It is not flow state: nothing is
- * captured into the COW delta, every entry is rebuilt from an emission, and dropping the table changes no
- * answer. The round-trip asserts run at every build against the fresh `view.n` and `view.layer`. A sheet whose
- * text does not parse leaves its slot empty and is re-parsed at every build.
+ * table stores one parse per sheet position (as Blink's StyleSheetContents), served while the emission is
+ * byte-identical to the one parsed; a parse is a function of the text alone (each run has its own parser,
+ * core/css/css_sheet_parse.h), so no flow is served another's parse, and two flows alternating on one slot
+ * thrash it. An unfinished parse stays in its slot with its run, so a build asking for the same bytes continues
+ * it and one asking for other bytes aborts it. Nothing is captured into the COW delta and dropping the table
+ * changes no answer. A text that does not parse is stored as an ended parse with no rules.
+ *
+ * The table decides no charge. A parse runs in work units (the run's begin and each step, the last one with
+ * its finish), each making exactly one charge, which the slot records; a flow pays each unit the first time its
+ * own path asks for it (solver/flow.h's paid sheet parses, keyed by the emission's digest): a unit the slot
+ * holds is charged as recorded, one it does not is run and charged, and a unit the path paid that the slot no
+ * longer holds is run again in a residency span. A unit is taken from a resting drive's allowance either way,
+ * so a flow's charges and rest points are the same whichever flow parsed first. A paid parse served whole is a
+ * hit, and a hit charges nothing.
  *
  * RETIREMENT: this table goes when a CSSOM §6.4 rule owns a parsed form that survives its own serialization. */
 typedef struct {
     char                 *text;  /* OWNED — the emission this parse is OF, and the whole of the key */
     size_t                len;
     lxb_css_memory_t     *mem;   /* OWNED — the arena the stylesheet, its rules and its selectors live in */
-    lxb_css_stylesheet_t *sst;   /* BORROWED from `mem`, which is the one owner */
+    lxb_css_stylesheet_t *sst;   /* BORROWED from `mem`, which is the one owner; NULL once a failed run ended */
     lxb_css_rule_t      **rules; /* OWNED array of rules borrowed from `mem`: the top-level list, by index, so a
                                     build that rests continues at a rule without walking the list to it */
     uint32_t              nrules;
     CssSheetParse        *run;   /* OWNED while the parse of `text` into `sst` is under way, else NULL */
-    bool                  parsed;   /* the run ended with `sst` holding the rules, and `rules` indexes them */
+    uint64_t             *unit_bytes;   /* OWNED: what each work unit run so far charged, `units` of them */
+    uint32_t              units, units_cap;
+    bool                  parsed;   /* the run ended: `sst` holds the rules and `rules` indexes them, or it failed */
 } CssdSheetParse;
 
 /* Indexed by the sheet's position in CSSOM §6.2's list — a POSITION and not an identity, so two documents in
@@ -1459,12 +1469,15 @@ static void cssd_sheet_parse_drop(CssdSheetParse *e)
     }
     free(e->text);
     free(e->rules);
+    free(e->unit_bytes);
     e->text = NULL;
     e->len = 0;
     e->mem = NULL;
     e->sst = NULL;
     e->rules = NULL;
     e->nrules = 0;
+    e->unit_bytes = NULL;
+    e->units = e->units_cap = 0;
     e->parsed = false;
 }
 
@@ -1478,28 +1491,80 @@ static void cssd_sheet_parse_free(void)
     g_sheet_parse_n = 0;
 }
 
+/* Runs `e`'s next work unit, charged to whatever span is open, and records what it charged. The span counts
+   the sheet's bytes once, at the unit that ends the run. */
+static void cssd_sheet_unit_run(CssdSheetParse *e)
+{
+    unsigned calls;
+    uint64_t before, after, last;
+    ThreadWorkSpan tw;
 
-/* THE PARSE OF `text`, WHICH IS EITHER THE ONE SLOT `si` ALREADY HOLDS OF THESE EXACT BYTES OR A FRESH ONE
-   THAT REPLACES IT. NULL when the text did not parse, which is the same answer and the same cost the
-   uncached path gave. The returned entry is BORROWED and is valid until this slot is next replaced — which,
-   because the author walk is asserted non-re-entrant at its call, cannot happen while a caller holds one.
-   An unfinished parse stays in the slot with its run, keyed by the text it parses, so whichever build asks for
-   those bytes next continues it; a slot replaced in between aborts it. With `rests`, each step is asked of the
-   resting drive (layout_job_parse_take) and `*parked` answers NULL for a parse the drive stopped.
-   Inside a residency span the table is read and never written: a slot not holding these bytes parsed is passed
-   over for `own`, the caller's private entry, which it drops after the sheet.
+    DCHECK(!e->parsed && (e->run == NULL) == (e->units == 0),
+           "a sheet parse unit was run on an ended parse, or the slot's run and its recorded units disagree");
+    if (e->units == e->units_cap) {
+        uint32_t cap = e->units_cap ? e->units_cap * 2 : 8;
+        uint64_t *grown = lexbor_realloc(e->unit_bytes, (size_t)cap * sizeof *grown);
+
+        CHECK(grown != NULL, "cssom: OOM recording a sheet parse's work units");
+        e->unit_bytes = grown;
+        e->units_cap = cap;
+    }
+    thread_work_begin(&tw);
+    if (e->run == NULL) {
+        e->run = css_sheet_parse_begin(e->sst, e->text, e->len);
+        before = 0;
+        calls = css_sheet_parse_charges(e->run, &after);
+    } else {
+        calls = css_sheet_parse_charges(e->run, &before);
+        css_sheet_parse_step(e->run);
+        calls = css_sheet_parse_charges(e->run, &after) - calls;
+    }
+    if (!css_sheet_parse_ended(e->run)) {
+        DCHECKF(calls == 1, "a sheet parse unit that suspended made %u charges; a run suspends at its one charge",
+                calls);
+        e->unit_bytes[e->units++] = after - before;
+        thread_work_end(&tw, THREAD_WORK_CSS_PARSE, 0);
+        return;
+    }
+    DCHECKF(calls == 0, "the sheet parse unit that ended its run made %u charges before its finish", calls);
+    e->parsed = true;
+    if (!css_sheet_parse_finish(e->run, &last)) {
+        lxb_css_memory_destroy(e->mem, true);
+        e->mem = NULL;
+        e->sst = NULL;
+    }
+    e->run = NULL;
+    e->unit_bytes[e->units++] = last;
+    thread_work_end(&tw, THREAD_WORK_CSS_PARSE, e->len);
+    if (e->sst != NULL && e->sst->root != NULL && e->sst->root->type == LXB_CSS_RULE_LIST) {
+        lxb_css_rule_t *r;
+        uint32_t n;
+
+        for (n = 0, r = lxb_css_rule_list(e->sst->root)->first; r; r = r->next) n++;
+        e->rules = lexbor_malloc((size_t)(n ? n : 1) * sizeof *e->rules);
+        CHECK(e->rules != NULL, "cssom: the per-sheet parse's rule index allocation failed");
+        for (n = 0, r = lxb_css_rule_list(e->sst->root)->first; r; r = r->next) e->rules[n++] = r;
+        e->nrules = n;
+    }
+}
+
+/* THE PARSE OF `text` (`len` bytes, `digest` its emission's), stored in slot `si` or, inside a residency span
+   when the slot does not hold these bytes parsed, in `scratch`, the caller's private entry, which it drops after
+   the sheet: a residency span reads the table and writes nothing into it, so the parses a later build finds are
+   the no-pressure twin's. NULL when the text did not parse. The entry is BORROWED and valid until the slot is
+   next replaced, which the author walk's non-re-entrance keeps from happening while a caller holds one. The
+   running flow pays each unit as the table's banner says. With `rests`, each unit is first asked of the resting
+   drive (layout_job_parse_take), and `*parked` answers NULL for a parse the drive stopped.
    Named residual. Not covered: without `rests` the parse runs to its end for a reader that cannot rest. Next
    diff: that reader answers "not yet" under a resting drive and the parse rests between steps. Its absence
    shows as a single sheet's parse charging several rest units of bytes inside one REST_UNIT_LAYOUT_DESCENDANTS
    bracket. */
-static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, size_t len, bool rests,
-                                               bool *parked, CssdSheetParse *own)
+static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, size_t len, uint64_t digest,
+                                               bool rests, bool *parked, CssdSheetParse *scratch)
 {
+    bool residency = thread_work_residency_open();
+    uint32_t paid, at;
     CssdSheetParse *e;
-    lxb_css_rule_t *r;
-    ThreadWorkSpan tw;
-    uint32_t n;
-    bool ok;
 
     DCHECK(text != NULL && len > 0,
            "a sheet was handed to the parse table with no emission to be a parse OF — the walk tests for an "
@@ -1516,12 +1581,10 @@ static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, si
         g_sheet_parse_n = want;
     }
     e = &g_sheet_parse[si];
-    /* What a slot holds decides whether a later charged build parses, so a residency span that replaced, began or
-       continued one would move work the job's no-pressure twin did not do. */
-    if (thread_work_residency_open() && !(e->parsed && e->len == len && memcmp(e->text, text, len) == 0)) {
-        DCHECK(!rests && own != NULL && own->text == NULL,
+    if (residency && !(e->parsed && e->len == len && memcmp(e->text, text, len) == 0)) {
+        DCHECK(!rests && scratch != NULL && scratch->text == NULL,
                "a residency span's sheet parse was asked to rest, or with no private entry or one still held");
-        e = own;
+        e = scratch;
     }
     if (e->text == NULL || e->len != len || memcmp(e->text, text, len) != 0) {
         cssd_sheet_parse_drop(e);
@@ -1544,33 +1607,35 @@ static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, si
            "the per-sheet parse table is keyed on a pointer its caller owns rather than on a copy of its own — "
            "the emission is freed at the end of each sheet iteration, so every later comparison would read "
            "freed memory. Copy the bytes at the store");
-    if (e->parsed) return e;
-    /* The span counts the sheet's bytes once, at the run's end, as css_sheet_parse's does. */
-    thread_work_begin(&tw);
-    if (e->run == NULL && !(rests && !layout_job_parse_take())) e->run = css_sheet_parse_begin(e->sst, e->text, len);
-    while (e->run != NULL && !css_sheet_parse_ended(e->run) && !(rests && !layout_job_parse_take()))
-        css_sheet_parse_step(e->run);
-    if (e->run == NULL || !css_sheet_parse_ended(e->run)) {
-        thread_work_end(&tw, THREAD_WORK_CSS_PARSE, 0);
-        *parked = true;
-        return NULL;
+    /* With no flow running nobody pays, and a charge is discarded: what the slot holds is served. */
+    paid = flow_running() != NULL ? flow_running_sheet_paid(digest, len) : e->units;
+    DCHECKF(!e->parsed || paid <= e->units, "the running flow paid %u units of a sheet parse that ended in %u",
+            paid, e->units);
+    /* The units the path paid that the slot no longer holds: another flow's build replaced it in between. */
+    if (e->units < paid) {
+        thread_work_residency_begin();
+        while (e->units < paid) cssd_sheet_unit_run(e);
+        thread_work_residency_end();
+        METRIC_ADD(css_parse_rederived, 1);
     }
-    ok = css_sheet_parse_finish(e->run);
-    e->run = NULL;
-    thread_work_end(&tw, THREAD_WORK_CSS_PARSE, len);
-    if (!ok) {
-        cssd_sheet_parse_drop(e);
-        return NULL;
+    for (at = paid; !(e->parsed && at == e->units); at++) {
+        DCHECK(!residency,
+               "a residency span asked for a sheet parse the running flow's path never paid for whole, so the "
+               "re-derivation did work its no-pressure twin charged elsewhere");
+        if (rests && !layout_job_parse_take()) {
+            flow_running_sheet_pay(digest, len, at);
+            *parked = true;
+            return NULL;
+        }
+        if (at < e->units) {
+            thread_work_charge(THREAD_WORK_CSS_PARSE, e->unit_bytes[at]);
+            METRIC_ADD(css_parse_units_replayed, 1);
+        } else {
+            cssd_sheet_unit_run(e);
+        }
     }
-    if (e->sst->root != NULL && e->sst->root->type == LXB_CSS_RULE_LIST) {
-        for (n = 0, r = lxb_css_rule_list(e->sst->root)->first; r; r = r->next) n++;
-        e->rules = lexbor_malloc((size_t)(n ? n : 1) * sizeof *e->rules);
-        CHECK(e->rules != NULL, "cssom: the per-sheet parse's rule index allocation failed");
-        for (n = 0, r = lxb_css_rule_list(e->sst->root)->first; r; r = r->next) e->rules[n++] = r;
-        e->nrules = n;
-    }
-    e->parsed = true;
-    return e;
+    if (!residency && at != paid) flow_running_sheet_pay(digest, len, at);
+    return e->sst != NULL ? e : NULL;
 }
 
 /* The match-result build below makes a sheet parse per slot of the parse table above, and replaces a slot when
@@ -1608,7 +1673,7 @@ static bool cssd_match_result_run(CssMatchResult *m, bool rests)
            position's emission has changed since the last build (the parse table above). The table's arena owns
            the stylesheet, and nothing kept here points into it: every value taken from a matched rule is
            copied, and a parked build keeps only indices. */
-        p = cssd_sheet_parsed(sheet->si, view->text, strlen(view->text), rests, &parked, &scratch);
+        p = cssd_sheet_parsed(sheet->si, view->text, sheet->len, sheet->digest, rests, &parked, &scratch);
         if (parked) goto out;
         if (p != NULL && p->rules != NULL) {
             /* The round trip is asserted per rule: each emitted rule parses back as exactly one rule at the
@@ -2046,7 +2111,7 @@ bool cssom_rules_run_parse_step(CssomRulesRun *run)
         thread_work_end(&tw, THREAD_WORK_CSS_PARSE, 0);
         return true;
     }
-    ok = css_sheet_parse_finish(run->parse);
+    ok = css_sheet_parse_finish(run->parse, NULL);
     run->parse = NULL;
     run->parsed = true;
     thread_work_end(&tw, THREAD_WORK_CSS_PARSE, run->len);

@@ -11,6 +11,7 @@
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_AUTHOR_SHEETS_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <lexbor/dom/dom.h>
@@ -19,10 +20,13 @@
 #include "core/css/css_rule.h"
 
 /* One applying sheet: `si` is its position in the root's sheet list, and `view` its emission (owned by the
-   set; `view.text` is never NULL, since a sheet that emits no rule contributes only layer declarations). */
+   set; `view.text` is never NULL, since a sheet that emits no rule contributes only layer declarations), `len`
+   its length and `digest` its FNV-1a 64, the key a flow's paid parse is recorded under. */
 typedef struct {
     uint32_t            si;
     CssRuleCascadeSheet view;
+    size_t              len;
+    uint64_t            digest;
 } CssAuthorSheet;
 
 typedef struct CssAuthorSheets CssAuthorSheets;

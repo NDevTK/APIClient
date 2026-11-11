@@ -47,6 +47,12 @@ static void cas_push(CssAuthorSheets *s, uint32_t si, CssRuleCascadeSheet view)
     }
     s->v[s->n].si = si;
     s->v[s->n].view = view;
+    s->v[s->n].len = strlen(view.text);
+    s->v[s->n].digest = 0xcbf29ce484222325ULL;
+    for (size_t i = 0; i < s->v[s->n].len; i++) {
+        s->v[s->n].digest ^= (unsigned char)view.text[i];
+        s->v[s->n].digest *= 0x100000001b3ULL;
+    }
     s->n++;
 }
 

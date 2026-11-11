@@ -20,6 +20,8 @@ struct CssSheetParse {
     lxb_css_stylesheet_t *sst;     /* BORROWED */
     size_t                len;     /* the text's length; the text itself is the tokenizer's, BORROWED */
     size_t                charged; /* how many of those bytes have been charged as CSS parse work */
+    unsigned              charges; /* how many charges its suspensions have made */
+    uint64_t              bytes;   /* …and the bytes those charged */
     lxb_status_t          status;  /* the last answer: LXB_STATUS_SUSPENDED until the run ends */
 };
 
@@ -37,6 +39,8 @@ static bool css_sheet_parse_yield(lxb_css_parser_t *parser, void *ctx)
     fresh = at - run->charged + parser->lookahead;
     if (fresh < rest_unit_items(REST_UNIT_CSS_PARSE_BYTES)) return false;
     thread_work_charge(THREAD_WORK_CSS_PARSE, fresh);
+    run->charges++;
+    run->bytes += fresh;
     run->charged = at;
     parser->lookahead = 0;
     return true;
@@ -77,12 +81,21 @@ void css_sheet_parse_step(CssSheetParse *run)
     run->status = lxb_css_stylesheet_parse_resume(run->sst, run->parser);
 }
 
-bool css_sheet_parse_finish(CssSheetParse *run)
+unsigned css_sheet_parse_charges(const CssSheetParse *run, uint64_t *bytes)
 {
+    DCHECK(run != NULL && bytes != NULL, "a sheet parse's charges were asked of no run or with nowhere to put them");
+    *bytes = run->bytes;
+    return run->charges;
+}
+
+bool css_sheet_parse_finish(CssSheetParse *run, uint64_t *charged)
+{
+    uint64_t last = run->len - run->charged + run->parser->lookahead;
     bool ok;
 
     DCHECK(css_sheet_parse_ended(run), "a sheet parse was finished while its run was suspended");
-    thread_work_charge(THREAD_WORK_CSS_PARSE, run->len - run->charged + run->parser->lookahead);
+    thread_work_charge(THREAD_WORK_CSS_PARSE, last);
+    if (charged != NULL) *charged = last;
     ok = run->status == LXB_STATUS_OK;
     lxb_css_parser_selectors_destroy(run->parser);
     lxb_css_parser_destroy(run->parser, true);

@@ -6,6 +6,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include <lexbor/css/css.h>
 
@@ -20,8 +21,11 @@ CssSheetParse *css_sheet_parse_begin(lxb_css_stylesheet_t *sst, const char *text
 bool css_sheet_parse_ended(const CssSheetParse *run);
 /* One more quantum of the parse. */
 void css_sheet_parse_step(CssSheetParse *run);
-/* Charges the bytes not yet charged and frees the run. True when `sst` holds the parsed rules. */
-bool css_sheet_parse_finish(CssSheetParse *run);
+/* How many charges of CSS parse work the run's suspensions have made so far, and in `*bytes` what they charged. */
+unsigned css_sheet_parse_charges(const CssSheetParse *run, uint64_t *bytes);
+/* Charges the bytes not yet charged and frees the run. True when `sst` holds the parsed rules. `*charged`, when
+   asked, is the byte count of that last charge. */
+bool css_sheet_parse_finish(CssSheetParse *run, uint64_t *charged);
 /* Frees a run that has not ended, leaving `sst` partly filled for its owner to destroy. */
 void css_sheet_parse_abort(CssSheetParse *run);
 

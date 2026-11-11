@@ -1350,6 +1350,57 @@ const Flow *flow_running_cascade_writes(uint64_t *gen)
     return g_running;
 }
 
+/* One sheet emission's paid units. The digest is FNV-1a 64 over the emission (css_author_sheets.c); a collision
+   could only make one parse's charge another's, never an answer, since the table compares the bytes. */
+struct FlowSheetPaid {
+    uint64_t digest;
+    size_t   len;
+    uint32_t units;
+};
+
+static struct FlowSheetPaid *flow_sheet_paid_of(Flow *f, uint64_t digest, size_t len)
+{
+    for (int i = 0; i < f->sheet_paid_n; i++)
+        if (f->sheet_paid[i].digest == digest && f->sheet_paid[i].len == len) return &f->sheet_paid[i];
+    return NULL;
+}
+
+uint32_t flow_running_sheet_paid(uint64_t digest, size_t len)
+{
+    const struct FlowSheetPaid *p = g_running != NULL ? flow_sheet_paid_of(g_running, digest, len) : NULL;
+
+    return p != NULL ? p->units : 0;
+}
+
+void flow_running_sheet_pay(uint64_t digest, size_t len, uint32_t units)
+{
+    struct FlowSheetPaid *p, *grown;
+
+    if (g_running == NULL) return;
+    p = flow_sheet_paid_of(g_running, digest, len);
+    if (p != NULL) {
+        DCHECKF(units >= p->units, "a sheet parse's paid units fell from %u to %u — the path's payments only grow",
+                p->units, units);
+        p->units = units;
+        return;
+    }
+    grown = reclaim_realloc(g_running->sheet_paid, (size_t)(g_running->sheet_paid_n + 1) * sizeof *grown);
+    CHECK(grown != NULL, "engine: OOM recording a flow's paid sheet parse");
+    g_running->sheet_paid = grown;
+    grown[g_running->sheet_paid_n++] = (struct FlowSheetPaid){ digest, len, units };
+}
+
+/* A fork's arm or a snapshot's: the paid parses of the prefix it continues. */
+static void flow_sheet_paid_inherit(Flow *sib, const Flow *from)
+{
+    DCHECK(sib->sheet_paid == NULL && sib->sheet_paid_n == 0, "a flow inherited its paid sheet parses twice");
+    if (from->sheet_paid_n == 0) return;
+    sib->sheet_paid = reclaim_malloc((size_t)from->sheet_paid_n * sizeof *sib->sheet_paid);
+    CHECK(sib->sheet_paid != NULL, "engine: OOM inheriting a flow's paid sheet parses");
+    memcpy(sib->sheet_paid, from->sheet_paid, (size_t)from->sheet_paid_n * sizeof *sib->sheet_paid);
+    sib->sheet_paid_n = from->sheet_paid_n;
+}
+
 /* How many times a finding was offered to the order, and how many of those the order could not be given: the
  * partition `valTop`, `topForgiven` and `selfEmit` presuppose. All three read zero both when no detector fired (a
  * reach question: build the surface) and when detectors fired with no flow to pay (a question about which side of
@@ -2569,6 +2620,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     sib->park_slots = parent->park_slots;
     sib->trail = reply_trail_share(parent->trail);
     sib->trail_seen = parent->trail_seen;
+    flow_sheet_paid_inherit(sib, parent);
     /* And the drive count, part of the class's identity below. An arm of a drive drives the same body, and the count
        is the one its seed read; a non-drive copies zero to zero; a drive's own seed rewrites the copy it was
        assembled with (flow_set_orphan_seen), after this equality, because the seed is an arrival and not a branch. */
@@ -3409,6 +3461,7 @@ void flow_arrive_on_snapshot(Flow *sib, const Flow *snap, FlowPathMarks at_cut) 
     sib->park_slots = snap->park_slots;
     sib->trail = reply_trail_share(snap->trail);
     sib->trail_seen = snap->trail_seen;
+    flow_sheet_paid_inherit(sib, snap);
     flow_reads_inherit(sib, snap);
     for (int i = 0; i < snap->assumed_slots_n; i++)
         flow_assumed_slot_push(sib, snap->assumed_slots[i], snap->assumed_slot_names[i]);
@@ -7343,6 +7396,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
         free(f->cand_src); free(f->cand_payload); fire_target_clear(&f->fire);
         free(f->assumed_slots); free(f->assumed_slot_names); free(f->assumed_read_names);
         free(f->env_slots); free(f->env_slot_names);
+        free(f->sheet_paid);
         for (int k = 0; k < f->cand_dn; k++) { free(f->cand_dsrc[k]); free(f->cand_dval[k]); }
         free(f->cand_dsrc); free(f->cand_dval);
         for (int k = 0; k < f->orphan_chain_n; k++) free(f->orphan_acts[k]);
