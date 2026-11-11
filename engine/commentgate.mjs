@@ -3,7 +3,7 @@
  * Refuses a diff that adds a comment block longer than LIMIT lines, or grows one that already is, and any added
  * comment line that cites a CLAUDE.md section by its section sign. It judges only what the diff ADDS, so standing blocks are untouched
  * until someone edits them; editing one that is over the limit is allowed as long as the edit does not make it
- * longer, and moving one unchanged within its file is not adding it.
+ * longer, and moving one unchanged, within its file or into another file of the same diff, is not adding it.
  *
  *   node engine/commentgate.mjs [--base <rev>] [--head <rev>]
  *
@@ -115,12 +115,40 @@ const files = git(["diff", "--name-only", "--diff-filter=AMR", ...range]).split(
 const untracked = head ? new Set() : new Set(git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(keep));
 for (const f of untracked) files.push(f);
 
+const commentsOf = (f, src) => (/\.(c|h)$/.test(f) ? cComments(src) : jsComments(src));
+const baseOf = (f) => {
+  try {
+    return execFileSync("git", ["show", `${forkPoint}:${f}`],
+                        { cwd: ROOT, encoding: "utf8", maxBuffer: 1 << 30, stdio: ["ignore", "pipe", "ignore"] });
+  } catch (e) { return null; }   /* the file is new on this side */
+};
+const headOf = (f) => {
+  if (!head) return existsSync(join(ROOT, f)) ? readFileSync(join(ROOT, f), "utf8") : null;
+  try {
+    return execFileSync("git", ["show", `${head}:${f}`],
+                        { cwd: ROOT, encoding: "utf8", maxBuffer: 1 << 30, stdio: ["ignore", "pipe", "ignore"] });
+  } catch (e) { return null; }   /* the file is deleted on this side */
+};
+
+/* Blocks that left a file this diff modifies or deletes: for each text, how many more copies the file's base
+   side holds than its head side. Each departed copy excuses one arrival of the same text in another file, which
+   is how a split that moves text into a new file is read as a move. */
+const departed = new Map();
+for (const f of git(["diff", "--name-only", "--no-renames", "--diff-filter=MD", ...range]).split("\n").filter(keep)) {
+  const baseSrc = baseOf(f), headSrc = headOf(f);
+  if (baseSrc === null) continue;
+  const net = new Map();
+  for (const b of commentsOf(f, baseSrc) || []) net.set(b.text, (net.get(b.text) || 0) + 1);
+  for (const b of (headSrc === null ? [] : commentsOf(f, headSrc)) || []) net.set(b.text, (net.get(b.text) || 0) - 1);
+  for (const [text, n] of net) if (n > 0) departed.set(text, (departed.get(text) || 0) + n);
+}
+
 const refusals = [];
 let judged = 0, unparsed = [];
 for (const f of files) {
   const src = head ? git(["show", `${head}:${f}`]) : (existsSync(join(ROOT, f)) ? readFileSync(join(ROOT, f), "utf8") : null);
   if (src === null) continue;
-  const blocks = /\.(c|h)$/.test(f) ? cComments(src) : jsComments(src);
+  const blocks = commentsOf(f, src);
   if (blocks === null) { unparsed.push(f); continue; }
   const { added, dels } = untracked.has(f)
     ? { added: new Set(src.split("\n").map((_, k) => k + 1)), dels: [] }
@@ -130,12 +158,8 @@ for (const f of files) {
      shows it as new lines only because the code around it moved. Each base copy excuses one head copy. */
   const moved = new Map();
   if (!untracked.has(f)) {
-    let baseSrc = null;
-    try {
-      baseSrc = execFileSync("git", ["show", `${forkPoint}:${f}`],
-                             { cwd: ROOT, encoding: "utf8", maxBuffer: 1 << 30, stdio: ["ignore", "pipe", "ignore"] });
-    } catch (e) { baseSrc = null; }   /* the file is new on this side: nothing in it can have moved */
-    const baseBlocks = baseSrc === null ? [] : ((/\.(c|h)$/.test(f) ? cComments(baseSrc) : jsComments(baseSrc)) || []);
+    const baseSrc = baseOf(f);   /* null when the file is new on this side: nothing moved within it */
+    const baseBlocks = baseSrc === null ? [] : (commentsOf(f, baseSrc) || []);
     for (const b of baseBlocks) moved.set(b.text, (moved.get(b.text) || 0) + 1);
   }
   for (const b of blocks) {
@@ -144,8 +168,9 @@ for (const f of files) {
     if (!plus) continue;
     const minus = dels.filter((d) => d.at >= b.start - 1 && d.at <= b.end).reduce((s, d) => s + d.count, 0);
     const len = b.end - b.start + 1;
-    const wasThere = (moved.get(b.text) || 0) > 0;
+    let wasThere = (moved.get(b.text) || 0) > 0;
     if (wasThere) moved.set(b.text, moved.get(b.text) - 1);
+    else if ((departed.get(b.text) || 0) > 0) { departed.set(b.text, departed.get(b.text) - 1); wasThere = true; }
     if (len > LIMIT && plus > minus && !wasThere)
       refusals.push(`${f}:${b.start}  a ${len}-line comment block was added or grown (+${plus} -${minus}); the limit is ${LIMIT}`);
     if (wasThere) continue;
