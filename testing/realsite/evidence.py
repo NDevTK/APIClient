@@ -3,9 +3,12 @@
 Printed: how the run ended; the wire mode and the sends a replay's recording lacked; the first requests
 Chromium always makes that the engine never sent, with each one's method, kind and engine record; per
 instance the program rows reached, the reply door, the clock licence, page errors split into standing and
-exploration-produced, and the records by provenance and door; and per instance the observed world over the
-run's census samples. `picks` there is the pick count of the best-weighted observed member at that sample,
-which is one member's history only while the observed world holds few members."""
+exploration-produced, the records by provenance and door, the sales by outcome, the engine gaps the instance
+crossed (`_instanceGaps`) and the oldest observed-class member's place; the zone's egress decisions by how each
+was answered; and per instance the observed world over the run's census samples. `picks` there is the pick
+count of the best-weighted observed member at that sample, which is one member's history only while the
+observed world holds few members. A replay's recording answers a send by method, URL and body, so a send it
+lacks is a miss whatever the engine did; misses are split into GET and the rest."""
 import gzip, json, os, sys
 from collections import Counter
 
@@ -32,6 +35,11 @@ def main(diff_path):
     misses = [x for x in w if x['wire'] == 'replay' and not x['hit']]
     print('wire mode', sorted(set(x['wire'] for x in w)), 'sends', len(w), 'sends the recording lacked', len(misses),
           sorted(set(x['method'] + ' ' + x['url'].split('?')[0] for x in misses))[:6])
+    for name, ms in (('GET', [x for x in misses if x['method'] == 'GET']), ('not GET', [x for x in misses if x['method'] != 'GET'])):
+        ids = Counter(x['method'] + ' ' + x['url'].split('?')[0] for x in ms)
+        print('  recording lacked, %s: %d sends, %d addresses' % (name, len(ms), len(ids)), ids.most_common(8))
+    eg = [json.loads(l.split('\t', 1)[1]) for l in open(base + '.egress.tsv')] if os.path.exists(base + '.egress.tsv') else []
+    print('egress decisions', len(eg), dict(Counter((e['method'], e['how'], e['refusal']) for e in eg)))
     print('chromium: counted', dj['counted'], 'of', dj['loads'], 'loads; stable identities', len(dj['stable']), 'varying',
           len(dj['varying']), '| engine never sent', len(dj['missing']), '| engine sends no load made', len(dj['extra']))
     for m in dj['missing'][:4]:
@@ -64,6 +72,19 @@ def main(diff_path):
         for e in [e for e in d['pageErrors'] if e in d['pageErrorsExplored']][:3]: print('     explored:', e[:260])
         print('   standard globals the realm lacks that the page asked for:', [k for k in d['_absent'] if not k.startswith('_')][:25])
         print('   records:', dict(Counter((r['provenance'], r['door'], r['method'], 'driven' if r['driven'] else '') for r in d['fetchCallSites'])))
+        print('   replies declined by ground:', {k: v for k, v in c.items() if k.startswith('replyDeclined') and k != 'replyDeclined' and v})
+        print('   sales by outcome:', {k: c[k] for k in c if k.startswith('sold')}, '| stubs standing', c.get('cold'),
+              'waiting for the park', c.get('coldWaiting'), 'returned', c.get('returned'), 'return bodies', c.get('returnBodies'))
+        old, units = q.get('observedOldest'), list(c['stepUnitRuns'])
+        print('   oldest observed-class member:', None if not old else dict(old, stepUnit=units[old['stepUnit']]),
+              '| observed members', q['observedMembers'], 'left out only for an arm against an environment example',
+              q.get('observedEnvMembers'), '| descents reaching the idle rung', c['stepReachedIdleLife'],
+              'idle periods run', c['stepUnitRuns']['start-or-run-an-idle-period'])
+        gaps = d.get('_instanceGaps')
+        print('   engine gaps crossed:', None if gaps is None else len(gaps))
+        for g in gaps or []:
+            print('     gap %s:%s reached %s%s: %s' % (g['siteFile'], g['siteLine'], g['reached'],
+                                                    ' (composed)' if g['composed'] else '', g['message'][:300]))
     cold, rows = {}, {}
     for l in gzip.open(base + '.census.tsv.gz', 'rt'):
         tag, marker, payload = l.rstrip('\n').split('\t', 2)

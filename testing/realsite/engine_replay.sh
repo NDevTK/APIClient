@@ -8,7 +8,9 @@
 # disk, so the disk gates (start at 600 MB free, stop under 300) only keep its own logs from meeting ENOSPC.
 # Its artifacts are <out-dir>/logs/<page>.0.{wire.jsonl,final.results.json,<budget>.results.json,stderr.tail,
 # progress.jsonl,census.tsv.gz}, one line appended to <out-dir>/runs.jsonl, and bench's own output in
-# <out-dir>/<page>.bench.out.
+# <out-dir>/<page>.bench.out. REALSITE_BIN names a native binary (its `.build.json` stamp beside it) to drive in
+# place of the snapshot's own engine/host/out/qjs-native-none; <snapshot> then only supplies the zone, and may be
+# any checkout of the binary's revision.
 set -u
 snap=$1; store=$2; out=$3; page=$4; budgets=${5:-108e6,432e6}; cap=${6:-4096}; backstop=${7:-2400}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -23,7 +25,8 @@ if [ "$room" -lt $((cap + 500)) ]; then echo "$page not started: memory headroom
 echo "$page start: $(free_mb) MB free, headroom $room MiB, $(uptime | sed 's/.*load/load/')"
 mkdir -p "$out"
 setsid node "$snap/testing/bench/bench.mjs" run --store "$store" --snap "$snap" --out "$out" --runs 1 \
-  --budgets "$budgets" --jobs 1 --backstop "$backstop" --mem-cap "$cap" --pages "$page" > "$out/$page.bench.out" 2>&1 8>&- &
+  --budgets "$budgets" --jobs 1 --backstop "$backstop" --mem-cap "$cap" --pages "$page" \
+  ${REALSITE_BIN:+--bin "$REALSITE_BIN"} > "$out/$page.bench.out" 2>&1 8>&- &
 pid=$!
 low=0
 while kill -0 $pid 2>/dev/null; do
