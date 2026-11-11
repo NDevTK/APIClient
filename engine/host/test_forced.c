@@ -1599,6 +1599,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/envtypes.h"
 #include "fixture/framerace.h"
 #include "fixture/waitclock.h"
+#include "fixture/framepair.h"
 #include "fixture/shuffle.h"
 #include "fixture/storearm.h"
 #include "fixture/pagewrite.h"
@@ -2395,6 +2396,7 @@ TF_DOCS[] = {
     { "envtypes", HTML_ENVTYPES },
     { "framerace", HTML_FRAMERACE },
     { "waitclock", HTML_WAITCLOCK },
+    { "framepair", HTML_FRAMEPAIR },
     { "shuffle", HTML_SHUFFLE },
     { "storearm", HTML_STOREARM },
     { "pagewrite", HTML_PAGEWRITE },
@@ -19167,6 +19169,33 @@ TF_UNIT void probes_waitclock(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `framepair` document (fixture/framepair.h): a frame ahead of the clock beside two replies the
+   host answers in one payment runs before, between and after their reactions. Which reply the host answers
+   first is the host's order, so both are admitted. */
+TF_UNIT void probes_framepair(const char *js, Probe *tab, int *n) {
+    const char *why = NULL; int tt = 1;
+    const int first = param_undriven_count(js, "/api/fprorder", "v", "frame-a-b") +
+                      param_undriven_count(js, "/api/fprorder", "v", "frame-b-a");
+    const int mid = param_undriven_count(js, "/api/fprorder", "v", "a-frame-b") +
+                    param_undriven_count(js, "/api/fprorder", "v", "b-frame-a");
+    const int last = param_undriven_count(js, "/api/fprorder", "v", "a-b-frame") +
+                     param_undriven_count(js, "/api/fprorder", "v", "b-a-frame");
+
+    fold_row(&tt, &why, first > 0 && last > 0,
+             "NOT REACHED: /api/fprorder does not record the frame both before and after the two replies, so the "
+             "frame was not raced against the first arrival at all");
+    fold_row(&tt, &why, mid > 0,
+             "the animation frame callback never ran between two replies answered in one payment: the delivery "
+             "arm asks the deadline race before each arrival for a timer only, so a frame the first arrival "
+             "preceded is not asked against the second");
+    fold_row(&tt, &why, first + mid + last == param_undriven_count(js, "/api/fprorder", "v", NULL),
+             "/api/fprorder recorded an order that is not the frame before, between or after the two replies");
+    const Probe rows[] = {
+        { "frame-race-pair", tt, "/api/fprorder", SESS_EXPLORE, why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `shuffle` document (fixture/shuffle.h): element accesses at an index that is an environment
    unknown holding an example run on the example's index. */
 TF_UNIT void probes_shuffle(const char *js, Probe *tab, int *n) {
@@ -31606,6 +31635,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_envtypes(js, probes, &np);
     probes_framerace(js, probes, &np);
     probes_waitclock(js, probes, &np);
+    probes_framepair(js, probes, &np);
     probes_shuffle(js, probes, &np);
     probes_storearm(js, probes, &np);
     probes_pagewrite(js, probes, &np);
