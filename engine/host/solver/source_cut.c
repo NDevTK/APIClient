@@ -263,6 +263,15 @@ static void cut_free(SourceCut *c) {
     free(c);
 }
 
+void source_cut_flow_cold(Flow *f) {
+    DCHECK(f->standby_of == NULL, "a held snapshot was sold — a standby is shed, never sold");
+    strv_free(&f->cut_due, &f->cut_due_n);
+    for (int i = 0; i < f->cuts_n; i++) source_cut_drop(f->cuts[i]);
+    free(f->cuts);
+    f->cuts = NULL;
+    f->cuts_n = 0;
+}
+
 void source_cut_flow_release(Flow *f) {
     strv_free(&f->src_read, &f->src_read_n);
     source_cut_log_free(f->deliv_log);

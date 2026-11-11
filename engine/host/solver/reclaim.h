@@ -94,7 +94,7 @@
 /* The browser half reaches the edge through lexbor_malloc, lexbor_calloc and lexbor_realloc, the library allocator
    reclaim_install routes here, and through reclaim_strdup and reclaim_strndup for its string copies; the solver's
    fresh allocations call reclaim_* directly. A free path keeps the C library, since a sale there would re-enter the
-   release walking it, and so does the park document's block, which engine_park_fund funds instead.
+   release walking it, and so does the park document's block, which the session's park writes mid-walk.
    Named residual. Not covered: the solver's realloc sites other than world.c's document and minted-world tables (a sale
    writes the second's rows in place and never grows it), whose buffer may belong to a flow a sale releases, or to a
    registry a sale grows (world.c's dead-world list). Next diff converts them file by file, each after checking its

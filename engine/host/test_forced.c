@@ -18301,11 +18301,19 @@ TF_UNIT void probes_rangerest(const char *js, Probe *tab, int *n) {
 
 /* The rows of the three sale documents (fixture/sale.h). sale-forced-returns and sale-own-returns: the member
    owing the request was sold at the act and its report is in the result, so it returned within the session.
-   sale-control-reaches: the same shape with no act reports with no member sold. */
+   sale-forced-stays-listed and sale-own-stays-listed: the bill taken after the sale still lists the request the
+   sold member owes. sale-control-reaches: the same shape with no act reports with no member sold. */
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
-    const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *at = strstr(js, "\"sold\":");
+    const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *at = strstr(js, "\"sold\":");
     long sold = at ? strtol(at + strlen("\"sold\":"), NULL, 10) : -1;
-    int ft = 1, ot = 1, ct = 1;
+    int ft = 1, ot = 1, ct = 1, lt = 1;
+
+    fold_row(&lt, &lwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
+             "the act sold nothing: no bill listed the owed request with a member to sell beside the one switched "
+             "in, so the row's premise did not arise");
+    fold_row(&lt, &lwhy, g_tf_sale.relisted,
+             "the bill taken after the sale no longer lists the owed request, so the sale withdrew a request its "
+             "sold member still owes");
 
     fold_row(&ft, &fwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
              "the act sold nothing: no bill listed /api/sl-forced-owed with a member to sell beside the one "
@@ -18328,6 +18336,8 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
         { "sale-forced-returns", ft, "slForced", SESS_EXPLORE, fwhy },
         { "sale-own-returns", ot, "slOwn", SESS_EXPLORE, owhy },
         { "sale-control-reaches", ct, "slCtl", SESS_EXPLORE, cwhy },
+        { "sale-forced-stays-listed", lt, "slForced", SESS_EXPLORE, lwhy },
+        { "sale-own-stays-listed", lt, "slOwn", SESS_EXPLORE, lwhy },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

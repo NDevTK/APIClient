@@ -124,8 +124,9 @@ static int64_t g_arrivals = 0;
 static int64_t g_departures = 0;
 /* The departure cause that had no counter. `flow_remove` is the one line a member leaves the frontier on and
    `flow_release` its one caller, so every departure is a flow that completed (engine.c's flow_finish, crediting
-   `finished`), one the pager sold (engine_reclaim_tail, `sold`), or the drain in flow_registry_free below, counted
-   here, and the three partition `g_departures` (asserted at engine_frontier_census). A member counted here is one
+   `finished`), one retired or shed, or the drain in flow_registry_free below, counted here, and the causes
+   partition `g_departures` (asserted at engine_frontier_census). A sold member stays (flow_sale_begin) and leaves
+   by this drain. A member counted here is one
    the frontier still held when its registry went down. Counted at the release rather than from `g_flows_n` before
    the loop, because a release announces a world death to this instance's peers (the end of flow_release), as
    `g_departures` is raised on the line that removes. */
@@ -2638,6 +2639,21 @@ void flow_assembly_end(Flow *f) {
 
 int flow_assembling(void) { return g_flows_assembling; }
 
+static void flow_ix_remove(Flow *f);
+static void flow_owed_unlink(Flow *f);
+static void frontier_rank_changed(void);
+static void flow_rows_release(Flow *f);
+
+/* The stubs standing and the stubs departed (flow.h). */
+static int g_cold_n;
+static int64_t g_cold_departed;
+/* The member a sale is open on, NULL between sales, and its order key as the sale found it. */
+static const Flow *g_sale_of;
+
+int flow_cold(const Flow *f) { return f->cold; }
+int flow_cold_count(void) { return g_cold_n; }
+int64_t flow_cold_departed(void) { return g_cold_departed; }
+
 #if APICLIENT_DEV
 static FlowParkReads flow_park_reads(const Flow *f) {
     FlowParkReads r;
@@ -2670,9 +2686,70 @@ int flow_park_reads_unchanged(const Flow *f) {
 }
 #endif
 
-/* The part of a release the park write does not read (flow.h): the compile, the continuations and frames, the
-   other agents' realms, the owed replies, the heap delta and the DOM head and base, and the pin blob. The pager
-   runs it before cold_park_flow so the memory a sale gives back funds the record it writes. */
+#if APICLIENT_DEV
+static struct { double w, x, ikey; int64_t turn; uint64_t seq; } g_sale_key;
+static void flow_sale_key_read(const Flow *f, __typeof__(g_sale_key) *k);
+#endif
+
+void flow_sale_begin(Flow *f) {
+    DCHECK(f != NULL && f != g_running && !f->cold && !f->held && !f->assembling && !f->bulk_released,
+           "a sale began on the running flow, a held snapshot, a sibling being assembled or a member already sold");
+    DCHECK(g_sale_of == NULL, "a sale began inside another — the refusal edge is latched while a sale runs");
+    DCHECK((f->ix_in != 0) != (flow_host_owed(f) != 0),
+           "a member to sell stands in the order's index and on the host-owed list, or on neither");
+    g_sale_of = f;
+#if APICLIENT_DEV
+    flow_sale_key_read(f, &g_sale_key);
+#endif
+    if (f->ix_in) flow_ix_remove(f);
+    else { flow_owed_unlink(f); f->owed_gen = 0; }
+    f->cold = 1;
+    g_cold_n++;
+    /* The eligible set lost a member, as when one is held: a stub is out of the pick while it is cold. */
+    frontier_rank_changed();
+}
+
+void flow_sale_end(JSContext *ctx, Flow *f, JSValue stand_ins) {
+    DCHECK(f != NULL && f == g_sale_of && f->cold && f->bulk_released && JS_IsUndefined(f->pending),
+           "a sale ended on a member it did not begin on, or before its bulk and register were given back");
+    DCHECK(flow_park_reads_unchanged(f),
+           "a field a park record reads changed when the flow's bulk was released — flow_release_bulk freed "
+           "something a stub keeps, so move that release out of the bulk");
+    /* What a replay re-derives. The references on the history's snapshots go so a standby nothing else names can
+       be shed; the delivery log and an open hold stay, since a replay delivers by them. */
+    source_cut_flow_cold(f);
+    flow_rows_release(f);
+    for (int i = 0; i < f->n_agents; i++) { JS_FreeValue(ctx, f->agents[i].jobs); f->agents[i].jobs = JS_UNDEFINED; }
+    /* A drive waits for its body again, the state the cold tier's rebuild leaves one in: the function is this
+       session's heap object, and the chain names every member a replay calls. */
+    JS_FreeValue(ctx, f->fn); f->fn = JS_UNDEFINED;
+    JS_FreeValue(ctx, f->orphan_claim_fn); f->orphan_claim_fn = JS_UNDEFINED;
+    if (f->orphan) {
+        DCHECK(f->orphan_chain_n > 0, "a sold drive names no member of its chain");
+        f->orphan_want = 1;
+        f->orphan_hash = 0;
+        f->orphan_claim_at = 0;
+        for (int k = 0; f->orphan_acts && k < f->orphan_chain_n; k++) {
+            free(f->orphan_acts[k]);
+            f->orphan_acts[k] = NULL;
+        }
+    }
+    f->pending = stand_ins;
+#if APICLIENT_DEV
+    {
+        __typeof__(g_sale_key) now;
+
+        flow_sale_key_read(f, &now);
+        DCHECK(memcmp(&now, &g_sale_key, sizeof now) == 0,
+               "a sale moved the sold member's order key — a stub keeps every operand the order reads, so the "
+               "sale released or rewrote one");
+    }
+#endif
+    g_sale_of = NULL;
+}
+
+/* The part of a release a park record does not read (flow.h): the compile, the continuations and frames, the
+   other agents' realms, the owed replies, the heap delta and the DOM head and base, and the pin blob. */
 void flow_release_bulk(JSContext *ctx, Flow *f) {
     DCHECK(f != g_running,
            "the running flow was released — its heap delta, document writes and decision state are live rather than "
@@ -2681,8 +2758,11 @@ void flow_release_bulk(JSContext *ctx, Flow *f) {
 #if APICLIENT_DEV
     f->bulk_reads = flow_park_reads(f);
 #endif
-    /* Out of every query first, so a sale that funds this one's record cannot pick it again. */
-    if (f->ix_in)       flow_ix_remove(f);
+    /* Out of every query first. A member being sold left them at flow_sale_begin. */
+    DCHECK(!f->cold || (f == g_sale_of && !f->ix_in && !flow_host_owed(f)),
+           "a stub's bulk was released outside its sale, or while a query still holds it");
+    if (f->cold)        { }
+    else if (f->ix_in)  flow_ix_remove(f);
     else if (!f->held)  flow_owed_unlink(f);
     /* And the parked continuations are released here, because the flow owns them: every park takes a reference that
        only the resume gives back. Each park's disposer rides the park (quickjs.h's JSFlowParkFreeFn), so this calls one
@@ -2731,10 +2811,13 @@ void flow_release(JSContext *ctx, Flow *f) {
     DCHECK(f != g_running,
            "the running flow was released — its heap delta, document writes and decision state are live rather than "
            "parked");
-    /* A flow whose bulk went first is one the pager sold, which writes it down between the two halves. */
-    DCHECK(!f->bulk_released || f->paged,
-           "a flow's bulk was released and the flow was never written to the park document — its work items "
-           "went with the bulk and nothing replays them");
+    /* A flow whose bulk went first is a stub, which the session's park writes down before the registry drains. */
+    DCHECK(!f->bulk_released || (f->cold && f->paged),
+           "a stub was released without being written to the park document — its work items went with its "
+           "bulk and nothing replays them");
+    DCHECK(f != g_sale_of, "a member was released inside its own sale");
+    /* A stub's register holds its stand-ins; the drop of a pair's last naming withdraws the request. */
+    if (f->cold) pending_free(ctx, &f->pending);
     if (!f->bulk_released) {
         /* A paged flow is not a dropped one. Five things a released flow can still carry are work items on the one
            frontier: a parked continuation, the suspended frame (its whole heap-frame chain), replies the host still
@@ -2770,21 +2853,7 @@ void flow_release(JSContext *ctx, Flow *f) {
     /* The body column gives a reference back rather than freeing: a program's text is shared by every timeline
        holding it (solver/dyn_body.h), and the last flow to leave frees it. The other two columns are this flow's
        own strings. */
-    for (int k = 0; k < f->dyn_n; k++) { dyn_body_unref(f->dyn[k]); free(f->dyn_token[k]); free(f->dyn_url[k]); }
-    free(f->dyn); f->dyn = NULL;
-    free(f->dyn_cand); f->dyn_cand = NULL;
-    free(f->dyn_type); f->dyn_type = NULL;
-    free(f->dyn_url); f->dyn_url = NULL;
-    /* The element column frees only itself: a row's `script` element is a borrowed node of the document's tree,
-       owned by that tree or, for a node a flow created, by the flow's DOM delta, which dom_buf_free discarded. */
-    free(f->dyn_el); f->dyn_el = NULL;
-    free(f->dyn_doc); f->dyn_doc = NULL;
-    free(f->dyn_realm); f->dyn_realm = NULL;
-    free(f->dyn_id); f->dyn_id = NULL;
-    free(f->dyn_run); f->dyn_run = NULL;
-    free(f->dyn_token); f->dyn_token = NULL;
-    free(f->dyn_pos); f->dyn_pos = NULL;
-    f->dyn_n = f->dyn_cap = 0;
+    flow_rows_release(f);
     /* And the undrained microtasks and tasks, one release for the array and every record; that they are gone is
        asserted at the top of this function. */
     for (int i = 0; i < f->n_agents; i++) { JS_FreeValue(ctx, f->agents[i].jobs); f->agents[i].jobs = JS_UNDEFINED; }
@@ -2800,6 +2869,25 @@ void flow_release(JSContext *ctx, Flow *f) {
         engine_notify_worlds_gone(ctx, gone, n);
     }
     flow_remove(ctx, f);
+}
+
+/* The program rows, every column. The body column gives a reference back (above); the element column frees only
+   itself: a row's `script` element is a borrowed node of the document's tree, owned by that tree or, for a node a
+   flow created, by the flow's DOM delta, which dom_buf_free discarded. */
+static void flow_rows_release(Flow *f) {
+    for (int k = 0; k < f->dyn_n; k++) { dyn_body_unref(f->dyn[k]); free(f->dyn_token[k]); free(f->dyn_url[k]); }
+    free(f->dyn); f->dyn = NULL;
+    free(f->dyn_cand); f->dyn_cand = NULL;
+    free(f->dyn_type); f->dyn_type = NULL;
+    free(f->dyn_url); f->dyn_url = NULL;
+    free(f->dyn_el); f->dyn_el = NULL;
+    free(f->dyn_doc); f->dyn_doc = NULL;
+    free(f->dyn_realm); f->dyn_realm = NULL;
+    free(f->dyn_id); f->dyn_id = NULL;
+    free(f->dyn_run); f->dyn_run = NULL;
+    free(f->dyn_token); f->dyn_token = NULL;
+    free(f->dyn_pos); f->dyn_pos = NULL;
+    f->dyn_n = f->dyn_cap = 0;
 }
 
 void flow_registry_free(JSContext *ctx) {
@@ -4402,6 +4490,15 @@ static FlowOrderKey flow_order_key(const Flow *f) {
     return o;
 }
 
+#if APICLIENT_DEV
+static void flow_sale_key_read(const Flow *f, __typeof__(g_sale_key) *k) {
+    FlowOrderKey o = flow_order_key(f);
+
+    memset(k, 0, sizeof *k);
+    k->w = o.w; k->x = o.x; k->ikey = o.ikey; k->turn = o.turn; k->seq = o.seq;
+}
+#endif
+
 /* The weight with the priced decisions left out of the optimism, in flow_order_key's composition: what the fork's
    rank-neutrality equality compares. Mentioned only inside DCHECK conditions. */
 static double flow_weight_observed(const Flow *f) {
@@ -5350,8 +5447,8 @@ static Flow *flow_pick_walk(FlowScan why) {
                "relation have come apart, and flow_remove will swap-remove at the handle's slot and drop "
                "whichever member is standing there");
         /* A held member is out of the order for good (flow_set_held): a front no dispatch can reach is not the
-           order's front. */
-        if (g_flows[i]->held) continue;
+           order's front. A stub is out of the pick while it is cold (flow_sale_begin). */
+        if (g_flows[i]->held || g_flows[i]->cold) continue;
         /* Counted where the weight is taken, so the count is what the scan cost. */
         w = flow_weight(g_flows[i]); g_scan_weights[why]++;
         /* And the precondition of every sub-linear order, asked of every member: engine.c's preempt hook holds it
@@ -5556,7 +5653,7 @@ static int flow_is_min_weight(const Flow *tail, const Flow *exclude) {
     double tw = flow_weight(tail);
     int i;
     for (i = 0; i < g_flows_n; i++) {
-        if (g_flows[i] == exclude || g_flows[i] == tail || g_flows[i]->held) continue;
+        if (g_flows[i] == exclude || g_flows[i] == tail || g_flows[i]->held || g_flows[i]->cold) continue;
         if (flow_weight(g_flows[i]) < tw) return 0;
     }
     return 1;
@@ -5586,6 +5683,11 @@ static void flow_ix_check(void) {
         if (m->held) {
             DCHECK(!m->ix_in && !flow_host_owed(m), "a held member stands in the order's index or is marked host-owed — "
                                                    "it is out of the pick for good and on neither list");
+            continue;
+        }
+        if (m->cold) {
+            DCHECK(!m->ix_in && !flow_host_owed(m) && m->bulk_released,
+                   "a stub stands in the order's index or is marked host-owed, or holds its bulk");
             continue;
         }
         if (flow_host_owed(m)) {
@@ -5690,7 +5792,7 @@ static void flow_ix_check(void) {
         for (int i = 0; i < g_flows_n; i++) {
             const Flow *m = g_flows[i];
             double w;
-            if (m == ref || flow_host_owed(m) || m->held) continue;
+            if (m == ref || flow_host_owed(m) || m->held || m->cold) continue;
             w = flow_weight(m);
             if (!ex || w > ew || (w == ew && flow_order_above(m, ex))) { ex = m; ew = w; }
         }
@@ -5718,10 +5820,10 @@ static void flow_ix_check(void) {
     {
         int64_t te = 0, tw = 0;
         const Flow *t1 = flow_tail_of(NULL, &te, &tw), *t2 = t1 ? flow_tail_of(t1, &te, &tw) : NULL;
-        DCHECK(t1 == NULL ? g_flows_n == flow_held_count() : flow_is_min_weight(t1, NULL),
+        DCHECK(t1 == NULL ? g_flows_n == flow_held_count() + g_cold_n : flow_is_min_weight(t1, NULL),
                "the pager's tail is not the lowest-weight member of the frontier — the tail query and the order are "
                "two readings of one comparator, so a bound or a re-key is wrong");
-        DCHECK(t1 == NULL || (t2 == NULL ? g_flows_n - flow_held_count() == 1 :
+        DCHECK(t1 == NULL || (t2 == NULL ? g_flows_n - flow_held_count() - g_cold_n == 1 :
                                             (t2 != t1 && flow_is_min_weight(t2, t1))),
                "the pager's tail with a member excluded is not the lowest-weight of the rest, or is the excluded "
                "member — the query's class walk passes over the excluded representative to the class's next member");
@@ -5909,7 +6011,7 @@ static void flow_site_census(WfqCensus *out) {
 
         if (!f->at) continue;
         all[na++] = f->at;
-        if (f->picks == 0 && !f->held) never[nn++] = f->at;
+        if (f->picks == 0 && !f->held && !f->cold) never[nn++] = f->at;
     }
     out->never_top_n = 0;
     site_runs(never, nn, &out->never_sites, &out->never_codes, &out->never_sites_unserved, out);
@@ -6882,9 +6984,9 @@ Flow *flow_worst(const Flow *exclude) {
        host. */
     g_scan_runs[FLOW_SCAN_OTHER]++;
     tail = flow_tail_of(exclude, &entries, &weighed);
-    DCHECK(!tail || (!tail->assembling && !tail->bulk_released),
-           "the pager's tail is a sibling still being assembled or a flow already sold for its bulk — both are out "
-           "of every query by construction, so the index or the host-owed list still holds one");
+    DCHECK(!tail || (!tail->assembling && !tail->cold),
+           "the pager's tail is a sibling still being assembled or a stub — both are out of every query by "
+           "construction, so the index or the host-owed list still holds one");
     g_scan_weights[FLOW_SCAN_OTHER] += weighed;
     g_ix_entries += entries;
     return tail;
@@ -6963,8 +7065,9 @@ void flow_remove(JSContext *ctx, Flow *f) {
            partitioning the members. Before acct_depart, which clears the bucket and family the index reads. */
         DCHECK(!f->assembling, "a sibling was removed from the frontier before its assembly ended");
         if (f->ix_in) flow_ix_remove(f);
-        else if (!f->bulk_released && !f->held) flow_owed_unlink(f);   /* a sold flow left both at flow_release_bulk */
+        else if (!f->cold && !f->held) flow_owed_unlink(f);   /* a stub left both at flow_sale_begin */
         if (f->held) g_held_n--;
+        if (f->cold) { g_cold_n--; g_cold_departed++; }
         flow_site_leave(f);
         acct_depart(f);
         free(f);

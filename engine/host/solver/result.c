@@ -1631,6 +1631,7 @@ char *result_cold_json(void) {
     METRIC_SET(sold, e.sold);
     METRIC_SET(sold_flows, e.sold_flows);
     METRIC_SET(sold_cands, e.sold_cands);
+    METRIC_SET(cold, flow_cold_count());
     METRIC_SET(forks, e.forks);
     METRIC_SET(resumed, ran);
     METRIC_SET(resumed_segs, resumed.segs);
@@ -1698,8 +1699,6 @@ char *result_cold_json(void) {
     DCHECK(e.rest_compose_attempts >= e.rest_compositions,
            "the census counted fewer composition attempts than compositions — every composition is one attempt "
            "or more");
-    DCHECK(e.park_funded <= e.sold, "the census counted more flows sold to fund a park record than flows sold");
-    METRIC_SET(park_funded, e.park_funded);
     METRIC_SET(rest_compositions, e.rest_compositions);
     METRIC_SET(rest_compose_attempts, e.rest_compose_attempts);
     METRIC_SET(rest_compose_attempts_max, e.rest_compose_attempts_max);

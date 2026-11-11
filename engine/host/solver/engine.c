@@ -1119,8 +1119,8 @@ static uint32_t mint_req(void)
 
 /* The synchronous requests sold flows took with them, reported rather than spent: one request may still be owed N
  * answers by N peer timelines. It is stated in engine_host_answer's abort and on the @COLD census line, and
- * decides nothing. A sold flow's fetch parks leave no debt: the drop of a pair's last park withdraws the request
- * (engine_pending_withdrawn), so no reply for it arrives. */
+ * decides nothing. A sold flow's unanswered fetch parks leave no debt either: its stub's stand-ins keep them
+ * listed (pending_stand_ins), so the reply arrives and nothing is withdrawn. */
 static long g_paged_reqs;
 
 /* Flows this instance has sold. `live < flows` is equally the signature of flows finishing, and `_park`'s record
@@ -1136,8 +1136,8 @@ static long g_flows_sold_flows, g_flows_sold_cands;
    the running flow (the pager's real end). Every engine_reclaim_tail call leaves by exactly one of five exits,
    each counted on its own line: a request past the whole limit (`over`), the unarmed refusal, the floor, a held
    snapshot shed (`shed`) and a sale (`sales`). So `asks == over + unarmed + floor + shed + sales`, asserted at
-   engine_frontier_census so an exit added later without a counter fires there; a sale's own record may sell more
-   flows for their bulk (engine_park_fund), so `sales + park_funded == sold`. Instance totals like
+   engine_frontier_census so an exit added later without a counter fires there; a sale exit sells one member,
+   so `sales == sold`. Instance totals like
    `g_flows_sold`, never per session: the question is whether the edge has ever fired. */
 static long g_reclaim_asks, g_reclaim_over, g_reclaim_unarmed, g_reclaim_floor, g_reclaim_shed, g_reclaim_sales;
 /* RAM pressure's policy (engine.h's engine_set_ram_share): the share in permille, the limit it is a share of (0:
@@ -2764,6 +2764,12 @@ void engine_unload_document(uint32_t doc)
     for (i = 0; i < n; i++) {
         Flow *f = flow_at(i);
 
+        if (flow_cold(f)) {
+            DFAIL("a Document was replaced while a member of its agent is cold-resident — the unload is a task the "
+                  "host causes, so no replay of the stub's recipe queues it. Build: the act recorded on the stub at "
+                  "its rest coordinate and queued onto its body where the body takes the stub's standing");
+            continue;
+        }
         /* The bracket closes on every path because the body has one: anything aborting between these lines
            aborts the process, so no stale owner can outlive a freed flow. */
         g_enqueue_owner = f;
@@ -6568,8 +6574,9 @@ static int engine_orphan_claim_open(void) {
     Flow *fl;
     int i;
 
+    /* A stub's claim is its body's to open: a stub runs nothing and takes no function. */
     for (i = 0; (fl = flow_at(i)) != NULL; i++)
-        if (fl->orphan_want && JS_IsUndefined(fl->orphan_claim_fn)) return 1;
+        if (!flow_cold(fl) && fl->orphan_want && JS_IsUndefined(fl->orphan_claim_fn)) return 1;
     return 0;
 }
 
@@ -6603,7 +6610,7 @@ static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64
     int i, open = 0, n = 0, seated = 0;
 
     for (i = 0; (fl = flow_at(i)) != NULL; i++) {
-        if (!fl->orphan_want || !JS_IsUndefined(fl->orphan_claim_fn)) continue;
+        if (flow_cold(fl) || !fl->orphan_want || !JS_IsUndefined(fl->orphan_claim_fn)) continue;
         open++;
         /* The claim is for the next member of the chain only: the calls are built in the order they were seeded. */
         DCHECK(fl->orphan_claim_at < fl->orphan_chain_n,
@@ -8259,6 +8266,12 @@ void engine_request_dump(const char *program) {
            "a dump was asked of a document whose every timeline has finished — there is no flow to run the program");
     for (i = 0; i < n; i++) {
         Flow *f = flow_at(i);
+        if (flow_cold(f)) {
+            DFAIL("a dump was asked while a member is cold-resident — its document is not materialized, and the "
+                  "program is the host's act, which no replay of the stub's recipe queues. Build: the row recorded "
+                  "on the stub and queued onto its body where the body takes the stub's standing");
+            continue;
+        }
         engine_queue_into(f, DYN_DOC_TOP_LEVEL, b, DYN_VALUE_DUMP, SCRIPT_TYPE_CLASSIC,
                           NULL, NULL, TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, NULL,
                           /*parser_inserted*/0);   /* the host's own text, and no element */
@@ -12124,13 +12137,6 @@ static int engine_reclaim_set(int v) { int prev = g_reclaim_allowed; g_reclaim_a
    the apply), and the one member a sale may not take, since its chain is half-installed in the heap. */
 static const Flow *g_reclaim_keep;
 
-/* The pager's owed records: flows sold for their bulk (engine_park_fund) while another flow's record was being
-   written, each written after it, newest first. Live only inside one sale (`g_sale_open`). */
-static Flow *g_sale_owed;
-static long g_sale_owed_n;
-static int g_sale_open;
-static long g_park_funded;   /* lifetime: flows sold for their bulk to fund another's record (engine_park_fund) */
-
 /* WHAT EACH SOLD MEMBER WOULD COST TO BRING BACK, BOTH WAYS — read at the sale, before anything is released. A
    replay re-runs the member's lifetime work (the sum of its agents' charges, inherited at every fork); a
    serialized delta writes what it changed: its heap entries (head and chain), the host records they saved, the
@@ -12369,12 +12375,20 @@ char *engine_sale_census_json(void) {
     return b;
 }
 
-/* The first half of a sale: the flow leaves every query and gives back what its record does not read. */
+/* A sale: the member stays in the registry as a cold-resident stub (flow.h's `cold`) and gives back everything
+   its recipe re-derives. Nothing is written, since the session's park writes a stub from the fields it keeps
+   (cold_park_flow), and no request is cancelled.
+   Named residual. Not covered: a flow captured as a snapshot; a stub holds a recipe and a return re-executes it.
+   Next diff builds: a serialized COW delta and frame chain that a return restores without re-execution. Absence
+   shows as: a returned member's first quantum spent re-running work its path had already done. */
 static void engine_sale_release(Flow *tail) {
+    /* Which population is sold, read before the sale: `cand_src` is the whole question (solver/engine.h). */
+    const int was_cand = tail->cand_src != NULL;
+    JSValue stand_ins;
+
     engine_sale_census_take(tail);
     /* The synchronous requests leave with the flow, counted (see g_paged_reqs); an answered HOSTREQ entry still
-       awaits answers from other peer timelines and stays counted. Its fetch parks go back with the register at
-       flow_release_bulk, and the drop of a pair's last park withdraws the request (engine_pending_withdrawn). */
+       awaits answers from other peer timelines and stays counted. */
     g_paged_reqs += pending_count_kind(tail->pending, FLOW_PENDING_HOSTREQ);
     /* The debt that leaves by being given back: a recipe cannot carry a rendezvous token (engine.h: it is the
        zone's name, has no generation, and does not outlive the zone's session), so the question is returned rather
@@ -12385,47 +12399,19 @@ static void engine_sale_release(Flow *tail) {
     engine_retract_flow(g_sess_ctx, tail);
     flow_job_retract_external(g_sess_ctx, tail);
     flow_withdraw_async_sends(g_sess_ctx, tail);
+    /* Named residual. Not covered: the sold member's return within this session. A stub is out of the pick, so its
+       work waits for the session's park and the next session's cold_resume. Next diff builds: the stub in the
+       order's index and, at the pick, a replaying body built from its recipe and served its prefix's replies from
+       its reply trail, which takes the stub's standing at the recorded coordinate. Absence shows as: `sold` above
+       zero with every sold member still `cold` when the session parks. */
+    flow_sale_begin(tail);
+    /* The stand-ins before the bulk release frees the register, so no pair loses its last naming and no
+       `fetch.cancel` is sent for a request the stub still owes its replay. */
+    stand_ins = pending_stand_ins(tail->pending);
     flow_release_bulk(g_sess_ctx, tail);
-}
-
-/* The second half: the record, funded by the bulk already given back, then the rest of the flow.
-   Named residual. Not covered: the sold member's return within this session. Its record re-enters only at the
-   next engine_sched_begin (cold_resume's one caller), so a sale removes its work from the session rather than
-   only moving where it lives. Next diff builds: the sold member kept in the order at cold residency, ranked by its
-   live operands, and restored from its serialized delta (the residual below) when the pick reaches it, with no
-   re-execution; a replay is only for a different build. Absence shows as: two runs of one artifact over one input
-   whose picks agree until the first RAM-pressure sale and differ after it.
-   Named residual. Not covered: a flow captured as a snapshot; the cold tier stores a recipe and re-executes it.
-   Next diff builds: a serialized COW delta and frame chain that a resume restores without re-execution. Absence
-   shows as: a resumed member's first quantum spent re-running work its path had already done. */
-static void engine_sale_write(Flow *tail) {
-    /* Which population is leaving, read before flow_release frees the label: `cand_src` is the whole question
-       (solver/engine.h). Per member, as at the retirement arm (engine.h). */
-    const int was_cand = tail->cand_src != NULL;
-    cold_park_flow(tail);
-    flow_release(g_sess_ctx, tail);
+    flow_sale_end(g_sess_ctx, tail, stand_ins);
     g_flows_sold++;
     if (was_cand) g_flows_sold_cands++; else g_flows_sold_flows++;
-}
-
-int engine_park_fund(void) {
-    Flow *t;
-    if (!g_sale_open) return 0;   /* a park outside a sale (the whole-frontier park) has no bulk to sell for it */
-    t = flow_worst(g_reclaim_keep ? g_reclaim_keep : flow_running());
-    if (!t) {
-        /* The floor is reached only with no sellable bulk left: every member but the excluded one has given its
-           bulk back, as the record being written or as an owed one. */
-        DCHECKF(flow_count() <= g_sale_owed_n + 1 + (g_reclaim_keep || flow_running() ? 1 : 0) + flow_assembling(),
-                "the park document met the floor with %ld members and only %ld owed records — a member still "
-                "holds bulk that no query offered for sale", (long)flow_count(), g_sale_owed_n);
-        return 0;
-    }
-    engine_sale_release(t);
-    g_park_funded++;
-    t->sale_next = g_sale_owed;
-    g_sale_owed = t;
-    g_sale_owed_n++;
-    return 1;
 }
 
 static void engine_shed_standby(JSContext *ctx, Flow *s);
@@ -12457,7 +12443,7 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
            "a reclaim was asked by a runtime that is not this session's — paging this frontier frees nothing for the "
            "other runtime");
     /* The running flow cannot go: its decision state is live in decide.c rather than in its blob and its delta is
-       applied to the heap, which cold_park_flow and flow_release both refuse. Every other member is a snapshot. */
+       applied to the heap, which flow_release_bulk refuses. Every other member is a snapshot. */
     DCHECK(!(g_reclaim_keep && flow_running()),
            "a reclaim found both a flow being switched in and a running flow — a switch-in follows the switch-out, so "
            "one of them is the flow this allocation is for and the other is stale");
@@ -12490,32 +12476,17 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
            "memory is usually growing that flow's own delta or undo log, so selling it frees the buffer the "
            "caller is holding and is about to write through");
     /* And it is still in the registry, a separate fact with a separate failure: a non-member is a stale Flow* the
-       frontier already removed, for which cold_park_flow would write a recipe and flow_release free a second time.
-       Two asserts, since a conjunction reports either failure under one message. */
+       frontier already removed, whose sale would release freed memory. Two asserts, since a conjunction reports
+       either failure under one message. */
     DCHECK(flow_is_member(tail),
            "the pager chose a flow that is not in the frontier — flow_worst walks the registry, so this is a "
-           "stale pointer, and both the park below it and the release after it would act on freed memory");
-    /* Give back the bulk, write it down, then give back the rest: the record is written before the remainder it reads
-       is freed, because the release makes the recipe the only copy, and after the bulk, so the bulk's memory funds the
-       record at the floor. cold_park_flow appends one record to the session's park document (stored under this bundle's
-       key and merged back by the next session); flow_release_bulk frees the suspended frame chain, heap delta, DOM
-       head and the nodes it created, and walks the shared heap and document chains down only as far as the segments
-       this flow held the last reference on. A tail flow's dying prefix cannot be a segment the running flow stands on
-       (a shared segment has a second reference), so the release moves nothing in the live heap or document. */
-    g_sale_open = 1;
+           "stale pointer, and the sale below would act on freed memory");
+    /* The sale's bulk release frees the suspended frame chain, heap delta, DOM head and the nodes it created, and
+       walks the shared heap and document chains down only as far as the segments this flow held the last reference
+       on. A tail flow's dying prefix cannot be a segment the running flow stands on (a shared segment has a second
+       reference), so the release moves nothing in the live heap or document. */
     g_reclaim_sales++;
     engine_sale_release(tail);
-    engine_sale_write(tail);
-    /* And the records of the flows this one's record sold for their bulk, each of which may sell more. */
-    while (g_sale_owed) {
-        Flow *o = g_sale_owed;
-        g_sale_owed = o->sale_next;
-        o->sale_next = NULL;
-        g_sale_owed_n--;
-        engine_sale_write(o);
-    }
-    DCHECK(g_sale_owed_n == 0, "the pager's owed-record count disagrees with its list once the list is empty");
-    g_sale_open = 0;
     return 1;
 }
 
@@ -12698,7 +12669,8 @@ static long engine_shed_layout_jobs(uint64_t target) {
             size_t mid = lo + (hi - lo) / 2;
             if ((uintptr_t)r[mid].flow < (uintptr_t)f) lo = mid + 1; else hi = mid;
         }
-        if (lo == n || r[lo].flow != f) continue;
+        /* A stub's jobs rest on step state its sale released, so they go first, as a departed flow's do. */
+        if (lo == n || r[lo].flow != f || flow_cold(f)) continue;
         w = flow_weight(f);
         for (i = lo; i < n && r[i].flow == f; i++) {
             p[i].weight = w;
@@ -12809,11 +12781,12 @@ int engine_headroom_at_rest(size_t bytes) {
         if (p) { free(p); return 1; }
         if (!engine_reclaim_at_rest()) {
             /* The floor: the composition's own CHECK answers. Reached only with nothing left to sell, so a frontier
-               still holding members other than the running one means the probe asked for what no sale can give. */
-            DCHECKF(flow_count() <= 1,
-                    "headroom for %zu bytes met the floor with %d members still in the frontier (live %zu, footprint "
-                    "%zu) — a sale was refused, or the probe asks for one block the freed memory cannot form",
-                    bytes, flow_count(), c_alloc_live(), c_alloc_footprint());
+               still holding resident members other than the running one means the probe asked for what no sale can
+               give. */
+            DCHECKF(flow_count() - flow_cold_count() <= 1,
+                    "headroom for %zu bytes met the floor with %d resident members still in the frontier (live %zu, "
+                    "footprint %zu) — a sale was refused, or the probe asks for one block the freed memory cannot form",
+                    bytes, flow_count() - flow_cold_count(), c_alloc_live(), c_alloc_footprint());
             return 0;
         }
     }
@@ -13165,6 +13138,13 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
     for (i = 0; i < flows; i++) {
         Flow *f = flow_at(i);
 
+        if (flow_cold(f)) {
+            DFAIL("a document joined an agent while a member is cold-resident — a resident path parks the rows' "
+                  "requests at the join, taking the path's next slots, and a body replayed from the baseline would "
+                  "park them at its seed. Build: the join recorded on the path with its coordinate, so a body "
+                  "lays the rows where the path took them");
+            continue;
+        }
         flow_take_peer_marks(f, arrival_marks(arrival));
         engine_seed_scripts(f, doc, rows, rown);
         flow_clear_host_owed(f);
@@ -13215,8 +13195,8 @@ int engine_runnable(void) {
        second, not folded into the bill, which would put a refused entry back on a bill the host cannot pay. A
        frontier whose marks rest on answered entries satisfies neither, because `pend_owed` is false for an
        answered entry. */
-    DCHECK(b != NULL || flow_count() == flow_held_count() || engine_host_owes() || engine_frontier_settled() ||
-               g_referenced,
+    DCHECK(b != NULL || flow_count() == flow_held_count() + flow_cold_count() || engine_host_owes() ||
+               engine_frontier_settled() || g_referenced,
            "this engine reported that nobody can take the thread while the host owes it nothing, no peer "
            "references it and no member is parked on a refusal — every member's mark rests on an answered register "
            "entry, which no host event can clear");
@@ -13340,9 +13320,8 @@ static int engine_sched_slice(int resume) {
         solve_seed_candidates(ctx);
         witness_verify_seed(ctx);   /* the same for an endpoint witness's verification (witness_verify.h) */
         /* The seeding allocates, and an allocation at the RAM floor sells the frontier's tail, which may be the
-           incumbent switched out above. The pick reads its incumbent through its handle, so one that departed is
-           not offered: an address walk, paid only on the turn that switched the incumbent out to seed. */
-        if (incumbent && !cur && !flow_is_member(incumbent)) incumbent = NULL;
+           incumbent switched out above. A sold incumbent is a stub, out of the pick, so it is not offered. */
+        if (incumbent && !cur && flow_cold(incumbent)) incumbent = NULL;
         /* WFQ: highest value of information among the members that can still make progress; a fresh fork (UCB)
            can preempt. The members waiting on the host are taken out of the pick only; they keep their weight,
            place and every work item (flow.h). The flow holding the thread is passed in, which makes this a
@@ -13999,7 +13978,9 @@ static int engine_sched_slice(int resume) {
            reaches this walk past the two STALLED exits, and is written to the cold tier below, and its refused
            entries are still outstanding to their flows. What this walk catches is a member holding nothing at all,
            a mark laid on a flow that could still progress, which the mark's own assert cannot see. */
-        DCHECK(pending_outstanding(flow_at(i)->pending) || g_referenced || flow_held(flow_at(i)),
+        /* A stub carries no mark: it is out of the pick because it is cold, and the park below writes it. */
+        DCHECK(pending_outstanding(flow_at(i)->pending) || g_referenced || flow_held(flow_at(i)) ||
+                   flow_cold(flow_at(i)),
                "the frontier reported a stall while a member waits on nothing — every entry on its register is "
                "answered and delivered, so its mark was laid while it still had work");
     }
@@ -14036,7 +14017,8 @@ static int engine_sched_slice(int resume) {
            the peer's message indistinguishable from a page with no handler. A flow suspended inside a live
            frame is the shape that reaches here holding one (deliveries are made only where flow_step has no
            frame), so if this fires, the enqueue belongs earlier than that branch. */
-        DCHECK(flow_deliver_pending(flow_at(i)) == 0,
+        /* A stub's queue is recipe: the park below writes each record it holds. */
+        DCHECK(flow_deliver_pending(flow_at(i)) == 0 || flow_cold(flow_at(i)),
                "the frontier was declared exhausted while a live flow still holds routed records");
     }
     /* The conservation law over the deliveries that became tasks. The asserts above are each about one queue at
@@ -14076,7 +14058,8 @@ static int engine_sched_slice(int resume) {
         long d = 0, r = 0, zero = 0;
 
         engine_routed_census(&d, &r, &zero);
-        DCHECK(zero == 0,
+        /* With a stub standing the gauge can still fall: a record on its queue is admitted by its replay. */
+        DCHECK(zero == 0 || flow_cold_count() > 0,
                "the frontier was declared exhausted holding routed records no timeline of this document admitted — "
                "each was refused at deliver_admits by a received world that contradicts it, a foreclosed world that "
                "covers it, or an answer world whose arm flow_answer_fork owes; re-run the routed world vectors "
@@ -14094,8 +14077,8 @@ static int engine_sched_slice(int resume) {
      * (`engine_host_owes` answers 0). That is @S search not yet solved, waiting on a per-origin widening in a later
      * session, and a residue is what carries it there. */
     if (flow_count() > 0) {
-        /* Refused only if nothing was written before: a tail sold at the RAM floor is runnable work. */
-        g_park_refused = cold_park_records() == 0;
+        /* Refused only if no stub stands: a member sold under memory pressure is runnable work. */
+        g_park_refused = cold_park_records() == 0 && flow_cold_count() == 0;
         engine_park_frontier(ctx, g_sess_cur);
         g_sess_cur = NULL;
     }
@@ -14391,7 +14374,6 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->paged_sales        = g_reclaim_sales;
     out->pressure_sold      = g_pressure_sold;
     out->pressure_collects  = g_pressure_collects;
-    out->park_funded        = g_park_funded;
     out->rest_compositions  = g_rest_compositions;
     out->rest_compose_attempts = g_rest_compose_attempts;
     out->rest_compose_attempts_max = g_rest_compose_attempts_max;
@@ -14419,25 +14401,31 @@ void engine_frontier_census(EngineFrontierCensus *out)
             out->finished_flows, out->finished_cands, out->finished);
     DCHECKF(out->sold_flows + out->sold_cands == out->sold,
             "the census's sale rows do not partition its sale total (%ld exploration + %ld candidate against %ld "
-            "sold) — the label is read before flow_release frees it",
+            "sold) — the label is read at the sale",
             out->sold_flows, out->sold_cands, out->sold);
+    /* A sold member is a stub standing or a stub that left the registry: a sale is no departure. */
+    DCHECKF((long)flow_cold_count() + (long)flow_cold_departed() == out->sold,
+            "the stubs standing (%d) and departed (%lld) do not account for the members sold (%ld) — a sale left "
+            "the registry without flow_remove, or a member went cold outside engine_sale_release",
+            flow_cold_count(), (long long)flow_cold_departed(), out->sold);
     /* And the two totals partition the frontier's departures, one level up: without this, the frontier's departure
        count and this file's retirement totals are three numbers in two censuses with no identity between them, and
        "this engine retires nothing" is a subtraction across them. Exact by construction: solver/flow.c's
        `flow_remove` is the one line a member leaves the frontier on, `flow_release` its one caller, and that has
-       five callers on a live instance: flow_finish (raising `g_finished`), engine_reclaim_tail (raising
-       `g_flows_sold`), the FLOW_STEP_RETIRED arm (raising `g_answer_standbys_retired` or `g_cands_contradicted`), engine_shed_standby
-       (raising `g_cuts_shed`) and flow_registry_free's drain (raising the last arm). None is reset by a session
+       four callers on a live instance: flow_finish (raising `g_finished`), the FLOW_STEP_RETIRED arm (raising
+       `g_answer_standbys_retired` or `g_cands_contradicted`), engine_shed_standby (raising `g_cuts_shed`) and
+       flow_registry_free's drain (raising the last arm). A sale is not among them: a sold member stays in the
+       registry as a stub and leaves by the drain. None is reset by a session
        boundary (the sale totals carry at engine_sched_begin, and flow_registry_init does not reset arrivals and
        departures). The last term reads 0 at every census hosts take today, since the drain runs after the report,
        but keeps the identity true at every instant. It catches a departure path added later without an arm, which
        any reclamation gated on something other than completion would be. */
-    DCHECKF(out->finished + out->sold + out->answer_standbys_retired + out->cands_contradicted + out->cuts_shed +
+    DCHECKF(out->finished + out->answer_standbys_retired + out->cands_contradicted + out->cuts_shed +
                 (long)flow_departures_teardown() == (long)flow_departures(),
-            "the frontier's departure causes do not partition its departures (%ld finished + %ld sold + %ld retired "
+            "the frontier's departure causes do not partition its departures (%ld finished + %ld retired "
             "+ %ld contradicted + %ld shed + %lld with the registry against %lld) — flow_release is flow_remove's "
             "one caller, so another exit moved the total",
-            out->finished, out->sold, out->answer_standbys_retired, out->cands_contradicted, out->cuts_shed,
+            out->finished, out->answer_standbys_retired, out->cands_contradicted, out->cuts_shed,
             (long long)flow_departures_teardown(), (long long)flow_departures());
     /* And the seed table's partition, about a table built once per session: `held` is a row whose source text this
        instance has, `awaited` one whose bytes the reply door still owes, `refused` one whose `src` did not
@@ -14481,18 +14469,17 @@ void engine_frontier_census(EngineFrontierCensus *out)
        leaves by one of five exits (a request past the whole limit, declined because the safepoint is unarmed,
        answered at the floor, a held snapshot shed, a sale), so the arms are the whole of the asks, and this catches
        a sixth exit added without a counter. `asks` alone separates "the allocator never refused" from "the pager
-       was consulted and could do nothing". A sale exit sells one flow and its record may sell more for their bulk,
-       and a shed at the edge is one of the sheds `cuts_shed` counts. */
+       was consulted and could do nothing". A sale exit sells one flow, and a shed at the edge is one of the sheds
+       `cuts_shed` counts. */
     DCHECKF(out->paged_over + out->paged_unarmed + out->paged_floor + out->paged_shed + out->paged_sales ==
                 out->paged_asks,
             "the census's reclaim rows do not partition the allocator's asks (%ld past the limit + %ld unarmed + %ld "
             "at the floor + %ld shed + %ld sales against %ld) — engine_reclaim_tail has five exits that each count "
             "themselves", out->paged_over, out->paged_unarmed, out->paged_floor, out->paged_shed, out->paged_sales,
             out->paged_asks);
-    DCHECKF(out->paged_sales + out->park_funded == out->sold,
-            "the census counts %ld sale exits and %ld flows sold to fund a record against %ld flows sold — "
-            "engine_sale_write runs once per sale exit and once per funded flow",
-            out->paged_sales, out->park_funded, out->sold);
+    DCHECKF(out->paged_sales == out->sold,
+            "the census counts %ld sale exits against %ld flows sold — engine_sale_release runs once per sale exit",
+            out->paged_sales, out->sold);
     DCHECKF(out->paged_shed <= out->cuts_shed,
             "the census counts %ld snapshots shed at the refusal edge against %ld shed in all — the edge sheds "
             "through engine_shed_standby, which counts every shed", out->paged_shed, out->cuts_shed);

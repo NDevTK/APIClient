@@ -865,6 +865,12 @@ void pending_free(JSContext *ctx, JSValue *reg);
    the answer, which every arm waiting on that request genuinely observes. JS_UNDEFINED in gives JS_UNDEFINED
    out, which is the common case and costs nothing. */
 JSValue pending_fork(JSValueConst reg);
+/* The register a sold flow's stub keeps: one stand-in per entry of `reg` the outstanding set is keyed on, a copy
+   that carries the request's identity, grade, slot and document and no resolve capability, script element or
+   unknown-address value, so it retains nothing of the flow's heap. Each is tracked and keyed like a park, so its
+   pair stays listed while the flow's own register is released, the reply fills and stamps it, and no cancel is
+   sent. JS_UNDEFINED when no entry is keyed. Built before `reg` is released. */
+JSValue pending_stand_ins(JSValueConst reg);
 
 /* GIVE THIS REGISTER ITS OWN COPY OF ENTRY `i`, replacing the shared record in the slot. Returns the copy,
    owned. There is exactly one field that must DIFFER between two arms — the unanswered synchronous request's

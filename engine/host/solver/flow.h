@@ -165,8 +165,9 @@ typedef struct FlowAgent {
 } FlowAgent;
 
 /* Every field and handle cold_park_flow reads off a flow, as its pointers and counts, zero-filled before
-   assignment so two compare with memcmp. flow_release_bulk records it, and the write asserts the flow still reads
-   so, which keeps a release moved ahead of the write from handing it freed state. */
+   assignment so two compare with memcmp. flow_release_bulk records it, and the sale asserts the flow still reads
+   so once its bulk is back (flow_sale_end), which keeps a release moved into the bulk from freeing what a record
+   reads. */
 typedef struct {
     const void *dec_blob, *perform_q, *deliver_q, *deliver_world_q, *fn, *agents, *dyn_token;
     const void *cand_src, *cand_payload, *cand_dsrc, *cand_dval, *orphan_chain, *family, *acct;
@@ -434,16 +435,19 @@ typedef struct Flow {
        continuation on a written flow is replayed next session; one on an unwritten flow is dropped), and
        cold_park_flow sets it and refuses a flow that already carries it. */
     int paged;
-    /* Has flow_release_bulk run? Set once, by the pager's sale before it writes the recipe; flow_release then
-       releases only the remainder. The flow is then out of the order's index and the host-owed list, so no query
-       sells it twice. */
+    /* Has flow_release_bulk run? Set once, by the pager's sale or by flow_release, which then releases only the
+       remainder. */
     int bulk_released;
+    /* Is this member cold-resident: sold under memory pressure (flow_sale_begin to flow_sale_end) and standing in
+       the registry as a stub? A stub keeps its family, its site standing and its own operands, so the order still
+       ranks it, and its recipe: the decision blob, the candidate, drive and commitment fields, the routed records
+       it has not delivered, the log of those it has, and its reply trail. What a replay of that recipe re-derives
+       is given back, and its register holds only stand-ins for the parks the host can still answer
+       (pending_stand_ins). It is out of the order's index and the host-owed list, so no query picks or sells it. */
+    int cold;
     /* Is the fork assembling this sibling (flow_assembly_begin to flow_assembly_end)? It is then out of the order's
        index and the host-owed list, so no sale can pick it while its fields are being written. */
     int assembling;
-    /* The next flow on the pager's owed-record list (engine.c): sold for its bulk while another record was being
-       written, its own record still to write. */
-    struct Flow *sale_next;
 #if APICLIENT_DEV
     /* What cold_park_flow reads, as flow_release_bulk found it (flow_park_reads_unchanged). */
     FlowParkReads bulk_reads;
@@ -2044,18 +2048,31 @@ void  flow_arrive_on_snapshot(Flow *sib, const Flow *snap, FlowPathMarks at_cut)
  * assert it. It is the only teardown, so a field added to `Flow` has one place to learn about it, and
  * flow_remove asserts it did. */
 void  flow_release(JSContext *ctx, Flow *f);
-/* The first half of flow_release, run alone by the pager before cold_park_flow: everything the park write does not
-   read (FlowParkReads names what it does), so a sale gives its memory back before the record it writes needs any.
-   It also takes the flow out of the order's index or the host-owed list. flow_release then frees the remainder.
-   Asserts the flow is not switched in and not released twice. */
+/* The first half of flow_release, run alone by the pager's sale between flow_sale_begin and flow_sale_end:
+   everything a park record does not read (FlowParkReads names what it does). It takes a flow that is not
+   cold out of the order's index or the host-owed list. flow_release then frees the remainder. Asserts the flow
+   is not switched in and not released twice. */
 void  flow_release_bulk(JSContext *ctx, Flow *f);
+/* A sale (the pager's, engine.c): `f` stays a registry member as a cold-resident stub (`cold`). Begin takes it
+   out of the order's index or the host-owed list and marks it; the caller then builds its stand-in register and
+   runs flow_release_bulk; end gives back what a replay re-derives (queued jobs, program rows, the references on
+   its history's snapshots, a drive's function, which leaves the drive waiting for its body as a rebuilt one
+   does), installs `stand_ins` (owned) as its register and asserts the order key is the one begin read. One sale
+   at a time, asserted. flow_release frees a stub's remainder like any member's. */
+void  flow_sale_begin(Flow *f);
+void  flow_sale_end(JSContext *ctx, Flow *f, JSValue stand_ins);
+int   flow_cold(const Flow *f);
+/* The stubs standing, and the stubs that have left the registry (flow_remove): every member ever sold is one or
+   the other. */
+int   flow_cold_count(void);
+int64_t flow_cold_departed(void);
 /* A sibling's assembly: begin takes the just-added flow out of the order's index, so no sale can pick it while the
    fork writes its fields with the refusal edge armed; end puts it in once it is complete. One at a time, asserted.
    flow_assembling answers how many stand between the two (0 or 1). */
 void  flow_assembly_begin(Flow *f);
 void  flow_assembly_end(Flow *f);
 int   flow_assembling(void);
-/* Does `f` read, for cold_park_flow, as it did when its bulk was released? Defined in dev builds, where the
+/* Does `f` read, for a park record, as it did when its bulk was released? Defined in dev builds, where the
    snapshot is kept; named only inside DCHECK conditions. */
 int flow_park_reads_unchanged(const Flow *f);
 

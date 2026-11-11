@@ -97,6 +97,8 @@ METRIC(net_prog_xhr_queued_life, "netProgXhrQueuedLife", LIFETIME, "program", PR
 METRIC(sold, "sold", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 METRIC(sold_flows, "soldFlows", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 METRIC(sold_cands, "soldCands", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+/* …and the sold members standing in the registry as stubs (solver/flow.h's `cold`), counted in `live`. */
+METRIC(cold, "cold", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(forks, "forks", LIFETIME, "fork", AGENT, "solver/engine.c", INT)
 /* `resumed` is the positive statement that a rebuild ran, always present: `resumed: 0` says
    no residue was handed over, so zeroes beside it are not a verdict. `resumedSegs`/`Flows`/
@@ -241,9 +243,6 @@ METRIC(paged_sales, "pagedSales", LIFETIME, "ask", PROCESS, "solver/engine.c", I
 METRIC(pressure_sold, "pressureSold", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 /* …and the cycle collections RAM pressure owed before a sale: a sold flow's cycles are freed only by one. */
 METRIC(pressure_collects, "pressureCollects", LIFETIME, "collection", PROCESS, "solver/engine.c", INT)
-/* …and the flows sold only for their bulk because another flow's park record could not be funded by its own,
-   each record written after the one it funded (engine_park_fund). */
-METRIC(park_funded, "parkFunded", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 /* …and the result compositions between steps, the attempts they took (a refused attempt sells at rest until its
    measured ask fits, then composes again), and the most attempts one composition took. */
 METRIC(rest_compositions, "restCompositions", LIFETIME, "composition", PROCESS, "solver/engine.c", INT)

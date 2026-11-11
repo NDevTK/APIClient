@@ -358,13 +358,10 @@ void cold_census_release(ColdCensus *out)
  * escaping" is finally asserted rather than distributed across four writers. A host with a FILE (the fixture)
  * stores cold_park_write's bytes directly and hands them straight back, which is the same document with one
  * fewer translation in it. */
-/* The document is held as a chain of fixed-size blocks, because it grows during a sale at the RAM floor, when no
- * memory is left beyond what the sale itself gave back. A contiguous buffer grows by a doubling realloc, which
- * needs about twice the document transiently; a block never copies. The pager releases a flow's bulk
- * (flow_release_bulk) before it writes the record, so the record's blocks are funded by that memory. A block is
- * sized near a record rather than a page because the freed bulk comes back as many separate chunks. A record may span
- * blocks: every reader takes the bytes in block order (cold_park_write), so the document is the same byte string
- * the contiguous form wrote. */
+/* The document is held as a chain of fixed-size blocks: a contiguous buffer grows by a doubling realloc, which
+ * needs about twice the document transiently, and a block never copies. A record may span blocks: every reader
+ * takes the bytes in block order (cold_park_write), so the document is the same byte string the contiguous form
+ * wrote. */
 #define PARK_BLOCK_BYTES 1024
 typedef struct ParkBlock {
     struct ParkBlock *next;
@@ -388,15 +385,17 @@ static uint64_t park_fnv(uint64_t h, const char *s, size_t n) {
    once to fill it) — so this is idempotent by construction: the same records render the same bytes. */
 static char *g_park_json;
 
-/* The next block. Plain malloc, never the reclaim edge: this runs inside a sale, funded by the bulk the sale gave
-   back, and a refusal sells further tails for their bulk (engine_park_fund) until the block fits or no member has
-   bulk left, the floor. */
+/* The next block. Plain malloc, never the reclaim edge: the session's park writes with its walk of the registry
+   open.
+   Named residual. Not covered: a block refused while the session's park writes. Next diff builds: the park selling
+   each resident member (engine_sale_release) before it writes that member's record, so the bulk funds the block.
+   Absence shows as: this CHECK on a session that parks at the RAM floor. */
 static ParkBlock *park_block_new(void)
 {
-    ParkBlock *b;
-    while (!(b = malloc(sizeof *b)))
-        CHECK(engine_park_fund(), "the cold tier could not extend its own park document with no member's bulk left "
-                                  "to sell — the record being written would be lost with the flow it describes");
+    ParkBlock *b = malloc(sizeof *b);
+
+    CHECK(b != NULL, "the cold tier could not extend its own park document — the record being written would be "
+                     "lost with the flow it describes");
     b->next = NULL; b->len = 0;
     return b;
 }
@@ -1358,11 +1357,6 @@ void cold_park_flow(Flow *f)
     char rec[64];
 
     DCHECK(f != NULL, "the cold tier was asked to write the recipe of no flow at all");
-    /* What the write reads is what it was before the flow's bulk was released: a field moved into
-       flow_release_bulk would read here as freed (NULL, undefined) and the record would describe a different flow. */
-    DCHECK(!f->bulk_released || flow_park_reads_unchanged(f),
-           "a field the park write reads changed when the flow's bulk was released — flow_release_bulk freed "
-           "something cold_park_flow reads, so move that release after the write");
     /* THE NAMESPACE THE RESIDUE RESUMES INTO IS THE FIRST THING IN IT. Before any segment ordinal and before
        any flow, because both are read back in one forward pass and a flow rebuilt before the generation is
        installed mints under the ended session's names. */
@@ -2035,7 +2029,7 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
        assigned its park-local ordinals into it as though the document were the whole of what exists — which is
        true of the session-start rebuild and false by construction of the thing this tier is for: a PARTIAL
        self-park writes the lowest-value TAIL, which belongs beside every flow NOT paged out; its one caller is
-       engine_sched_begin, so the tail returns at the next session (engine_sale_write states that residual).
+       engine_sched_begin, so the tail returns at the next session (engine_sale_release states that residual).
        THE SEEDING CLAIM DID NOT DISAPPEAR, IT MOVED TO THE PLACE THAT MAKES IT. "The boot flow and the residue
        are alternatives" is a statement about STARTING a session, so engine_sched_begin asserts the frontier is
        empty and then chooses one of the two; a rebuild has no business asserting anything about flows it did

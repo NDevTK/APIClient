@@ -1460,6 +1460,39 @@ JSValue pending_fork(JSValueConst reg)
     return out;
 }
 
+JSValue pending_stand_ins(JSValueConst reg)
+{
+    static const int strip[] = { PEND_RESOLVE, PEND_REJECT, PEND_SCRIPT_EL, PEND_ADDRESS_VALUE, PEND_ADDRESS_URL };
+    JSValue out = JS_UNDEFINED;
+    int n, i, k = 0;
+
+    if (!JS_IsObject(reg)) return JS_UNDEFINED;
+    pend_atoms();
+    n = pend_len(reg);
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(reg, i), c;
+
+        if (!pending_index_keyed(e)) { JS_FreeValue(pend_ctx(), e); continue; }
+        DCHECK(pending_get_int(e, PEND_SLOT) > 0 && !pending_get_int(e, PEND_HAVE_VALUE),
+               "a keyed park carries no slot on its flow's path, or already holds its reply");
+        /* Named residual. Not covered: a stand-in refused at the floor, since the copy is made before the bulk is
+           given back. Next diff builds: a sale that allocates nothing, its stand-ins cut from memory the sale
+           reserved. Absence shows as: this allocation's CHECK on a run that sells at the allocator's refusal. */
+        c = pend_entry_copy(e);
+        if (!JS_IsObject(out)) out = pend_register_new();
+        cow_engine_write_begin();
+        for (size_t s = 0; s < sizeof strip / sizeof strip[0]; s++) pend_put(c, strip[s], JS_UNDEFINED);
+        JS_SetPropertyUint32(pend_ctx(), out, (uint32_t)k++, JS_DupValue(pend_ctx(), c));
+        cow_engine_write_end();
+        pending_index_track(c);
+        pend_index_sync(c, PEND_URL);
+        DCHECK(pending_index_keyed(c), "a stand-in copied from a keyed park did not key under its pair");
+        JS_FreeValue(pend_ctx(), c);
+        JS_FreeValue(pend_ctx(), e);
+    }
+    return out;
+}
+
 JSValue pending_unshare(JSValueConst reg, int i)
 {
     JSValue src = pending_entry(reg, i);

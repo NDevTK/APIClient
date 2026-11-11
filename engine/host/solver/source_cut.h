@@ -56,6 +56,9 @@ int  source_cut_delivery_ready(const Flow *f, const char *record);
 void source_cut_fork(Flow *sib, const Flow *parent);
 /* flow_release's half: the read sources, the references, an outstanding ask, and a standby's place in its cut. */
 void source_cut_flow_release(Flow *f);
+/* A sale's half (flow_sale_end): the stub gives back its references on its history's snapshots and an outstanding
+   ask, which its replay re-derives, and keeps its read sources, its delivery log and an open hold. */
+void source_cut_flow_cold(Flow *f);
 
 /* The cut on `f`'s path that precedes every read of `src`, or NULL. */
 SourceCut *source_cut_of(const Flow *f, const char *src);
