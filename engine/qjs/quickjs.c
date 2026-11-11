@@ -51252,6 +51252,8 @@ static const char *js_ab_codec_intern(JSRuntime *rt, const uint8_t *name, uint32
 #define FG_NO_WRITER() CHECK_FAIL("flow graph: a parked graph holds a value or object no writer can write")
 enum { FG_GAP_CLASS = 1, FG_GAP_TAG, FG_GAP_SYMBOL_KEY, FG_GAP_PROP_KIND, FG_GAP_WEAK, FG_GAP_OPEN_CELL,
        FG_GAP_FRAME_BASE, FG_GAP_FRAME, FG_GAP_CONT, FG_GAP_REQUESTER, FG_GAP_STEP, FG_GAP_STEP_FIELD, FG_GAP_PARK };
+/* An FG_GAP_FRAME_BASE id past the FLOW_BASE_* kinds: a base standing in a direct eval's parse (JSEvalHold). */
+enum { FG_BASE_HOLDS_EVAL = 3 };
 typedef struct { const void *k; uint32_t v; } FGSlot;
 typedef struct { FGSlot *s; size_t cap, n; } FGMap;
 typedef struct { uint8_t *b; size_t len, cap; } FGBuf;
@@ -51642,7 +51644,8 @@ static void fg_record(FGWriter *w, FGBuf *out, const void *rec, const JSRecordLa
 
 /* A closure cell: `c` and its index for one written before, `B` and an anchor for a baseline cell, `C` for a
    private closed cell with its two flags and its value. An open cell aliases a live frame's slot, which no graph
-   writes yet.
+   writes yet; one aliasing a frame the write walked is that flow's own whatever generation it was born at, so
+   it is asked before the baseline test.
    Named residual. Not covered: an open cell, a closure over a local of a frame still running or parked. Next
    diff builds: the parked frame's slots written beside the graph, the cell naming its slot. Absence shows as:
    `openCell` gaps in the sale census's graph survey, `ownFrame` where the survey walked the frame the cell
@@ -51654,6 +51657,12 @@ static void fg_cell(FGWriter *w, FGBuf *out, JSVarRef *vr)
 
     if (!vr) { fg_u8(out, 'N'); return; }
     if (fg_map_get(&w->cells, vr, &i)) { fg_u8(out, 'c'); fg_u32(out, i); return; }
+    if (!vr->is_detached && fg_map_get(&w->frame_sfs, vr->stack_frame, &i)) {
+        if (w->survey) { fg_gap(w, out, FG_GAP_OPEN_CELL, 0); return; }
+        DCHECK(false, "flow graph: a parked flow's frame holds an open cell, a slot a closure aliases — write the "
+               "cell as its frame's slot so the closure names it");
+        FG_NO_WRITER();
+    }
     if (vr->flow_gen <= w->floor) {
         if (!fg_map_get(&w->cell_anch, vr, &i)) {
             i = g->n_cells++;
@@ -51665,10 +51674,7 @@ static void fg_cell(FGWriter *w, FGBuf *out, JSVarRef *vr)
         fg_u8(out, 'B'); fg_u32(out, i);
         return;
     }
-    if (!vr->is_detached && w->survey) {
-        fg_gap(w, out, FG_GAP_OPEN_CELL, !fg_map_get(&w->frame_sfs, vr->stack_frame, &i));
-        return;
-    }
+    if (!vr->is_detached && w->survey) { fg_gap(w, out, FG_GAP_OPEN_CELL, 1); return; }
     if (!vr->is_detached) {
         DCHECK(false, "flow graph: a private closure on a parked graph names an open cell, a slot of a live frame — "
                "give the parked frame's slots a writer the cell can name");
@@ -51815,7 +51821,7 @@ CONT_KIND_SWITCH_CHECKED_END
 
 static void fg_gap_name(JSContext *ctx, const FGGap *gap, char *buf, size_t cap)
 {
-    static const char *const base[] = { "bytecode", "stepRoot", "asyncCall" };
+    static const char *const base[] = { "bytecode", "stepRoot", "asyncCall", "holdsEval" };
     static const char *const frame[] = { "call", "async", "generator", "asyncGeneratorCreate",
                                          "asyncGeneratorDrive", "anchor" };
     static const char *const field[] = { "strbuf", "props", "slots", "buf", "atom", "array", "shared", "maprec",
@@ -52162,11 +52168,59 @@ static void *fg_rrecord(FGReader *r, const JSRecordLayout *l)
     return rec;
 }
 
+/* A bytecode base, rebuilt as flow_clone_state_alloc and clone_susp_frame build a sibling's: a host-owned state
+   whose buffer the layout law sizes from the argument count written and the body, holding the slots, cells and
+   positions written. Its function may be a shell whose body is read after it; fg_read checks the two agree. */
+static JSAsyncFunctionState *fg_rbase_bytecode(FGReader *r)
+{
+    JSContext *ctx = r->ctx;
+    JSValue bv = fg_rvalue(r);
+    JSFunctionBytecode *b;
+    JSAsyncFunctionState *s = js_mallocz(ctx, sizeof *s);
+    JSStackFrame *sf;
+    uint32_t argc, al, pc, live, lc;
+    uint8_t flags;
+
+    CHECK(s != NULL, "flow graph: OOM rebuilding a base");
+    CHECK(JS_VALUE_GET_TAG(bv) == JS_TAG_FUNCTION_BYTECODE, "flow graph: a base's body is not a function body");
+    b = JS_VALUE_GET_PTR(bv);
+    sf = &s->frame;
+    flow_park_init(s);
+    s->base_kind = FLOW_BASE_BYTECODE;
+    sf->cur_func = fg_rvalue(r);
+    s->this_val = fg_rvalue(r);
+    sf->this_val = s->this_val;   /* the state owns it and the frame borrows, as async_func_init leaves them */
+    argc = fg_r32(r); al = fg_r32(r); flags = fg_r8(r); pc = fg_r32(r); live = fg_r32(r);
+    CHECK(JS_IsObject(sf->cur_func) && al <= UINT16_MAX && al == (argc > b->arg_count ? argc : b->arg_count),
+          "flow graph: a base's argument counts are not the ones its body and its call give");
+    lc = (uint32_t)TRAMP_FRAME_SLOTS(al, b);
+    CHECK(live <= lc && pc <= (uint32_t)b->byte_code_len,
+          "flow graph: a base's live end or program counter is outside its frame or its body");
+    CHECK(!(flags & 8), "flow graph: a base's live point is on a chain of heap frames, and no reader rebuilds one");
+    s->argc = (int)argc;
+    s->throw_flag = flags & 1;
+    sf->is_strict_mode = (flags >> 1) & 1;
+    sf->is_constructor = (flags >> 2) & 1;
+    sf->step_func = sf->step_this = JS_UNDEFINED;
+    sf->arg_buf = js_malloc(ctx, sizeof(JSValue) * (lc ? lc : 1) + sizeof(JSVarRef *) * (size_t)b->var_ref_count);
+    CHECK(sf->arg_buf != NULL, "flow graph: OOM rebuilding a base's frame");
+    sf->arg_count = (uint16_t)al;
+    sf->var_buf = sf->arg_buf + al;
+    sf->var_refs = TRAMP_VAR_REFS(sf->var_buf + b->var_count, b);
+    sf->var_ref_count = b->var_ref_count;
+    sf->cur_pc = b->byte_code_buf + pc;
+    for (uint32_t i = 0; i < live; i++) sf->arg_buf[i] = fg_rvalue(r);
+    sf->cur_sp = sf->arg_buf + live;
+    for (int i = 0; i < b->var_ref_count; i++) sf->var_refs[i] = fg_rcell(r);
+    JS_FreeValue(ctx, bv);
+    return s;
+}
+
 static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue **frames)
 {
     FGReader r = { 0 };
     const uint8_t *kinds;
-    uint32_t n;
+    uint32_t n, n_bases;
 
     CHECK(g->n_gaps == 0, "flow graph: a survey's graph was handed to the reader — it holds placeholders for what no "
                           "writer could write, so it is not a graph");
@@ -52204,10 +52258,14 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
     n = fg_r32(&r);
     CHECK(n == g->n_roots, "flow graph: the serialized root count disagrees with the graph's");
     for (uint32_t i = 0; i < n; i++) roots[i] = fg_rvalue(&r);
-    n = fg_r32(&r);
-    CHECK(n == g->frames.bases, "flow graph: the serialized base count disagrees with the graph's");
-    (void)frames;
-    CHECK(n == 0, "flow graph: a graph holds a flow's base, and no reader rebuilds one");
+    n_bases = fg_r32(&r);
+    CHECK(n_bases == g->frames.bases, "flow graph: the serialized base count disagrees with the graph's");
+    CHECK(n_bases == 0 || frames != NULL, "flow graph: a graph holding a flow's bases was handed to a reader of "
+                                          "values");
+    for (uint32_t i = 0; i < n_bases; i++) {
+        CHECK(fg_r8(&r) == 'b', "flow graph: a base carries a kind this reader does not know");
+        frames[i] = (JSValue *)fg_rbase_bytecode(&r);
+    }
     for (uint32_t i = 0; i < r.n_objs; i++) {
         JSValue o = r.objs[i], proto = fg_rvalue(&r);
         uint8_t ext = fg_r8(&r);
@@ -52253,6 +52311,14 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
         if (!ext) CHECK(JS_PreventExtensions(ctx, o) >= 0, "flow graph: a rebuilt object refused to stop extending");
     }
     CHECK(r.p == r.end, "flow graph: a serialized graph has bytes past its last record");
+    for (uint32_t i = 0; i < n_bases; i++) {   /* each base's function now holds its body */
+        const JSStackFrame *sf = &((JSAsyncFunctionState *)frames[i])->frame;
+        const JSObject *fp = JS_VALUE_GET_OBJ(sf->cur_func);
+        const JSFunctionBytecode *b = js_class_has_bytecode(fp->class_id) ? fp->u.func.function_bytecode : NULL;
+
+        CHECK(b != NULL && sf->cur_pc >= b->byte_code_buf && sf->cur_pc <= b->byte_code_buf + b->byte_code_len,
+              "flow graph: a rebuilt base's function is not the one its frame was written against");
+    }
     for (uint32_t i = 0; i < r.n_objs; i++) JS_FreeValue(ctx, r.objs[i]);
     for (uint32_t i = 0; i < r.n_strs; i++) JS_FreeValue(ctx, r.strs[i]);
     (free)(r.objs); (free)(r.strs); (free)(r.cells); (free)(r.shared);
@@ -87996,14 +88062,15 @@ static void js_reaction_park_free(JSContext *ctx, void *opaque)
     flow_reaction_free(ctx, &rf->fs);
 }
 
-/* The frame half of a graph survey (JS_FlowGraphSurvey). No part of a frame has a writer, so each part is
-   recorded as a gap by its identity, and the values a frame holds are surveyed as the collector's own walk
-   reports them (async_func_mark), so an object only a frame reaches is surveyed too. `g_fg_frames` is the
-   survey whose walk is running: neither the collector's mark callback nor a step declaration's visitor carries
-   an argument.
-   Named residual. Not covered: a requester recorded on a frame (seq_req) is named and not followed, and a
-   frame's strings and numbers are not written, so a survey's bytes leave a frame's slots out. Next diff builds:
-   the frame writer, which writes each slot and follows each link it owns. Absence shows as: `requester` gaps. */
+/* The frame half of a graph write. A part of a frame with a writer is written (a bytecode base); every other
+   part is a gap by its identity (fg_frame_gap), and for a survey the values a frame holds are surveyed as the
+   collector's own walk reports them (async_func_mark), so an object only a frame reaches is surveyed too.
+   `g_fg_frames` is the write whose walk is running: neither the collector's mark callback nor a step
+   declaration's visitor carries an argument.
+   Named residual. Not covered: a requester recorded on a frame (seq_req) is named and not followed, and the
+   strings and numbers of a part with no writer are not written, so a survey's bytes leave those slots out. Next
+   diff builds: that part's writer, which writes each slot and follows each link it owns. Absence shows as:
+   `requester` gaps, and a `frame`, `cont` or `step` gap for each unwritten part. */
 static FGWriter *g_fg_frames;
 enum { FG_FRAME_CALL, FG_FRAME_ASYNC, FG_FRAME_GENERATOR, FG_FRAME_AGEN_CREATE, FG_FRAME_AGEN_DRIVE, FG_FRAME_ANCHOR };
 enum { FG_SF_STRBUF, FG_SF_PROPS, FG_SF_SLOTS, FG_SF_BUF, FG_SF_ATOM, FG_SF_ARRAY, FG_SF_SHARED, FG_SF_MAPREC,
@@ -88132,8 +88199,47 @@ static const char *fg_park_site(const JSAsyncFunctionState *s)
     return "unnamed";
 }
 
-/* One base: its kind, its park, each heap frame stashed on it with what waits on that frame, and the values
-   the base's record and its chain hold. A base's kind names the record it is embedded in. */
+/* A bytecode base: 'b', its body (an anchor), its function and receiver, the count it was called with and the
+   count its frame holds, its flags (a pending throw, strict mode, a constructor call, a live point on its
+   chain), its program counter as an offset into the body, its live slots from the first argument, and its cells
+   in var-ref order. The live end is the frame's own stack position, or the bottom heap frame's record of it. */
+static void fg_base_bytecode(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s)
+{
+    JSStackFrame *sf = &s->frame;
+    JSFunctionBytecode *b;
+    TrampFrame *bt = s->tramp_top;
+    JSValue *end;
+    uint32_t live;
+
+    DCHECK(!sf->is_call_root && JS_VALUE_GET_TAG(sf->cur_func) == JS_TAG_OBJECT &&
+               js_class_has_bytecode(JS_VALUE_GET_OBJ(sf->cur_func)->class_id),
+           "flow graph: a bytecode base's frame is a call root, or its function holds no bytecode");
+    b = JS_VALUE_GET_OBJ(sf->cur_func)->u.func.function_bytecode;
+    while (bt && bt->up) bt = bt->up;
+    end = bt ? bt->caller_sp : sf->cur_sp;
+    DCHECK(end != NULL && end >= sf->arg_buf && end - sf->arg_buf <= TRAMP_FRAME_SLOTS(sf->arg_count, b),
+           "flow graph: a parked base's live end is outside its frame — the base is running, or its buffer was "
+           "allocated by another layout law than the one it is read by");
+    DCHECK(sf->cur_pc >= b->byte_code_buf && sf->cur_pc <= b->byte_code_buf + b->byte_code_len,
+           "flow graph: a parked base's program counter is outside its function's body");
+    DCHECK(sf->var_ref_count == b->var_ref_count, "flow graph: a base's var-ref count is not its body's");
+    if (sf->eval_hold) fg_frame_gap(w, FG_GAP_FRAME_BASE, FG_BASE_HOLDS_EVAL, NULL);
+    live = (uint32_t)(end - sf->arg_buf);
+    fg_u8(out, 'b');
+    fg_value(w, out, JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, b));
+    fg_value(w, out, sf->cur_func);
+    fg_value(w, out, s->this_val);
+    fg_u32(out, (uint32_t)s->argc);
+    fg_u32(out, sf->arg_count);
+    fg_u8(out, (uint8_t)(s->throw_flag | sf->is_strict_mode << 1 | sf->is_constructor << 2 | (bt != NULL) << 3));
+    fg_u32(out, (uint32_t)(sf->cur_pc - b->byte_code_buf));
+    fg_u32(out, live);
+    for (uint32_t i = 0; i < live; i++) fg_value(w, out, sf->arg_buf[i]);
+    for (int i = 0; i < sf->var_ref_count; i++) fg_cell(w, out, sf->var_refs[i]);
+}
+
+/* One base: its record by its kind, its park, each heap frame stashed on it with what waits on that frame, and
+   for a survey the values the unwritten parts hold. A base's kind names the record it is embedded in. */
 static void fg_frame_base(FGWriter *w, JSAsyncFunctionState *s)
 {
     JSRuntime *rt = w->ctx->rt;
@@ -88141,9 +88247,10 @@ static void fg_frame_base(FGWriter *w, JSAsyncFunctionState *s)
     uint32_t depth = 0;
 
     fr->bases++;
-    fg_frame_gap(w, FG_GAP_FRAME_BASE, s->base_kind, NULL);
-    if (s->park_fn) fg_frame_gap(w, FG_GAP_PARK, 0, fg_park_site(s));
     fg_frame_sf(w, &s->frame);
+    if (s->base_kind == FLOW_BASE_BYTECODE) fg_base_bytecode(w, &w->fbuf, s);
+    else fg_frame_gap(w, FG_GAP_FRAME_BASE, s->base_kind, NULL);
+    if (s->park_fn) fg_frame_gap(w, FG_GAP_PARK, 0, fg_park_site(s));
     for (TrampFrame *t = s->tramp_top; t; t = t->up, depth++) {
         JSAsyncGeneratorData *agd = tramp_agen_data(t);
 
@@ -88161,6 +88268,7 @@ static void fg_frame_base(FGWriter *w, JSAsyncFunctionState *s)
     }
     fr->heap += depth;
     if (depth > fr->depth) fr->depth = depth;
+    if (!w->survey) return;
     switch (s->base_kind) {
     case FLOW_BASE_BYTECODE:
         async_func_mark(rt, s, fg_frame_mark);
