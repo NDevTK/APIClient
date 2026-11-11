@@ -26877,8 +26877,8 @@ TF_UNIT void probes_colormix(const char *js, Probe *tab, int *n) {
              "CSS Color 4 §6.4: a currentcolor color-mix() argument is not the element's own used `color`");
     fold_row(&cm_tt, &cm_why, CM_IS("r", "188_0_188_1"),
              "CSS Color 4 §13.3: a mix in srgb-linear is not interpolated in linear light");
-    fold_row(&cm_tt, &cm_why, CM_IS("x", "0_0_0_0"),
-             "CSS Color 5 §3.2: a percentage over 100% does not make the declaration invalid");
+    fold_row(&cm_tt, &cm_why, CM_IS("x", "0_0_255_1"),
+             "CSS Color 5 §3.2: a percentage over 100% does not drop the declaration to the initial currentcolor");
     fold_row(&ca_tt, &ca_why, CM_IS("t", "0_0_255_0.4"),
              "CSS Color 4 §13.5: blue 40% with transparent is not premultiplied to rgba(0, 0, 255, 0.4)");
     fold_row(&ca_tt, &ca_why, CM_IS("l", "128_0_128_0.6") && CM_IS("s", "255_0_0_0.5"),
