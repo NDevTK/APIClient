@@ -48420,7 +48420,7 @@ static void fg_rchain_calls(FGReader *r, JSAsyncFunctionState *s, JSFunctionByte
         if (amode == 'b') aoff = fg_r32(r);
         pc = fg_r32(r);
         live = fg_r32(r);
-        CHECK(JS_IsObject(sf->cur_func) && JS_VALUE_GET_OBJ(sf->cur_func)->u.func.function_bytecode == b
+        CHECK(JS_IsObject(sf->cur_func) && js_class_has_bytecode(JS_VALUE_GET_OBJ(sf->cur_func)->class_id)
                   && al <= UINT16_MAX && pc < (uint32_t)b->byte_code_len
                   && (t->cont_kind == CONT_NONE || t->cont_kind == CONT_CONSTRUCT || cont_kind_recordless(t->cont_kind))
                   && (amode == 'o' ? al != 0 : al == 0 && (amode == 'n' || amode == 'b'))
@@ -48653,6 +48653,10 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
         CHECK(sf->is_call_root
                   || (b != NULL && sf->cur_pc >= b->byte_code_buf && sf->cur_pc <= b->byte_code_buf + b->byte_code_len),
               "flow graph: a rebuilt base's function is not the one its frame was written against");
+        /* and each heap frame's, whose closure the graph may have built after the frame (a private function) */
+        for (const TrampFrame *t = ((JSAsyncFunctionState *)frames[i])->tramp_top; t; t = t->up)
+            CHECK(JS_VALUE_GET_OBJ(t->sf.cur_func)->u.func.function_bytecode == t->b,
+                  "flow graph: a rebuilt heap frame's function is not the one its frame was written against");
         fg_rchain_cells((JSAsyncFunctionState *)frames[i]);
     }
     for (uint32_t i = 0; i < r.n_objs; i++) JS_FreeValue(ctx, r.objs[i]);
