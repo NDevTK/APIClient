@@ -2154,6 +2154,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/hdrclass.h"
 #include "fixture/fileparsetext.h"
 #include "fixture/requestunk.h"
+#include "fixture/reqmethod.h"
 #include "fixture/respurl.h"
 #include "fixture/urlhref.h"
 #include "fixture/uspiso.h"
@@ -2976,6 +2977,7 @@ TF_DOCS[] = {
     { "hdrclass", HTML_HDRCLASS },
     { "fileparse-text", HTML_FILEPARSE_TEXT },
     { "requestunk", HTML_REQUESTUNK },
+    { "reqmethod", HTML_REQMETHOD },
     { "respurl", HTML_RESPURL },
     { "urlhref", HTML_URLHREF },
     { "uspiso", HTML_USPISO },
@@ -13496,6 +13498,29 @@ static int emitted_record_method(const char *js, const char *url, const char *me
                "that is not about what the engine recorded");
         v = o + 11;                               /* past `{"method":"` — the method's own first byte */
         if ((size_t)(u - 2 - v) == n && memcmp(v, method, n) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Does a record of the statement at `url` carry a method whose spelling CONTAINS `needle` — for a method that
+   is an unknown's display shape, whose exact spelling is the shape grammar's and not the row's claim; the row
+   names the source the shape must be about. Located as emitted_record_method locates it. */
+static int emitted_record_method_has(const char *js, const char *url, const char *needle) {
+    EmittedRec r[EMITTED_REC_MAX];
+    size_t n = strlen(needle);
+    int cnt = emitted_records(js, url, r, EMITTED_REC_MAX), i;
+
+    for (i = 0; i < cnt; i++) {
+        const char *u = r[i].at, *o, *v, *p;
+
+        for (o = u; o > js && *o != '{'; o--) { }
+        DCHECK(*o == '{' && strncmp(o + 1, "\"method\":\"", 10) == 0 && u > o + 12 && u[-1] == ',' &&
+               u[-2] == '"',
+               "endpoint_json_array writes a record whose `\"url\"` is not immediately preceded by the "
+               "`\"method\"` field this reader reads it out of");
+        v = o + 11;
+        for (p = v; p + n <= u - 2; p++)
+            if (memcmp(p, needle, n) == 0) return 1;
     }
     return 0;
 }
@@ -27878,6 +27903,78 @@ TF_UNIT void probes_requestunk(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `reqmethod` document (fixture/reqmethod.h): Fetch §5.4 step 25 over a method the page
+   computed forks into the arm that returned and the arm that threw, steps 32.1 and 35 fork over the method the
+   first arm carries, and the request records the method's shape. */
+TF_UNIT void probes_reqmethod(const char *js, Probe *tab, int *n) {
+#define RQM_ROW(tt, why, cond, text) const char *why = NULL; int tt = 1; fold_row(&tt, &why, (cond), text)
+    RQM_ROW(eb_tt, eb_why, !!strstr(js, "\"/api/rqm-ex-built\""),
+            "NOT REACHED: no /api/rqm-ex-built record, so new Request() given a method built from "
+            "navigator.language did not return on any arm");
+    RQM_ROW(et_tt, et_why, !!strstr(js, "\"/api/rqm-ex-threw\""),
+            "no /api/rqm-ex-threw record, so §5.4 step 25's TypeError arm over a method with an example was "
+            "not explored: the example's verdict decided the predicate for every world");
+    RQM_ROW(em_tt, em_why, emitted_record_method_has(js, "/api/rqm-exreq", "navigator.language"),
+            "the request built with a method from navigator.language has no record whose method names that "
+            "source, so the endpoint was not identified by the method's shape");
+    RQM_ROW(er_tt, er_why, !!strstr(js, "\"/api/rqm-ex-replied\""),
+            "no /api/rqm-ex-replied record, so the request whose method has an example was not sent with the "
+            "normalized example and answered");
+    RQM_ROW(ub_tt, ub_why, !!strstr(js, "\"/api/rqm-un-built\""),
+            "NOT REACHED: no /api/rqm-un-built record, so new Request() given a method with no example did not "
+            "return on any arm");
+    RQM_ROW(ut_tt, ut_why, !!strstr(js, "\"/api/rqm-un-threw\""),
+            "no /api/rqm-un-threw record, so §5.4 step 25's TypeError arm over a method with no example was "
+            "not explored");
+    RQM_ROW(um_tt, um_why, emitted_record_method_has(js, "/api/rqm-unreq", "location.hash"),
+            "the request built with a method from location.hash has no record whose method names that source");
+    RQM_ROW(ft_tt, ft_why, !!strstr(js, "\"/api/rqm-forbid-threw\""),
+            "NOT REACHED: no /api/rqm-forbid-threw record, so new Request() given the forbidden method TRACE did "
+            "not throw §5.4 step 25's TypeError");
+    RQM_ROW(fb_tt, fb_why, !strstr(js, "\"/api/rqm-forbid-built\""),
+            "a /api/rqm-forbid-built record exists, so a Request was built with the forbidden method TRACE");
+    RQM_ROW(pp_tt, pp_why, emitted_record_method(js, "/api/rqm-post", "POST"),
+            "the request given the method `post` was not recorded as POST: §2.2.1's normalize a method "
+            "byte-uppercases the six names");
+    RQM_ROW(fm_tt, fm_why, emitted_record_method_has(js, "/api/rqm-fetchreq", "location.hash"),
+            "fetch() given a method with no example has no record whose method names location.hash");
+    RQM_ROW(fr_tt, fr_why, !!strstr(js, "\"/api/rqm-fetch-rejected\""),
+            "no /api/rqm-fetch-rejected record, so fetch()'s promise did not reject with step 25's TypeError "
+            "on the arm where the method is not a usable one");
+    RQM_ROW(bb_tt, bb_why, !!strstr(js, "\"/api/rqm-body-built\""),
+            "no /api/rqm-body-built record, so a Request with a body and an unknown method was not built on the "
+            "arm where §5.4 step 35's method is neither GET nor HEAD");
+    RQM_ROW(bt_tt, bt_why, !!strstr(js, "\"/api/rqm-body-threw\""),
+            "no /api/rqm-body-threw record, so the TypeError arms of steps 25 and 35 over an unknown method "
+            "with a body were not explored");
+    RQM_ROW(nb_tt, nb_why, !!strstr(js, "\"/api/rqm-nc-built\""),
+            "no /api/rqm-nc-built record, so a no-cors Request with an unknown method was not built on the arm "
+            "where §5.4 step 32.1's method is CORS-safelisted");
+    RQM_ROW(nt_tt, nt_why, !!strstr(js, "\"/api/rqm-nc-threw\""),
+            "no /api/rqm-nc-threw record, so the TypeError arm of step 32.1 over an unknown method was not "
+            "explored");
+#undef RQM_ROW
+    const Probe rows[] = {
+        { "rqm-ex-built", eb_tt, "rqm-exreq", SESS_EXPLORE, eb_why },
+        { "rqm-ex-threw", et_tt, "rqm-exreq", SESS_EXPLORE, et_why },
+        { "rqm-ex-method", em_tt, "rqm-exreq", SESS_EXPLORE, em_why, .gate = "rqm-ex-built" },
+        { "rqm-ex-replied", er_tt, "rqm-exreq", SESS_EXPLORE, er_why, .gate = "rqm-ex-built" },
+        { "rqm-un-built", ub_tt, "rqm-unreq", SESS_EXPLORE, ub_why },
+        { "rqm-un-threw", ut_tt, "rqm-unreq", SESS_EXPLORE, ut_why },
+        { "rqm-un-method", um_tt, "rqm-unreq", SESS_EXPLORE, um_why, .gate = "rqm-un-built" },
+        { "rqm-forbid-threw", ft_tt, "rqm-forbid", SESS_EXPLORE, ft_why },
+        { "rqm-forbid-not-built", fb_tt, "rqm-forbid", SESS_EXPLORE, fb_why, .reach = "rqm-forbid-threw" },
+        { "rqm-post-normalized", pp_tt, "rqm-post", SESS_EXPLORE, pp_why },
+        { "rqm-fetch-method", fm_tt, "rqm-fetchreq", SESS_EXPLORE, fm_why },
+        { "rqm-fetch-rejected", fr_tt, "rqm-fetchreq", SESS_EXPLORE, fr_why },
+        { "rqm-body-built", bb_tt, "rqm-body", SESS_EXPLORE, bb_why },
+        { "rqm-body-threw", bt_tt, "rqm-body", SESS_EXPLORE, bt_why },
+        { "rqm-nc-built", nb_tt, "rqm-nc", SESS_EXPLORE, nb_why },
+        { "rqm-nc-threw", nt_tt, "rqm-nc", SESS_EXPLORE, nt_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `respurl` document (fixture/respurl.h): `url` over the reply no server sent to a request whose
    address the query names answers, and the request built from it is rooted in that query value. */
 TF_UNIT void probes_respurl(const char *js, Probe *tab, int *n) {
@@ -32969,6 +33066,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_hdrclass(js, probes, &np);
     probes_fileparse_text(js, probes, &np);
     probes_requestunk(js, probes, &np);
+    probes_reqmethod(js, probes, &np);
     probes_respurl(js, probes, &np);
     probes_urlhref(js, probes, &np);
     probes_uspiso(js, probes, &np);
