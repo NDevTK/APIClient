@@ -1,83 +1,33 @@
-/* THE REVISION A GATE'S NUMBER BELONGS TO — one place, every gate.
+/* The revision a gate's number belongs to: one place, every gate.
  *
- * CLAUDE.md §Testing states the rule and this file is the mechanism for it: "a gate runs from a FROZEN
- * SNAPSHOT … and the commit it measured is REPORTED WITH THE RESULT. A result quoted without the revision it
- * came from is not a measurement." Every gate in this tree obeyed the first half and none of them obeyed the
- * second, so every number this project has ever produced was a number about an unnamed tree.
+ * A gate runs from a frozen snapshot and reports the commit it measured with its result; a result quoted
+ * without its revision is not a measurement. This file answers what that revision is: the commit, whether the
+ * cone the gate compiles is clean at it, whether the commit can compile itself, and which revision a prebuilt
+ * artifact was built from.
  *
- * IT IS NOT A HYPOTHETICAL, AND THE INCIDENT IS THE REASON THIS FILE EXISTS. A whole-corpus WPT run reported
- * 1393 of 2000 aborts as one atom-census leak naming nine interned names — `type`,
- * `__fileSystemWritableSlots`, `data`, `position`, `top`, `headers`, `body`, `method`, `url` — and it was read
- * as the highest-value defect in the tree. Those nine are the exact nine that superproject 26a34533 had
- * already fixed at their three roots, and the run measured a tree from BEFORE it. Nothing in the report said
- * so. What finally said so was FORENSICS ON A DCHECK's PROSE: the pasted message read "went down with 9 ATOMS
- * still interned", which is submodule 88701bd's wording, superseded twenty-three minutes later by 2268e0f's
- * "above baseline, N of them BUILT-IN names". A gate whose revision has to be recovered by diffing the
- * spelling of an assertion is a gate that reported a number about nothing, and the cost is not the reading —
- * it is that the next reader is sent to build what is already built, which is exactly the stale-`DFAIL`
- * failure §Disposition names.
+ * The revision is one commit. `engine/qjs` is ordinary tracked content of this repository, so every question
+ * about it is asked from the repository root with the path as a pathspec, and `dirty` answers for it as for
+ * any other cone path. `engine/qjs/test262` is still a submodule, declared at the root `.gitmodules` with
+ * `update = none`; it is a corpus and not a source, no cone names it, and `git ls-files` and `git ls-tree`
+ * both stop at its gitlink.
  *
- * THE REVISION USED TO BE A PAIR AND IS ONE COMMIT NOW, AND THE ARGUMENT FOR THE PAIR IS REWRITTEN RATHER
- * THAN DELETED BECAUSE A READER WHO RE-DERIVES IT WILL RE-ADD IT. It said: the engine is a superproject plus
- * `engine/qjs`, a checkout can hold a SUBMODULE at a commit the superproject does not record, and that gap is
- * precisely how the run above came to compile a quickjs.c older than the HEAD that "contained" the fix — so a
- * revision here is a PAIR, the PINNED commit reported beside the CHECKED-OUT one to make a disagreement a line
- * rather than a discovery. Every clause of that was true while `engine/qjs` was a submodule.
+ * A dirty cone is the verdict on the measurement: the checkout is edited by several agents, so "HEAD is X" is
+ * true of a run only if nothing in the cone the gate compiles differs from X. The gate passes its cone in,
+ * because gates do not compile the same sources (test262 links quickjs files and no host file).
  *
- * A SUBTREE MERGE MADE IT ORDINARY TRACKED CONTENT, so there is no pointer, no second repository, and no gap
- * for the two shas to disagree ACROSS: whether the engine source on disk is the source this commit records is
- * now the same question `dirty` already answers for every other path in the cone, and it is answered by the
- * same `git status`. The PAIR is therefore not a pair that happens to agree — it is one fact, and a check
- * whose two sides cannot disagree is a NON-check wearing a check's syntax (CLAUDE.md
- * §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE), so the branch that compared them is gone rather than left
- * standing and always-true.
- *
- * WHAT DID NOT CHANGE IS THE FAILURE THIS FILE EXISTS FOR, AND WHAT THE MERGE COST WAS MEASURED. Every ask
- * this file put to `engine/qjs` as a repository — `rev-parse HEAD`, `status --porcelain`, `ls-tree -r HEAD` —
- * began FAILING the instant the merge landed, because the directory stopped being a repository of its own.
- * It failed HONESTLY, and only because `ask` establishes the repository before putting the question: without
- * that guard git would have walked up and answered all three from the superproject, which is the confident
- * false red its own comment records. What the honest failures cost instead was everything downstream of them:
- * `unasked` was non-empty on EVERY gate run, so the CLEAN line — the one that says a number is quotable
- * against a commit — became unreachable for every gate in this project; and the dangling-include audit
- * returned `unaudited` rather than running, because ONE of its two tree asks was the submodule's. Measured at
- * de7485b6 before this diff: three alarm blocks on a clean tree, 0 dangling includes reported because the
- * audit did not run, and a remedy hint telling the reader to clone `<rev>:engine/qjs`, which is a TREE and
- * cannot be cloned. Measured after: one `ls-tree` over both paths resolves 4842 include lines, 717 of them
- * THROUGH `engine/qjs`, 0 dangling.
- *
- * `engine/qjs/test262` IS STILL A SUBMODULE — re-declared at the ROOT `.gitmodules` with `update = none`,
- * because git reads `.gitmodules` only from the repository root. It is a CORPUS rather than a source this
- * program is compiled from, so no cone here names it and no ask here is put to it; `git ls-files` and
- * `git ls-tree` both stop at its gitlink, which is why the two walks below need no exclusion for it.
- *
- * A DIRTY CONE IS NOT A FOOTNOTE, IT IS THE VERDICT ON THE MEASUREMENT. §Testing's worked example is a build
- * that read `idl_args.h` 33 seconds apart and produced a program no revision of the tree ever contained. This
- * checkout is edited by several agents continuously, so "HEAD is X" is only true of the run if nothing in the
- * cone the gate COMPILES differs from X. The cone is passed in by the gate, because the gates do not compile
- * the same sources: test262 links five quickjs files and not one host file, so a `solver/cow.c` edit does not
- * touch its program and must not be reported as if it did.
- *
- * A FAILED ASK IS KEPT AS THE IDENTITY, never replaced by a plausible value — the same rule engine/wpt.mjs
- * states for the corpus's own identity, and §Offensive-programming's rule about a consumer that defaults a
- * producer's field. A run that could not ask git and a run that asked and got an answer must not read alike.
- */
+ * A failed ask is kept as the identity and never replaced by a plausible value: a run that could not ask git
+ * and a run that asked and got an answer must not read alike. */
 import { spawnSync } from "node:child_process";
 import { statSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const ENGINE = import.meta.dirname;
 const ROOT = dirname(ENGINE);            /* the superproject */
-/* `engine/qjs` IS A PATH IN THIS REPOSITORY AND NO LONGER A HANDLE TO ANOTHER ONE. The directory handle that
-   stood beside this is gone with the asks that used it: a question put to that directory is a question put to
-   THIS repository, so it is asked from ROOT with the path as a pathspec, which is what every other cone path
-   has always done. The constant keeps its value and loses its name — nothing here is a submodule any more. */
 const QJS_PATH = "engine/qjs";           /* how this repository's tree names the engine sources */
 
-/* IS THIS DIRECTORY A REPOSITORY OF ITS OWN — asked once per directory per run, because a directory does not
-   stop being one under a gate. `--show-toplevel` is the only question that answers it: `--is-inside-work-tree`
-   says yes for every subdirectory of every repository, which is the exact confusion this guards against. Both
-   sides are realpath'd because a snapshot reached through a symlink is still the same directory. */
+/* Whether this directory is a repository of its own, asked once per directory per run. `--show-toplevel` is
+   the question that answers it; `--is-inside-work-tree` says yes for every subdirectory of every repository.
+   Both sides are realpath'd because a snapshot reached through a symlink is the same directory. */
 const IS_REPO_ROOT = new Map();
 function isRepoRoot(cwd) {
   if (!IS_REPO_ROOT.has(cwd)) {
@@ -90,23 +40,10 @@ function isRepoRoot(cwd) {
   return IS_REPO_ROOT.get(cwd);
 }
 
-/* THE ANSWER OR THE FAILURE, never neither. `status !== 0` is kept verbatim so it prints as itself.
- *
- * AND THE QUESTION MUST REACH THE REPOSITORY IT NAMES, WHICH IS A SECOND CONTRACT AND THE ONE THAT WAS BROKEN.
- * git resolves its repository by walking UPWARD from cwd, so a question put to a directory that is not itself a
- * repository is answered by whichever repository CONTAINS it — successfully, with status 0, about a different
- * program. `status !== 0` cannot see that, because there is no failure to keep: this is the "one fact answered
- * from the wrong place" defect, and it wears the shape of an answer rather than of a gap.
- * MEASURED, IN THE VERY ARRANGEMENT THIS FILE'S OWN TEXT RECOMMENDS. A snapshot made with
- * `git clone --shared <root> <dir>` has an EMPTY `engine/qjs` until the submodule is cloned too, and every ask
- * of it was then answered from the superproject: `rev-parse HEAD` returned the SUPERPROJECT's sha wearing the
- * submodule's name, so the banner printed THE SUBMODULE IS NOT THE ONE THIS COMMIT RECORDS against the real
- * pin; `status --porcelain -- .` answered clean, so the same banner called the cone "CLEAN at that revision"
- * about a directory with nothing in it; and `ls-tree -r HEAD` listed the superproject UNDER THAT PREFIX, which
- * is a gitlink rather than a tree, so it answered EMPTY and 590 `#include "quickjs.h"` lines were published as
- * includes "no commit provides" under THIS REVISION DOES NOT COMPILE. One wrong repository, three confident
- * false statements, and not one failed ask anywhere to notice. So the repository is ESTABLISHED before the
- * question is put, and a directory that is not one of its own returns the failure it always should have. */
+/* The answer or the failure, never neither; a non-zero status is returned verbatim so it prints as itself.
+ * git resolves its repository by walking upward from cwd, so a question put to a directory that is not itself
+ * a repository would be answered, with status 0, by whichever repository contains it. The repository is
+ * therefore established before the question is put, and a directory that is not one returns a failure. */
 function ask(cwd, ...a) {
   if (!isRepoRoot(cwd))
     return `<git ${a.join(" ")} failed: ${cwd} is not a git repository of its own, so git would have answered ` +
@@ -115,68 +52,36 @@ function ask(cwd, ...a) {
   return r.status === 0 ? r.stdout.trim() : `<git ${a.join(" ")} failed: ${(r.stderr || "").trim()}>`;
 }
 
-/* DID AN ASK ANSWER. `ask` returns the failure verbatim rather than throwing, so every consumer that compares
-   two of its answers must first know that they ARE answers — comparing two failure strings, or a failure
-   against a sha, is how "could not ask" gets published as "differs". */
+/* Whether an ask answered. `ask` returns a failure as a string, so a consumer comparing two of its answers
+   first checks that both are answers. */
 const answered = (v) => typeof v === "string" && v !== "" && !v.startsWith("<git ");
 
-/* WHAT THIS TREE IS LANDING ON TOP OF — ONE PLACE, EVERY GATE, BECAUSE A CLONE MANUFACTURES A REF THAT LOOKS
-   LIKE THE ANSWER AND IS NOT ONE. A gate scoped to what a checkout INTRODUCED needs a base, and every tool
-   here reached for the same spelling: origin/main. That spelling is a claim about the PUBLICATION TIP, and it
-   is only such a claim in a checkout whose origin is the real remote. `git clone` builds refs/remotes/origin/*
-   from the SOURCE REPOSITORY's refs/heads/*, so inside a clone origin/main means THE SOURCE'S LOCAL BRANCH
-   main — and in a workflow where lanes commit on a lane branch and publish by sha, nobody ever advances that
-   branch, so it is frozen at whenever it was last touched and the ref goes on resolving cleanly for ever.
+/* What this tree is landing on top of: the publication tip, for a gate scoped to what a checkout introduced.
+   `origin/main` is that tip only in a checkout whose origin is the real remote. `git clone` builds
+   refs/remotes/origin/* from the source repository's refs/heads/*, so inside a frozen snapshot origin/main is
+   the source's local branch main, which nothing advances, and a stale base makes pre-existing work read as
+   introduced by this checkout. So the clone chain is walked through remote.origin.url until it reaches a
+   checkout whose origin is not a local repository, and that one's origin/<branch> is the base.
 
-   MEASURED, AND IT IS NOT A CORNER: the frozen-snapshot recipe this project mandates is exactly this clone, so
-   EVERY gate run from a snapshot took its base from a branch nothing advances. In the checkout this was
-   written in, origin/main and the stale local main were 499 commits and 1302 differing files apart, and the
-   snapshot on disk resolved its origin/main to the stale one. The failure is silent and it is the ACCUSING
-   direction: a stale base makes pre-existing work read as INTRODUCED BY THIS CHECKOUT, which lands as a
-   finding against whoever is holding the tree. Nothing in the output says so, because the resolved sha it
-   prints is a real commit with a real date.
+   The repository that can read the object is returned with the sha: a snapshot carries no alternates file and
+   cannot name a commit that landed in its source after the clone, so the base is read from `repo`. No ancestry
+   is asked: the repository is shallow, so the base is a revision whose files are read by content. Nothing is
+   fetched and the network is not asked, since a fetch would move a ref other lanes read and would make a
+   verdict depend on the hour. A base that cannot be resolved returns a null sha beside the reason.
 
-   NO ANCESTRY IS ASKED AND NONE CAN BE. This repository is shallow, so the graft makes parent and child read
-   as diverged and a divergence count answers the clone depth; the base is a REVISION whose file is read by
-   CONTENT, which is the same commitment the record gate above it already makes.
-
-   THE BASE IS RECOVERED RATHER THAN GUESSED, AND THE CLONE RECORDS WHERE FROM. remote.origin.url in a snapshot
-   is a local path to the repository that still has the true ref, so the chain is walked until it reaches a
-   checkout whose origin is NOT a local repository — that one's origin/<branch> is a publication claim and
-   every earlier one's is not.
-
-   AND THE REPOSITORY THAT CAN READ THE OBJECT IS RETURNED WITH THE SHA, because resolving it is not enough.
-   Measured on this box: ZERO of 58 snapshots carries an objects/info/alternates file, and a snapshot cloned
-   after a commit landed in its source cannot name that commit at all — so a base read put to the CLONE fails
-   for a sha that is perfectly real. The read belongs to `repo`.
-
-   A FETCH IS NOT AN OPTION AND NEITHER IS ls-remote. A gate that fetched would move a ref every other lane in
-   a shared checkout is reading, and a network ask would make a deciding stage's verdict a function of the
-   hour rather than of the revision — which is the whole of what the freeze exists to prevent.
-
-   THE FAILURE IS KEPT AS THE IDENTITY, per this file's own header: a base that could not be resolved returns
-   a null sha beside the reason, never a plausible one, because a consumer that defaults here turns cannot-ask
-   into clean.
-
-   NAMED RESIDUAL — THE BASE IS THE TIP AT RUN TIME AND NOT AT FREEZE TIME. What is NOT covered: a snapshot is
-   frozen so its SUBJECT belongs to one revision, and this resolver reads the source repository's ref when it
-   is asked, so the BASE tracks the source instead. Two runs of one snapshot days apart therefore compare the
-   same subject against different bases, and a finding can retire because somebody else published rather than
-   because anything in the snapshot changed. That is correct for the question — what is published is a fact
-   about the remote, and the freeze exists to fix the subject — and it is narrower than a frozen pair.
-   What the NEXT DIFF builds: frozen_snapshot.sh resolves this in the parent at clone time, brings the object
-   into the clone as a ref of its own, and records it where this resolver prefers it over the live ask. How
-   its ABSENCE would SHOW: two runs of one snapshot printing the same subject line and different resolved base
-   shas. RETIREMENT: this residual goes when a snapshot carries its own recorded base, because the resolver
-   then reads a fact the freeze wrote rather than one the source currently holds. */
+   Named residual: not covered — the base is the tip at run time and not at freeze time, so two runs of one
+   snapshot days apart compare the same subject against different bases, and a finding can retire because
+   somebody else published. Next diff — frozen_snapshot.sh resolves the base in the parent at clone time,
+   brings the object into the clone as a ref of its own, and records it where this resolver prefers it over the
+   live ask. Absence shows as — two runs of one snapshot printing the same subject line and different resolved
+   base shas. */
 function remoteOriginUrl(cwd) {
   const r = spawnSync("git", ["config", "--get", "remote.origin.url"], { cwd, encoding: "utf8" });
   return r.status === 0 ? r.stdout.trim() : "";
 }
-/* THE SOURCE REPOSITORY THIS CHECKOUT WAS CLONED FROM, or null when origin is a real remote. A url carrying a
-   scheme or an scp-like host is a remote and is NOT walked; file:// is the one scheme that names a path, so it
-   is stripped rather than rejected. A path that exists and is not a repository ROOT is also null — the same
-   precision `ask` states: git walks upward, so a question put to a non-root is answered about another tree. */
+/* The source repository this checkout was cloned from, or null when origin is a real remote. A url carrying a
+   scheme or an scp-like host is a remote and is not walked; file:// is the one scheme that names a path, so
+   it is stripped. A path that exists and is not a repository root is also null, for `ask`'s reason. */
 function localCloneSource(cwd) {
   let url = remoteOriginUrl(cwd);
   if (!url) return null;
@@ -210,10 +115,8 @@ export function publicationBase(treeRoot = ROOT, branch = "main") {
   return { sha, repo, hops, branch, why: null };
 }
 
-/* THE SAME CONTRACT AS `ask`, FOR A QUESTION PUT TO THE BUILD RATHER THAN TO GIT — the answer or the failure,
-   never neither, and never a remembered answer standing in for a failed one. The build is asked because it is
-   the only thing that knows what it hands the compiler; a parse error or a non-zero exit is returned as the
-   finding it is, so a checker that cannot ask says so instead of quietly checking something else. */
+/* `ask`'s contract for a question put to the build: the answer or the failure, never neither. A parse error
+   or a non-zero exit is returned as the finding it is. */
 function askJson(cwd, argv) {
   const r = spawnSync(process.execPath, argv, { cwd, encoding: "utf8" });
   if (r.status !== 0)
@@ -222,134 +125,54 @@ function askJson(cwd, argv) {
   catch (e) { return `<${argv.join(" ")} did not answer JSON: ${String(e && e.message)}>`; }
 }
 
-/* THE PORCELAIN LINES FOR ONE CONE, as a list. `--porcelain` names each path with its two status columns, and
-   both columns matter: a staged edit and an unstaged one are equally not-in-HEAD, which is the only question
-   this file asks. An untracked `.c` under the cone is in the cone too — the walk that builds a gate's source
-   list reads the DIRECTORY, so a file no revision contains still gets compiled. */
-/* TWO FACTS, KEPT APART: the paths that DIFFER, and whether the question could be PUT AT ALL. This function
-   used to return the failed ask as though it were a differing path, and the verdict downstream then counted it
-   and announced "THE COMPILED CONE IS DIRTY — 2 path(s) below differ from that revision" about a tree it had
-   never managed to inspect. That is this file's own header defeated inside its own body — "a run that could
-   not ask git and a run that asked and got an answer must not read alike" — and the collapse is the worse
-   direction, because the false verdict is the CONFIDENT one: it names a count, so it reads as a measurement.
-   IT IS NOT HYPOTHETICAL AND IT FIRES ON THE RECIPE §Testing ASKS FOR. A frozen snapshot exported with
-   `git archive` has no `.git` at all, so every ask fails and a gate run from the very snapshot the rule
-   prescribes reported the snapshot as dirty — the one arrangement in which the cone is guaranteed clean. */
+/* The porcelain lines for one cone, and whether the question could be put at all, as two fields: a failed
+   ask goes in `unasked` and never in `lines`, so "could not ask" is not counted as a differing path. Both
+   status columns matter, since a staged edit and an unstaged one are equally not in HEAD, and an untracked
+   `.c` under the cone is in the cone too: the walk that builds a gate's source list reads the directory. */
 function dirtyIn(cwd, cone) {
-  /* AN EMPTY PATHSPEC IS THE WHOLE REPOSITORY, which is the widest possible wrong answer wearing the shape of
-     a right one: a cone naming only the submodule would report every edit anyone made anywhere as a reason to
-     distrust this gate's number. An empty cone has nothing to be dirty. */
+  /* An empty pathspec is the whole repository; an empty cone has nothing to be dirty. */
   if (!cone.length) return { lines: [], unasked: [] };
   const out = ask(cwd, "status", "--porcelain", "--", ...cone);
   if (out.startsWith("<git ")) return { lines: [], unasked: [out] };
   return { lines: out.split("\n").map((l) => l.trimEnd()).filter(Boolean), unasked: [] };
 }
 
-/* A REVISION THAT CANNOT COMPILE ITSELF IS NOT A MEASURABLE REVISION, and that is a question about the
- * REVISION, which is why it lives here beside the other two.
+/* Whether a revision can compile itself: every `#include "…"` under engine/host must name a file the commit
+ * tracks. It is answered over the committed tree and never the working one, because the working tree passes
+ * while HEAD is broken and HEAD is what another agent checks out. One `ls-tree` at the revision over
+ * `engine/host` and `engine/qjs` lists what the commit provides (`ls-tree -r` stops at the
+ * `engine/qjs/test262` gitlink). Resolution mirrors the compiler: the build's own `-I` roots plus the
+ * including file's directory.
  *
- * IT HAPPENED TODAY AND IT COST EVERY AGENT THEIR BUILD. A commit published `solver/dom_cow.c` with
- * `#include "core/dom/node_heap.h"` while `node_heap.{c,h}` were still untracked — they existed only in the
- * shared working tree. `main` did not compile for anyone, and nothing said so until somebody ran a build four
- * minutes long. The cause is §Disposition's staging rule: the committing agent verified `git diff HEAD` and a
- * different agent's hunks landed in the shared worktree before its `git hash-object` two commands later, so an
- * include for a file it did not stage rode into its commit. That rule tells an agent how not to cause it; this
- * tells every gate how to SEE it, in 73 ms, without a compiler.
- *
- * §Testing already states the neighbouring half — "A TRANSLATION UNIT NO GATE COMPILES IS OUTSIDE THE GATE,
- * AND THE SHIPPED ENTRY POINT IS THE ONE THAT ROTS" — and the remedy there was that `build.mjs` compiles the
- * entry it did not link. This is that rule's dual and it is strictly cheaper: a HEADER no commit contains is
- * outside every gate too, and unlike an unbuilt entry it takes the whole program down with it rather than one
- * translation unit. Answered over the COMMITTED tree, never the working one — the working tree passes while
- * HEAD is broken, and HEAD is what another agent checks out.
- *
- * Resolution mirrors the build's own `-I` list (`engine/host`, `engine/host/browser`, `engine/qjs`) plus the
- * including file's own directory, because that is what the compiler will do.
- *
- * IT USED TO TAKE TWO TREE ASKS AND THE SECOND ONE WAS UNSOUND, WHICH THE MERGE EXPOSED BY BREAKING IT. The
- * retired sentence read: a path resolving into the submodule is asked of the submodule, because the
- * superproject's tree does not list a gitlink's contents. That was true and its CONSEQUENCE was not stated —
- * the submodule could only be asked about its CHECKED-OUT `HEAD`, while this function's own header promises an
- * answer "over the COMMITTED tree, never the working one". So for the 717 includes that resolve through the
- * engine, the audit was reading whatever the submodule happened to be checked out at rather than what `<rev>`
- * records, which is the one thing it exists not to do.
- * `engine/qjs` is content of this repository now, so ONE `ls-tree` at `<rev>` over BOTH paths answers the whole
- * question, at the revision asked for, with no second repository to be out of step with. That is not merely
- * one fewer ask: it is the difference between an audit that promises the committed tree and one that delivers
- * it. `engine/qjs/test262` is still a gitlink and `ls-tree -r` stops at it, so the corpus needs no exclusion.
- *
- * ONE SHAPE ON EVERY PATH, AND THIS FUNCTION HAD THREE. The two-field split below — `dangling` for what the
- * audit FOUND, `unaudited` for the audit that could not be PUT — was introduced for the manifest ask and never
- * carried back to the git asks above it, which went on returning the pre-split BARE ARRAY. `gateRevision`
- * spreads this result into its record, and spreading an array into an object literal is silent: it contributes
- * an index key and NO `dangling` key at all, so the record came back missing the field its own reporter reads.
- * The cost was not a wrong number, it was that `revisionLines` threw `Cannot read properties of undefined` at
- * the `rev.dangling.length` line — BEFORE returning any of the lines it had already composed, including the
- * THE CONE'S STATE COULD NOT BE ASKED block written for precisely this case. So the one arrangement whose
- * diagnostic this file wrote out in full was the one arrangement in which it could not be printed: a
- * `git archive` snapshot has no `.git`, the first ask here fails, and every gate that names `engine/host` in
- * its cone died with a stack trace where its explanation should have been. A dead fallback path is worse than
- * an absent one, because the prose reads as though the case is handled. */
+ * Every path returns one shape: `dangling` for what the audit found and `unaudited` for an audit that could
+ * not be put. `gateRevision` spreads the result into its record, so a bare array would carry neither key. */
 function auditUnputtable(why) { return { dangling: [], unaudited: [why] }; }
 function danglingIncludes(rev) {
   const out = ask(ROOT, "grep", "-n", "-e", '^[[:space:]]*#[[:space:]]*include[[:space:]]*"',
                   rev, "--", "engine/host/*.c", "engine/host/*.h");
   if (out.startsWith("<git ")) return auditUnputtable(out);
-  /* BOTH PATHS IN ONE ASK, AT THE REVISION. The engine's tree is a PRECONDITION of this answer and not an
-     optional enrichment — 717 of this cone's include lines resolve only through it, measured at de7485b6 — so
-     a failure here leaves by the same door as the manifest's rather than substituting an empty set, which
-     would be the strongest possible negative claim ("the engine provides no header at all") derived from the
-     one state in which nothing is known. That substitution is what produced the 590-include false red above.
-     THE SECOND ASK THAT USED TO STAND HERE WAS PUT TO `engine/qjs` AS A REPOSITORY, and the subtree merge
-     turned every such question into a failure — an honest one, because `ask` establishes the repository first,
-     but a failure all the same, so this whole audit returned `unaudited` on every gate run in the project
-     instead of running. One ask cannot be half-answered. */
+  /* Both paths in one ask, at the revision. The engine's tree is a precondition of the answer, so a failure
+     here leaves through `auditUnputtable`; an empty set would claim the engine provides no header. */
   const listed = ask(ROOT, "ls-tree", "-r", "--name-only", rev, "--", "engine/host", QJS_PATH);
   if (listed.startsWith("<git ")) return auditUnputtable(listed);
   const tracked = new Set(listed.split("\n").filter(Boolean));
-  /* NO `-h`, DELIBERATELY, AND THIS WAS WRONG ONCE. Searching a REVISION rather than the worktree, git grep
-     prefixes `<rev>:<path>:<lineno>:`, and `-h` suppresses the path — which is the one field that names the
-     OWNER of a bad include. With `-h` this parser matched nothing and the check passed for every tree there
-     will ever be: the "diagnostic that always says yes" failure this file names two functions up, reproduced
-     inside the fix for it. A report that some file somewhere includes a missing header is a search, not a
-     finding, so the path is the deliverable and its absence is what makes the whole check inert. */
-  /* THE ROOTS COME FROM THE BUILD, BECAUSE THE BUILD IS WHAT HANDS THEM TO THE COMPILER. This list used to be
-     four paths written out here, and a second program's extra `-I` made the copy wrong the day it landed: the
-     unit included a header its own compiler could see, the link succeeded, and this check announced that the
-     revision "cannot be built by anyone who checks it out". That is the phantom §Testing describes — a
-     confident false red costs more than a silent miss, because the next REAL dangling include arrives in a
-     report already known to lie. A second copy of a build's configuration is the same defect as a second copy
-     of its source list, which the paragraph above `--list-sources` in build.mjs was written about.
-     PER SET, NOT A UNION, WHICH MATTERS MOST WHEN THERE IS ONE SET. The build answers a LIST of compiler
-     invocations and this walks it; today that list has one entry, and the temptation is to flatten. A flat
-     union answers "fine" to a unit including a header only some OTHER invocation's roots can reach — the
-     diagnostic that always says yes — so the shape is kept as the build states it, and a source in two sets
-     must satisfy BOTH, which is what its own two links require.
-     IF THE BUILD CANNOT ANSWER, THAT IS THE FINDING. There is no fallback to a remembered list here: a stale
-     list is exactly what produced the false red, and a checker that quietly reverts to one when the question
-     fails is a checker whose answer nobody can interpret.
-     BUT "COULD NOT ASK" IS NOT "ASKED AND FOUND A DANGLING INCLUDE", AND THIS RETURNED THE FIRST AS THE SECOND.
-     The build's error string was handed back in the dangling list, so the reporter counted it as an include and
-     announced THIS REVISION DOES NOT COMPILE — the exact phantom the paragraph above was written to kill,
-     surviving on the one path that paragraph does not cover. Measured: a snapshot with no `engine/.work/emsdk`
-     cannot run `--list-include-roots` at all, and every gate run from such a snapshot published that verdict
-     over a revision whose full artifact had been built and linked an hour earlier. Absence of an answer and a
-     negative answer are different facts (§Architecture), so they are returned as different fields and the
-     reporter states them as different sentences. Refusing the fallback is still right; reporting the refusal
-     as a compile failure was not. */
+  /* No `-h`: searching a revision, git grep prefixes `<rev>:<path>:<lineno>:`, and the path names the owner
+     of a bad include. Without it the parser below matches nothing and the check passes for every tree. */
+  /* The roots come from the build, which is what hands them to the compiler; a second copy here would go
+     wrong the day a program gains an `-I`. They are kept per set, as the build states them, and not
+     flattened: a union would pass a unit including a header only another invocation's roots can reach. If
+     the build cannot answer, that is returned as `unaudited`; there is no fallback list, and "could not ask"
+     is never reported as a dangling include. */
   const manifest = askJson(ROOT, ["engine/build.mjs", "--list-include-roots"]);
   if (typeof manifest === "string") return auditUnputtable(manifest);
   const bad = [];
   const setsFor = (owner) => {
     const named = manifest.filter((g) => g.sources.includes(owner));
     if (named.length) return named;
-    /* A HEADER is compiled by whichever unit includes it, so it is checked against every set whose roots could
-       reach it — the sets that can name it are the sets whose compilers could be looking at it. */
-    /* NOT ONLY HEADERS. `engine/build.mjs` is not the whole build system — `engine/wpt.mjs` compiles
-       `engine/host/wpt_runner.c` with its own flags — so a source absent from this manifest is a source whose
-       roots this file does not know, NOT a source nobody builds. An earlier draft of this check said "compiled
-       by NO build target, so nothing checks its includes or its syntax" about exactly that file, which is the
-       same overreach it was written to remove. What can still be said soundly is the at-least-one question. */
+    /* A header is compiled by whichever unit includes it, so it is checked against every set whose roots
+       could reach it. So is a source this manifest does not list: `engine/build.mjs` is not the whole build
+       system (`engine/wpt.mjs` compiles `engine/host/wpt_runner.c` with its own flags), so absence from the
+       manifest is not "nobody builds it". */
     const reach = manifest.filter((g) => g.roots.some((r) => owner.startsWith(r + "/")));
     if (reach.length) return { any: reach };
     return null;
@@ -363,16 +186,11 @@ function danglingIncludes(rev) {
       bad.push(`${owner}:${no} includes "${inc}", and the file sits under no include root this build declares`);
       continue;
     }
-    /* ONE SET, BECAUSE THERE IS ONE TREE. This used to fall back to a second, submodule-relative set for any
-       candidate under `engine/qjs/`; the paths that set held are in `tracked` now, spelled the way the
-       compiler's `-I` list spells them. */
     const has = (c) => tracked.has(c);
-    /* A .c IS CHECKED AGAINST EVERY SET THAT COMPILES IT, because each of those links really does hand it that
-       root list and all of them must succeed. A .h CANNOT BE — which unit includes a header is not a fact a
-       grep for `#include` lines has, and requiring every set whose roots merely REACH it is provably wrong: a
-       browser-only header sits under `engine/host`, which is a root of both sets, while the browser process
-       never compiles a translation unit that includes it. So the header question is AT LEAST ONE, and it is an
-       approximation stated as one rather than a stricter-looking answer that reports healthy files. */
+    /* A .c is checked against every set that compiles it, since each of those links hands it that root list.
+       A header cannot be: a grep for `#include` lines does not know which unit includes it, and requiring
+       every set whose roots reach it would fail a browser-only header under `engine/host`. So the header
+       question is at-least-one, an approximation stated as one. */
     const gs = Array.isArray(groups) ? groups : groups.any;
     const resolves = (g) => [join(dirname(owner), inc), ...g.roots.map((r) => join(r, inc))].some(has);
     if (Array.isArray(groups)) {
@@ -386,55 +204,28 @@ function danglingIncludes(rev) {
   return { dangling: bad, unaudited: [] };
 }
 
-/* THE ARTIFACT CARRIES ITS OWN IDENTITY, BECAUSE AN MTIME IS NOT ONE — and the mtime answer was wrong in
- * exactly the mode §Testing MANDATES. `git worktree add --detach` writes every tracked file at the checkout
- * instant, so in a frozen snapshot every source is newer than any artifact built before it, whatever revision
- * built it: the first snapshot run of this mechanism reported "THE ARTIFACT IS OLDER THAN THE TREE — 600
- * tracked source(s) have changed since" about a build of that very revision, three minutes after the checkout.
- * This file already names the failure while excluding `test262/` for one instance of it — "a diagnostic that
- * always says yes is the same as one that never fires" — and the general case is the same defect, because a
- * checkout re-materializes EVERYTHING, not just the corpus.
- *
- * So `build.mjs` STAMPS the artifact with the revision it was built from, through this same file, and the
- * comparison is between REVISIONS. That is a fact rather than a heuristic and it reads identically in a fresh
- * worktree and in the shared checkout. Three answers, and each is a different statement:
- *   - stamped and EQUAL to this tree      -> the artifact is a build of the revision above.
- *   - stamped and DIFFERENT               -> named, with whether the build's revision is an ancestor of this
- *                                            one (behind by N commits, the ordinary case) or unrelated.
- *   - stamped from a DIRTY tree           -> there IS no revision that describes it, and saying so is stronger
- *                                            than any timestamp: the build is the artifact of an edit.
- * An UNSTAMPED artifact predates this mechanism, and mtime is then all there is. It is still reported, and
- * reported AS a heuristic — §Offensive-programming's rule that a run which could not ask and a run which asked
- * must not read alike applies to the answer's KIND as much as to its value. */
+/* The artifact carries its own identity, because an mtime is not one: `git worktree add --detach` writes
+ * every tracked file at the checkout instant, so in a frozen snapshot every source is newer than any artifact.
+ * `build.mjs` stamps the artifact with the revision it was built from, through this file, and the comparison
+ * is between revisions. Three answers, each a different statement:
+ *   - stamped and equal to this tree      -> the artifact is a build of the revision above.
+ *   - stamped and different               -> named, with whether the build's revision is an ancestor of this
+ *                                            one (behind by N commits) or unrelated.
+ *   - stamped from a dirty tree           -> no revision describes it.
+ * An unstamped artifact predates the stamp; its mtime is then reported, as a heuristic. */
 const STAMP_SUFFIX = ".build.json";
 const stampPath = (artifact) => artifact + STAMP_SUFFIX;
 
-/* WRITTEN BY THE BUILD, THROUGH THE ONE PLACE THAT ANSWERS "what revision is this tree". `build.mjs` does not
-   re-derive the pair — it calls gateRevision() and writes what a gate would have computed, so the stamp and
-   the check are the same answer by construction rather than by two authors agreeing. */
-/* AND A REVISION IS NOT THE WHOLE IDENTITY: `assertRegime` IS THE AXIS THAT DECIDES WHAT AN ABSENT ABORT MEANS,
-   AND WITHOUT IT EVERY ASSERT-BASED READING OF THIS ARTIFACT IS UNSCORABLE. `-DAPICLIENT_DEV=0` compiles every
-   DCHECK and DFAIL out, so a release artifact's silence is TOTAL: "no abort fired" is the CONFIRMING reading
-   for every assert-based prediction ever made against it, at any depth. CLAUDE.md's cure for an absent crash
-   — pair the absence with a reachability witness — does not reach that, because the path WAS taken and the
-   check was simply not in the program, so a reader who does everything that rule asks gets a scored-looking
-   pass out of a binary that could not have failed. A stamp carrying `head`, `branch`, an empty `dirty` and an
-   `at` states four true facts and leaves that reader unable to say whether the thing they are about could have
-   failed at all.
-   IT IS REQUIRED AT THE CALL SITE AND NEVER DEFAULTED, for the reason engine/build.mjs's `nativeProgram` gives
-   about the same two words: the value a silent caller would take is the one whose silence this field exists to
-   distrust. A build that cannot state the regime does not get to write a stamp.
-   AND IT IS A FACT ABOUT THE ARTIFACT AND NOT ABOUT THE RUN, WHICH THIS BUILD ALREADY PROVES: `node
-   engine/build.mjs release` links a DEV=0 wasm and compiles its native verdict host at DEV=1 in the same
-   invocation, and build.mjs says so at that call. So the caller reads the word back out of the flag list that
-   compiled THIS artifact rather than off argv, and two artifacts of one run carry two answers.
-   A STAMP WRITTEN BEFORE THIS FIELD CARRIES NO `assertRegime`, AND NOTHING DEFAULTS IT. An absent field is a
-   question a reader cannot ask wrongly; a defaulted one is the plausible datum §Offensive-programming names,
-   arriving in the one record that exists to say which program a number belongs to. testing/artifact_stamp.js
-   classifies the absence as a third state and takes the same arm for it as for `release`. */
-/* `environment` is the artifact's answers to the questions ECMAScript and ECMA-402 leave to the implementation: the
-   default locale and system time zone it pins, and the Intl host whose data answers the rest, as build.mjs's
-   intlEnvironment reads them. */
+/* Written by the build through `gateRevision`, so the stamp and a gate's check are the same answer.
+   `assertRegime` is part of the identity: `-DAPICLIENT_DEV=0` compiles every DCHECK and DFAIL out, so a
+   release artifact's absent abort confirms nothing, and a reader must be able to tell which it holds. It is
+   required at the call site and never defaulted. It is a fact about the artifact and not the run: one
+   `node engine/build.mjs release` links a DEV=0 wasm and compiles its native verdict host at DEV=1, so the
+   caller reads the word from the flag list that compiled this artifact. A stamp written before the field
+   carries none, and testing/artifact_stamp.js takes the `release` arm for that absence.
+   `environment` is the artifact's answers to the questions ECMAScript and ECMA-402 leave to the
+   implementation: the default locale and system time zone it pins, and the Intl host whose data answers the
+   rest, as build.mjs's intlEnvironment reads them. */
 export function stampArtifact(artifact, cone, assertRegime, environment) {
   if (!environment || typeof environment.systemTimeZone !== "string" ||
       typeof environment.defaultLocale !== "string" || !environment.intlHost ||
@@ -449,34 +240,19 @@ export function stampArtifact(artifact, cone, assertRegime, environment) {
                     `describes an artifact whose silence means nothing, and every driver reading it would ` +
                     `file an absent abort as a scored absence.`);
   const rev = gateRevision(cone);
-  /* NAMED RESIDUAL — THIS RECORD NAMES A REVISION AND NOT THE BYTES, SO THE PAIRING IT ASSERTS IS UNFALSIFIABLE
-     BY WHOEVER READS IT. The stamp is a separate FILE from the artifact, so any copy, install or partial write
-     can leave one newer than the other, and nothing in either file binds the two: a reader holding `head <sha>,
-     clean cone` has a true statement about a TREE and no way to establish that THESE bytes are what that tree
-     produced.
-     WHAT IS NOT COVERED: every consumer of this record, both callers included. The nearest thing to a binding
-     today is an MTIME comparison in testing/artifact_stamp.js, which belongs to one caller rather than to the
-     artifact and which answers "the stamp is not older than the artifact" — a different and weaker question than
-     "the stamp describes these bytes".
-     WHAT THE NEXT DIFF BUILDS: a digest of the artifact's own bytes in this record, and the decision it has to
-     make first is what "the artifact" IS. The wasm is a PAIR — `qjs.mjs` and the `qjs.wasm` beside it, which is
-     where the program actually is — while the native link is one file, so a single field digesting `artifact`
-     alone would answer for the whole native program and for HALF the wasm one, which is one field serving two
-     shapes. It is not landed with the native stamp because the mtime comparison would then be a second and
-     weaker pairing mechanism standing beside it, in a file that diff does not touch, and
-     §A-superseded-system-is-DELETED wants the two to move together.
-     HOW ITS ABSENCE WOULD SHOW: a driver reporting a revision for bytes some other build produced — a stamp and
-     an artifact copied or installed apart, every field of the record true, the pair wrong, and no reader able to
-     say so from the two files alone. */
+  /* Named residual: not covered — the stamp names a revision and not the bytes. It is a separate file from
+     the artifact, so a copy, install or partial write can leave one newer than the other, and no consumer
+     can establish that these bytes are what that tree produced; testing/artifact_stamp.js's mtime comparison
+     answers only "the stamp is not older than the artifact". Next diff — a digest of the artifact's own bytes
+     in this record, after deciding what the artifact is: the wasm is a pair (`qjs.mjs` and `qjs.wasm`) while
+     the native link is one file, and the mtime comparison is deleted in the same diff. Absence shows as — a
+     driver reporting a revision for bytes some other build produced: a stamp and an artifact copied or
+     installed apart, every field of the record true and the pair wrong. */
   writeFileSync(stampPath(artifact), JSON.stringify(
-    /* `unasked` IS STAMPED BESIDE `dirty` FOR THE SAME REASON THE VERDICT PRINTS THEM APART. A build whose
-       tree could not be asked has an empty `dirty`, and a later reader comparing only that field would read
-       the artifact as built from a clean revision — the strongest claim this file can make, derived from the
-       one state in which it knows nothing. */
-    /* THE STAMP IS THIS RECORD, SO THE RETIRED PAIR LEAVES HERE TOO — see REVISION_FIELDS for why it is
-       removed rather than left holding a tree hash. A stamp written before this diff carries `qjsHead`, and
-       readers treat its PRESENCE as dating the artifact to before the subtree merge rather than as a field to
-       compare; nothing defaults it, because an absent field is a question that cannot be asked wrongly. */
+    /* `unasked` is stamped beside `dirty`: a build whose tree could not be asked has an empty `dirty`, which
+       alone would read as a clean revision. */
+    /* A stamp written while `engine/qjs` was a submodule carries `qjsHead`; readers treat its presence as
+       dating the artifact and compare nothing with it. */
     { head: rev.head, branch: rev.branch, assertRegime, environment,
       dirty: rev.dirty, unasked: rev.unasked, cone, at: new Date().toISOString() }, null, 1));
   return rev;
@@ -487,69 +263,42 @@ function readStamp(artifact) {
   catch { return null; }
 }
 
-/* HOW FAR BEHIND, and in which direction. `--is-ancestor` is the question that separates "this build is six
-   commits old" from "this build is off a branch that is not in this history at all", and the two need
-   different responses from whoever reads the line. A repository that cannot answer keeps the failure. */
+/* How far behind, and in which direction: `--is-ancestor` separates a build some commits old from a build
+   off a branch that is not in this history. A repository that cannot answer keeps the failure. */
 function behindBy(oldSha, newSha) {
   if (!oldSha || !newSha || oldSha.startsWith("<") || newSha.startsWith("<")) return null;
   if (oldSha === newSha) return { same: true };
-  /* A COMMIT THIS REPOSITORY DOES NOT HAVE IS NOT A COMMIT ON ANOTHER BRANCH, and `--is-ancestor` answers
-     both with the same non-zero status. Reporting them alike is §Testing's own defect — the test262 kill that
-     named "segfault/abort/timeout" through one message and distinguished none of them — so the resolvability
-     is asked FIRST and separately. An unresolvable stamp means the artifact was built from a tree this
-     checkout has never fetched (a stale clone, a dropped branch, a corrupt stamp), and the remedy is to fetch
-     or rebuild; a resolvable non-ancestor means a real divergence, and the remedy is to find out whose. */
+  /* A commit this repository does not have and a commit on another branch both fail `--is-ancestor`, so
+     resolvability is asked first. An unresolvable stamp was built from a tree this checkout never fetched. */
   if (ask(ROOT, "rev-parse", "--verify", "--quiet", oldSha + "^{commit}").startsWith("<"))
     return { unresolvable: true };
   const r = spawnSync("git", ["merge-base", "--is-ancestor", oldSha, newSha], { cwd: ROOT, encoding: "utf8" });
   if (r.error) return { unknown: String(r.error.message || r.error) };
   if (r.status !== 0) return { unrelated: true };
-  /* `--first-parent`, AND THE SUBTREE MERGE IS WHY. `rev-list --count A..B` counts every commit reachable
-     from B and not from A, and the merge made the whole absorbed quickjs fork reachable — so an artifact
-     three days old began reporting as thousands of commits behind, with nothing saying that nearly all of
-     them are engine history this repository swallowed in one act rather than superproject commits anybody
-     made. MEASURED at 32d133cd against the installed stamp's 0a04ed49: 2356 without the flag and 43 with it,
-     a 55x inflation of the one number a reader uses to decide whether a build is worth rebuilding. Following
-     first parents counts the superproject's own line, which is the line a stamp's `head` is always on because
-     `build.mjs` reads it from ROOT — and `--is-ancestor` above has already established that it IS on it. */
+  /* `--first-parent` counts this repository's own line. The subtree merge made the absorbed quickjs history
+     reachable, which `rev-list --count A..B` would otherwise count; a stamp's `head` is on the first-parent
+     line because `build.mjs` reads it from ROOT. */
   return { behind: ask(ROOT, "rev-list", "--count", "--first-parent", oldSha + ".." + newSha) };
 }
 
-/* THE MTIME FALLBACK, kept ONLY for an artifact with no stamp. Unchanged in what it computes and changed in
- * what it claims: its caller reports it as a heuristic, never as the identity. */
+/* The mtime fallback, for an artifact with no stamp. Its caller reports it as a heuristic. */
 function stalerThan(artifact, cone) {
   let art;
   try { art = statSync(artifact).mtimeMs; }
   catch (e) { return { missing: String(e.message || e) }; }
-  /* THE SAME CONE THE REVISION IS ABOUT, and it is passed in rather than guessed for the reason the revision's
-     own cone is: the two answers must be about ONE set of files, or "clean at HEAD" and "newer than the build"
-     are statements about two different programs printed as if they were about one. */
-  /* ONE ASK OVER THE WHOLE CONE. It used to be two — the cone minus `engine/qjs` asked of this repository,
-     and `engine/qjs` asked of the submodule with its answers re-prefixed — and the split existed only because
-     `git ls-files` cannot see inside a gitlink. There is no gitlink, so there is no split and no prefix. */
+  /* The same cone the revision is about, so "clean at HEAD" and "newer than the build" are about one set of
+     files. */
   const asks = [[ROOT, "", cone]];
-  /* THE COUNT IS THE VERDICT AND THE NEWEST FILE IS THE EVIDENCE — the 445 names between them are not a work
-     queue, and printing them would be. This is NOT the truncation §Testing forbids: an unreadable corpus file
-     is its own diagnosis, so that list IS the work, whereas every entry here has the identical single remedy
-     (`node engine/build.mjs`) and the count is EXACT rather than clipped. A gate whose own report is buried
-     under four hundred lines is the "one number in which encoding answers three quarters of a million
-     subtests" failure wearing a different hat. */
+  /* The count is the verdict and the newest file is the evidence; the names are not printed, since every
+     entry has the same remedy (`node engine/build.mjs`) and the count is exact. */
   let count = 0, newest = null, newest_at = art, broke = null;
   for (const [cwd, prefix, paths] of asks) {
     if (!paths.length) continue;
     const listed = ask(cwd, "ls-files", "--", ...paths);
     if (listed.startsWith("<git ")) { broke = listed; continue; }
     for (const rel of listed.split("\n").filter(Boolean)) {
-      /* THE CORPUS SKIP THAT STOOD HERE IS RETIRED BY THE WALK RATHER THAN BY A DECISION, AND ITS ARGUMENT IS
-         KEPT BECAUSE IT IS STILL THE REASON THE ANSWER IS RIGHT. It read: the corpora are not sources,
-         `engine/qjs/test262` is a checkout this gate's program is not built from, and a corpus re-materialized
-         this morning would otherwise report every artifact in the tree as stale — a diagnostic that always says
-         yes is the same as one that never fires. All of that holds. What changed is that it can no longer
-         FIRE: the skip matched a submodule-relative `test262/…`, and this walk now asks THIS repository, where
-         `git ls-files` stops at the `engine/qjs/test262` gitlink and lists nothing beneath it (measured at
-         de7485b6: 185 paths under `engine/qjs`, 0 of them under `test262/`). The gitlink entry itself has no
-         extension and the filter below drops it. A check that cannot fire is not a cheap safeguard, it is a
-         reader's belief that a case is handled, so it goes and its reason stays. */
+      /* `git ls-files` stops at the `engine/qjs/test262` gitlink, so the corpus is not walked; the gitlink
+         entry has no extension and the filter below drops it. */
       if (!/\.(c|h|mjs|js|json)$/.test(rel)) continue;
       let m;
       try { m = statSync(join(cwd, rel)).mtimeMs; } catch { continue; }
@@ -562,41 +311,10 @@ function stalerThan(artifact, cone) {
            newest_at: newest ? new Date(newest_at).toISOString() : null, broke };
 }
 
-/* THE REVISION THIS RUN'S NUMBERS BELONG TO.
- *
- * `cone` is the set of SUPERPROJECT-RELATIVE paths the calling gate compiles or reads. Pass what the gate's
- * own source list is built from — not the whole tree, which would report another agent's popup edit as a
- * reason to distrust a JS-engine number, and not a hand-written subset of it either.
- *
- * `engine/qjs` in the cone is what asks the submodule about ITSELF: the superproject can only say "the
- * submodule differs", and which of its files differ is a question only the submodule can answer.
- *
- * `artifact` is the PREBUILT program a non-building gate runs, or null for a gate that links its own. */
-/* THE RECORD'S SHAPE IS ASSERTED WHERE IT IS BUILT, WHICH IS THE ONLY PLACE THE ANSWER IS. §Offensive
-   programming: a consumer never defaults a producer's field, it asserts the field's presence — and the assert
-   goes at the ORIGIN, because the reader is a hundred lines away and its `.length` names the symptom rather
-   than the producer. The list is exactly what `revisionLines` and `revisionMoved` read, so a field added to the
-   record without being added here is a field nothing states a contract about, and a field the record stops
-   carrying crashes HERE with its own name in the message instead of there with none. */
-/* `qjsPinned` AND `qjsHead` ARE GONE FROM THIS CONTRACT, AND THE PAIR IS THE FINDING RATHER THAN A FIELD TO
-   MAINTAIN. They were the submodule's CHECKED-OUT commit and the commit the superproject PINNED, and their
-   entire purpose was the one state where those disagree. Ask what value of the program makes them disagree
-   now: `<sha>:engine/qjs` names a TREE, and the other half could only be answered by a repository at
-   `engine/qjs` that no longer exists — so there is no disagreement to catch, and a check whose two sides
-   cannot disagree is a NON-check that certifies what it never examined.
-   THE FACT THEY CARRIED IS NOT LOST, IT MOVED TO WHERE EVERY OTHER PATH'S VERSION OF IT ALREADY LIVED: "is the
-   engine source on disk the source this commit records" is `dirty` over `engine/qjs`, which the cone names and
-   the one `git status` above answers. Two entries in `cone` remain two DISJOINT populations — measured at
-   de7485b6, `ls-tree -r -- engine/host engine/qjs` gives 1023 paths and 1023 unique, with 0 path under both
-   prefixes — so nothing counts the engine twice.
-   THEY ARE REMOVED RATHER THAN LEFT HOLDING THE TREE SHA, and that choice is the load-bearing one. The stamp
-   this record is written into is what a lane reads to decide which revision a measurement belongs to, and a
-   TREE hash sitting in a field every reader spells as a commit fails `git grep`/`merge-base --is-ancestor` in
-   the direction that reads as "the row did not exist" rather than as "I asked a malformed question" — a
-   coordinate that means the opposite of how it reads, in the one artifact that exists to prevent exactly that.
-   An ABSENT field is a question a reader cannot ask wrongly. Every consumer moved in the same commit, because
-   the retired argument was written down in six places and the one in engine/renderer_host_gate.mjs was a hard
-   `fail()` on the field's absence. */
+/* The record's shape, asserted where it is built. The list is what `revisionLines` and `revisionMoved` read,
+   so a field the record stops carrying fails here with its name. The record carries one commit and no
+   separate engine sha: a tree hash in a field readers spell as a commit would fail `merge-base` as if the
+   commit did not exist. */
 const REVISION_FIELDS = {
   head: "string", branch: "string",
   dirty: "array", unasked: "array", dangling: "array", unaudited: "array", cone: "array",
@@ -616,55 +334,28 @@ function checkedRevision(rev) {
   return rev;
 }
 
+/* The revision this run's numbers belong to. `cone` is the set of repository-relative paths the calling gate
+   compiles or reads: what its own source list is built from, not the whole tree and not a hand-written
+   subset. `artifact` is the prebuilt program a non-building gate runs, or null for a gate that links its
+   own. */
 export function gateRevision(cone, artifact = null) {
-  /* ONE `git status` OVER THE WHOLE CONE, because `engine/qjs` is an ordinary path in it. The filter-and-
-     re-ask that stood here asked this repository about the cone MINUS the engine and the submodule about
-     itself, then re-labelled the second answer — three moving parts to express one question that one pathspec
-     now answers. MEASURED at de7485b6: `git status --porcelain -- engine/qjs` is 0 lines on a clean tree, so
-     folding it in does not manufacture a dirty cone; and a `engine/qjs/test262` gitlink that DOES drift shows
-     up here as one line, which is the honest answer — the corpus differing from what this revision records is
-     a real difference, and only the MTIME walk above had a reason to skip it.
-     AND THE PREDICATE THAT SELECTED THE RETIRED HALF IS GONE WITH IT. `const wantsQjs = cone.includes(QJS_PATH)`
-     outlived the filter-and-re-ask it gated: it decided whether the SUBMODULE was asked about itself, and once
-     `engine/qjs` became ordinary tracked content there was no second question for it to select. It was a write
-     with no reader in the machinery every stamp's honesty rests on, and unreachable by construction rather than
-     merely ungreppable — a local `const` in a function whose returned record does not carry it, so no seam of
-     any spelling could have read it. Deleting a dead path is a behaviour change owed the same scrutiny as
-     writing one, so: had it run, it would have selected a re-ask of a path that is no longer a gitlink, which is
-     the three-moving-parts mechanism the paragraph above records as deleted. `QJS_PATH` itself STAYS — it has
-     three other readers, in the ls-tree audit and in two diagnostics.
-     THE ONE GITLINK LEFT UNDER THE CONE IS `engine/qjs/test262`, AND IT NEEDS NO PREDICATE, which is the reason
-     this note exists rather than only the deletion: a reader who sees a gitlink inside `engine/qjs` will
-     re-derive exactly this flag for it. The single pathspec already reports its drift as one line, which the
-     paragraph above states is the honest answer.
-     ITS ORIGIN IS NOT ESTABLISHABLE FROM THIS CHECKOUT and that is the finding rather than a gap in the
-     reading: the repository is shallow, and `git log -S wantsQjs -- engine/gate_revision.mjs` answers a commit
-     that is ITSELF one of the two entries in `.git/shallow`, with a subject about a CSS box-generation entry. A
-     pickaxe at a graft boundary reports every pre-existing line as introduced by the graft. The purpose above is
-     read off this file's own CONTENT, never off its ancestry.
-     RETIREMENT: this note goes when `git status --porcelain -- engine/qjs` can no longer answer about a gitlink
-     at all, because the question a reader would re-derive the flag for has then stopped existing. */
+  /* One `git status` over the whole cone. A drifted `engine/qjs/test262` gitlink shows as one line, which is
+     a real difference from what the revision records and needs no predicate of its own. */
   const dirty = dirtyIn(ROOT, cone);
   const stamp = artifact ? readStamp(artifact) : null;
   return checkedRevision({
     head: ask(ROOT, "rev-parse", "HEAD"),
     branch: ask(ROOT, "rev-parse", "--abbrev-ref", "HEAD"),
     dirty: dirty.lines,
-    /* THE QUESTION THAT COULD NOT BE PUT, carried beside the answer and never folded into it. A reader must be
-       able to tell "this cone differs from its revision" from "this gate does not know whether it does", and
-       only the first of those is a statement about the tree. */
+    /* The question that could not be put, carried beside the answer: "this cone differs from its revision"
+       and "this gate does not know" are different statements. */
     unasked: dirty.unasked,
     artifact,
-    /* THE STAMP IS THE ANSWER AND THE MTIME IS THE FALLBACK — asked in that order, and only ONE of the two is
-       ever carried, so a reader cannot mistake which kind of answer arrived. */
+    /* The stamp is the answer and the mtime is the fallback; only one of the two is carried. */
     stamp,
     stale: artifact && !stamp ? stalerThan(artifact, cone) : null,
-    /* ASKED OF HEAD, not of the working tree, and asked whenever the host is in the cone — a gate that links
-       only quickjs sources cannot be broken by a host include, and reporting one at it would be the same
-       category error as reporting a popup edit at a JS-engine number. */
-    /* TWO FIELDS, NEVER ONE: an audit that could not RUN is not an audit that found a broken include.
-       See danglingIncludes — collapsing them published "THIS REVISION DOES NOT COMPILE" over revisions
-       that build and link. A cone without engine/host asks neither question, so both are empty. */
+    /* Asked of HEAD whenever the host is in the cone; a gate that links only quickjs sources cannot be broken
+       by a host include. Two fields: an audit that could not run is not one that found a broken include. */
     ...(cone.includes("engine/host") ? danglingIncludes("HEAD") : { dangling: [], unaudited: [] }),
     cone,
   });
@@ -672,41 +363,21 @@ export function gateRevision(cone, artifact = null) {
 
 const short = (h) => (h && !h.startsWith("<") ? h.slice(0, 8) : h);
 
-/* THE LINES A GATE PRINTS. Every one carries the `[rev]` tag for the reason the atom census's rows carry
-   theirs: a driver collecting this out of a mixed stream filters by line, so a header with indented rows under
-   it is a report whose rows are invisible to whatever quotes it. Returned rather than printed so a gate can
-   emit the same block at its start and again inside its summary — the tail is what gets pasted, and the tail
-   is exactly where the revision was missing. */
+/* The lines a gate prints. Each carries the `[rev]` tag, because a driver collecting them out of a mixed
+   stream filters by line. They are returned and not printed, so a gate can emit the block at its start and
+   again in its summary, which is the part that gets pasted. */
 export function revisionLines(rev) {
   const out = [];
-  /* ONE COMMIT NAMES THE WHOLE PROGRAM NOW. This line used to carry `qjs <sha>` beside the engine's, and the
-     two blocks that stood under it — THE SUBMODULE'S IDENTITY COULD NOT BE ASKED and THE SUBMODULE IS NOT THE
-     ONE THIS COMMIT RECORDS — are retired with the pair they compared. Their argument is kept at
-     REVISION_FIELDS, where the removal is: they were the only readers of a fact that no longer has two sides.
-     The SECOND of them was the loudest line in this file, and it is worth saying what killed it rather than
-     just that it is gone: it fired when the checked-out submodule differed from the pinned one, and the
-     subtree merge means the engine's bytes ARE this commit's bytes — a difference between them is an edit, and
-     an edit is what `dirty` reports two branches down, for `engine/qjs` exactly as for `engine/host`. */
+  /* One commit names the whole program. */
   out.push(`[rev] engine ${short(rev.head)} (${rev.branch})`);
-  /* THE ORDER IS THE POINT: a gate that could not ask has no dirty finding to report, and printing the CLEAN
-     line for it would be the original defect inverted — an unasked question answered in the reassuring
-     direction instead of the alarming one. Both directions are the same error, so neither branch may run. */
+  /* Order matters: a gate that could not ask has neither a dirty finding nor a clean one to report. */
   if (rev.unasked.length) {
     out.push(`[rev] THE CONE'S STATE COULD NOT BE ASKED — git did not answer for ${rev.unasked.length} of the ` +
              `paths below, so this gate does not know whether the sources it compiled match the revision ` +
              `above. That is NOT a finding that they differ and NOT a finding that they agree: the number ` +
              `below is unattributable either way until the ask succeeds.`);
     for (const l of rev.unasked) out.push(`[rev]   ${l}`);
-    /* THE HINT NAMES THE CAUSES IT KNOWS AND CLAIMS NEITHER, because the reason is in the failure above and a
-       hint that asserts one cause reads as a diagnosis. There are two, and they need different halves of the
-       same remedy: a `git archive` export carries no `.git` at all, and a `git clone --shared` snapshot carries
-       one for the superproject only until the submodule is cloned too — the second half of the recipe below,
-       which is the half that gets skipped. */
-    /* THE SECOND HALF OF THIS HINT WAS AN INSTRUCTION THAT COULD ONLY FAIL. It used to say to freeze with
-       repositories on BOTH halves and to clone `<rev>:engine/qjs` — which names a TREE, and a tree cannot be
-       cloned. A remedy a reader cannot carry out is worse than none: they run it, git refuses, and the
-       conclusion available is that the tree is broken rather than that the advice is. One clone populates
-       everything this gate compiles now; `engine/frozen_snapshot.sh` is that recipe and is the thing to run. */
+    /* The hint names the cause it knows without asserting it; the failure itself is printed above. */
     out.push(`[rev] a snapshot exported with \`git archive\` carries no \`.git\` at all, so the one arrangement ` +
              `whose cone is guaranteed clean reports as unknown. Freeze with a repository — ` +
              `\`git clone --shared <root> <dir> && git -C <dir> checkout --detach <rev>\`, which populates ` +
@@ -719,16 +390,11 @@ export function revisionLines(rev) {
              `checkout --detach <rev>\`, or \`engine/frozen_snapshot.sh\`.`);
     for (const l of rev.dirty) out.push(`[rev]   ${l}`);
   } else {
-    /* A POSITIVE STATEMENT, not an absence. "Clean" is the finding that makes the head above quotable, and a
-       reader who sees nothing here cannot tell it from a gate that forgot to ask. */
+    /* A positive statement: "clean" is the finding that makes the head above quotable. */
     out.push(`[rev] the compiled cone (${rev.cone.join(", ")}) is CLEAN at that revision — this number is ` +
              `quotable against it`);
   }
-  /* THE PROGRAM, WHEN IT IS NOT THE ONE THIS RUN LINKED. Reported after the revision and never instead of it:
-     both facts are needed, because a clean tree in front of a six-commit-old artifact is the most misleading
-     pair there is — every line above says "quotable" about a program that is not the one that ran. */
-  /* BEFORE THE ARTIFACT, because this one says the revision named above cannot be COMPILED at all, which
-     makes every statement under it about a program that cannot exist. */
+  /* Before the artifact: this says the revision named above cannot be compiled at all. */
   if (rev.dangling.length) {
     out.push(`[rev] THIS REVISION DOES NOT COMPILE — ${rev.dangling.length} include(s) below name a file no ` +
              `commit provides, so the tree as published cannot be built by anyone who checks it out. The usual ` +
@@ -736,44 +402,35 @@ export function revisionLines(rev) {
              `index is shared, so stage and commit as ONE uninterrupted operation).`);
     for (const l of rev.dangling) out.push(`[rev]   ${l}`);
   }
-  /* THE OTHER HALF OF THE SAME QUESTION, AND IT MUST NOT WEAR THE VERDICT ABOVE. This says the audit could not
-     be PUT, which licenses nothing about whether the revision compiles — it is the `unasked` half of `dirtyIn`
-     one function over, and the sentence this file's own header states: a run that could not ask and a run that
-     asked and got an answer must not read alike. It prints AFTER the verdict because it is not one. */
+  /* The audit could not be put, which says nothing about whether the revision compiles. It prints after the
+     verdict because it is not one. */
   if (rev.unaudited.length) {
     out.push(`[rev] THE DANGLING-INCLUDE AUDIT DID NOT RUN — the build could not be asked which include roots ` +
              `it hands the compiler, so NOTHING here says whether this revision compiles. It is not a finding ` +
              `about the tree; the reason is below and is usually a snapshot missing engine/.work/emsdk.`);
     for (const l of rev.unaudited) out.push(`[rev]   ${l}`);
   }
+  /* The artifact, when it is not the program this run linked. Reported after the revision and never instead
+     of it: a clean tree in front of an older artifact would otherwise read as quotable. */
   if (rev.stamp) {
     const s = rev.stamp;
     if (s.unasked && s.unasked.length) {
-      /* THE STAMP'S OWN UNKNOWN, ASKED FIRST for the same reason the tree's is: a build whose tree could not
-         be asked stamped an EMPTY `dirty`, so every branch below would read it as the clean case and compare
-         revisions that were never established. An artifact stamped before this field existed has no `unasked`
-         key at all, which is the ordinary case and correctly falls through — absence here is age, not a
-         negative answer, and it is the `dirty` comparison below that then carries the weaker claim. */
+      /* The stamp's own unknown, asked first: a build whose tree could not be asked stamped an empty `dirty`.
+         A stamp from before the field has no `unasked` key and falls through. */
       out.push(`[rev] THE ARTIFACT'S TREE COULD NOT BE ASKED WHEN IT WAS BUILT — ${rev.artifact} was stamped ` +
                `${s.at} at ${short(s.head)} with ${s.unasked.length} unanswered ask(s), so whether it was ` +
                `built from a clean revision was never established and the head it names is unconfirmed.`);
       for (const l of s.unasked) out.push(`[rev]   built-with ${l}`);
     } else if (s.dirty && s.dirty.length) {
-      /* THE STRONGEST OF THE THREE ANSWERS, and the only one no timestamp could ever give: the build was made
-         from a tree that no revision contains, so there is nothing to compare it TO. */
+      /* The build was made from a tree no revision contains, so there is nothing to compare it to. */
       out.push(`[rev] THE ARTIFACT WAS BUILT FROM A DIRTY TREE — ${rev.artifact} was stamped ${s.at} at ` +
                `${short(s.head)} with ${s.dirty.length} path(s) of its cone modified, so no revision describes ` +
                `the program this run measured. Rebuild from a frozen snapshot before quoting this number.`);
       for (const l of s.dirty) out.push(`[rev]   built-with ${l}`);
     } else {
       const eng = behindBy(s.head, rev.head);
-      /* A STAMP CARRYING `qjsHead` IS EVIDENCE OF ITS ERA AND IS NAMED RATHER THAN IGNORED. That field was the
-         submodule's checked-out commit; this record stopped producing it when `engine/qjs` stopped being a
-         submodule, so its PRESENCE dates the artifact to before the subtree merge exactly. Silently dropping
-         the read would have been the defaulted-field defect one level up — an old artifact reading as though
-         it simply had nothing to say about the engine, when what it has is a commit from a repository this one
-         has absorbed. `head` still determines that artifact's engine (the superproject commit pinned it), so
-         nothing is unknowable; only the era needs saying. */
+      /* A stamp carrying `qjsHead` was written while `engine/qjs` was a submodule; its presence dates the
+         artifact and is named. `head` still determines that artifact's engine, which the commit pinned. */
       const preSubtree = typeof s.qjsHead === "string" ? s.qjsHead : null;
       if (eng && eng.same) {
         out.push(`[rev] the artifact ${rev.artifact} was BUILT FROM THIS REVISION (stamped ${s.at}) — the ` +
@@ -798,9 +455,8 @@ export function revisionLines(rev) {
       }
     }
   } else if (rev.stale) {
-    /* NO STAMP: the artifact predates the stamping, so mtime is all there is — and it is reported AS a
-       heuristic, because in a frozen snapshot every file is newer than every artifact and the answer is
-       meaningless there. A reader must be able to tell this line from the stamped ones above. */
+    /* No stamp: mtime is all there is, and it is reported as a heuristic, since in a frozen snapshot every
+       file is newer than every artifact. */
     if (rev.stale.missing)
       out.push(`[rev] THE ARTIFACT THIS GATE RUNS IS NOT THERE — ${rev.artifact}: ${rev.stale.missing}`);
     else if (rev.stale.broke)
@@ -816,27 +472,18 @@ export function revisionLines(rev) {
   return out;
 }
 
-/* DID THE TREE MOVE UNDER THE RUN. Asked at the end against the identity taken at the start, the way
-   engine/wpt.mjs already asks it of the corpus: a shared checkout edited mid-run means the binary that was
-   linked and the tree that is on disk are two different programs, and the second one is what a reader will
-   `git show` when they go looking. Returns the description, or null when nothing moved — a POSITIVE null, read
-   by the caller as "did not move", never as a hole to fill. */
+/* Whether the tree moved under the run, asked at the end against the identity taken at the start: a shared
+   checkout edited mid-run means the linked program and the tree on disk differ. Returns the description, or
+   null when nothing moved. */
 export function revisionMoved(before) {
-  /* NO ARTIFACT ON THE RE-ASK, and deliberately: the question here is whether the SOURCES moved, and the
-     artifact cannot have been rebuilt by this run — a gate that runs a prebuilt program does not build one. */
+  /* No artifact on the re-ask: the question is whether the sources moved. */
   const now = gateRevision(before.cone);
   if (now.head !== before.head)
     return `the superproject HEAD changed under this run (${short(before.head)} → ${short(now.head)})`;
-  /* THE SUBMODULE-MOVED QUESTION THAT STOOD HERE IS ANSWERED BY THE TWO CHECKS AROUND IT NOW. It compared the
-     engine's checked-out commit at both ends of the run; `engine/qjs` is tracked content, so the engine moving
-     under a run is either a new HEAD (above) or an edit to the cone (below), and this would have been a third
-     reading of the same two facts. */
   if (now.dirty.join("\n") !== before.dirty.join("\n"))
     return "the compiled cone was edited under this run — the sources that were linked are not the sources " +
            "on disk now, so `git diff` will not show the program this number is about";
-  /* ASKED SEPARATELY, because a run that could ask at the start and not at the end learned something real —
-     the repository moved out from under it — and folding that into the `dirty` comparison would have made it
-     look like an edit, which is a different remedy. */
+  /* Asked separately: a run that could ask at the start and not at the end is not an edit. */
   if (now.unasked.join("\n") !== before.unasked.join("\n"))
     return "git answered about the compiled cone at one end of this run and not the other, so whether the " +
            "sources moved under it is now unknowable rather than merely unknown";
