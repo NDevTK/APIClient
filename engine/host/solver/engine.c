@@ -14811,10 +14811,10 @@ static long long g_host_turns;
 long long engine_host_turns(void) { return g_host_turns; }
 long long engine_gc_us(void) { return (long long)g_gc_us; }
 
-/* The collector work residency caused, in the instance's unit: the scoped collections a sale owes and the
-   whole-heap ones only RAM pressure owed (JS_GCOwe). It is the residency system's, never a flow's or the
-   instance's service, so a run that relocated nothing banks none of it and the same schedule otherwise. Lifetime.
-   engine_residency_work adds the host work residency spans re-derived (thread_work_residency_units). */
+/* The collector work residency caused, in the instance's unit: the scoped collections a sale owes, the whole-heap
+   ones only RAM pressure owed (JS_GCOwe), and a path collection's work past its price (engine_collect_slice). It is
+   never a flow's or the instance's service, so a run that relocated nothing has the same schedule and service.
+   Lifetime. engine_residency_work adds the host work residency spans re-derived (thread_work_residency_units). */
 static int64_t g_residency_work;
 /* The collector work this collector slice did, in the instance's unit and whoever's it is, kept across a host turn
    that interrupted the slice, which ends at the quantum on it. */
