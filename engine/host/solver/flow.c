@@ -2710,6 +2710,32 @@ void flow_sold_free(JSContext *ctx, FlowSold *s) {
     free(s);
 }
 
+void flow_stub_unwrite(JSContext *ctx, Flow *f) {
+    DCHECK(f != NULL && f->cold && f->sold != NULL && f->bulk_released && g_sale_of == NULL,
+           "a stub's bytes were given back on a member that is not a written stub, or inside a sale");
+    flow_rest_unlink(f);
+    flow_sold_free(ctx, f->sold); f->sold = NULL;
+    f->owed_gen = 0;   /* a stub its bytes left waits for its recipe, unmarked, as an unwritten one does */
+    cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
+    dom_base_release(f->dom_base); f->dom_base = NULL;
+    concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
+    /* and what flow_sale_end gives back for an unwritten stub, since a replay re-derives it */
+    source_cut_flow_cold(f);
+    flow_rows_release(f);
+    f->script_i = 0; f->last_compiled = -1; f->imm_at = -1; f->imm_next = 0; f->in_compile = 0;
+    frontier_rank_changed();
+}
+
+Flow *flow_sold_worst(void) {
+    Flow *worst = NULL;
+    double ww = 0.0;
+    for (Flow *m = g_rest_head; m; m = m->rest_next) {
+        double w = flow_weight(m);
+        if (!worst || w < ww) { worst = m; ww = w; }
+    }
+    return worst;
+}
+
 void flow_restore_end(Flow *f) {
     DCHECK(f != NULL && f->cold && f->sold == NULL && f->bulk_released && !f->ix_in && !flow_host_owed(f) &&
                f != g_running && g_sale_of == NULL,
@@ -2915,13 +2941,7 @@ void flow_release(JSContext *ctx, Flow *f) {
     /* A stub's register holds its stand-ins; the drop of a pair's last naming withdraws the request. */
     if (f->cold) pending_free(ctx, &f->pending);
     /* A written stub never picked: its bytes, and what it kept for its restore. */
-    if (f->cold && f->sold) {
-        flow_rest_unlink(f);
-        flow_sold_free(ctx, f->sold); f->sold = NULL;
-        cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
-        dom_base_release(f->dom_base); f->dom_base = NULL;
-        concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
-    }
+    if (f->cold && f->sold) flow_stub_unwrite(ctx, f);
     if (!f->bulk_released) {
         /* A paged flow is not a dropped one. Five things a released flow can still carry are work items on the one
            frontier: a parked continuation, the suspended frame (its whole heap-frame chain), replies the host still

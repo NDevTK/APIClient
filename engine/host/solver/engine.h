@@ -1299,7 +1299,7 @@ typedef struct {
     long host_terminated;    /* rendezvous ids withdrawn: Fetch §2 Infrastructure's terminate-a-fetch-controller */
     long paged_reqs;         /* synchronous requests a sale took with it */
     /* Whether the allocator's refusal edge reached the pager at all, which a zero `sold` cannot say:
-       `paged_over + paged_unarmed + paged_floor + paged_shed + paged_sales == paged_asks` and
+       `paged_over + paged_unarmed + paged_floor + paged_shed + paged_sales + sold_unwritten == paged_asks` and
        `paged_sales == sold`, asserted at engine_frontier_census. */
     long paged_asks;         /* times the allocator's refusal edge reached this engine (engine_reclaim_tail) */
     long paged_over;         /* …declined because the request exceeds the instance's whole limit */
@@ -1312,6 +1312,7 @@ typedef struct {
        the session's park because it ran unfunded, met a part with no writer, or holds a named reason. */
     long sold_restores, sold_waits_unfunded, sold_waits_gap, sold_waits_other;
     long restored;            /* written stubs a pick read back */
+    long sold_unwritten;      /* written stubs whose bytes the pager gave back at the floor */
     long sale_over_reserve;   /* funded sales whose allocations asked for more than the block they gave back */
     long sale_reserve_kib;    /* the sale reserve held now, 0 when the allocator refused it */
     long sale_need_max_kib;   /* the most one sale's allocations asked for (c_alloc.h's span) */

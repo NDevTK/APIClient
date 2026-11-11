@@ -111,6 +111,7 @@ METRIC(sold_waits_unfunded, "soldWaitsUnfunded", LIFETIME, "member", PROCESS, "s
 METRIC(sold_waits_gap, "soldWaitsGap", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 METRIC(sold_waits_other, "soldWaitsOther", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 METRIC(restored, "restored", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+METRIC(sold_unwritten, "soldUnwritten", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 METRIC(sale_over_reserve, "saleOverReserve", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 METRIC(sale_reserve_kib, "saleReserveKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
 METRIC(sale_need_max_kib, "saleNeedMaxKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)

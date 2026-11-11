@@ -2101,6 +2101,12 @@ void  flow_sale_end(Flow *f, JSValue stand_ins);
 void  flow_restore_end(Flow *f);
 /* Frees a written member's bytes and the graph's anchors. */
 void  flow_sold_free(JSContext *ctx, FlowSold *s);
+/* A written stub given back to its recipe: its bytes and what it kept for its restore (chain, DOM base, pin blob,
+   rows, snapshot references) are released, as a sale releases an unwritten stub's, and it waits unmarked for the
+   session's park. The bytes are re-derivable from the recipe the stub keeps. Not inside a sale, asserted. */
+void  flow_stub_unwrite(JSContext *ctx, Flow *f);
+/* The written stub of least weight, the one whose bytes the pager gives back first; NULL when none stands. */
+Flow *flow_sold_worst(void);
 int   flow_cold(const Flow *f);
 /* The stubs standing, and the stubs that have left the registry (flow_remove): every member ever sold is one or
    the other. */

@@ -12749,6 +12749,8 @@ static void engine_sale_reserve_retake(int funded) {
    back (a named reason). A member that waits returns next session by its recipe. `restored` counts the picks
    that read a written stub back. */
 static long g_sold_restores, g_sold_waits_unfunded, g_sold_waits_gap, g_sold_waits_other, g_restored;
+/* Written stubs whose bytes the pager gave back at the floor (flow_stub_unwrite), each then waiting for its recipe. */
+static long g_sold_unwritten;
 static void sale_tally(SaleTally **t, int *n, const char *name) {
     int k;
     for (k = 0; k < *n; k++) if (!strcmp((*t)[k].name, name)) break;
@@ -13015,6 +13017,17 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
         }
     }
     tail = flow_worst(g_reclaim_keep ? g_reclaim_keep : flow_running());
+    /* With no resident member left to sell, a written stub's bytes go before the floor: they are re-derivable
+       from the recipe the stub keeps, so giving them back loses no work a replay cannot redo. */
+    if (!tail) {
+        Flow *w = flow_sold_worst();
+
+        if (w) {
+            flow_stub_unwrite(g_sess_ctx, w);
+            g_sold_unwritten++;
+            return 1;
+        }
+    }
     if (!tail) {
         /* The floor, a reading rather than a failure: the frontier held nothing but the flow this allocation is
            for, so the allocator's NULL is the physical answer. Counted apart from the unarmed refusal because the
@@ -14948,6 +14961,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->sold_waits_gap = g_sold_waits_gap;
     out->sold_waits_other = g_sold_waits_other;
     out->restored = g_restored;
+    out->sold_unwritten = g_sold_unwritten;
     out->sale_over_reserve = g_sale_over_reserve;
     out->sale_reserve_kib = g_sale_reserve ? (long)(g_sale_reserve_bytes / 1024) : 0;
     out->sale_need_max_kib = (long)(g_sale_need_max / 1024);
@@ -15051,12 +15065,12 @@ void engine_frontier_census(EngineFrontierCensus *out)
        a sixth exit added without a counter. `asks` alone separates "the allocator never refused" from "the pager
        was consulted and could do nothing". A sale exit sells one flow, and a shed at the edge is one of the sheds
        `cuts_shed` counts. */
-    DCHECKF(out->paged_over + out->paged_unarmed + out->paged_floor + out->paged_shed + out->paged_sales ==
-                out->paged_asks,
+    DCHECKF(out->paged_over + out->paged_unarmed + out->paged_floor + out->paged_shed + out->paged_sales +
+                out->sold_unwritten == out->paged_asks,
             "the census's reclaim rows do not partition the allocator's asks (%ld past the limit + %ld unarmed + %ld "
-            "at the floor + %ld shed + %ld sales against %ld) — engine_reclaim_tail has five exits that each count "
-            "themselves", out->paged_over, out->paged_unarmed, out->paged_floor, out->paged_shed, out->paged_sales,
-            out->paged_asks);
+            "at the floor + %ld shed + %ld sales + %ld written stubs given back against %ld) — engine_reclaim_tail "
+            "has six exits that each count themselves", out->paged_over, out->paged_unarmed, out->paged_floor,
+            out->paged_shed, out->paged_sales, out->sold_unwritten, out->paged_asks);
     DCHECKF(out->paged_sales == out->sold,
             "the census counts %ld sale exits against %ld flows sold — engine_sale_release runs once per sale exit",
             out->paged_sales, out->sold);

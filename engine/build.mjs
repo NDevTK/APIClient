@@ -231,10 +231,12 @@ function replyDoorReading(b) {
 function retiredReading(c) {
   coldPartition(c, "finished", ["finishedFlows", "finishedCands"], "engine_frontier_census");
   coldPartition(c, "sold", ["soldFlows", "soldCands"], "engine_frontier_census");
-    /* The pager's own partition. engine_reclaim_tail leaves by five exits and each counts itself on the line it
+    /* The pager's own partition. engine_reclaim_tail leaves by six exits and each counts itself on the line it
      leaves by; a sale exit sells one member, so the sale exits are `sold`. */
-  coldPartition(c, "pagedAsks", ["pagedOver", "pagedUnarmed", "pagedFloor", "pagedShed", "pagedSales"],
-                "engine_frontier_census");
+  coldPartition(c, "pagedAsks", ["pagedOver", "pagedUnarmed", "pagedFloor", "pagedShed", "pagedSales",
+                                 "soldUnwritten"], "engine_frontier_census");
+  coldPartition(c, "sold", ["soldRestores", "soldWaitsUnfunded", "soldWaitsGap", "soldWaitsOther"],
+                "engine_sale_release");
   coldPartition(c, "sold", ["pagedSales"], "engine_frontier_census");
   return `retired: ${c.finished} (${c.finishedFlows} exploration flow(s), ` +
          `${c.finishedCands} @S candidate MEMBER(s))` +

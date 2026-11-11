@@ -1641,6 +1641,7 @@ char *result_cold_json(void) {
     METRIC_SET(sold_waits_gap, e.sold_waits_gap);
     METRIC_SET(sold_waits_other, e.sold_waits_other);
     METRIC_SET(restored, e.restored);
+    METRIC_SET(sold_unwritten, e.sold_unwritten);
     METRIC_SET(sale_over_reserve, e.sale_over_reserve);
     METRIC_SET(sale_reserve_kib, e.sale_reserve_kib);
     METRIC_SET(sale_need_max_kib, e.sale_need_max_kib);
