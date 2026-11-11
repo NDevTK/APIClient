@@ -21203,6 +21203,40 @@ static inline JSAtom cont_own_take_atom(JSAtom *s) { JSAtom a = *s; *s = JS_ATOM
      KIND_IMPLIES, CLONE_HOOK  no member: (kind, predicate on r) each walk asserts, or a copy's last step;
      VISITED   an embedded struct, `type` = (its type, its visit function), freed and taken by the step visitors.
    Each role defines one macro per walk; a role a walk does not define is a compile error at that walk. */
+
+/* A walk over a record's fields that is not one of its own (the flow graph's writer and reader): p_fields hands
+   each field to the operation for its role, in declaration order, and `other` a role with none, by name. The
+   requester link and the members that are not fields (KIND_IMPLIES, CLONE_HOOK's) are not handed; a CLONE_HOOK
+   is `other`, since a copy does more there than its fields say. */
+typedef struct ContRecFieldsVisit {
+    void (*val)(void *u, JSValue *slot);         /* OWN_VAL, each of OWN_ARRAY */
+    void (*borrow)(void *u, JSValue *slot);      /* BORROW, each of BORROW_ARRAY */
+    void (*atom)(void *u, JSAtom *slot);         /* OWN_ATOM */
+    void (*pod)(void *u, void *p, size_t n);     /* POD, KIND_FLAG */
+    void (*fresh)(void *u, JSValue *slot);       /* FRESH, each of FRESH_ARRAY */
+    void (*other)(void *u, const char *role);
+} ContRecFieldsVisit;
+#define CONT_REC_FIELDS_OWN_VAL(t, n)      v->val(u, CONT_OWN_SLOT(&r->n));
+#define CONT_REC_FIELDS_OWN_ATOM(t, n)     v->atom(u, CONT_OWN_ASLOT(&r->n));
+#define CONT_REC_FIELDS_POD(t, n)          v->pod(u, &r->n, sizeof r->n);
+#define CONT_REC_FIELDS_BORROW(t, n)       v->borrow(u, (JSValue *)&r->n);
+#define CONT_REC_FIELDS_OUTER(t, n)
+#define CONT_REC_FIELDS_DESC_OUT(t, n)     v->other(u, "DESC_OUT");
+#define CONT_REC_FIELDS_FACTS(t, n)        v->other(u, "FACTS");
+#define CONT_REC_FIELDS_PROPS(t, n)        v->other(u, "PROPS");
+#define CONT_REC_FIELDS_OWN_ARRAY(t, n)    for (int i_ = 0; i_ < (t); i_++) v->val(u, &r->n[i_]);
+#define CONT_REC_FIELDS_BORROW_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) v->borrow(u, &r->n[i_]);
+#define CONT_REC_FIELDS_OWN_VEC(t, n)      v->other(u, "OWN_VEC");
+#define CONT_REC_FIELDS_OWN_LIST(t, n)     v->other(u, "OWN_LIST");
+#define CONT_REC_FIELDS_VIEW(t, n)         v->other(u, "VIEW");
+#define CONT_REC_FIELDS_KIND_FLAG(t, n)    v->pod(u, &r->n, sizeof r->n);
+#define CONT_REC_FIELDS_KIND_IMPLIES(t, n)
+#define CONT_REC_FIELDS_CLONE_HOOK(t, n)   v->other(u, "CLONE_HOOK");
+#define CONT_REC_FIELDS_OWN_SUB(t, n)      v->other(u, "OWN_SUB");
+#define CONT_REC_FIELDS_FRESH(t, n)        v->fresh(u, &r->n);
+#define CONT_REC_FIELDS_FRESH_ARRAY(t, n)  for (int i_ = 0; i_ < (t); i_++) v->fresh(u, &r->n[i_]);
+#define CONT_REC_FIELDS_VISITED(t, n)      v->other(u, "VISITED");
+#define CONT_REC_FIELDS(role, t, n)        CONT_REC_FIELDS_##role(t, n)
 #define CONT_REC_MEMBER_OWN_VAL(t, n) const JSValue n;
 #define CONT_REC_MEMBER_OWN_ATOM(t, n) const JSAtom n;
 #define CONT_REC_MEMBER_POD(t, n) t n;
@@ -21542,6 +21576,11 @@ static inline JSAtom cont_own_take_atom(JSAtom *s) { JSAtom a = *s; *s = JS_ATOM
         void *o_ = p##_outer_get(r, &k_);                                                                      \
         p##_mark_fields(ctx, r);                                                                               \
         tramp_cont_mark(ctx, o_, k_);                                                                          \
+    }                                                                                                          \
+    static inline void p##_fields(T *r, const ContRecFieldsVisit *v, void *u)                                \
+    {                                                                                                          \
+        FIELDS(CONT_REC_FIELDS)                                                                                \
+        (void)r; (void)v; (void)u;                                                                             \
     }
 
 /* A keyed property operation whose accessor or trap is running on the chain. `target` is the proxy's
@@ -48412,6 +48451,58 @@ static JSValueConst fg_rborrow(FGReader *r)
     return v;
 }
 
+/* A declared record's fields (fg_links' fg_recw), read in the same order: an owned value takes the read's
+   reference, a borrowed one gives it back, since another holder the graph rebuilt keeps it. */
+static void fg_recr_val(void *u, JSValue *slot) { *slot = fg_rvalue(u); }
+static void fg_recr_borrow(void *u, JSValue *slot) {
+    FGReader *r = u;
+
+    *slot = fg_rvalue(r);
+    JS_FreeValue(r->ctx, *slot);
+}
+static void fg_recr_atom(void *u, JSAtom *slot) { *slot = fg_rkey(u); }
+static void fg_recr_pod(void *u, void *p, size_t n) { memcpy(p, fg_take(u, n), n); }
+static void fg_recr_fresh(void *u, JSValue *slot) { (void)u; *slot = JS_UNDEFINED; }
+static void fg_recr_other(void *u, const char *role) {
+    (void)u;
+    CHECK_FAIL("flow graph: a serialized record holds a field of a role this reader has no operation for");
+    (void)role;
+}
+static const ContRecFieldsVisit fg_recr = { fg_recr_val, fg_recr_borrow, fg_recr_atom, fg_recr_pod,
+                                            fg_recr_fresh, fg_recr_other };
+#define FG_REC_CASE_RFIELDS(k, T, p, role) case k: p##_init((T *)st); p##_fields((T *)st, &fg_recr, r); return st;
+static void *fg_rrec(FGReader *r, uint8_t kind)
+{
+    void *st;
+
+    CHECK(cont_kind_declared(kind), "flow graph: a serialized link names a kind that is no declared record's");
+    st = js_mallocz(r->ctx, cont_record_size(kind));
+    CHECK(st != NULL, "flow graph: OOM rebuilding a continuation record");
+    switch (kind) {
+    CONT_RECORD_KINDS(FG_REC_CASE_RFIELDS)
+    }
+    CHECK_FAIL("flow graph: a declared record kind has no case in the record reader");
+    return NULL;
+}
+
+/* The links a frame's continuation waits on (fg_links), rebuilt in order, each one's requester set to the next.
+   Returns the frame's own record, or NULL for a kind with none. */
+static void *fg_rlinks(FGReader *r, uint8_t kind)
+{
+    void *first = NULL, *prev = NULL;
+    uint8_t prev_kind = CONT_NONE;
+
+    while (kind != CONT_NONE && !cont_kind_recordless(kind)) {
+        void *st = fg_rrec(r, kind);
+
+        if (prev) cont_outer_set(prev, prev_kind, st, kind);
+        else first = st;
+        prev = st; prev_kind = kind;
+        kind = fg_r8(r);
+    }
+    return first;
+}
+
 /* A base's chain of heap frames (fg_chain_calls), rebuilt bottom-up onto the base `s` whose body is `cb` (NULL
    for a call root, whose realm the bottom frame names): each
    frame as do_tramp_call pushes it, its caller records taken from the frame below it, and the base dormant, its
@@ -48472,7 +48563,8 @@ static void fg_rchain_calls(FGReader *r, JSAsyncFunctionState *s, JSFunctionByte
         live = fg_r32(r);
         CHECK(JS_IsObject(sf->cur_func) && js_class_has_bytecode(JS_VALUE_GET_OBJ(sf->cur_func)->class_id)
                   && al <= UINT16_MAX && pc < (uint32_t)b->byte_code_len
-                  && (t->cont_kind == CONT_NONE || t->cont_kind == CONT_CONSTRUCT || cont_kind_recordless(t->cont_kind))
+                  && (t->cont_kind == CONT_NONE || cont_kind_declared(t->cont_kind)
+                      || cont_kind_recordless(t->cont_kind))
                   && (amode == 'o' ? al != 0 : al == 0 && (amode == 'n' || amode == 'b'))
                   && (amode != 'b' || cbuf + aoff + sf->arg_count <= cend),
               "flow graph: a heap frame's function, counts, continuation or arguments are not what an ordinary "
@@ -48499,19 +48591,11 @@ static void fg_rchain_calls(FGReader *r, JSAsyncFunctionState *s, JSFunctionByte
         sf->this_val = t->this_val;
         sf->prev_frame = csf;
         t->seq_req = NULL; t->seq_req_kind = CONT_NONE;
-        t->async_data = NULL; t->async_promise = JS_UNDEFINED; t->gen_data = NULL; t->cont_state = NULL;
-        if (t->cont_kind == CONT_CONSTRUCT) {
-            JSConstruct *cs = js_mallocz(ctx, sizeof *cs);
-
-            CHECK(cs != NULL, "flow graph: OOM rebuilding a constructor body's record");
-            js_construct_init(cs);
-            CONT_OWN_MOVE(&cs->created_obj, fg_rvalue(r));
-            CONT_OWN_MOVE(&cs->super_ref, fg_rvalue(r));
-            cs->from_super = fg_r8(r);
-            CHECK(JS_VALUE_GET_PTR(t->this_val) == JS_VALUE_GET_PTR(cs->created_obj),
-                  "flow graph: a rebuilt constructor body's receiver is not the object its record holds");
-            t->cont_state = cs;
-        }
+        t->async_data = NULL; t->async_promise = JS_UNDEFINED; t->gen_data = NULL;
+        t->cont_state = fg_rlinks(r, t->cont_kind);
+        CHECK(t->cont_kind != CONT_CONSTRUCT || JS_VALUE_GET_PTR(t->this_val) ==
+                                                    JS_VALUE_GET_PTR(((JSConstruct *)t->cont_state)->created_obj),
+              "flow graph: a rebuilt constructor body's receiver is not the object its record holds");
         t->up = below;
         t->caller_sf = csf; t->caller_b = cb; t->caller_ctx = realm;
         t->caller_local_buf = cbuf; t->caller_var_buf = csf->var_buf; t->caller_arg_buf = csf->arg_buf;
@@ -85079,16 +85163,68 @@ static void fg_frame_machine(FGWriter *w, JSStepHdr *h)
     }
 }
 
-/* Whether the continuation `st` of `kind` waiting on a frame is one the call writer writes with the frame: none,
-   a kind whose frame's own operands are the whole of it, or a bytecode constructor's body (CONT_CONSTRUCT) an
-   opcode asked for, whose record is its created object, its super reference and its entry shape.
-   Named residual. Not covered: a construct a machine requested (`outer` set: Reflect.construct, a species
-   construct), whose requester link names a step machine. Next diff builds: that link with the machine's
-   writer. Absence shows as: `cont CONSTRUCT` in the sale census's `waitsGapKinds`. */
-static bool fg_cont_written(uint8_t kind, const void *st)
+/* A declared record's fields all have an operation in the record writer (fg_rec): `other` marks one that has
+   none. */
+static void fg_rec_none(void *u, JSValue *slot) { (void)u; (void)slot; }
+static void fg_rec_none_atom(void *u, JSAtom *slot) { (void)u; (void)slot; }
+static void fg_rec_none_pod(void *u, void *p, size_t n) { (void)u; (void)p; (void)n; }
+static void fg_rec_other_seen(void *u, const char *role) { (void)role; *(bool *)u = false; }
+static const ContRecFieldsVisit fg_rec_check = { fg_rec_none, fg_rec_none, fg_rec_none_atom, fg_rec_none_pod,
+                                                 fg_rec_none, fg_rec_other_seen };
+#define FG_REC_CASE_FIELDS(k, T, p, role) case k: p##_fields((T *)st, v, u); return;
+static void fg_rec_fields(uint8_t kind, void *st, const ContRecFieldsVisit *v, void *u)
 {
-    return kind == CONT_NONE || cont_kind_recordless(kind)
-           || (kind == CONT_CONSTRUCT && ((const JSConstruct *)st)->outer == NULL);
+    switch (kind) {
+    CONT_RECORD_KINDS(FG_REC_CASE_FIELDS)
+    }
+    DCHECKF(false, "flow graph: continuation kind %d is no declared record's", (int)kind);
+}
+static bool fg_rec_writable(uint8_t kind, void *st)
+{
+    bool ok = true;
+
+    fg_rec_fields(kind, st, &fg_rec_check, &ok);
+    return ok;
+}
+
+/* Whether the continuation `st` of `kind` waiting on a frame is one the call writer writes with the frame: none,
+   a kind whose frame's own operands are the whole of it, or a declared record whose fields the record writer
+   has. The links it waits on are asked one by one (fg_frame_links). */
+static bool fg_cont_written(uint8_t kind, void *st)
+{
+    return kind == CONT_NONE || cont_kind_recordless(kind) || (cont_kind_declared(kind) && fg_rec_writable(kind, st));
+}
+
+/* A declared record's fields (p_fields) in declaration order: an owned or borrowed value, a key, plain bytes;
+   a fresh value is written as nothing, since a copy never shares it. */
+typedef struct { FGWriter *w; FGBuf *out; } FGRecOut;
+static void fg_recw_val(void *u, JSValue *slot) { FGRecOut *o = u; fg_value(o->w, o->out, *slot); }
+static void fg_recw_atom(void *u, JSAtom *slot) { FGRecOut *o = u; fg_key(o->w, o->out, *slot); }
+static void fg_recw_pod(void *u, void *p, size_t n) { FGRecOut *o = u; fg_put(o->out, p, n); }
+static void fg_recw_other(void *u, const char *role) {
+    (void)u;
+    DCHECKF(false, "flow graph: a strict write reached a record field of role %s, which has no writer", role);
+}
+static const ContRecFieldsVisit fg_recw = { fg_recw_val, fg_recw_val, fg_recw_atom, fg_recw_pod, fg_rec_none,
+                                            fg_recw_other };
+
+/* The records waiting from a frame's continuation outward, the chain fg_frame_links surveys: each link a
+   declared record's fields (fg_rec_fields), followed by the kind of the link it waits on, CONT_NONE ending it.
+   The frame's record states its own kind, and a recordless kind has no link. */
+static void fg_links(FGWriter *w, FGBuf *out, void *st, uint8_t kind)
+{
+    while (kind != CONT_NONE && !cont_kind_recordless(kind)) {
+        FGRecOut o = { w, out };
+        uint8_t next_kind;
+        void *next;
+
+        DCHECKF(st != NULL && cont_kind_declared(kind) && fg_rec_writable(kind, st),
+                "flow graph: a strict write reached continuation kind %d, which has no record writer", (int)kind);
+        fg_rec_fields(kind, st, &fg_recw, &o);
+        next = cont_outer_get(st, kind, &next_kind);
+        fg_u8(out, next_kind);
+        st = next; kind = next_kind;
+    }
 }
 
 /* The chain of records and machines waiting from `st` outward, each by its identity. The next link is the one
@@ -85176,9 +85312,10 @@ static bool fg_frame_call_written(const TrampFrame *t)
    owns_func, its continuation kind and for-of offset), its buffer's law (arg_allocated, callee_argc,
    local_slots, arg_count), the caller's argc and argument allocation, its flags (strict, constructor), where
    its arguments are (its own buffer, none, or an offset into its caller's), its program counter, its live
-   slots and its cells. The caller's stack position is the caller's live end, which the caller's record states,
-   and every other caller pointer is the caller's own frame, so neither is written; each is asserted here. A
-   frame whose caller is a call root (a step-root base) also names the caller's realm, which no body states. */
+   slots, its cells, and what its continuation waits on (fg_links). The caller's stack position is the caller's
+   live end, which the caller's record states, and every other caller pointer is the caller's own frame, so
+   neither is written; each is asserted here. A frame whose caller is a call root (a step-root base) also names
+   the caller's realm, which no body states. */
 static void fg_chain_calls(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s, uint32_t n)
 {
     TrampFrame **ts = fg_grow(NULL, sizeof *ts * n);
@@ -85252,16 +85389,10 @@ static void fg_chain_calls(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s, uin
         fg_u32(out, live);
         for (uint32_t k = 0; k < live; k++) fg_value(w, out, t->local_buf[k]);
         for (int k = 0; k < sf->var_ref_count; k++) fg_cell(w, out, sf->var_refs[k]);
-        if (t->cont_kind == CONT_CONSTRUCT) {   /* the record do_return applies the constructor rule from */
-            const JSConstruct *cs = t->cont_state;
-
-            DCHECK(cs->outer == NULL && JS_VALUE_GET_PTR(t->this_val) == JS_VALUE_GET_PTR(cs->created_obj),
-                   "flow graph: a written constructor body's record has a requester, or its frame's receiver is not "
-                   "the object the record holds");
-            fg_value(w, out, cs->created_obj);
-            fg_value(w, out, cs->super_ref);
-            fg_u8(out, cs->from_super);
-        }
+        DCHECK(t->cont_kind != CONT_CONSTRUCT ||
+                   JS_VALUE_GET_PTR(t->this_val) == JS_VALUE_GET_PTR(((const JSConstruct *)t->cont_state)->created_obj),
+               "flow graph: a constructor body's receiver is not the object its record holds");
+        fg_links(w, out, t->cont_state, t->cont_kind);
         csf = sf; cb = b; cbuf = t->local_buf; cend = end;
     }
     (free)(ts);
