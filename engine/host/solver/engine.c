@@ -14677,7 +14677,12 @@ static int engine_sched_slice(void) {
                 g_checkpoint_hook(ctx);
             /* The timer source's arrivals, at the first instant after the work that moved this flow's clock past an
                expiry and before the host can pay a reply between steps (core/timing/timer.h's timer_stamp_due). Any
-               step's end, inside a program too: the clock is the flow's work, not its units. */
+               step's end, inside a program too: the clock is the flow's work, not its units.
+               Named residual. Not covered: a task the step queues after its work passed an expiry is stamped
+               older than the timer, and where the step ended decides which tasks those are. Next diff builds: the
+               stamp taken before each mint of the running flow (flow_work_seq_next), the stamp's own mint guarded.
+               Absence shows as: a drained document's slice twins differing in their stand series where a page
+               queues a task in the step a timer falls due. */
             if (g_timer_stamp_hook && r != FLOW_STEP_DONE && r != FLOW_STEP_RETIRED)
                 g_timer_stamp_hook(ctx);
             /* …and how many timers the stepped flow's world holds now, for the census's timer holders. */
