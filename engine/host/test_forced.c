@@ -1575,6 +1575,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/absentarm.h"
 #include "fixture/envarm.h"
 #include "fixture/envtypes.h"
+#include "fixture/framerace.h"
 #include "fixture/storearm.h"
 #include "fixture/pagewrite.h"
 #include "fixture/keydomain.h"
@@ -2365,6 +2366,7 @@ TF_DOCS[] = {
     { "absentarm", HTML_ABSENTARM },
     { "envarm", HTML_ENVARM },
     { "envtypes", HTML_ENVTYPES },
+    { "framerace", HTML_FRAMERACE },
     { "storearm", HTML_STOREARM },
     { "pagewrite", HTML_PAGEWRITE },
     { "keydomain", HTML_KEYDOMAIN },
@@ -18822,6 +18824,35 @@ TF_UNIT void probes_envtypes(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `framerace` document (fixture/framerace.h): a frame ahead of the clock beside a reply in
+   flight runs in both orders against the reply's arrival. */
+TF_UNIT void probes_framerace(const char *js, Probe *tab, int *n) {
+    const char *raf_why = NULL; int raf_tt = 1;
+    const char *io_why = NULL; int io_tt = 1;
+    const int fr = param_undriven_count(js, "/api/fcorder", "v", "frame-reply");
+    const int rf = param_undriven_count(js, "/api/fcorder", "v", "reply-frame");
+
+    fold_row(&raf_tt, &raf_why, rf > 0,
+             "NOT REACHED: /api/fcorder has no `reply-frame` record, so the reply's reaction and the animation frame "
+             "callback did not both run in the arm where the reply arrives first");
+    fold_row(&raf_tt, &raf_why, fr > 0,
+             "the animation frame callback never ran ahead of the reply in flight: HTML §8.1.7.3 Processing model "
+             "determines a rendering opportunity from the display and the page, not from the network, so the frame "
+             "is raced against the arrival as a timer's deadline is");
+    fold_row(&raf_tt, &raf_why, fr + rf == param_undriven_count(js, "/api/fcorder", "v", NULL),
+             "/api/fcorder recorded an order that is neither `frame-reply` nor `reply-frame`");
+    fold_row(&io_tt, &io_why, param_undriven_count(js, "/api/fcobserved", "r", NULL) > 0,
+             "NOT REACHED: /api/fcobserved has no record, so the IntersectionObserver's callback never ran");
+    fold_row(&io_tt, &io_why, param_undriven_count(js, "/api/fcobserved", "r", "fcPending") > 0,
+             "the IntersectionObserver's callback never ran while the reply was in flight: its notification is "
+             "queued by the frame, which is raced against the reply's arrival");
+    const Probe rows[] = {
+        { "frame-race-raf", raf_tt, "/api/fcorder", SESS_EXPLORE, raf_why },
+        { "frame-race-observer", io_tt, "/api/fcobserved", SESS_EXPLORE, io_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `storearm` document. A key this run wrote reads back the value it stored (the page's own
    requests grade `derived` at best: engine_prov_of_running_path never answers `observed`). The
    branches over a localStorage key the area lacks and over the cookies the jar lacks keep the example's arm on the
@@ -31159,6 +31190,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_absentarm(js, probes, &np);
     probes_envarm(js, probes, &np);
     probes_envtypes(js, probes, &np);
+    probes_framerace(js, probes, &np);
     probes_storearm(js, probes, &np);
     probes_pagewrite(js, probes, &np);
     probes_keydomain(js, probes, &np);
