@@ -746,6 +746,12 @@ bool flow_static_position_ask(lxb_dom_element_t *el, bool vertical, bool trailin
            "its rule 2 — and states no static position for `bottom` anywhere. A trailing static position on "
            "the block axis is §10.3.7's `rtl` arm having been carried across an axis it is not written for");
     spcb = block_flow_static_position_containing_block(el);
+    /* The release arm of that entry's DFAIL (an element outside a rendered tree) answers no block container;
+       the static position is then the containing block's own edge. */
+    if (spcb == NULL) {
+        *out = css_px(0.0);
+        return true;
+    }
     if (!flow_border_box_origin_ask(spcb, &o)) return false;
     if (!fp_abs_cb_leading_ask(el, vertical, true, &cb_edge)) return false;
     if (block_flow_static_box_on_line(el)) {

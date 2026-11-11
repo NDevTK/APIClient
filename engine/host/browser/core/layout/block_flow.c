@@ -3400,6 +3400,11 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
     DCHECK(el != NULL, "CSS 2.1 §10.3.7's static position was asked for with no element");
     n = lxb_dom_interface_node(el);
     cb = block_flow_static_position_containing_block(el);
+    /* That entry's DFAIL answers no block container on its release arm: the container's top then stands. */
+    if (cb == NULL) {
+        *out = css_px(0.0);
+        return true;
+    }
     /* §10.3.7's Note first, because every other step below is written about a box on §9.4.1's stack and this
        is what decides whether the hypothetical box is one. A float has no hypothetical box: it sits where it is
        in its container's content. */
