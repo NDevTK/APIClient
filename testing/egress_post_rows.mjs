@@ -3,8 +3,9 @@
 // zone's `@EGRESS` lines. The page's unforced boot POSTs JSON and reads the reply; it POSTs two bodies to one
 // address; and on an arm that assumes absent state it POSTs to a new address and repeats a POST its unforced run
 // already made. It also sends a header whose value is an unknown with an example (`navigator.language`) and, on
-// the arm that contradicts that example, the same unknown with no bytes, by fetch() and by XMLHttpRequest. The
-// control is the seed load: the server served the page, or nothing below is a reading.
+// the arm that contradicts that example, the same unknown with no bytes, by fetch() and by XMLHttpRequest. Its
+// XMLHttpRequests POST JSON and read the reply, POST binary bytes, and POST on the forced arm. The control is
+// the seed load: the server served the page, or nothing below is a reading.
 //
 //   node testing/egress_post_rows.mjs [path-to-native-binary]      (after `node engine/build.mjs native`)
 "use strict";
@@ -32,8 +33,13 @@ fetch('/api/same', { method: 'POST', body: 's=1' }).then(function () {
   if (window.__FLAGS && window.__FLAGS.role === 'admin') {
     fetch('/api/forced', { method: 'POST', body: 'f=1' });
     fetch('/api/same', { method: 'POST', body: 's=1' });
+    var xf = new XMLHttpRequest(); xf.open('POST', '/api/xhr-forced'); xf.send('f=2');
   }
 });
+var xp = new XMLHttpRequest(); xp.open('POST', '/api/xhr-post'); xp.setRequestHeader('Content-Type', 'application/json');
+xp.onload = function () { fetch('/api/xhr-read?n=' + JSON.parse(xp.responseText).n); };
+xp.send(JSON.stringify({ x: 1 }));
+var xb = new XMLHttpRequest(); xb.open('POST', '/api/xhr-bin'); xb.send(new Uint8Array([0, 255, 1, 128]));
 fetch('/api/hdr-ex', { headers: { 'X-Probe': navigator.language } });
 var xe = new XMLHttpRequest(); xe.open('GET', '/api/xhr-ex'); xe.setRequestHeader('X-Probe', navigator.language); xe.send();
 if (navigator.language !== 'en-US') {
@@ -49,6 +55,7 @@ const server = createServer(async (req, res) => {
   for await (const c of req) chunks.push(c);
   const u = new URL(req.url, 'http://x');
   arrived.push({ method: req.method, path: u.pathname, query: u.search, body: Buffer.concat(chunks).toString('utf8'),
+                 hex: Buffer.concat(chunks).toString('hex'),
                  type: req.headers['content-type'] || '', page: req.headers['x-page'] || '',
                  probe: req.headers['x-probe'] === undefined ? '-' : req.headers['x-probe'] });
   if (u.pathname === '/') {
@@ -127,6 +134,18 @@ const ROWS = [
     ['GET /api/xhr-unk', got('GET', '/api/xhr-unk').length, 0],
     ['what refused it', refusals(sends('GET', '/api/xhr-unk')), 'bytes=unknown'],
     ['what its entry states', bytes(sends('GET', '/api/xhr-unk')), 'unknown X-Probe:unknown']]],
+  ['an unforced XMLHttpRequest POST arrives once with the body and content type the page composed, and its reply is read',
+   [['POST /api/xhr-post', got('POST', '/api/xhr-post').length, 1],
+    ['its body', got('POST', '/api/xhr-post').map((a) => a.body).join('|'), '{"x":1}'],
+    ['its content type', got('POST', '/api/xhr-post').map((a) => a.type).join('|'), 'application/json'],
+    ['the request the reply\'s value names', got('GET', '/api/xhr-read').map((a) => a.query).join('|'), '?n=1'],
+    ['how the zone answered it', said(sends('POST', '/api/xhr-post')), 'sent/default']]],
+  ['an XMLHttpRequest body of bytes arrives as those bytes',
+   [['POST /api/xhr-bin', got('POST', '/api/xhr-bin').length, 1],
+    ['its bytes in hex', got('POST', '/api/xhr-bin').map((a) => a.hex).join('|'), '00ff0180']]],
+  ['an XMLHttpRequest POST on a forced path is recorded and not sent',
+   [['POST /api/xhr-forced', got('POST', '/api/xhr-forced').length, 0],
+    ['how the zone answered it', said(sends('POST', '/api/xhr-forced')), 'not-sent/none provenance=forced']]],
 ];
 let bad = 0;
 for (const [label, notes] of ROWS) {
