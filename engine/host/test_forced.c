@@ -1534,7 +1534,8 @@ static void tf_floor_lift(void) {
    in through the allocator's refusal edge (engine_reclaim_at_rest), before anything is paid, and answers the
    bill as it stands after. */
 static const char *tf_sale_act(const char *urls) {
-    static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed", "/api/sl-floor-owed" };
+    static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed", "/api/sl-floor-owed",
+                                        "/api/sl-async-owed" };
 
     for (size_t i = 0; !g_tf_sale.listed && i < COUNTOF(owed); i++) {
         const int at_floor = i == 2;
@@ -2745,6 +2746,7 @@ TF_DOCS[] = {
     { "saleown", HTML_SALEOWN },
     { "salectl", HTML_SALECTL },
     { "salefloor", HTML_SALEFLOOR },
+    { "saleasync", HTML_SALEASYNC },
     { "replyrec", HTML_REPLYREC },
     { "replynone", HTML_REPLYNONE },
     { "rangeinsertrest", HTML_RANGEINSERTREST },
@@ -19330,7 +19332,9 @@ TF_UNIT void probes_rangerest(const char *js, Probe *tab, int *n) {
    sale-forced-stays-listed and sale-own-stays-listed: the bill taken after the sale still lists the request the
    sold member owes. sale-control-reaches: the same shape with no act reports with no member sold.
    sale-floor-sells: with every allocation refused at the act, the members were sold, a sale took its census on
-   storage it funded, and the bill after the sale still lists the request the sold member owes. */
+   storage it funded, and the bill after the sale still lists the request the sold member owes.
+   sale-async-returns: as sale-forced-returns, for a member whose delta holds a pre-fork promise's settlement,
+   and its report reads the value the restored settlement carries. */
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
     const char *cat = strstr(js, "\"saleCensus\":{\"n\":");
@@ -19340,7 +19344,8 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *wat = strstr(js, "\"soldRestores\":"), *rat = strstr(js, "\"restored\":");
     long wrote = wat ? strtol(wat + strlen("\"soldRestores\":"), NULL, 10) : -1;
     long restored = rat ? strtol(rat + strlen("\"restored\":"), NULL, 10) : -1;
-    int ft = 1, ot = 1, ct = 1, lt = 1;
+    int ft = 1, ot = 1, ct = 1, lt = 1, yt = 1;
+    const char *awhy = NULL;
 
     fold_row(&lt, &lwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
              "the act sold nothing: no bill listed the owed request with a member to sell beside the one switched "
@@ -19364,6 +19369,17 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     fold_row(&ot, &owhy, wrote > 0 && restored > 0,
              "no sold member was restored from its written bytes (`soldRestores`, `restored`): the sale wrote "
              "nothing a pick could rehydrate, or no pick reached a written stub");
+    fold_row(&yt, &awhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
+             "the act sold nothing: no bill listed /api/sl-async-owed with a member to sell beside the one "
+             "switched in, so the row's premise did not arise");
+    fold_row(&yt, &awhy, wrote > 0 && restored > 0,
+             "no sold member was restored from its written bytes (`soldRestores`, `restored`)");
+    fold_row(&yt, &awhy, param_value_is(js, "/api/sl-async-done", "b", "22"),
+             "NOT REACHED: no /api/sl-async-done?b=22 record, so the member sold while it owed /api/sl-async-owed "
+             "did not return within the session");
+    fold_row(&yt, &awhy, param_value_is(js, "/api/sl-async-done", "v", "7"),
+             "the returned member read its pre-fork promise as other than fulfilled with 7: its delta's settlement "
+             "did not come back with it");
     fold_row(&ot, &owhy, param_value_is(js, "/api/sl-own-done", "b", "22"),
              "NOT REACHED: no /api/sl-own-done?b=22 record, so the page's own run, sold while it owed "
              "/api/sl-own-owed, did not return within the session");
@@ -19387,6 +19403,7 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
         { "sale-floor-sells", xt, "slFloor", SESS_EXPLORE, xwhy },
         { "sale-forced-returns", ft, "slForced", SESS_EXPLORE, fwhy },
         { "sale-own-returns", ot, "slOwn", SESS_EXPLORE, owhy },
+        { "sale-async-returns", yt, "slAsync", SESS_EXPLORE, awhy },
         { "sale-control-reaches", ct, "slCtl", SESS_EXPLORE, cwhy },
         { "sale-forced-stays-listed", lt, "slForced", SESS_EXPLORE, lwhy },
         { "sale-own-stays-listed", lt, "slOwn", SESS_EXPLORE, lwhy },

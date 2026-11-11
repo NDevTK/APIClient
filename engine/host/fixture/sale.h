@@ -6,8 +6,10 @@
    `sale`: the arm against the example owes the request and the page's own run is busy. `saleown`: the page's own
    run owes it and the arm against the example is busy. `salectl`: `sale`'s shape with no act, the control.
    `salefloor`: `sale`'s shape, sold with the allocator placed at its floor (tf_floor_place), so the sale's own
-   allocations are refused unless the sale funds them.
-   Four of test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c
+   allocations are refused unless the sale funds them. `saleasync`: `sale`'s shape where the owing arm first
+   settles a promise made before the fork, so its delta holds that promise's settlement and its resolving
+   function's latch when it is sold, and its report reads the settled value.
+   Five of test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c
    defines before including this file. */
 #ifndef ENGINE_HOST_FIXTURE_SALE_H
 #define ENGINE_HOST_FIXTURE_SALE_H
@@ -58,6 +60,23 @@ static const char HTML_SALEOWN[] =
     "} else {"
     "  fetch('/api/sl-own-owed').then(function (r) { return r.text(); })"
     "    .then(function (t) { fetch('/api/sl-own-done?b=' + t.length); });"
+    "}"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+static const char HTML_SALEASYNC[] =
+    "<!doctype html><html><body>"
+    "<script>"
+    "var slaRes, slaP = new Promise(function (r) { slaRes = r; });"
+    "var slAsync = location.hash === '#owe';"
+    "if (slAsync) {"
+    "  slaRes(7);"
+    "  fetch('/api/sl-async-owed').then(function (r) { return r.text(); })"
+    "    .then(function (t) { slaP.then(function (v) { fetch('/api/sl-async-done?b=' + t.length + '&v=' + v); }); });"
+    "} else {"
+    TF_SALE_BUSY
+    "  fetch('/api/sl-async-busy?n=' + slN);"
     "}"
     "</script>"
     TF_CANVAS_INK
