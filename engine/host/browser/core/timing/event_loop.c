@@ -235,8 +235,13 @@ void event_loop_free(JSRuntime *rt)
    that made the base unknown. Adding nothing must therefore BE nothing, not an addition of zero. */
 JSValue event_loop_now(JSContext *ctx)
 {
-    JSValue base = el_get(ctx, g_atom_now), elapsed, sum;
-    double work = el_num_get(ctx, g_atom_work);
+    JSValue base, elapsed, sum;
+    double work;
+
+    /* The work the running flow retired since the interpreter last banked it is part of this moment. */
+    engine_work_settle(ctx);
+    base = el_get(ctx, g_atom_now);
+    work = el_num_get(ctx, g_atom_work);
 
     if (work == 0)
         return base;

@@ -171,6 +171,10 @@ void engine_set_timer_hook(int (*fn)(JSContext *ctx));
    (core/timing/timer.h's timer_due_stamp), and the write it reads (timer_stamp_due), which the scheduler performs
    at the end of each step of the running flow. Registered by the timer component beside the step above. */
 void engine_set_timer_due_hooks(uint64_t (*due)(JSContext *ctx), void (*stamp)(JSContext *ctx));
+/* Banks the work the running flow's open step has retired since the interpreter's last poll, when `ctx` is in the
+   flow's selected agent, so the event loop's clock (core/timing/event_loop.h's event_loop_now) and a fork's delta
+   read the flow's exact coordinate. A no-op outside a step. */
+void engine_work_settle(JSContext *ctx);
 /* The delivery arm's half of the deadline race, registered by the event loop (core/timing/event_loop.h's
    event_loop_deadline_pending and event_loop_race_arrival). `pending` is a read: some clock-driven source may
    hold a deadline. `race` answers which task the arrival about to be delivered follows. */

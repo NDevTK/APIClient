@@ -5716,6 +5716,8 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
      * holds cannot change under it (world_ancestry asserts it). The cost is one minted row per fork; the vector
      * does not grow, because world_ancestry names only ancestors that have crossed the seam. */
     WorldId fork_point = parent->world;
+    /* The parent's clock at the branch, so the arm's delta holds the work the open step has run up to it. */
+    if (parent == flow_running()) engine_work_settle(ctx);
     /* The decision this fork is taken at is where both arms stand (solver/flow.c's FlowSite): the page frame
        standing at the branch names it, so the parent is moved there before the arm copies its site. A fork asked
        with no page frame standing (between tasks, at a park) or for a flow not holding the thread leaves the
@@ -8949,6 +8951,19 @@ static void engine_work_bank(JSContext *ctx, uint64_t units) {
     g_service_work += (int64_t)units;
     /* …and the selected agent's charge, which flow_select_agent compares between the flow's agents. */
     flow_agent_running(flow_running())->work += units;
+}
+
+/* See engine.h. Banked at the reading rather than at the poll before it: the poll falls wherever a call, a back-edge or
+   the slice's dispatch-counted budget raised a request, and the last of those is placed by the slice. */
+void engine_work_settle(JSContext *ctx) {
+    Flow *f = flow_running();
+    uint64_t left;
+
+    if (f == NULL || g_in_step == 0 || JS_GetRealmAgent(ctx) != flow_agent_running(f)->agent) return;
+    DCHECK(!JS_FlowInCompileStint(), "the running flow's clock was settled inside a compile stint — the parse's "
+                                     "offer period is measured on the count this would take");
+    left = JS_FlowTakeRetiredWork();
+    if (left != 0) engine_work_bank(ctx, left);
 }
 
 /* Brings `f`'s reply trail up to the newest record: a row for every park a record filled on its register since
