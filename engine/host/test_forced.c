@@ -18319,12 +18319,15 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
 
 /* The rows of the two reply-record documents (fixture/replyrecord.h), read off the census's `replyRecords` and
    `replyTrailRows`. reply-record-trailed: both of the page's requests were recorded and the flow's trail took a
-   row. reply-record-none, the control: a document that asks for nothing records nothing. */
+   row. reply-record-none, the control: a document that asks for nothing records nothing, read once its
+   script has run (`_unitsDone`), so the row is not answered before the run starts. */
 TF_UNIT void probes_replyrecord(const char *js, Probe *tab, int *n) {
     const char *twhy = NULL, *nwhy = NULL;
     const char *ra = strstr(js, "\"replyRecords\":"), *ta = strstr(js, "\"replyTrailRows\":");
     long recs = ra ? strtol(ra + strlen("\"replyRecords\":"), NULL, 10) : -1;
     long rows = ta ? strtol(ta + strlen("\"replyTrailRows\":"), NULL, 10) : -1;
+    const char *ua = strstr(js, "\"_unitsDone\":");
+    long units = ua ? strtol(ua + strlen("\"_unitsDone\":"), NULL, 10) : -1;
     int tt = 1, nt = 1;
 
     fold_row(&tt, &twhy, param_value_is(js, "/api/rr-done", "b", "22"),
@@ -18333,6 +18336,8 @@ TF_UNIT void probes_replyrecord(const char *js, Probe *tab, int *n) {
              "the census counts fewer than the two answered sends the page made as reply records");
     fold_row(&tt, &twhy, rows >= 1,
              "the census counts no reply trail row, so the flow that took /api/rr-owed's reply did not trail it");
+    fold_row(&nt, &nwhy, units >= 1,
+             "NOT REACHED: the document has completed no unit of work, so its script has not run");
     fold_row(&nt, &nwhy, recs == 0 && rows == 0,
              "a document that asks for nothing has a reply record or a trail row");
     const Probe rows_[] = {
