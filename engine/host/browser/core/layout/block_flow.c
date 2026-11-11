@@ -3393,7 +3393,8 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
     BlockFlowRun before;
     FlowRunStart start = { css_px(0.0), css_px(0.0), css_px(0.0), false };
     BfRun run;
-    bool reached = false, held;
+    CssPx margin;
+    bool reached = false, held, split;
     char nbuf[160], cbuf[160];
 
     DCHECK(el != NULL, "CSS 2.1 §10.3.7's static position was asked for with no element");
@@ -3422,13 +3423,9 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
             "%s, in %s: CSS 2 §9.4.1's stack was asked the static top of a hypothetical box that is inline-level "
             "and on a line, which is line_box_static_position_ask's to answer",
             box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
-    /* §9.2.1.1's SPLIT, WHICH THIS WALK CANNOT MEASURE AND WILL NOT GUESS AT. A hypothetical block-level box
-       inside a run of inline content breaks that run into TWO anonymous block boxes and sits between them, so
-       its position is the running position plus the height of the FIRST of them — a height this walk measures
-       for the WHOLE run and never for a prefix of it. Where nothing box-generating precedes the element in
-       its run there is no first box and the position is the run's own start, which is the reading below and
-       is the common case: an out-of-flow child between two block-level siblings, or at the start of a
-       container's content, has only collapsible white space in front of it. */
+    /* §9.2.1.1's split: a block-level hypothetical box after inline-level content in its run breaks that run
+       (and any inline box holding it) into the anonymous block box before it and one after, so it sits below
+       the first, whose content is the run up to the element. */
     before.after = after;
     before.end = n;
     /* A float on a line is the line box fill's to place (`block_flow_float_on_line`), so its static top is
@@ -3436,19 +3433,7 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
     DCHECKF(!flt || !block_flow_float_on_line(el),
             "%s, in %s: the stack's starting top was asked of a float the line box fill places",
             box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
-    if (reached && !flt && block_flow_run_generates_box(cb, before))
-        DFAILF("%s, whose static-position containing block is %s: CSS 2.2 §9.2.1.1 would break the anonymous "
-               "block box this element sits in — \"if a block container box … has a block-level box inside it "
-               "…, then we force it to have only block-level boxes inside it\" — because §10.3.7's "
-               "hypothetical "
-               "box is BLOCK-LEVEL and inline-level content precedes it inside one run. Its static position "
-               "is then this run's start plus the HEIGHT of the anonymous box that leading content becomes, "
-               "and this walk measures the whole run as ONE box rather than the two the hypothetical document "
-               "has. BUILD the split: `bf_anon_box` already measures a run and `block_flow_run_generates_box` "
-               "already decides whether one is a box, so what is missing is the ENUMERATION yielding an extra "
-               "break at this element — after which the position falls out of the same loop body every other "
-               "box on the stack is placed by",
-               box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
+    split = reached && !flt && block_flow_run_generates_box(cb, before);
     {
         lxb_dom_element_t *ae = after != NULL ? lxb_dom_interface_element(after) : NULL;
         BfBox w;
@@ -3472,10 +3457,28 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
     run.pos = start.run_pos;
     run.neg = start.run_neg;
     /* CSS 2.2 §8.3's vertical margins "will not have any effect on non-replaced inline elements". */
-    *out = bf_static_margin_edge(start.pos, run,
-                                 flt || !block_flow_hypothetical_is_block_level(el) ? css_px(0.0)
-                                                                            : bf_hypothetical_margin_top(el, cb),
-                                 start.escaping);
+    margin = flt || !block_flow_hypothetical_is_block_level(el) ? css_px(0.0) : bf_hypothetical_margin_top(el, cb);
+    if (split) {
+        BfBox a;
+
+        DCHECKF(block_flow_hypothetical_is_block_level(el),
+                "%s: a run was split at an inline-level hypothetical box, which is on its line instead",
+                box_subject(el, nbuf, sizeof nbuf));
+        if (!line_box_atomics_ask(cb, before, line_box_available_width_derived()) ||
+            !line_box_extents_ask(cb, before, line_box_available_width_derived()))
+            return false;
+        a = bf_anon_box(cb, before, BF_BASELINE_NONE);
+        /* With a line box the first anonymous box ends the open margins (§8.3.1), and the hypothetical box's
+           margin edge is that box's bottom, its own margin then meeting only that box's zero. Without one it is
+           collapsed through, and the stack stands where the run started. */
+        if (!a.collapse_through) {
+            CssPx top = start.escaping ? start.pos : css_px_add(start.pos, bf_run_value(run));
+
+            *out = bf_static_margin_edge(css_px_add(top, a.border_h), bf_run_of(css_px(0.0)), margin, false);
+            return true;
+        }
+    }
+    *out = bf_static_margin_edge(start.pos, run, margin, start.escaping);
     return true;
 }
 

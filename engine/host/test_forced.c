@@ -21829,6 +21829,11 @@ TF_UNIT void probes_inlineboxstatic(const char *js, Probe *tab, int *n) {
              "css-position-3 §3.5.3: a static position inside an inline box is not its line's top, 20px down");
     fold_row(&si_tt, &si_why, param_value_is(js, "/api/inlineboxstatic", "l", "30"),
              "css-position-3 §3.5.3: a static position inside an inline box is not 30px along its line");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/inlineboxstatic", "bt", "20"),
+             "CSS 2.2 §9.2.1.1: a block-level hypothetical box inside an inline box is not below the 20px "
+             "anonymous block box its split leaves before it");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/inlineboxstatic", "bl", "0"),
+             "CSS 2.2 §9.4.1: a block-level hypothetical box is not at its containing block's left edge");
     fold_row(&sf_tt, &sf_why, sf_tt,
              "NOT REACHED: there is no /api/shadowfloats record at all, so the document aborted before its fetch");
     fold_row(&sf_tt, &sf_why, param_value_is(js, "/api/shadowfloats", "w", "10"),
