@@ -1224,7 +1224,7 @@ static int g_tf_ws_n;
 
 static void tf_ws_note(const char *url, const char *method, const char *destination, const char *credentials,
                        const char *referrer, const char *headers_key) {
-    int has_headers = strspn(headers_key, "0") != strlen(headers_key);
+    int has_headers = strcmp(headers_key, "-") != 0;   /* "-" is an empty list's digest word */
 
     if (g_tf_ws_n == (int)COUNTOF(g_tf_ws)) return;
     snprintf(g_tf_ws[g_tf_ws_n].url, sizeof g_tf_ws[0].url, "%s", url);
@@ -18408,7 +18408,7 @@ TF_UNIT void probes_websocket(const char *js, Probe *tab, int *n) {
     /* The socket's address on the endpoint surface, through its own door. */
     tt[k] = 1;
     fold_row(&tt[k], &why[k], reached, "NOT REACHED: there is no /api/wsconst record");
-    fold_row(&tt[k], &why[k], emitted_record_has(js, "/api/ws/fail", "\"door\":\"websocket\""),
+    fold_row(&tt[k], &why[k], emitted_record_has(js, "wss://x.test/api/ws/fail", "\"door\":\"websocket\""),
              "the @H surface has no record of the socket's address with the door `websocket`");
     rows[k] = (Probe){ "ws-endpoint-record", tt[k], "/api/ws/fail", SESS_EXPLORE, why[k] };
     k++;
