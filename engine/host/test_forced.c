@@ -2034,6 +2034,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/envgate.h"
 #include "fixture/timegate.h"
 #include "fixture/datenum.h"
+#include "fixture/dateslot.h"
 #include "fixture/rxcompile.h"
 #include "fixture/codegenrest.h"
 #include "fixture/b64coerce.h"
@@ -2852,6 +2853,7 @@ TF_DOCS[] = {
     { "envgate", HTML_ENVGATE },
     { "timegate", HTML_TIMEGATE },
     { "datenum", HTML_DATENUM },
+    { "dateslot", HTML_DATESLOT },
     { "rxcompile", HTML_RXCOMPILE },
     { "codegenrest", HTML_CODEGENREST },
     { "b64coerce", HTML_B64COERCE },
@@ -26495,6 +26497,53 @@ TF_UNIT void probes_gridnames(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `dateslot` document (fixture/dateslot.h): a Date built over unknown input is a Date object whose
+   methods run on the unknown time value it holds. */
+TF_UNIT void probes_dateslot(const char *js, Probe *tab, int *n) {
+    const char *in_why = NULL; int in_tt = 1;
+    fold_row(&in_tt, &in_why, param_value_is(js, "/api/ds-inst", "w", "dsDATE"),
+             "NOT REACHED: no /api/ds-inst?w=dsDATE record, so a Date built over the navigator unknown was not an "
+             "instance of Date on any flow");
+    fold_row(&in_tt, &in_why, !param_value_is(js, "/api/ds-inst", "w", "dsNOTDATE"),
+             "a /api/ds-inst?w=dsNOTDATE record: a flow took `new Date(u) instanceof Date` false, so the constructor "
+             "answered an unknown rather than a Date object");
+    const char *is_why = NULL; int is_tt = 1;
+    fold_row(&is_tt, &is_why, param_value_is(js, "/api/ds-iso", "w", "dsISO"),
+             "no /api/ds-iso?w=dsISO record: toISOString over the Date built from the navigator unknown did not "
+             "return a String on any flow");
+    const char *tm_why = NULL; int tm_tt = 1;
+    fold_row(&tm_tt, &tm_why, param_value_is(js, "/api/ds-time", "w", "dsNUM"),
+             "no /api/ds-time?w=dsNUM record: getTime over the Date built from the navigator unknown did not answer "
+             "a Number on any flow");
+    const char *nn_why = NULL; int nn_tt = 1;
+    fold_row(&nn_tt, &nn_why, param_value_is(js, "/api/ds-nan", "w", "dsRANGE") &&
+                              param_value_is(js, "/api/ds-nan", "w", "dsSTRING"),
+             "toISOString over a time value with no example did not run both completions of its step 4 (the "
+             "RangeError arm and the String arm)");
+    fold_row(&nn_tt, &nn_why, !param_value_is(js, "/api/ds-nan", "w", "dsOTHER"),
+             "a /api/ds-nan?w=dsOTHER record: toISOString over a Date built from an exampleless unknown threw "
+             "something other than a RangeError, so its receiver was not a Date");
+    const char *st_why = NULL; int st_tt = 1;
+    fold_row(&st_tt, &st_why, param_value_is(js, "/api/ds-set", "w", "dsSET") &&
+                              !param_value_is(js, "/api/ds-set", "w", "dsTHREW"),
+             "setHours over a Date holding the clock's unknown did not return on every flow, or the Date was not "
+             "a Date after it");
+    const char *js_why = NULL; int js_tt = 1;
+    fold_row(&js_tt, &js_why, param_value_is(js, "/api/ds-json", "w", "dsJSON") &&
+                              !param_value_is(js, "/api/ds-json", "w", "dsTHREW"),
+             "JSON.stringify over a Date holding the clock's unknown threw on some flow: toJSON's finite arm and "
+             "the toISOString it invokes must read one answer to whether the time value is finite");
+    const Probe rows[] = {
+        { "ds-instance", in_tt, "/api/ds-inst", SESS_EXPLORE, in_why },
+        { "ds-iso", is_tt, "/api/ds-iso", SESS_EXPLORE, is_why },
+        { "ds-time", tm_tt, "/api/ds-time", SESS_EXPLORE, tm_why },
+        { "ds-iso-both", nn_tt, "/api/ds-nan", SESS_EXPLORE, nn_why },
+        { "ds-setter", st_tt, "/api/ds-set", SESS_EXPLORE, st_why },
+        { "ds-json", js_tt, "/api/ds-json", SESS_EXPLORE, js_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `datenum` document (fixture/datenum.h): both arms of the gate after each coercion. */
 TF_UNIT void probes_datenum(const char *js, Probe *tab, int *n) {
     const char *pl_why = NULL; int pl_tt = 1;
@@ -32954,6 +33003,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_envgate(js, probes, &np);
     probes_timegate(js, probes, &np);
     probes_datenum(js, probes, &np);
+    probes_dateslot(js, probes, &np);
     probes_rxcompile(js, probes, &np);
     probes_codegenrest(js, probes, &np);
     probes_b64coerce(js, probes, &np);
