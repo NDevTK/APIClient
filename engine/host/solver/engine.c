@@ -15240,6 +15240,11 @@ int64_t engine_residency_work(void) { return g_residency_work + (int64_t)thread_
    banked in the instance's currency at its price, a function of the path (JSGCCycleStats' `price`), rounded once
    at its finish, so Level 1 sees the same service whatever is resident; its work past the price, which the
    resident population caused, is residency work (g_residency_work), as all of a collection residency owed is. It answers YIELD: every flow is where it was. */
+/* Named residual. Not covered: the crossing and the price count the runtime's births and survivors, every
+   member's, so which collection is a path one and what it is priced at depend on how the schedule interleaved
+   the members. Next diff builds: each member's births counted on its path, and a path collection owed by and
+   priced at that member's own crossing. Absence shows as: a drained document's slice twins agreeing on stepWork
+   and differing in serviceWork. */
 static int engine_collect_slice(JSRuntime *rt) {
     const uint64_t budget = rest_unit_items(REST_UNIT_GC_WORK);
     int64_t t0 = quantum_thread_us();
