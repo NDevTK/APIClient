@@ -444,68 +444,19 @@ function forkReading(t) {
           `retains; a bigger table is not it`));
 }
 function probeFlips(out) {
-  /* THE TABLE, AND NEVER PROSE ABOUT THE TABLE — SELECTED IN engine/probe_rows.mjs, WHICH IS WHERE THAT
-     ARGUMENT NOW LIVES. test_forced.c's `probes_report` prints TWO shapes under the one `@H ` marker, a
-     narration sentence per folded 0 and the table itself, and a `why` carries whatever pairs its author
-     needed to make the sentence say something. The discriminator is the producer's own terminator: the table
-     is the line that ENDS in the verdict, and a narration never carries one.
-     IT MOVED BECAUSE THIS FILE COULD NOT BE ROUTED TO. The predicate was correct here and the two log readers
-     beside it — engine/rowsplit.mjs and engine/smokerows.mjs — each wrote their own and got it wrong, because
-     this file has no exports and does the build at import, so there was nothing for them to call. Two right
-     answers to one question is the shape that drifts; here the other two were not even right.
-     WHAT STAYS HERE IS WHAT THIS READER DOES WITH THEM, which is why the prose reading cost more than a
-     count: `ever` is a union over every row, so the first `why` that ever spells `k=1` invents a statement
-     the fixture does not make; and `answered`, `asked` and `unanswered` are read off the LAST row, so a run
-     killed between a narration and the table it precedes reported a fabricated fraction, in the arms whose
-     whole subject is killed runs.
-     AND A TABLE THIS READER CANNOT PARSE NOW THROWS WHERE IT USED TO BE DROPPED. A line that is pairs-shaped
-     all the way to the verdict and still does not match is a counter sharing the table; the pattern here
-     simply did not match it, so this file silently read one table fewer and every fraction above was taken
-     off a stream it had quietly measured a subset of. That check is in probe_rows.mjs with the selection,
-     which makes it every reader's rather than one reader's. */
+    /* The table and never prose about it. test_forced.c's `probes_report` prints a narration sentence per
+     folded 0 and the table itself under the one `@H ` marker; engine/probe_rows.mjs selects the table by the
+     producer's own terminator (the line that ends in the verdict) and throws on a table-shaped line it cannot
+     parse. This reader depends on that selection: `ever` is a union over every row, and `answered`, `asked`
+     and `unanswered` are read off the last row. */
   return probeTables(out, "the run's own output");
 }
-/* WHERE THE RUN GOT TO, IN THE FIXTURE'S OWN UNITS — AND THE ONE NUMBER THE VERDICT USED TO THROW AWAY.
-   `hungCauseCensus` has always computed this (its `zero` list) and the verdict line has always cut it off:
-   the verdict kept the cause's NAME and dropped everything in parentheses, which is exactly where
-   every number lives. So the stage table read `HUNG — a HEALTHY FRONTIER THAT WANTED MORE BUDGET` on six
-   consecutive builds of six different revisions, while underneath it the fixture answered 93/135, 96/138,
-   96/138, 97/141, 98/141 and 128/141 — a run that reached 128 and a run that reached 93 produced the SAME
-   line, and the 128 was the one nobody saw. That is a computed observation with no reader — the mirror of the
-   defect §Architecture names, and harder to see, because the value was real, printed in the hint, and
-   discarded by the one line anybody reads.
-   IT IS A STATEMENT ABOUT THE DOCUMENT AND NOT ABOUT THE MACHINE, which is what makes it the right thing to
-   put in a verdict: the fixture declares its own probe table (engine/host/test_forced.c), so this is not a
-   stored expectation this file has to keep in step — nothing here knows what 141 is until the run says so,
-   and a fixture that gains a statement moves both halves of the fraction by itself.
-   ABSENCE IS REPORTED AS ABSENCE. A stage that drives no scheduler prints no @H at all (the two-instance ABI
-   drive, the browser-process layer), and `0/0` for one of those would be the same lie as counting a marker no
-   shipped path writes. */
-/* AND IT IS A READING OF THE LAST INSTANT, WHICH IS ONLY HALF OF WHAT THE STREAM SAYS. `answered` is the last
-   @H row, and a probe row can go 1→0 — this file says so itself, in the arm that calls that "the finding rather
-   than the frontier's pace" — so a run that established a statement and then stopped making it reports the same
-   fraction as one that never established it. Those are opposite findings and the count that separates them is
-   the MONOTONE one: how many distinct rows were 1 at ANY sample. It is carried beside the instant reading and
-   printed only where the two DIFFER, because a difference is the whole of the information: equal, it is noise
-   in the one line everybody reads; unequal, it is a document that stopped saying something it had said. */
-/* HOW FAR THE RUN HAD GOT WHEN EACH TABLE ABOVE WAS COMPOSED — test_forced.c's `@HEVENTS`, and it is the
-   number the sentence under `standingText` used to INFER one bit of. `fixture_have_answers` gates the table on
-   `engine_sched_events()`, so the quantity that decides WHEN every measurement of a run is taken was itself on no
-   line of the stream; the producer put it on one, and until this reader existed the only consumer of that line
-   was a person.
-   PAIRED BY INDEX AND NEVER BY LAST-LINE, which is the same rule the @FORKAT reader states for the @COLD block
-   it is printed beside. `probes_report` writes this line IMMEDIATELY BEFORE the table it belongs to, in one
-   function with no other emitter between them, so the i-th record belongs to the i-th table — and a run killed
-   between the two leaves exactly ONE more record than tables, which is a real state and the only imbalance a
-   truncation can produce. Any other disagreement is the producer having changed and throws, for the reason the
-   @COLD and @WFQ field loops throw: a stream this reader can no longer pair is one whose numbers it would be
-   attributing to the wrong table.
-   THE FIELDS ARE THE PRODUCER'S OWN AND ARE NOT LISTED HERE. A hand list is what let SEVEN rows reach a
-   census and no reader — see `censusComposerFields`.
-   EVERY ROW IS A LIFETIME COUNTER and the producer says so where it emits them, so two samples MAY be
-   differenced and the series is its own check: a lifetime counter cannot fall. test_forced.c DCHECKs exactly
-   that at the emission and the DCHECK is compiled out of a release build, where this reader still runs — the
-   same division of labour the `jobWGap` check below is written for. */
+/* How far the run had got when each probe table was composed: test_forced.c's `@HEVENTS` records.
+   `probes_report` writes the record on the line immediately before its table, with no other emitter between,
+   so records and tables pair by index; a run killed between the two leaves exactly one more record than
+   tables, and any other imbalance throws in `probeStanding`. The fields are the producer's own
+   (`hworkFields`). Every row is a lifetime counter, so two samples may be differenced and a fall throws:
+   test_forced.c DCHECKs the same at the emission, which a release build compiles out. */
 function probeWork(out) {
   const w = [];
   for (const m of out.matchAll(/^@HEVENTS (\{.*\})$/gm)) {
@@ -518,13 +469,9 @@ function probeWork(out) {
       throw new Error(`[build] an @HEVENTS record has no numeric \`${f}\` — this reader takes its field list ` +
                       `from test_forced.c's own printf (${fields.join(", ")}), so a row that is absent from ` +
                       `the line is one the producer stopped writing rather than one this file forgot.`);
-  /* THE ONE IDENTITY THAT IS INTERNAL TO THIS LINE, and the fork total that falls out of it. `engine_sched_events`
-     is forks + flows + jobs + switches (solver/engine.c), and the producer deliberately does NOT restate the
-     forks term because @COLD already spells it — so the identity a reader checks spans two lines and two
-     CADENCES, which are taken at different instants and cannot be paired. What CAN be checked is the half that
-     is one printf at one instant: the three named counters are non-negative, so the sum of them can never
-     exceed the total. Its RESIDUE is then this instant's fork count, which is the @COLD row contemporaneous
-     with the probe table and which no other line of this stream carries. */
+    /* The identity internal to this line: `engine_sched_events` is forks + flows + jobs + switches
+     (solver/engine.c) and the line carries the other three terms, so their sum cannot exceed the total, and
+     the residue is this instant's fork count. */
   for (const r of w) {
     const named = r._switches + r._flows + r._jobsRun;
     if (!(r.schedEvents >= named))
@@ -545,6 +492,11 @@ function probeWork(out) {
                       `this at the emission; that DCHECK is compiled out of a release build and this is not.`);
   return w;
 }
+/* Where the run got to, in the fixture's own units: how many of the statements in the fixture's probe table
+   (engine/host/test_forced.c) the last table answered, out of how many it asks. Nothing here stores an
+   expected total; the run states both halves. `ever` counts the rows that were 1 at any sample, because a
+   row can go 1→0 and the last table alone cannot tell a statement that was established and lost from one
+   never established. Null for a stage that prints no @H table, which is absence and not 0/0. */
 function probeStanding(out) {
   const rows = probeFlips(out);
   if (!rows.length) return null;
@@ -562,56 +514,25 @@ function probeStanding(out) {
                     `table's standing to another.`);
   return { answered: names.filter((k) => last[k]).length, asked: names.length,
            unanswered: names.filter((k) => !last[k]), ever: ever.size, samples: rows.length,
-           /* THE RECORD CONTEMPORANEOUS WITH THE TABLE THE FRACTION ABOVE IS READ OFF, which is `rows.length - 1`
-              and NOT the last record: a run killed while composing its final table leaves a record whose table
-              does not exist, and quoting it would state a standing for a table nobody has. `null` where the
-              artifact predates the producer, which is a positive statement — this stream said nothing about
-              its own progress — and never a 0 for one that said 0. */
+                      /* The record contemporaneous with the table the fraction is read off: index `rows.length - 1` and
+              not the last record, since a run killed while composing its final table leaves a record with no
+              table. Null where the output carries no @HEVENTS line, which is absence and not a zero. */
            work: work.length >= rows.length ? work[rows.length - 1] : null,
            first: work.length ? work[0] : null };
 }
-/* AND HOW MANY TIMES THE QUESTION WAS ASKED, WHICH `probeStanding` HAS ALWAYS COMPUTED AND THIS LINE HAS
-   ALWAYS DROPPED. That is the defect the paragraph above this function describes — a computed observation
-   with no reader — one field over, in the function that describes it.
-   IT IS WHAT SEPARATES A SOLVER THAT RAN AND FOUND NOTHING FROM A RUN THAT NEVER STARTED, and those are the
-   two readings of an all-zero table. solver/engine.c's `run_scheduler` calls the park hook at the TOP of its
-   loop — before `engine_sched_step` has run once — and test_forced.c's `fixture_have_answers` prints on its
-   first call and thereafter only every PROBE_SAMPLE_EVERY units of `engine_sched_events`. So ONE table in the
-   whole output is the table composed BEFORE THE FIRST STEP, and every 0 in it is a statement the run never
-   reached rather than one it answered wrongly — which is the opposite reading from the one an all-zero table
-   invites, and the one nothing in this file said. Measured: a smoke that aborted on its second scheduler step
-   printed a single table reading 193 of 196 still 0, and the frontier under it (`@WFQ members: 1`,
-   `@FORKAT {}`, `_sourceReads: 0`) was read as a scheduler that starves.
-   AND IT IS MEASURED NOW RATHER THAN INFERRED — BUT NOT BY THE NUMBER THE PRODUCER OFFERED, and the
-   difference is the whole of what this paragraph is worth. The sentence above is a claim about
-   `run_scheduler`'s LOOP ORDER, held in a file that cannot check it and decided off the SAMPLE COUNT, which is
-   a proxy for it. test_forced.c now prints `engine_sched_events` beside every table (`probeWork`) and its own
-   note names `schedEvents` 0 as the pre-first-step marker — SO THAT MARKER WAS DERIVED HERE BEFORE IT WAS BUILT
-   ON, and it does not hold. `engine_sched_events` is forks + FLOWS CREATED + jobs + switches, and
-   `engine_sched_begin` seeds the frontier (flow_add, or cold_resume) BEFORE the loop the hook sits at the top
-   of — so the pre-first-step table is composed at a work total of at least one flow and `schedEvents === 0` is
-   reachable at no table of any run. An arm keyed on it would have been a reading with no state behind it,
-   which is the mirror of the defect this whole comment is about.
-   THE ROW THAT DOES ANSWER IT IS `_switches`, AND IT ANSWERS WITHOUT A CLAIM ABOUT THE LOOP AT ALL.
-   `engine_sched_step` raises that counter beside its `flow_credit_pick`, which is the only site, so
-   `_switches: 0` IS "no flow has ever been handed the thread" — a fact about DISPATCH, checkable at the
-   counter, true whatever order the hook and the step stand in. That is what the loop-order sentence was
-   reaching for, and it is the one form of it this file is entitled to state.
-   THE SPAN IS THE OTHER HALF AND IT IS THE ONE A BISECT NEEDS. A row at 0 because a mechanism failed and a row
-   at 0 because the run stopped earlier are the two readings this whole paragraph is about, and the fraction
-   alone separates neither — what separates them is how far the two runs got, which is `first→last` in the
-   engine's own units. It is a difference of LIFETIME counters and is therefore arithmetic a reader is entitled
-   to; `probeWork` is where that kind is established. */
+/* The standing as a sentence, with how far the run had got. An all-zero table has two readings, a run that
+   answered nothing and a run that never started, and `_switches` separates them: `engine_sched_step` raises
+   it beside its only `flow_credit_pick`, so `_switches: 0` is "no flow was ever handed the thread".
+   `schedEvents: 0` is not that marker, because `engine_sched_begin` seeds the frontier, and a flow created
+   counts, before the first table is composed. The span from the first record to the last is a difference of
+   lifetime counters (`probeWork`) and says how much work a row still at 0 had to be reached in. */
 const standingText = (s) =>
   s === null ? "no @H probe stream in this run — this stage makes no statement of that kind"
              : `${s.answered}/${s.asked} of the fixture's statements answered` +
                (s.ever > s.answered ? ` (${s.ever} ever — ${s.ever - s.answered} went back to 0)` : "") +
                (s.work === null
-                  /* NOT A ZERO, AND NOT THE OLD INFERENCE EITHER. An artifact older than the producer of that
-                     line says nothing about its own progress, and this reports the absence as one rather than
-                     re-deriving the sample-count proxy the paragraph above retires — a fallback to a reading
-                     this file has just called a claim it cannot check would be that claim surviving its own
-                     correction. */
+                                    /* Absence is reported as absence: an output without the @HEVENTS line says nothing about
+                     its own progress. */
                   ? `, over ${s.samples} @H table(s), NO @HEVENTS LINE — this artifact predates the progress ` +
                     `line, so how far the run had got when that table was composed is not in its output and ` +
                     `neither reading of a 0 row is established here`
@@ -630,20 +551,13 @@ const standingText = (s) =>
                            `answered without the event count moving between its tables`
                          : ` from ${s.first.schedEvents} at the first, a span of ` +
                            `${s.work.schedEvents - s.first.schedEvents} events` +
-                           /* AND WORK IS NOT THE ONLY THING A ROW CAN BE WAITING ON, WHICH THIS SENTENCE USED
-                              TO ASSUME. Every async continuation in this engine is a JOB, so a statement
-                              behind an await, a reaction, a timer or a delivery cannot be answered by ANY
-                              amount of straight-line work — and a run that executed none has not "had the
-                              work to reach and did not", it has not reached the half of itself those rows sit
-                              behind. Charging the MECHANISM there is the wrong component.
-                              THE SPLIT IS WHAT DECIDES IT AND IT IS ON THE LINE. solver/flow.h partitions the
-                              backlog by what each job waits on — the host, the member finishing its own
-                              program, or RANK — and only the last is the ordering's to move. So a zero job
-                              count beside a zero rank-eligible count is a run whose jobs were all FRAMED:
-                              nothing was ever the scheduler's to pick, and the rows behind them are unasked
-                              rather than unanswered. Read as a positive statement, never defaulted — the
-                              field is in probeWork's derived list, so its absence throws above rather than
-                              arriving here as a plausible zero. */
+                                                      /* Work is not the only thing a row can wait on: every async continuation is a
+                              job, so a statement behind an await, a reaction, a timer or a delivery is not
+                              reached by straight-line work. solver/flow.h partitions the backlog by what each
+                              job waits on (the host, the member finishing its own program, or rank) and only
+                              the last is the ordering's to move, so zero jobs run beside zero rank-eligible
+                              is a run whose rows behind jobs are unasked. `_jobsReady` is in `hworkFields`,
+                              so its absence throws in `probeWork`. */
                            (s.work._jobsRun === 0
                               ? `, AND NOT ONE JOB RAN across it${s.work._jobsReady === 0
                                    ? ` with NOTHING EVER RANK-ELIGIBLE — every job this run held was waiting `
@@ -659,43 +573,30 @@ const standingText = (s) =>
                                 `than the budget`)));
 
 
-/* AND THE STAGE THAT DECLINED TO ASK ITS QUESTION AT ALL, which `skipped` below already reports for the cases
-   THIS file can see — a program that did not link — and which was invisible for the cases only the CHILD can
-   see. A gate whose first act is to establish that the artifact in front of it belongs to a nameable revision
-   (§Testing) exits non-zero when it does not, and that arrived here as `FAILED rc=1`: indistinguishable from
-   the layer under test being broken, and read as exactly that. The witness is a line the child WROTE, not its
-   exit status, on the same argument BUDGET_NOT_INSTALLED is read that way — a status is a value a program may
-   produce for some other reason entirely. The tag is left open (`[<gate>] REFUSED TO MEASURE: …`) so any gate
-   can state it in its own name rather than this file keeping a list of which ones can. */
+/* A stage whose child declined to measure. A gate that cannot name the revision of the artifact in front of
+   it exits non-zero, and the witness is the line it writes, not its exit status, which a program may produce
+   for another reason. The tag is open (`[<gate>] REFUSED TO MEASURE: …`) so any gate can state it in its own
+   name. */
 const REFUSED_WITNESS = /^\[[^\]\n]+\] REFUSED TO MEASURE: (.+)$/m;
 
-/* THE CAUSE'S NAME, FOR THE ONE LINE ANYBODY READS. A `split(" (")[0]` was the whole of this and it only
-   worked for the arms that happen to open with a parenthesis: the two that do not — NOT ESTABLISHED, and the
-   too-few-censuses arm — put a whole paragraph into the stage table, where the report pads every label to a
-   column width. A name ends at the first " (" or the first " — ", whichever comes first, which is true of
-   every arm because that is how each one is written. */
-/* AND `check.h`'S LINE IS A RECORD, SO ITS NAME IS COMPOSED FROM ITS FIELDS RATHER THAN SLICED OFF ITS FRONT.
-   The rule below ends a name at the first " — " and pads it into a table column, and the macro writes
-   `@WHY {"phase":…,"cond":…,"at":…,"reason":…}` — so the ninety columns a name gets are spent on `phase` and
-   on the C text of the condition, and the `reason` (the only field written for a reader) never starts before
-   the cut. The two fields anybody acts on are WHERE it fired and WHAT it says, in that order, which is the
-   order §AN-ASSERT-THAT-NAMES-A-REMEDY asks for: a remedy with an object.
-   A LINE THIS CANNOT PARSE IS RETURNED WHOLE. The record is evidence; a name derived from a shape it does not
-   have would be a guess replacing it, and the shape moving is itself the finding. The captured bytes are used
-   as they were written rather than JSON-unescaped, so there is no arm here that can throw. */
+/* check.h's assertion line is a record (`@WHY {"phase":…,"cond":…,"at":…,"reason":…}`), so its name is
+   composed from the two fields a reader acts on, where it fired and what it says, in that order. A line this
+   cannot parse is returned whole. The captured bytes are used as written, not JSON-unescaped, so nothing here
+   throws. */
 const assertRecordName = (cause) => {
   const at = cause.match(/^@(?:WHY|E) \{.*"at":"((?:[^"\\]|\\.)*)"/);
   const why = cause.match(/^@(?:WHY|E) \{.*"reason":"((?:[^"\\]|\\.)*)"/);
   return at && why ? `${at[1]} ${why[1]}` : cause;
 };
 
+/* The cause's name for the stage table: it ends at the first " (" or " — ", whichever comes first, which is
+   how every cause arm is written. */
 const causeName = (raw) => {
   const cause = assertRecordName(raw);
   const cut = [" (", " — "].map((d) => cause.indexOf(d)).filter((i) => i >= 0);
   const name = (cut.length ? cause.slice(0, Math.min(...cut)) : cause).trim();
-  /* AND IT STAYS A TABLE CELL. `report` pads every label to one column width, so a verdict that runs to a
-     paragraph reflows the whole stage list and the one line anybody reads becomes unreadable. The full record
-     is printed in the detail line above it — this is the name, not the evidence. */
+    /* It stays a table cell: `report` pads every label to one column width. The full record is printed in the
+     detail line. */
   return name.length > 90 ? name.slice(0, 89) + "…" : name;
 };
 
@@ -717,46 +618,20 @@ const causeName = (raw) => {
    candidate session, a joined document's boot flow) enters at reward 0 and is exactly that population.
    Same field contract as @COLD: the names are engine.c's printf, and an absent one throws rather than being
    silently compared as undefined. */
-/* THE LIST IS DERIVED AND IS NO LONGER A LIST, which is this reader's own defect closed rather than another
-   row added to it. What stood here was `result_wfq_json`'s format string retyped by hand, on the argument
-   that "adding a row there is a change in two places on purpose" — and the measurement is that it never was.
-   The second place does not get changed. This file already recorded THREE rows found months after they were
-   added; at the revision this was written the count was EIGHT — `picksLive`, `picksMax`, `picksLifetime`,
-   `topForgiven`, `scanCensusRuns`, `scanCensusWeights`, `schedEvents`, and the four of test_forced.c's progress
-   line — and THREE of those landed in the hour this function was being written. A required-PRESENCE loop
-   cannot notice a row that was never in its list, so every row added over there joins the unchecked half by
-   default, is computed on every sample of every run, and is read by nothing.
-   SO THE ROW SET COMES FROM THE DECLARATION THE COMPOSER EMITS FROM (`censusDefFields` over
-   solver/metrics/wfq.def and wfq_frontier.def), which is `hostDefine`'s rule for a constant and
-   `forkCensusName`'s for a spelling, applied to the one fact this file kept a copy of. A row the declaration
-   drops or renames fails at this line instead of being compared as `undefined` — which is FALSE for every
-   input, so the arm reading it can never fire again.
-   THE PER-ROW READING NOTES THAT STOOD HERE ARE GONE WITH THE LIST, deliberately and not as collateral. Every
-   one of them restated a paragraph solver/result.c or solver/flow.h already carries beside the row itself —
-   what `topSvc` says that `topSvcFam` cannot, why `visZero` is not `unrun`, what the three candidate rows
-   separate — so they were second copies of the producer's own reasoning, kept in the file whose whole subject
-   is what a second copy costs. The producer is one `git show` away and is where a row's meaning is maintained.
-   WHAT SURVIVES IS THE READING THAT BELONGS TO THIS FILE AND TO NO OTHER, because it spans two lines and the
-   producer of neither can state it: `delivReady` is NOT the @COLD census's `canDeliver`. That row is
-   `flow_stack_empty && pending_ready`; this one subtracts the members flow_pick REFUSES for carrying the
-   host-owed mark, so `canDeliver - delivReady` is exactly the population the ARM could serve and the PICK will
-   not offer the thread to. And `nonrewardMax` is carried out of the engine rather than grepped for the reason
-   `ageQuantum` is read and not restated — it is the bound `flow_nonreward` asserts, folding the optimism
-   ceiling, the fitness ladder over FLOW_RUNGS_N and the aging's zero, and `hostDefine` reads plain numeric
-   defines while that one is an expression.
-   MEMOIZED BECAUSE IT IS A FILE READ AND THE ANSWER CANNOT CHANGE UNDER ONE BUILD — and never evaluated at
-   module load, which is the shape that has already left an instrument throwing for every lane in this shared
-   tree: `HOST` is a `const` far below this line, so a top-level derivation here would reach it in its temporal
-   dead zone and `node --check` would pass on it. */
+/* The rows the @WFQ reader requires, from the declarations the composer emits from (solver/metrics/wfq.def
+   and wfq_frontier.def, through `censusDefFields`), so a row the declaration drops or renames fails here
+   instead of comparing as `undefined`. A row's meaning is stated beside the row in solver/result.c and
+   solver/flow.h. Two readings belong to this file because they span two lines. `delivReady` is not the @COLD
+   census's `canDeliver`: that row is `flow_stack_empty && pending_ready`, and this one subtracts the members
+   flow_pick refuses for carrying the host-owed mark, so `canDeliver - delivReady` is the population the arm
+   could serve and the pick will not offer the thread to. `nonrewardMax` is carried out of the engine because
+   it is an expression (the bound `flow_nonreward` asserts) and `hostDefine` reads plain numeric defines.
+   A `sourceFact`, for `coldFields`' reason. */
 const wfqFields = sourceFact(() => censusDefFields(["wfq", "wfq_frontier"],
   "the @WFQ reader states which rows it requires of a census that claims an order, and it takes that set " +
   "from the composer's declaration rather than from a list beside it").numeric);
-/* A CONSTANT OF THE ENGINE IS READ FROM THE ENGINE, NEVER RESTATED HERE — the rule `ageQuantum` was written
-   for and which now has a second reader (`hungCauseCensus`'s census cadence), so it is one function rather than two
-   copies of one regex. Throws on an absent or unparseable define, because the alternative is this reader
-   quietly pricing something at a rate the engine stopped charging — the same class of defect as comparing an
-   absent census field as undefined, and caught the same way. `HOST` is initialised long before any stage calls
-   this. */
+/* A numeric `#define` of the engine, read from the engine and never restated here. Throws on an absent or
+   unparseable define rather than pricing something at a remembered value. */
 function hostDefine(file, name, why) {
   const m = hostSource(file, why)
     .match(new RegExp(`^#define\\s+${name}\\s+\\(?\\(?(?:\\(int64_t\\))?\\s*(\\d+)`, "m"));
@@ -776,28 +651,12 @@ function censusDefFields(families, why) {
   return defFields(families.map((f) => ({ label: `engine/host/solver/metrics/${f}.def`,
                                           src: hostSource(`solver/metrics/${f}.def`, why) })), why);
 }
-/* AND THE HALF A NUMERIC ROW SET CANNOT SPEAK FOR: WHICH OBJECTS THE COMPOSER SPLICES, AND WHETHER THIS FILE
-   CHECKS THEM. `censusComposerFields` names the two kinds apart so that a caller asks for the one it can
-   check; that is the whole of what it can do, because it does not know who its caller is. What it cannot
-   notice is a composer that grows a FOURTH `%s` — the row is silently absent from `.numeric`, absent from
-   every presence loop, computed on every census of every run, and read by nothing. That is precisely the
-   defect the numeric derivation was built to end, arriving one KIND over and invisible to it.
-   SO THE CALLER STATES WHICH OBJECTS IT VALIDATES AND THE MISMATCH THROWS, IN BOTH DIRECTIONS. A caller
-   validating none passes an EMPTY set to say so rather than by omission — "this census publishes no object"
-   is a claim, and the day one does the reader that cannot check it is told instead of quietly dropping it.
-   AN EARLIER FORM OF THIS PARAGRAPH ENUMERATED WHICH READER VALIDATES WHAT, AND BOTH HALVES OF THAT
-   ENUMERATION WENT STALE BEFORE ANYONE READ IT AGAIN — it said @HEAP and @SWAP validate none, and @HEAP had
-   gained `childRealmRefSites` while @SWAP has since gained the `cowStateAsks`/`cowStateMade` pair. THE ROT IS
-   THE POINT AND IS WHY THE LIST IS DELETED RATHER THAN CORRECTED: a list of which callers validate what is
-   the second copy of a fact THE CALL SITES THEMSELVES STATE, which is precisely the hand-kept list this whole
-   mechanism exists to end, arriving one level up in the prose that describes it. The call sites are the
-   enumeration. What does not rot is what the refusal is FOR, and that is all that belongs here: a `%s` row is
-   absent from `.numeric`, absent from every presence loop, computed on every census of every run, and read by
-   nothing. `censusHistRows` is the shape for a PARTITION and the message below says "if it is a partition"
-   for a reason — what is required is a reader, never a particular one.
-   THE DIRECTION THAT IS ALREADY COVERED IS STILL CHECKED HERE, AND CHEAPLY: a renamed histogram would throw at
-   `censusHistRows` when the reading runs, but only if that reading is reached, whereas this fires while the
-   row set is being taken and names the composer. One throw, at the seam, for a set that is one line long. */
+/* The half a numeric row set cannot speak for: which objects the composer splices, and whether this file
+   checks them. A spliced row is absent from `.numeric` and from every presence loop, so the caller states
+   which objects it validates and a mismatch throws in both directions: an object with no reader named, or a
+   reader for an object the composer no longer splices. A caller validating none passes an empty set. What is
+   required is a reader, not a particular one (`censusHistRows` is the shape for a partition). The check
+   fires while the row set is taken and names the composer, before any reading runs. */
 function censusRowSet(file, from, to, objects, why) {
   return censusObjectsChecked(censusComposerFields(file, from, to, why),
                               `the composer at ${JSON.stringify(from)} in engine/host/${file}`, objects, why);
@@ -827,21 +686,10 @@ function censusObjectsChecked(d, where, objects, why) {
                       : ``));
   return d.numeric;
 }
-/* THE SAME RULE FOR A STRING — the two members of decide.c's fork census that this file has to recognise BY
-   NAME rather than by shape, because neither is a row and both are spelled in prose that only decide.c owns.
-   A copy of either here would be a second spelling that goes stale in silence: a rename over there would leave
-   this reader quietly reporting the overflow BUCKET as the hot predicate again, or summing the census's own
-   BOUND into the forks as though it were mass — both invisible from either side, and the first is precisely
-   the defect this reader exists to end. So they are read, and an unreadable one throws rather than being
-   guessed past.
-   IT REFUSES AN ESCAPED LITERAL RATHER THAN HALF-DECODING ONE. There is no C string unescaper here, and a key
-   containing `\n` or `\x41` would be matched against the JSON's decoded bytes as the two characters it is
-   written with — a comparison that silently never matches, which is exactly the same silence. decide.c's own
-   note says the overflow row is named "under a name no constraint key can collide with because no key is
-   prose", so a backslash appearing in either is a change of kind and this is where it stops.
-   ONE READER FOR BOTH, which is the rule `hostDefine` above is written for applied to a second kind of fact: a
-   second copy of this regex and this refusal would be two spellings of one contract, and the day one of them
-   learned something the other would keep not knowing it. */
+/* The same rule for a string: the members of decide.c's fork census this file recognises by name, because
+   they are not rows and are spelled in prose only decide.c owns. They are read, and an unreadable one throws.
+   An escaped literal is refused rather than half-decoded: there is no C string unescaper here, and a key
+   holding a backslash would be compared with the JSON's decoded bytes and never match. */
 function forkCensusName(sym, why) {
   const file = "solver/decide.c";
   const m = hostSource(file, why)
@@ -863,9 +711,8 @@ const forkLightestKey = sourceFact(() =>
                  "can have taken — from the rows by that exact name, and without it that bound is summed into " +
                  "the forks as mass no fork produced and every percentage is taken against the wrong " +
                  "denominator"));
-/* AND THE SAME PAIR FOR THE UNNAMED-FORK-SITE TABLE, READ RATHER THAN COPIED FOR THE SAME REASON. A bound is
-   a statement about ONE table (Space-Saving's guarantee is about the table that did the evicting), so the two
-   tables have two spills and two bounds and neither pair can answer the other's question. */
+/* The same pair for the unnamed-fork-site table. A bound is a statement about one table (Space-Saving's
+   guarantee is about the table that did the evicting), so the two tables have two spills and two bounds. */
 const forkSiteOverflowKey = sourceFact(() =>
   forkCensusName("SITE_OVERFLOW_KEY",
                  "the @FORKAT reader tells the unnamed-fork-site table's overflow BUCKET from the shapes it " +
@@ -886,16 +733,9 @@ const ageQuantum = sourceFact(() =>
              "the @WFQ reader prices the aging term from flow.c's FLOW_AGE_QUANTUM factors") /
   hostDefine("solver/flow.c", "FLOW_SILENCE_WORK",
              "the @WFQ reader prices the aging term from flow.c's FLOW_AGE_QUANTUM factors"));
-/* AND THE FOUR THAT WERE READ FROM INSIDE A STAGE, DECLARED HERE FOR THE ONE REASON THE FREEZE HAS. Each of
-   these was a `hostDefine`/`censusComposerFields` call in the body of a reader, so it was taken when that
-   reader ran — after the compile, which is the defect `sourceFact` exists to end. Declared at module scope they
-   are registered, and the freeze takes them with everything else; their readers now CALL them. They sit with
-   the other source-derived facts rather than beside their callers because the freeze is over all of them and
-   because a reader looking for "what does this build derive from the engine's sources" has one place to look.
-   USED ABOVE THEIR DECLARATION, WHICH IS SOUND AND IS THIS FILE'S EXISTING SHAPE: a `const` at module scope is
-   in its temporal dead zone only until this line is evaluated, and every caller runs from a stage, long after
-   it — the same reason `coldFields` may reference `HOST` from three hundred lines above where `HOST` is
-   declared. */
+/* Facts whose readers run inside a stage, declared here so the freeze takes them with the rest. They are
+   used above their declaration, which is sound: a module-scope `const` is in its temporal dead zone only
+   until this line is evaluated, and every caller runs from a stage. */
 const forkKeySlots = sourceFact(() =>
   hostDefine("solver/decide.c", "DECIDE_FORK_KEYS",
              "the @FORKAT reader checks that a census reporting an eviction is one whose predicate table is " +
@@ -936,49 +776,20 @@ const hworkFields = sourceFact(() =>
     "`standingText` states how far a run had got when its probe table was composed, and that is the one " +
     "number deciding which of a 0 row's two readings the WHOLE table has").numeric);
 
-/* WHICH OF TWO READINGS A FRONT-OF-QUEUE SENTENCE ABOUT THE UNFRAMED POPULATION HAS — the one thing the rest
-   of this reading cannot say, and the question solver/flow.c's job-split residual states and deliberately
-   refuses to decide. Both arms below reach a sentence that closes a question: `jobWGap: 0` renders "nothing
-   the ordering can do would run these sooner", and the second-silence arm renders "read where jobs are
-   queued". Each is true of a population the ORDER has reached and each is a wrong instruction for one it has
-   not, and no row on that line could tell the two apart — `memUnframed` is a gauge over one instant and says
-   who is standing in the state, never whether the scheduler has ever offered one of them the thread.
-   IT IS STATED AS WHAT EACH OUTCOME REFUTES RATHER THAN AS WHAT IT PROVES, which is the only form this row
-   earns: a zero refutes "the dispatch takes them" outright, and a non-zero refutes "the dispatch never takes
-   them" outright, and neither settles by itself what the remaining defect IS. The share against
-   `picksLifetime` is the follow-on reading and is printed so it can be taken rather than assumed.
-   THE DENOMINATOR IS READ FIRST AND THAT IS NOT A CAVEAT. `unframedPicksLifetime: 0` on an instance that has
-   dispatched NOTHING is the absent reading of a zero and is about neither — the pair CLAUDE.md prescribes for
-   every count offered as a share of another, and the one arm here that says so instead of judging.
-   AND `picksLifetime` IS NOT THE WHOLE OF THAT DENOMINATOR, WHICH IS THE ARM THAT WAS MISSING AND THE ONE THE
-   FIRST READING OF THIS ROW LANDED IN. Both verdicts below are about the DISPATCH — whether it takes a member
-   whose stack is empty when it could have taken another — so each is a claim about a CHOICE, and a choice is
-   only a thing that happened where there was something to choose between. `arrivals - departures == members`
-   is asserted at flow_wfq_census, so members at any instant is at most `arrivals` at that instant and at most
-   `arrivals` at the end: an instance reporting ONE arrival has never held two members, every dispatch it ever
-   made went to the only member there was, and the share is then 100% or 0% BY CONSTRUCTION — decided by what
-   that one member's stack happened to be doing and by nothing about the order. Both verdicts are unavailable
-   there, and the non-zero one is the dangerous half, because it renders the word REFUTED off an arithmetic
-   identity.
-   IT IS AN IDENTITY AND NOT A THRESHOLD, which is the only form this arm may take: `arrivals <= 1` is the
-   exact condition under which the frontier never offered the pick an alternative, so there is no sample size
-   being judged and no run being called too short — §NO BOUNDS is untouched and nothing here decides that work
-   will not happen. A frontier that DID hold two members is judged by the two arms below whatever its totals.
-   MEASURED, AND IT IS WHY THIS ARM EXISTS RATHER THAN A CAUTION: the only emission of this row anywhere in
-   this session's archive reads `unframedPicksLifetime: 1` of `picksLifetime: 1` at `members: 1`, `arrivals:
-   1`, `departures: 0`, `schedEvents: 2` — a native smoke instance that minted one flow and stepped it once. The
-   arm below would have rendered "Those members ARE dispatched … 100.0% … REFUTED" from it, and solver/flow.c's
-   job-split residual is waiting on a reading of this row to separate two readings about a REAL-PAGE frontier
-   of hundreds of members. A degenerate instance cannot separate them and must not appear to.
-   RETIREMENT: this arm goes when the census publishes the dispatches this row is a subset of against the
-   population the pick actually chose from, so that "there was an alternative" is a row rather than a
-   derivation from `arrivals`. */
+/* Which of two readings a front-of-queue sentence about the unframed population has: whether the dispatch
+   has ever handed the thread to a member whose stack was empty. `memUnframed` is a gauge over one instant;
+   `unframedPicksLifetime` is the lifetime count this reads. Each outcome is stated as what it refutes: zero
+   refutes "the dispatch takes them", non-zero refutes "the dispatch never takes them", and neither says what
+   the remaining defect is. The share against `picksLifetime` is printed beside it.
+   Two arms come first because both verdicts are about a choice. No dispatch at all is the absent reading of
+   a zero. And `arrivals <= 1` is an instance that never held two members (`arrivals - departures == members`
+   is asserted at flow_wfq_census), so every dispatch went to the only member and the share is 100% or 0% by
+   construction; that is an identity, not a threshold on the run's size. The arm goes when the census
+   publishes the dispatches against the population the pick chose from. */
 function unframedPickSentence(w) {
-  /* THE OPERAND THIS ARM RESTS ON, CHECKED BEFORE IT IS READ — a consumer never defaults a producer's field
-     (CLAUDE.md), and `arrivals` is read nowhere else in this reader, so a producer that stopped emitting it
-     would make the new arm silently unreachable and every degenerate instance would reach the verdicts again.
-     The identity is the engine's own and is asserted at flow_wfq_census, where it is compiled out of a release
-     build that this reader still runs against. */
+    /* The operands the degenerate arm rests on are checked before they are read: `arrivals` is read nowhere
+     else in this reader, and the engine's own assert of the identity (flow_wfq_census) is compiled out of a
+     release build this reader still runs against. */
   if (typeof w.arrivals !== "number" || typeof w.departures !== "number" ||
       w.arrivals - w.departures !== w.members)
     throw new Error(`[build] the @WFQ census reports arrivals ${w.arrivals} and departures ${w.departures} ` +
@@ -4355,10 +4166,11 @@ function retireReading(b, lastRetire, n, every) {
 /* Names why a killed run did not finish, from the two streams in its captured output: the @COLD frontier
    census and the fixture's probe table. Each is read as its last sample against one a fixed number of samples
    behind it (`HUNG_WINDOW_CENSUSES`, or half the run when that is shorter), never two adjacent ones, because
-   one re-ranking pause between adjacent samples reads as a stall. `finished` rising is not by itself health:
-   the probe table says whether the work that retired advanced any statement the fixture makes. Every census
-   row read is required through `censusFields`, so an absent row throws. The result is diagnosis; the caller's
-   verdict stays a non-pass. */
+   one re-ranking pause between adjacent samples reads as a stall. Censuses are taken at a fixed cadence of
+   engine work (`progressEvery`), so the window is a span of work and not of time. `finished` rising is not by
+   itself health: the probe table says whether the work that retired advanced any statement the fixture makes.
+   Every census row read is required through `censusFields`, so an absent row throws. The result is diagnosis;
+   the caller's verdict stays a non-pass. */
 function hungCauseCensus(out) {
   const s = [];
   for (const m of out.matchAll(/^@COLD (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
