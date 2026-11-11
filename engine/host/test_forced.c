@@ -820,6 +820,8 @@ typedef struct { const char *at; const char *type; const char *body; } TfServed;
                        "#lnBig{" LINKNEST_D100("0") LINKNEST_D100("1") LINKNEST_D100("2") LINKNEST_D100("3")   \
                        LINKNEST_D100("4") LINKNEST_D100("5") LINKNEST_D100("6") LINKNEST_D100("7")             \
                        LINKNEST_D100("8") LINKNEST_D100("9") "height:3px}"
+/* fixture/fontload.h's linked style sheet, whose relative font address resolves against the sheet's location. */
+#define FONTLOAD_SHEET "@font-face{font-family:FlExt;src:url(../fonts/fl-ext.woff2)}"
 /* fixture/collrest.h's elements: 50,000 empty `<i>` by macro repetition. */
 #define COLLREST_10 "<i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>"
 #define COLLREST_100 COLLREST_10 COLLREST_10 COLLREST_10 COLLREST_10 COLLREST_10 COLLREST_10 COLLREST_10     \
@@ -849,6 +851,7 @@ static const TfServed TF_SERVED[] = {
     { "https://x.test/data/jsonrest-s.json", "application/json", JSONREST_BODY },
     { "https://x.test/sheet/linkrest.css", "text/css", LINKREST_SHEET },
     { "https://x.test/sheet/linknest.css", "text/css", LINKNEST_SHEET },
+    { "https://x.test/sheet/fontload.css", "text/css", FONTLOAD_SHEET },
     { "https://x.test/chunk/rxmod.js", "text/javascript",
       "var rxmR = /" RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 "b/;"
       "export var m = rxmR.test('a'.repeat(327680) + 'b') && !rxmR.test('a'.repeat(327680))"
@@ -1579,6 +1582,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fragscript.h"
 #include "fixture/fragbase.h"
 #include "fixture/linkimage.h"
+#include "fixture/fontload.h"
 #include "fixture/focusbox.h"
 #include "fixture/altbutton.h"
 #include "fixture/inputbutton.h"
@@ -2372,6 +2376,7 @@ TF_DOCS[] = {
     { "fragscript", HTML_FRAGSCRIPT },
     { "fragbase", HTML_FRAGBASE },
     { "linkimage", HTML_LINKIMAGE },
+    { "fontload", HTML_FONTLOAD },
     { "focusbox", HTML_FOCUSBOX },
     { "altbutton", HTML_ALTBUTTON },
     { "inputbutton", HTML_INPUTBUTTON },
@@ -17806,6 +17811,80 @@ TF_UNIT void probes_linkimage(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* Whether the fixture was shown a pending line for the font at `path` under any provenance. */
+static int fontload_asked(const char *path) {
+    char url[96];
+    int k = snprintf(url, sizeof url, "https://x.test/fonts/%s", path);
+
+    CHECK(k > 0 && (size_t)k < sizeof url, "a font row's address did not fit its buffer");
+    return tf_seen_line(url, PENDING_PINNED_NO, NULL) || tf_seen_line(url, PENDING_PINNED_YES, NULL);
+}
+
+/* The rows of the `fontload` document (fixture/fontload.h): which `@font-face` resources text layout
+   requests, each against Chrome 153's requests for the same markup. A request is read off the pending lines
+   the fixture's zone was shown; `used` is read in the observed world, where the load is the page's own act. */
+TF_UNIT void probes_fontload(const char *js, Probe *tab, int *n) {
+    static const struct { const char *row, *path, *why; } LOADS[] = {
+        { "font-load-composite", "fl-comp-latin.woff2",
+          "css-fonts-4 §5.2: the face whose unicode-range includes the text's characters was not requested" },
+        { "font-load-format", "fl-fmt.ttf",
+          "css-fonts-4 §4.3.3: the src item after one with an unknown format hint was not requested" },
+        { "font-load-sheet-relative", "fl-ext.woff2",
+          "css-values-4 §4.5.4: a linked sheet's relative font address was not requested resolved against the "
+          "sheet's location" },
+        { "font-load-painted", "fl-paint.woff2",
+          "css-fonts-4 §5.2: a face used by text no script measures was not requested, so update the "
+          "rendering's layout did not start the load" },
+    };
+    static const struct { const char *row, *path, *why; } NEVER[] = {
+        { "font-unused", "fl-unused.woff2",
+          "css-fonts-4 §4.8.1: a face no element's font-family names was requested" },
+        { "font-display-none", "fl-none.woff2",
+          "css-fonts-4 §4.8.1: a face named only by an element that generates no box was requested" },
+        { "font-out-of-range", "fl-range.woff2",
+          "css-fonts-4 §4.5: a face was requested for text outside its unicode-range" },
+        { "font-composite-other", "fl-comp-cjk.woff2",
+          "css-fonts-4 §4.5: the composite's face whose range holds none of the text was requested" },
+        { "font-installed-first", "fl-inst.woff2",
+          "css-fonts-4 §5.2: a face was requested behind an installed family that has the text's characters" },
+        { "font-format-unknown", "fl-zebra.zeb",
+          "css-fonts-4 §4.3.3: a src item whose format hint is unknown was requested" },
+        { "font-space-only", "fl-space.woff2",
+          "a face was requested for an element whose text is white space only, which Chrome 153 does not load" },
+    };
+    enum { NL = COUNTOF(LOADS), NN = COUNTOF(NEVER) };
+    Probe rows[1 + NL + NN];
+    const char *why[1 + NL + NN] = { NULL };
+    int tt[1 + NL + NN], reached = !!strstr(js, "\"/api/fontload\""), i;
+
+    /* The used face: requested in the observed world, and the script that measured its text ran on. */
+    tt[0] = 1;
+    fold_row(&tt[0], &why[0], reached,
+             "NOT REACHED: there is no /api/fontload record, so the document aborted before its fetch");
+    fold_row(&tt[0], &why[0],
+             tf_seen_line("https://x.test/fonts/fl-used.woff2", PENDING_PINNED_NO, PENDING_PROVENANCE_OBSERVED),
+             "css-fonts-4 §5.2: the face visible text uses was not requested in the observed world");
+    rows[0] = (Probe){ "font-load-used", tt[0], "/api/fontload", SESS_EXPLORE, why[0] };
+    for (i = 0; i < NL; i++) {
+        tt[1 + i] = 1;
+        fold_row(&tt[1 + i], &why[1 + i], reached,
+                 "NOT REACHED: there is no /api/fontload record, so the document aborted before its fetch");
+        fold_row(&tt[1 + i], &why[1 + i], fontload_asked(LOADS[i].path), LOADS[i].why);
+        rows[1 + i] = (Probe){ LOADS[i].row, tt[1 + i], "/api/fontload", SESS_EXPLORE, why[1 + i] };
+    }
+    /* A never row holds only once the used face was requested: with no load at all it would be vacuous. */
+    for (i = 0; i < NN; i++) {
+        int k = 1 + NL + i;
+
+        tt[k] = 1;
+        fold_row(&tt[k], &why[k], reached && fontload_asked("fl-used.woff2"),
+                 "NOT REACHED: the used face was never requested, so nothing shows this document's fonts load");
+        fold_row(&tt[k], &why[k], !fontload_asked(NEVER[i].path), NEVER[i].why);
+        rows[k] = (Probe){ NEVER[i].row, tt[k], "/api/fontload", SESS_EXPLORE, why[k] };
+    }
+    probes_append(tab, n, rows, 1 + NL + NN);
+}
+
 /* The rows of the `focusbox` document (fixture/focusbox.h). */
 TF_UNIT void probes_focusbox(const char *js, Probe *tab, int *n) {
     /* HTML §6.6.7's autofocus flush, §4.11.4's dialog focusing steps and §6.12's popover focusing steps, each
@@ -31399,6 +31478,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fragscript(js, probes, &np);
     probes_fragbase(js, probes, &np);
     probes_linkimage(js, probes, &np);
+    probes_fontload(js, probes, &np);
     probes_focusbox(js, probes, &np);
     probes_altbutton(js, probes, &np);
     probes_inputbutton(js, probes, &np);
