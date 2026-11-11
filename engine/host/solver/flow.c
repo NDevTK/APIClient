@@ -2720,8 +2720,8 @@ void flow_sale_end(Flow *f, JSValue stand_ins) {
        stay, since a replay delivers by them. */
     source_cut_flow_cold(f);
     flow_rows_release(f);
-    /* A stub stands at no row: its replay starts the sequence again. */
-    f->script_i = 0; f->last_compiled = -1; f->imm_at = -1; f->imm_next = 0;
+    /* A stub stands at no row and in no row's compile: its replay starts the sequence again. */
+    f->script_i = 0; f->last_compiled = -1; f->imm_at = -1; f->imm_next = 0; f->in_compile = 0;
     f->pending = stand_ins;
 #if APICLIENT_DEV
     {
