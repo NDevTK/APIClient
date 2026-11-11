@@ -206,11 +206,7 @@ JSValue page_reveal_begin(JSContext *ctx)
        dev-only (core/realm.h), as the assert is. */
 #if APICLIENT_DEV
     {
-        JSValue vt = realm_interface_prototype_object(ctx, "ViewTransition");
-        bool built = !JS_IsUndefined(vt);
-
-        JS_FreeValue(ctx, vt);
-        DCHECK(!built,
+        DCHECK(!realm_built_interface_prototype_object(ctx, "ViewTransition"),
                "§7.4.6.3 step 3 reads doc's active view transition and this realm has built the ViewTransition "
                "interface: the reveal still hands PageRevealEvent a null and step 5 (activate the view "
                "transition) is not written. Build CSS View Transitions' document state here and in "

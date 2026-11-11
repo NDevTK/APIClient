@@ -503,11 +503,7 @@ static void step_18(JSContext *docctx)
     /* Asked of the realm's interface census rather than a global name, which a page can define itself. The
        census is dev-only (core/realm.h), as the assert is. */
 #if APICLIENT_DEV
-    JSValue vt = realm_interface_prototype_object(docctx, "ViewTransition");
-    bool built = !JS_IsUndefined(vt);
-
-    JS_FreeValue(docctx, vt);
-    DCHECK(!built,
+    DCHECK(!realm_built_interface_prototype_object(docctx, "ViewTransition"),
            "update the rendering step 18 performs pending transition operations (CSS View Transitions §7.2): "
            "setup view transition calls the author's ViewTransitionUpdateCallback and settles "
            "ready/updateCallbackDone/finished. This realm has built ViewTransition, so step 18 must be written");

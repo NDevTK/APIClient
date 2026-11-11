@@ -250,9 +250,9 @@ void realm_assert_global_property_references(JSContext *ctx);
  * newer site's realm was judged by nothing. A per-realm line a host can forget is what this file's own banner
  * exists to abolish, and an ASSERTION is not exempt from that because it asserts rather than installs.
  *
- * DEV ONLY, and the two note entries with it: they build a per-realm census object per realm, which is work
- * rather than a side-effect-free test, so the block and not merely the DCHECK is compiled out. A caller guards
- * its call with APICLIENT_DEV. */
+ * DEV ONLY, and the note entries with it: they keep a per-realm record in C memory, never JS heap, so the dev
+ * build's heap and every walk priced by it are the release build's; the block and not merely the DCHECK is
+ * compiled out. A caller guards its call with APICLIENT_DEV. */
 #if APICLIENT_DEV
 /* WEB IDL §3.7.3 Interface prototype object — this realm built one for `iface`, and THIS IS THE OBJECT.
    Called from core/idl_args' idl_interface_tag, which is the one statement of that step in this tree, so a
@@ -264,11 +264,21 @@ void realm_assert_global_property_references(JSContext *ctx);
    there was no way to reach a realm's prototype by identifier at all, so such a check had nowhere to stand.
    It is one record and not two: the fact recorded is that this realm built THIS object for THAT interface, and
    each consumer asks its own question of it — realm_assert_interface_objects_asked reads the KEYS and ignores the
-   value, idl_args.c's §3.3.14 [Unscopable] walk reads the VALUE. */
+   value, idl_args.c's §3.3.14 [Unscopable] walk reads the VALUE. The object is recorded by address and holds no
+   reference. */
 void realm_note_interface_prototype_object(JSContext *ctx, JSValueConst proto, const char *iface);
-/* That object back, by identifier. JS_UNDEFINED for an interface this realm never built — the sound arm, not
-   a failure: a worker realm has no Element. OWNED by the caller. */
+/* Whether this realm built `iface`'s interface prototype object. False is the sound arm, not a failure: a worker
+   realm has no Element. */
+bool realm_built_interface_prototype_object(JSContext *ctx, const char *iface);
+/* Whether `obj` is the interface prototype object this realm built for `iface`. Asked of a live `obj`; an address
+   a freed prototype left and `obj` reuses answers true. */
+bool realm_is_interface_prototype_object(JSContext *ctx, const char *iface, JSValueConst obj);
+/* That object back, by identifier, read from the realm class slot that holds it: an interface whose prototype a
+   check reads stores it with JS_SetClassProto, and one held by no slot fails. JS_UNDEFINED for an interface this
+   realm never built. OWNED by the caller. */
 JSValue realm_interface_prototype_object(JSContext *ctx, const char *iface);
+/* The realm is torn down: its census goes with it. */
+void realm_census_release(JSContext *ctx);
 /* WEB IDL §3.8's `define the global property references` — a component ASKED this realm's global for `id`.
    Called at the two entries that can refuse: §3.8's door itself, before §3.3.7 step 1, and
    idl_install_interface_object_exposed, before §3.3.7 step 2. Recorded BEFORE either refusal, because a

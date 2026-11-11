@@ -345,6 +345,9 @@ static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
     }
     document_free(cctx);
     node_wrap_realm_teardown(cctx);   /* the wrappers this realm created whose nodes outlived its documents */
+#if APICLIENT_DEV
+    realm_census_release(cctx);
+#endif
 }
 
 

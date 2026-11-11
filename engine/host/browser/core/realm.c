@@ -356,61 +356,149 @@ void realm_assert_global_property_references(JSContext *ctx)
     JS_FreeValue(ctx, global);
 }
 
-/* ---- Web IDL §3.8's OTHER DIRECTION: every interface object this realm OWES was ASKED for ------------------
-   See realm.h for the argument — why §3.7.3's class string is the observation site, why the other side is
-   the ASK and not the placement, and why the caller and not this file states that a realm is finished. What
-   lives here is the STORE and the walk.
+/* ---- Web IDL §3.8's other direction: every interface object this realm owes was asked for ----------------
+   See realm.h for why §3.7.3's class string is the observation site and the ask, not the placement, is the
+   other side. What lives here is the store and the walk.
 
-   THE TWO CENSUSES ARE PER-REALM JS OBJECTS IN THE SLOT ARRAY THIS FILE ALREADY OWNS, and that is not a
-   convenience: an interface prototype object is built PER REALM, the property reference is asked PER REALM,
-   and a module static holding either would be one realm's answer to every realm's question — the defect the
-   whole of realm.h exists to prevent, arriving in the auditor rather than in the platform. Being a JS object
-   also means each identifier is COPIED into an atom rather than held as a pointer: every identifier reaching
-   the notes below is a string literal or a static table entry today, and a census that depended on that would
-   be a census with a lifetime rule nobody can see.
-   THE OBJECT'S [[Prototype]] IS NULL, so a membership question is a question about what was RECORDED and never
-   about %Object.prototype% — `toString` and `constructor` are not interface identifiers, but a set whose
-   answers depend on which names ECMAScript happens to define is a set that answers a different question than
-   the one asked.
-   DEV ONLY, with the walk. */
-static JSClassID g_proto_tagged_slot;      /* §3.7.3 — identifiers this realm built an interface prototype object for */
-static JSClassID g_reference_asked_slot;   /* §3.8   — identifiers some component asked this realm's global for */
-static JSClassID g_member_slot;            /* §3.7.6-§3.7.7 — `Iface.prototype.member` installed in this realm */
+   The store is C memory keyed by the realm's serial (JS_GetContextSerial, never reused), so each realm's
+   question is answered from its own record. It is not a JS object: the census is dev-only bookkeeping, and an
+   object, shape, atom or class id minted for it is heap the release build does not have, which the collection
+   owe, the cycle collector's work and every other walk priced by heap entries would count, so the two builds
+   would run different schedules. Each identifier is copied. A prototype is recorded by its address and holds no
+   reference, because a reference only the dev build takes is a root only one regime's collector sees; the
+   address is compared, and dereferenced only through a counted holder (realm_interface_prototype_object). */
+typedef struct RealmCensusSet {
+    char **key;     /* open addressing over `cap` slots, a power of two; NULL is an empty slot */
+    uintptr_t *id;  /* beside each key: the §3.7.3 set's prototype address, 0 in the other two */
+    uint32_t cap, n;
+} RealmCensusSet;
 
-/* The per-realm census object, created on first note. `create` false is a PEEK: a realm that never noted has
-   no object, and the walk has to tell that apart from an empty one rather than mint one to read. */
-static JSValue realm_census(JSContext *ctx, JSClassID *slot, const char *what, bool create)
+typedef struct RealmCensus {
+    uint64_t serial;
+    RealmCensusSet tagged;    /* §3.7.3: identifiers this realm built an interface prototype object for */
+    RealmCensusSet asked;     /* §3.8: identifiers some component asked this realm's global for */
+    RealmCensusSet members;   /* §3.7.6-§3.7.7: `Iface.prototype.member` installed in this realm */
+} RealmCensus;
+
+/* The live realms' records; a realm's goes at its teardown (realm_census_release) or with the agent. */
+static RealmCensus *g_census;
+static int g_census_n, g_census_cap;
+
+static uint32_t census_hash(const char *k)
 {
-    JSValue set;
+    uint32_t h = 2166136261u;   /* FNV-1a */
 
-    if (*slot == JS_INVALID_CLASS_ID) {
-        if (!create) return JS_NULL;
-        *slot = realm_value_declare(ctx, what);
-    }
-    set = JS_GetClassProto(ctx, *slot);
-    if (JS_IsNull(set) && create) {
-        set = JS_NewObjectProto(ctx, JS_NULL);
-        CHECK(!JS_IsException(set), "realm: a Web IDL §3.8 census object could not be allocated");
-        JS_SetClassProto(ctx, *slot, JS_DupValue(ctx, set));
-    }
-    return set;   /* OWNED by the caller */
+    for (; *k; k++) h = (h ^ (uint8_t)*k) * 16777619u;
+    return h;
 }
 
-/* `value` is CONSUMED. It used to be nothing at all — "this is a set, and the key is the whole of what it
-   records" — and that is still true of the §3.8 census, which passes JS_UNDEFINED. It is NOT true of the
-   §3.7.3 one: the identifier says an interface prototype object was built and says nothing about WHICH OBJECT,
-   and a realm has no other way to reach one by name. A dev-only check that has to read a finished prototype
-   therefore had nowhere to get it, which is exactly the gap idl_args.c's [Unscopable] residual named.
-   CHECK rather than DCHECK because the define consumes nothing a caller could retry with and the only way it
-   fails is allocation — a census that silently dropped an identifier would report a component as having asked
-   when it did not, which is the one direction this instrument must never fail in. */
-static void realm_census_note(JSContext *ctx, JSClassID *slot, const char *what, const char *name, JSValue value)
+/* The slot holding `k`, or the empty slot it would go in. */
+static uint32_t census_slot(const RealmCensusSet *s, const char *k)
 {
-    JSValue set = realm_census(ctx, slot, what, true);
+    uint32_t i = census_hash(k) & (s->cap - 1);
 
-    CHECK(JS_DefinePropertyValueStr(ctx, set, name, value, JS_PROP_C_W_E) >= 0,
-          "realm: an identifier could not be recorded in a Web IDL §3.8 census");
-    JS_FreeValue(ctx, set);
+    while (s->key[i] != NULL && strcmp(s->key[i], k) != 0) i = (i + 1) & (s->cap - 1);
+    return i;
+}
+
+static bool census_has(const RealmCensusSet *s, const char *k, uintptr_t *id)
+{
+    uint32_t i;
+
+    if (s->cap == 0) return false;
+    i = census_slot(s, k);
+    if (s->key[i] == NULL) return false;
+    if (id) *id = s->id[i];
+    return true;
+}
+
+/* Records `k` (copied) with `id`; a second note of one identifier replaces its id, as a define over a key did. */
+static void census_put(RealmCensusSet *s, const char *k, uintptr_t id)
+{
+    uint32_t i, j;
+
+    if (2 * (s->n + 1) > s->cap) {
+        RealmCensusSet g = { 0 };
+
+        g.cap = s->cap ? 2 * s->cap : 64;
+        g.key = calloc(g.cap, sizeof *g.key);
+        g.id = calloc(g.cap, sizeof *g.id);
+        CHECK(g.key != NULL && g.id != NULL, "realm: OOM growing a Web IDL §3.8 census");
+        for (i = 0; i < s->cap; i++) {
+            if (s->key[i] == NULL) continue;
+            j = census_slot(&g, s->key[i]);
+            g.key[j] = s->key[i];
+            g.id[j] = s->id[i];
+        }
+        g.n = s->n;
+        free(s->key);
+        free(s->id);
+        *s = g;
+    }
+    i = census_slot(s, k);
+    if (s->key[i] == NULL) {
+        s->key[i] = strdup(k);
+        CHECK(s->key[i] != NULL, "realm: an identifier could not be recorded in a Web IDL §3.8 census");
+        s->n++;
+    }
+    s->id[i] = id;
+}
+
+static void census_set_free(RealmCensusSet *s)
+{
+    uint32_t i;
+
+    for (i = 0; i < s->cap; i++) free(s->key[i]);
+    free(s->key);
+    free(s->id);
+}
+
+/* This realm's record; with `create` false a realm that never noted has none, which the walk tells apart from an
+   empty one. */
+static RealmCensus *realm_census(JSContext *ctx, bool create)
+{
+    uint64_t serial = JS_GetContextSerial(ctx);
+    int i;
+
+    for (i = 0; i < g_census_n; i++)
+        if (g_census[i].serial == serial) return &g_census[i];
+    if (!create) return NULL;
+    if (g_census_n == g_census_cap) {
+        int cap = g_census_cap ? 2 * g_census_cap : 4;
+        RealmCensus *g = realloc(g_census, (size_t)cap * sizeof *g);
+
+        CHECK(g != NULL, "realm: OOM recording a realm's Web IDL §3.8 census");
+        g_census = g;
+        g_census_cap = cap;
+    }
+    memset(&g_census[g_census_n], 0, sizeof g_census[0]);
+    g_census[g_census_n].serial = serial;
+    return &g_census[g_census_n++];
+}
+
+void realm_census_release(JSContext *ctx)
+{
+    RealmCensus *c = realm_census(ctx, false);
+
+    if (c == NULL) return;
+    census_set_free(&c->tagged);
+    census_set_free(&c->asked);
+    census_set_free(&c->members);
+    *c = g_census[--g_census_n];
+}
+
+static void realm_census_free_all(void)
+{
+    while (g_census_n > 0) {
+        RealmCensus *c = &g_census[--g_census_n];
+
+        census_set_free(&c->tagged);
+        census_set_free(&c->asked);
+        census_set_free(&c->members);
+    }
+    free(g_census);
+    g_census = NULL;
+    g_census_cap = 0;
 }
 
 void realm_note_interface_prototype_object(JSContext *ctx, JSValueConst proto, const char *iface)
@@ -423,35 +511,49 @@ void realm_note_interface_prototype_object(JSContext *ctx, JSValueConst proto, c
            "Web IDL §3.7.3 Interface prototype object's census was handed something that is not an object — "
            "§3.7.3's own step is OrdinaryObjectCreate(proto), so the thing being tagged is an Object or the "
            "algorithm did not run");
-    realm_census_note(ctx, &g_proto_tagged_slot,
-                      "Web IDL §3.7.3 the interface prototype objects built in this realm", iface,
-                      JS_DupValue(ctx, proto));
+    census_put(&realm_census(ctx, true)->tagged, iface, (uintptr_t)JS_VALUE_GET_PTR(proto));
 }
 
-/* THE OBJECT BACK, BY IDENTIFIER — the read the value above exists for, and the one thing a per-realm check
-   that must run AFTER a prototype is finished cannot get any other way. An interface this realm never built
-   has no row and answers JS_UNDEFINED, which is the SOUND arm and not a failure: a worker realm has no
-   Element, and a census of what LANDED must never charge a realm for an interface Web IDL §3.3.7 [Exposed]
-   correctly keeps out of it. OWNED by the caller. */
-JSValue realm_interface_prototype_object(JSContext *ctx, const char *iface)
+bool realm_built_interface_prototype_object(JSContext *ctx, const char *iface)
 {
-    JSValue set, proto;
+    const RealmCensus *c = realm_census(ctx, false);
 
     DCHECK(iface != NULL && *iface,
-           "Web IDL §3.7.3 Interface prototype object's census was asked for the object of no identifier");
-    set = realm_census(ctx, &g_proto_tagged_slot, NULL, false);
-    if (!JS_IsObject(set)) { JS_FreeValue(ctx, set); return JS_UNDEFINED; }
-    /* The census object's [[Prototype]] is null, so this read cannot reach %Object.prototype% and answer with
-       a function for an interface named `toString` — the same reason the membership walk gives. */
-    proto = JS_GetPropertyStr(ctx, set, iface);
-    JS_FreeValue(ctx, set);
-    /* AND A THROW IS NOT AN ABSENCE. The census object is a plain null-prototype data map, so the only way
-       this read fails is allocation — and returning the exception value as though it were "this realm did not
-       build that interface" would leave the exception PENDING on the context for whatever runs next, which is
-       the one failure this read could cause that has nothing to do with the question asked. */
-    CHECK(!JS_IsException(proto),
-          "realm: OOM reading the Web IDL §3.7.3 census for an interface prototype object");
-    return proto;
+           "Web IDL §3.7.3 Interface prototype object's census was asked about no identifier");
+    return c != NULL && census_has(&c->tagged, iface, NULL);
+}
+
+bool realm_is_interface_prototype_object(JSContext *ctx, const char *iface, JSValueConst obj)
+{
+    const RealmCensus *c = realm_census(ctx, false);
+    uintptr_t id;
+
+    DCHECK(iface != NULL && *iface && JS_IsObject(obj),
+           "Web IDL §3.7.3 Interface prototype object's census was asked about no identifier or no object");
+    return c != NULL && census_has(&c->tagged, iface, &id) && id == (uintptr_t)JS_VALUE_GET_PTR(obj);
+}
+
+JSValue realm_interface_prototype_object(JSContext *ctx, const char *iface)
+{
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    const RealmCensus *c = realm_census(ctx, false);
+    uint32_t bound = JS_CLASS_INIT_COUNT + JS_ClassIDsMinted(rt);
+    uintptr_t id;
+    JSClassID k;
+
+    if (c == NULL || !census_has(&c->tagged, iface, &id)) return JS_UNDEFINED;
+    for (k = 1; k < bound; k++) {
+        JSValue p;
+
+        if (!JS_IsRegisteredClass(rt, k)) continue;
+        p = JS_GetClassProto(ctx, k);
+        if (JS_IsObject(p) && (uintptr_t)JS_VALUE_GET_PTR(p) == id) return p;
+        JS_FreeValue(ctx, p);
+    }
+    DFAILF("`%s`'s Web IDL §3.7.3 Interface prototype object, which this realm built, is held by none of its class "
+           "slots, so the census holds an address nothing counted keeps alive; an interface whose prototype a check "
+           "reads stores it with JS_SetClassProto", iface);
+    return JS_UNDEFINED;
 }
 
 void realm_note_property_reference_asked(JSContext *ctx, const char *id)
@@ -460,15 +562,13 @@ void realm_note_property_reference_asked(JSContext *ctx, const char *id)
            "Web IDL §3.8 Platform objects implementing interfaces' census was told a property reference had "
            "been asked for with no identifier — §3.8 keys every one of its DefineMethodProperty calls by an "
            "identifier and there is nothing else to record");
-    realm_census_note(ctx, &g_reference_asked_slot,
-                      "Web IDL §3.8 the identifiers asked of this realm's global", id, JS_UNDEFINED);
+    census_put(&realm_census(ctx, true)->asked, id, 0);
 }
 
 void realm_note_member_installed(JSContext *ctx, JSValueConst target, const char *member)
 {
     JSPropertyDescriptor d;
     const char *tag;
-    JSValue proto;
     int r;
 
     DCHECK(JS_IsObject(target) && member != NULL && *member, "a member install was noted with no target or name");
@@ -480,8 +580,7 @@ void realm_note_member_installed(JSContext *ctx, JSValueConst target, const char
     JS_FreeValue(ctx, d.getter);
     JS_FreeValue(ctx, d.setter);
     if (tag == NULL) return;
-    proto = realm_interface_prototype_object(ctx, tag);
-    if (JS_IsObject(proto) && JS_VALUE_GET_PTR(proto) == JS_VALUE_GET_PTR(target)) {
+    if (realm_is_interface_prototype_object(ctx, tag, target)) {
         size_t tn = strlen(tag), mn = strlen(member);
         char *key = malloc(tn + sizeof ".prototype." + mn);
 
@@ -489,63 +588,48 @@ void realm_note_member_installed(JSContext *ctx, JSValueConst target, const char
         memcpy(key, tag, tn);
         memcpy(key + tn, ".prototype.", sizeof ".prototype." - 1);
         memcpy(key + tn + sizeof ".prototype." - 1, member, mn + 1);
-        realm_census_note(ctx, &g_member_slot, "Web IDL the members installed on this realm's interface "
-                          "prototype objects", key, JS_UNDEFINED);
+        census_put(&realm_census(ctx, true)->members, key, 0);
         free(key);
     }
-    JS_FreeValue(ctx, proto);
     JS_FreeCString(ctx, tag);
 }
 
 void realm_assert_interface_objects_asked(JSContext *ctx)
 {
-    JSPropertyEnum *tab = NULL;
-    uint32_t n = 0, i;
-    JSValue tagged = realm_census(ctx, &g_proto_tagged_slot, NULL, false);
-    JSValue asked  = realm_census(ctx, &g_reference_asked_slot, NULL, false);
-    int ok;
+    const RealmCensus *c = realm_census(ctx, false);
+    uint32_t i;
 
     /* BOTH POPULATIONS ARE NON-EMPTY, AND THAT IS THE ASSERT THAT KEEPS THE REST FROM BEING VACUOUS. A walk
        over an empty census passes for every realm and every defect, so a recording that silently stopped
        happening — an install path that no longer reaches idl_interface_tag, a note compiled out of one of the
        two doors — would read as a clean audit. This is asked of a FINISHED realm, which by the time it gets
        here has run the whole per-realm intrinsic list, so neither census can legitimately be absent. */
-    DCHECK(!JS_IsNull(tagged),
+    DCHECK(c != NULL && c->tagged.n > 0,
            "a realm was declared FINISHED and Web IDL §3.7.3 built no interface prototype object in it — the "
            "per-realm intrinsic list runs before any caller can say this, and every one of its components "
            "builds at least one, so an empty census is this instrument having stopped recording rather than a "
            "realm having nothing in it. The one recording site is core/idl_args' idl_interface_tag");
-    DCHECK(!JS_IsNull(asked),
+    DCHECK(c != NULL && c->asked.n > 0,
            "a realm was declared FINISHED and no Web IDL §3.8 property reference was ever asked of its global "
            "— §3.8's door and core/idl_args' idl_install_interface_object_exposed are the two recording sites, "
            "and a realm that reached neither has placed no interface object at all");
-    ok = JS_GetOwnPropertyNames(ctx, &tab, &n, tagged, JS_GPN_STRING_MASK);
-    DCHECK(ok == 0, "the Web IDL §3.7.3 census of this realm could not be enumerated");
-    for (i = 0; i < n; i++) {
-        const char *name = JS_AtomToCString(ctx, tab[i].atom);
+    for (i = 0; c != NULL && i < c->tagged.cap; i++) {
+        const char *name = c->tagged.key[i];
         const IdlExposureRow *row;
-        int has;
 
-        /* A SKIPPED NAME IS A HOLE IN A CENSUS — the same statement the walk above makes, for the same reason:
-           the worth of this is that its population is every interface prototype object this realm built. */
-        DCHECK(name != NULL,
-               "an identifier in this realm's Web IDL §3.7.3 census could not be materialized as a string, so "
-               "§3.8's question could not be asked of it — the only way this fails is allocation");
+        if (name == NULL) continue;
         row = bsearch(name, IDL_EXPOSURE, sizeof IDL_EXPOSURE / sizeof IDL_EXPOSURE[0],
                       sizeof IDL_EXPOSURE[0], idl_exposure_row_name_cmp);
         /* §3.8 PLACES NOTHING FOR THIS IDENTIFIER, so nothing is owed and no bit is needed to say why — see
            realm.h for the two readings this band carries here and why they take the same action. */
-        if (row == NULL) { JS_FreeCString(ctx, name); continue; }
+        if (row == NULL) continue;
         /* AND §3.8's OWN STEP 1 DECIDES WHICH OF THEM THIS REALM IS OWED: "Let interfaces be a list that
            contains every interface that is exposed in realm". A Window-only interface whose prototype a
            per-realm intrinsic built in a WORKER realm is not in that list, so no component owes an ask for it
            — asked of core/idl_args' idl_exposed_in_realm, which is §3.3.7 step 1's one statement in this tree
            rather than a second copy of it written here. */
-        if (!idl_exposed_in_realm(ctx, name)) { JS_FreeCString(ctx, name); continue; }
-        has = JS_HasProperty(ctx, asked, tab[i].atom);
-        CHECK(has >= 0, "a Web IDL §3.8 census probe threw — [[HasProperty]] over a null-prototype object this "
-                        "file built runs no page code and has nothing to throw with");
-        DCHECKF(has == 1,
+        if (!idl_exposed_in_realm(ctx, name)) continue;
+        DCHECKF(census_has(&c->asked, name, NULL),
                 "Web IDL §3.7.3 Interface prototype object built `%s`.prototype in this realm and NOTHING ever "
                 "asked §3.8 Platform objects implementing interfaces for the matching `%s` property on its "
                 "global — so a page reads `[object %s]` off a live prototype while `%s` itself is undefined and "
@@ -557,12 +641,7 @@ void realm_assert_interface_objects_asked(JSContext *ctx)
                 "`git grep '\\\"%s\\\"' engine/host/browser` lands on the component that built the prototype, "
                 "and the call it owes is core/idl_args' idl_define_global_property_reference",
                 name, name, name, name, name, name);
-        JS_FreeCString(ctx, name);
     }
-    for (i = 0; i < n; i++) JS_FreeAtom(ctx, tab[i].atom);
-    js_free(ctx, tab);
-    JS_FreeValue(ctx, tagged);
-    JS_FreeValue(ctx, asked);
 }
 #endif
 
@@ -911,11 +990,8 @@ void realm_intrinsics_free(void)
     g_time_origin_slot = JS_INVALID_CLASS_ID;
     g_building_world_slot = JS_INVALID_CLASS_ID;
 #if APICLIENT_DEV
-    /* The two §3.8 censuses are slots like the three above and are released the same way — their CONTENTS are
-       the realms' and went with them; what the agent holds is the slot id. */
-    g_proto_tagged_slot = JS_INVALID_CLASS_ID;
-    g_reference_asked_slot = JS_INVALID_CLASS_ID;
-    g_member_slot = JS_INVALID_CLASS_ID;
+    /* The censuses of realms no teardown hook released (a runtime without one) go with their agent. */
+    realm_census_free_all();
 #endif
 }
 
@@ -1107,20 +1183,14 @@ void realm_awaits(JSContext *ctx, const char *path, const char *what)
 
     DCHECK(path != NULL && *path, "a producer assertion named no producer");
     if (dot == NULL) {
-        JSValue proto = realm_interface_prototype_object(ctx, path);
-
-        present = !JS_IsUndefined(proto);
-        JS_FreeValue(ctx, proto);
+        present = realm_built_interface_prototype_object(ctx, path);
     } else {
-        JSValue set = realm_census(ctx, &g_member_slot, NULL, false), v = JS_UNDEFINED;
+        const RealmCensus *c = realm_census(ctx, false);
 
         DCHECK(strncmp(dot, ".prototype.", sizeof ".prototype." - 1) == 0 &&
                    strchr(dot + sizeof ".prototype." - 1, '.') == NULL,
                "a producer assertion's path is neither an interface nor `Interface.prototype.member`");
-        if (JS_IsObject(set)) v = JS_GetPropertyStr(ctx, set, path);
-        present = !JS_IsUndefined(v);
-        JS_FreeValue(ctx, v);
-        JS_FreeValue(ctx, set);
+        present = c != NULL && census_has(&c->members, path, NULL);
     }
     DCHECK(!present, what);
 #else

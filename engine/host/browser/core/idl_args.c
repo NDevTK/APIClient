@@ -8180,7 +8180,7 @@ static void idl_assert_receiver_is_target(JSContext *ctx, JSValueConst target, c
 {
     int idx = idl_member_of_step(stepid);
     JSPropertyDescriptor d;
-    JSValue tag, recorded;
+    JSValue tag;
     const char *on;
     int got;
 
@@ -8190,8 +8190,7 @@ static void idl_assert_receiver_is_target(JSContext *ctx, JSValueConst target, c
     /* OWN, not inherited: every interface prototype object in a chain carries §3.7.3's tag, and one found a
        link up is the PARENT interface's answer to a question asked about this object. */
     got = JS_GetOwnSlotDesc(ctx, &d, target, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG));
-    /* A THROW IS NOT AN ABSENCE — the same reading realm_interface_prototype_object states for its own read.
-       This is an own-slot read of a plain data property, so the only way it fails is allocation, and taking
+    /* A throw is not an absence. This is an own-slot read of a plain data property, so the only way it fails is allocation, and taking
        that for "no tag" would leave the exception PENDING on the context for whatever runs next. */
     CHECK(got >= 0, "idl: OOM reading a Web IDL §3.7.3 class string at a member install");
     if (got != 1) return;
@@ -8205,8 +8204,7 @@ static void idl_assert_receiver_is_target(JSContext *ctx, JSValueConst target, c
     on = JS_ToCString(ctx, tag);
     JS_FreeValue(ctx, tag);
     CHECK(on != NULL, "idl: OOM reading a Web IDL §3.7.3 class string at a member install");
-    recorded = realm_interface_prototype_object(ctx, on);
-    if (JS_IsObject(recorded) && JS_IsSameValue(ctx, recorded, target)) {
+    if (realm_is_interface_prototype_object(ctx, on, target)) {
         DCHECKF(strcmp(on, idl_member(idx)->this_iface) == 0,
                 "%s:%d installs `%s` on \"%s\"'s Web IDL §3.7.3 Interface prototype object, and that member's "
                 "declaration names \"%s\" as the interface §3.7 Interfaces' implementation-check is against — "
@@ -8220,7 +8218,6 @@ static void idl_assert_receiver_is_target(JSContext *ctx, JSValueConst target, c
                 at_file, at_line, name ? name : "(unnamed member)", on, idl_member(idx)->this_iface,
                 on, idl_member(idx)->this_iface);
     }
-    JS_FreeValue(ctx, recorded);
     JS_FreeCString(ctx, on);
 }
 #define IDL_RECEIVER_IS_TARGET(c, t, n, s, f, l) idl_assert_receiver_is_target((c), (t), (n), (s), (f), (l))
@@ -8630,8 +8627,8 @@ bool idl_member_exposed_in_realm(JSContext *ctx, const char *member)
  * pick between two prototypes and this call has nothing to pick with. NEXT DIFF: the DATUM, not the
  * transport, because the transport already exists twice over and naming it as the work would send a reader to
  * build what is there. core/realm.h's realm_note_interface_prototype_object already records every §3.7.3
- * prototype a realm builds BY IDENTIFIER, and realm_interface_prototype_object hands it back — so the object
- * for ANY declaring interface is one call away and no registration is needed at all. What is missing is which
+ * prototype a realm builds BY IDENTIFIER, and realm_interface_prototype_object hands back one a class slot holds —
+ * so the object for ANY declaring interface is one call away and no registration is needed at all. What is missing is which
  * interface to ask for: engine/idlgen.mjs emits the per-[Global] own bands and nothing that maps a MEMBER to
  * the interface that DECLARES it, so the next diff is that table, after which this call reads it and asks the
  * realm rather than reading a registered function. Both halves are gated on one more thing, which
@@ -8662,7 +8659,7 @@ void idl_set_global_ancestor_terms(JSValue (*proto_of_realm)(JSContext *ctx), Id
                 "interface that DECLARES a member, so it can serve exactly one reachable non-[Global] "
                 "ancestor. That was a fact about the corpus and it has stopped being one. DO NOT ADD A SECOND "
                 "SLOT: core/realm.h's realm_interface_prototype_object already hands back this realm's §3.7.3 "
-                "prototype for ANY identifier, so what is missing is the map from a MEMBER to the interface "
+                "prototype for any identifier a class slot holds, so what is missing is the map from a MEMBER to the interface "
                 "that DECLARES it — engine/idlgen.mjs emits the per-[Global] own bands and not that one. "
                 "Build it, read it here, and ask the realm; the named residual above this function states the "
                 "one thing that still gates it, which is that the census is dev-only",
@@ -8717,9 +8714,7 @@ JSValue idl_global_member_target_at(JSContext *ctx, JSValueConst global, const c
            THE POPULATION IT COVERS IS THE ONE THAT REACHES THIS ARM AT ALL, which is every member a component
            places through this resolver — so the two arms of §3.7.3's conditional are now each two-sided: the
            [Global] one at idl_global_member_refused's positive band assert, this one here. */
-        JSValue recorded = realm_interface_prototype_object(ctx, g_ancestor_iface);
-
-        DCHECKF(JS_IsObject(recorded) && JS_IsSameValue(ctx, recorded, proto),
+        DCHECKF(realm_is_interface_prototype_object(ctx, g_ancestor_iface, proto),
                 "%s:%d asked Web IDL §3.7.3 which object `%s` goes on, and the function registered for `%s` "
                 "answered an object this realm did not build as that interface's §3.7.3 Interface prototype "
                 "object — core/realm.h's census records every one a realm builds BY IDENTIFIER, so the "
@@ -8729,7 +8724,6 @@ JSValue idl_global_member_target_at(JSContext *ctx, JSValueConst global, const c
                 "and is what core/workers/worker_global_scope.c's banner over `g_dwgs_class` calls (a): the "
                 "registering row must stand AHEAD of every row that owns one of this interface's members",
                 at_file, at_line, name, g_ancestor_iface, g_ancestor_iface);
-        JS_FreeValue(ctx, recorded);
 #endif
         return proto;
     }
@@ -9865,8 +9859,6 @@ static void idl_check_global_target(JSContext *ctx, JSValueConst target, const c
  * assert in this file lives — a second `#if APICLIENT_DEV` here would be a second nesting of one condition. */
 static void idl_check_proto_target(JSContext *ctx, JSValueConst target, const char *name, const char *iface)
 {
-    JSValue recorded;
-
     DCHECKF(!idl_target_is_realm_global(ctx, target),
             "the [Replaceable] attribute `%s` was installed on the realm's GLOBAL object while stating `%s` "
             "as Web IDL §3.7.6 Attributes' `target` — a member on a global is placed by §3.8 \"Platform "
@@ -9882,8 +9874,7 @@ static void idl_check_proto_target(JSContext *ctx, JSValueConst target, const ch
             "both place one member: either this install has the wrong target, or the band and the interface "
             "the install names disagree (`node engine/idlgen.mjs --regen`)",
             name, iface, idl_realm_global_interface(ctx), name, name);
-    recorded = realm_interface_prototype_object(ctx, iface);
-    DCHECKF(JS_IsObject(recorded) && JS_IsSameValue(ctx, recorded, target),
+    DCHECKF(realm_is_interface_prototype_object(ctx, iface, target),
             "`%s` was installed on an object this realm did not build as `%s`'s Web IDL §3.7.3 Interface "
             "prototype object — §3.7.6 Attributes' `target` is \"the definition whose members are being "
             "defined on this object\", so the identifier the install states and the object it was handed are "
@@ -9891,7 +9882,6 @@ static void idl_check_proto_target(JSContext *ctx, JSValueConst target, const ch
             "builds `%s`'s prototype has not run in this realm yet, which is core/platform.c's DECLARATION "
             "order and is what core/workers/worker_global_scope.c's banner over `g_dwgs_class` calls (a)",
             name, iface, iface);
-    JS_FreeValue(ctx, recorded);
 }
 #define IDL_CHECK_GLOBAL_TARGET(c, t, n, f) idl_check_global_target((c), (t), (n), (f))
 #define IDL_CHECK_PROTO_TARGET(c, t, n, i)  idl_check_proto_target((c), (t), (n), (i))
