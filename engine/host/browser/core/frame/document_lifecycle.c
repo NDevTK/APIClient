@@ -63,18 +63,9 @@ enum {
 static void descend_enqueue(JSContext *ctx, JSValueConst proxy, int op, int after);
 static void self_enqueue(JSContext *ctx, JSValueConst proxy, int op, int after);
 static void destroy_a_top_level_traversable(JSContext *ctx, JSValueConst proxy);
-/* HTML §7.5.9 "Unloading documents"' unloading document cleanup steps. One body with two entries: unload a
- * Document reaches it at step 18 and HTML §7.5.10's destroy a Document at step 4, and a Document can arrive
- * by either alone (a navigation unloads and then destroys; a removed `<iframe>` is destroyed with no unload).
- *
- * Of the standard's four sets, the WebTransport and EventSource loops iterate over interfaces this engine
- * does not have, so they run zero times, as §7.5.10's worker and worklet loops do. The WebSocket loop makes
- * each of window's sockets disappear (core/websockets/web_socket.h), outside the salvageable branch as the
- * standard has it. The branch's second half clears window's map of active timers, which is this window's:
- * core/timing/timer.c keeps one per realm, so clearing it takes nothing from a same-origin popup.
- *
- * The branch is read through UNLOAD_SALVAGEABLE rather than assumed away: writing its body unconditionally
- * would be right for every Document this build has and wrong on the first day one is kept. */
+/* §7.5.9's UNLOADING DOCUMENT CLEANUP STEPS — declared here because it has TWO ENTRIES, in two different
+   algorithms: §7.5.9's unload a Document step 18, and §7.5.10's destroy a Document step 4. It is defined beside
+   the salvageable state its own branch reads. */
 static void unloading_document_cleanup_steps(JSContext *cctx);
 
 /* THE OPERATION'S CONTINUATION, AND IT TRAVELS WITH THE JOB. §7.5.9's afterAllUnloads is an INPUT of "unload a
@@ -258,24 +249,19 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
  * either way it is the value this constant already is, which is why that step has no site of its own. */
 #define UNLOAD_SALVAGEABLE false
 
-/* §7.5.9's UNLOADING DOCUMENT CLEANUP STEPS — ONE BODY, TWO ENTRIES, which is why it is a function and not two
- * lines. §7.5.9's unload a Document reaches it at step 18 and §7.5.10's destroy a Document at step 4, and a
- * Document can arrive by either route ALONE: a navigation unloads and then destroys, while a removed `<iframe>`
- * is destroyed with no unload anywhere in its history. Written inline at one of them it is not a shared
- * algorithm at all, it is that algorithm's private line — which is exactly what it had become, and the entry it
- * was missing is the one every frame removal takes.
+/* HTML §7.5.9 "Unloading documents"' unloading document cleanup steps. One body with two entries: unload a
+ * Document reaches it at step 18 and HTML §7.5.10's destroy a Document at step 4, and a Document can arrive
+ * by either alone (a navigation unloads and then destroys; a removed `<iframe>` is destroyed with no unload).
  *
- * FOUR SETS, TWO OF THEM EMPTY BY CONSTRUCTION. The WebTransport and EventSource loops iterate over
- * interfaces this engine does not have, so "for each" runs zero times, exactly as §7.5.10's worker and worklet
- * loops do. The WebSocket loop makes each of window's sockets disappear (core/websockets/web_socket.h), outside
- * the salvageable branch as the standard has it. What remains is that branch's second half: "clear window's map
- * of active timers",
- * and it is THIS window's — §8.7 Timers gives every global its own map and core/timing/timer.c keeps one per
- * realm, so clearing it takes nothing from a same-origin popup this document opened.
+ * Of the standard's four sets, the WebTransport and EventSource loops iterate over interfaces this engine
+ * does not have, so they run zero times, as §7.5.10's worker and worklet loops do. The WebSocket loop makes
+ * each of window's sockets disappear (core/websockets/web_socket.h), outside the salvageable branch as the
+ * standard has it. The branch's second half clears window's map of active timers, which is this window's:
+ * core/timing/timer.c keeps one per realm, so clearing it takes nothing from a same-origin popup.
  *
- * THE BRANCH IS THE STANDARD'S AND IS READ THROUGH THE CONSTANT ABOVE rather than assumed away: the EventSource
- * close and the timer clear are both inside "if document's salvageable state is false", and writing them
- * unconditionally would be right for every Document this build has and wrong on the first day one is kept. */
+ * The EventSource close and the timer clear are both inside "if document's salvageable state is false",
+ * which is read through UNLOAD_SALVAGEABLE rather than assumed away: writing them unconditionally would be
+ * right for every Document this build has and wrong on the first day one is kept. */
 static void unloading_document_cleanup_steps(JSContext *cctx)
 {
     DCHECK(cctx != NULL,
