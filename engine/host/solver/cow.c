@@ -2501,7 +2501,8 @@ void cow_delta_serial_census(const CowDelta *d, void (*val)(JSValueConst v, void
 }
 
 /* The written head (cow.h). An entry's bytes: its kind ('P' slot, 'H' component bytes or a body mark, 'R'
-   component record), then its kind's fields; its values go to `take` in the order the reader takes them. */
+   component record, 'A' a shared async object's settlement), then its kind's fields; its values go to `take` in
+   the order the reader takes them. */
 #define COW_GAP_NAME(id, name) "delta " name,
 static const char *const g_cow_state_gap[] = { COW_STATE_KINDS(COW_GAP_NAME) };
 #undef COW_GAP_NAME
@@ -2510,7 +2511,8 @@ static const char *cow_entry_unwritten(const CowEntry *e) {
     if (e->is_map) return "delta map";
     if (e->is_state)
         return e->state_kind == COW_STATE_HOST || e->state_kind == COW_STATE_BODY ||
-               e->state_kind == COW_STATE_HOST_REC ? NULL : g_cow_state_gap[e->state_kind];
+               e->state_kind == COW_STATE_HOST_REC || e->state_kind == COW_STATE_ASYNC
+                   ? NULL : g_cow_state_gap[e->state_kind];
     return e->vref ? "delta cell" : NULL;
 }
 
@@ -2540,6 +2542,23 @@ static void cow_bytes_blob(CowBytes *o, const void *blob, size_t n) {
     cow_bytes_put(o, &has, 1);
     if (has) cow_bytes_put(o, blob, n);
 }
+/* The engine's blob IO over this file's byte buffer and value list (JSStateBlobIO). */
+typedef struct { CowBytes *o; void (*take)(JSValue, void *); void *arg;
+                 const uint8_t **p, *end; JSValue *vals; int *v, n_vals; } CowBlobIO;
+static void cow_io_put(const void *p, size_t n, void *arg) { cow_bytes_put(((CowBlobIO *)arg)->o, p, n); }
+static void cow_io_take(JSValue v, void *arg) { CowBlobIO *io = arg; io->take(v, io->arg); }
+static void cow_io_get(void *p, size_t n, void *arg) {
+    CowBlobIO *io = arg;
+    CHECK((size_t)(io->end - *io->p) >= n, "cow: a sold member's head ends inside a state blob");
+    memcpy(p, *io->p, n);
+    *io->p += n;
+}
+static JSValue cow_io_next(void *arg) {
+    CowBlobIO *io = arg;
+    CHECK(*io->v < io->n_vals, "cow: a sold member's head holds more values than were read back");
+    return io->vals[(*io->v)++];
+}
+
 /* A record blob's values, each a reference `take` owns, in val_off order. */
 static void cow_rec_vals(JSContext *ctx, const CowRecord *rec, const void *blob, void (*take)(JSValue, void *),
                          void *arg) {
@@ -2559,7 +2578,8 @@ size_t cow_delta_head_write(JSContext *ctx, const CowDelta *d, void (*take)(JSVa
     cow_bytes_put(&o, &n, sizeof n);
     for (int i = 0; i < d->n; i++) {
         const CowEntry *e = &d->e[i];
-        uint8_t kind = e->is_state ? (e->state_kind == COW_STATE_HOST_REC ? 'R' : 'H') : 'P';
+        uint8_t kind = !e->is_state ? 'P' : e->state_kind == COW_STATE_HOST_REC ? 'R'
+                     : e->state_kind == COW_STATE_ASYNC ? 'A' : 'H';
 
         DCHECKF(cow_entry_unwritten(e) == NULL, "a sold member's head was written holding an entry of kind %s, "
                 "which has no writer — the sale writes only a head cow_delta_head_gaps found whole",
@@ -2576,6 +2596,17 @@ size_t cow_delta_head_write(JSContext *ctx, const CowDelta *d, void (*take)(JSVa
             take(JS_DupValue(ctx, e->cur.value), arg);
             take(JS_DupValue(ctx, e->cur.getter), arg);
             take(JS_DupValue(ctx, e->cur.setter), arg);
+            continue;
+        }
+        if (kind == 'A') {
+            CowBlobIO bio = { .o = &o, .take = take, .arg = arg };
+            JSStateBlobIO io = { .put = cow_io_put, .take = cow_io_take, .arg = &bio };
+            for (int h = 0; h < 2; h++) {
+                const void *blob = h ? e->a_cur : e->a_base;
+                uint8_t has = blob != NULL;
+                cow_bytes_put(&o, &has, 1);
+                if (has) JS_AsyncStateWrite(blob, &io);
+            }
             continue;
         }
         {
@@ -2647,8 +2678,8 @@ int cow_delta_head_read(JSContext *ctx, CowDelta *d, const uint8_t *bytes, size_
 
         cow_entry_init(e);
         cow_read_take(&r, &kind, 1);
-        CHECK(kind == 'P' || kind == 'H' || kind == 'R', "cow: a sold member's head names an entry kind it has no "
-                                                         "reader for");
+        CHECK(kind == 'P' || kind == 'H' || kind == 'R' || kind == 'A',
+              "cow: a sold member's head names an entry kind it has no reader for");
         CHECK(v < n_vals, "cow: a sold member's head holds more values than were read back");
         e->obj = vals[v++];
         if (kind == 'P') {
@@ -2661,6 +2692,18 @@ int cow_delta_head_read(JSContext *ctx, CowDelta *d, const uint8_t *bytes, size_
             JS_FreeValue(ctx, vals[v++]);
             e->base.value = vals[v++]; e->base.getter = vals[v++]; e->base.setter = vals[v++];
             e->cur.value = vals[v++]; e->cur.getter = vals[v++]; e->cur.setter = vals[v++];
+        } else if (kind == 'A') {
+            CowBlobIO bio = { .p = &r.p, .end = r.end, .vals = vals, .v = &v, .n_vals = n_vals };
+            JSStateBlobIO io = { .get = cow_io_get, .next = cow_io_next, .arg = &bio };
+            e->is_state = 1;
+            e->state_kind = COW_STATE_ASYNC;
+            /* the identity a capture files it under (cow_state_entry_set): the object, for this kind */
+            e->state_key = JS_VALUE_GET_PTR(e->obj);
+            for (int h = 0; h < 2; h++) {
+                uint8_t has;
+                cow_read_take(&r, &has, 1);
+                if (has) *(h ? &e->a_cur : &e->a_base) = JS_AsyncStateRead(ctx, &io);
+            }
         } else {
             int32_t sk;
             uint64_t len;

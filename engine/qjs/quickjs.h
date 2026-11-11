@@ -2511,6 +2511,18 @@ JS_EXTERN void *JS_AsyncStateSave(JSContext *ctx, JSValueConst obj);
 JS_EXTERN void  JS_AsyncStateRestore(JSContext *ctx, JSValueConst obj, void *blob);
 JS_EXTERN void *JS_AsyncStateClone(JSContext *ctx, void *blob);
 JS_EXTERN void  JS_AsyncStateFree(JSRuntime *rt, void *blob);
+/* The same blob as bytes and values, for a sold member's head (the host's cow.c): Write hands the blob's
+   values to `take`, each a reference it owns, and its other fields to `put`; Read takes the bytes through `get`
+   and the values, in the order Write handed them, through `next`, whose references it keeps. */
+typedef struct JSStateBlobIO {
+    void (*put)(const void *p, size_t n, void *arg);
+    void (*take)(JSValue v, void *arg);
+    void (*get)(void *p, size_t n, void *arg);
+    JSValue (*next)(void *arg);
+    void *arg;
+} JSStateBlobIO;
+JS_EXTERN void  JS_AsyncStateWrite(const void *blob, const JSStateBlobIO *io);
+JS_EXTERN void *JS_AsyncStateRead(JSContext *ctx, const JSStateBlobIO *io);
 #define JS_MAP_MUTATE_OVERWRITE 1
 #define JS_MAP_MUTATE_DELETE    2
 /* The FORK GENERATION stamped onto every object created from now on: 0 = no flow is running (baseline), else

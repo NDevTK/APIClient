@@ -83838,6 +83838,63 @@ void JS_AsyncStateFree(JSRuntime *rt, void *blob)
     js_free_rt(rt, b);
 }
 
+void JS_AsyncStateWrite(const void *blob, const JSStateBlobIO *io)
+{
+    const JSAsyncStateBlob *b = blob;
+    int32_t st = b->promise_state;
+    uint32_t n[2] = { 0, 0 };
+    struct list_head *el;
+
+    DCHECK(b->kind == JS_ASYNC_BLOB_PROMISE || b->kind == JS_ASYNC_BLOB_LATCH,
+           "an async-state blob of a kind this writer does not know");
+    for (int i = 0; i < 2; i++) list_for_each(el, &b->reactions[i]) n[i]++;
+    io->put(&b->kind, 1, io->arg);
+    io->put(&b->already_resolved, 1, io->arg);
+    io->put(&b->is_handled, 1, io->arg);
+    io->put(&st, sizeof st, io->arg);
+    io->put(n, sizeof n, io->arg);
+    io->take(js_dup(b->promise_result), io->arg);
+    for (int i = 0; i < 2; i++) {
+        list_for_each(el, &b->reactions[i]) {
+            JSPromiseReactionData *rd = list_entry(el, JSPromiseReactionData, link);
+            io->take(js_dup(rd->resolving_funcs[0]), io->arg);
+            io->take(js_dup(rd->resolving_funcs[1]), io->arg);
+            io->take(js_dup(rd->handler), io->arg);
+        }
+    }
+}
+
+void *JS_AsyncStateRead(JSContext *ctx, const JSStateBlobIO *io)
+{
+    JSAsyncStateBlob *b = js_mallocz(ctx, sizeof *b);
+    int32_t st;
+    uint32_t n[2];
+
+    CHECK(b != NULL, "async state: OOM reading a sold member's settlement");
+    init_list_head(&b->reactions[0]);
+    init_list_head(&b->reactions[1]);
+    io->get(&b->kind, 1, io->arg);
+    io->get(&b->already_resolved, 1, io->arg);
+    io->get(&b->is_handled, 1, io->arg);
+    io->get(&st, sizeof st, io->arg);
+    io->get(n, sizeof n, io->arg);
+    CHECK(b->kind == JS_ASYNC_BLOB_PROMISE || b->kind == JS_ASYNC_BLOB_LATCH,
+          "async state: a sold member's settlement names a kind this reader does not know");
+    b->promise_state = (JSPromiseStateEnum)st;
+    b->promise_result = io->next(io->arg);
+    for (int i = 0; i < 2; i++) {
+        for (uint32_t k = 0; k < n[i]; k++) {
+            JSPromiseReactionData *rd = js_mallocz(ctx, sizeof *rd);
+            CHECK(rd != NULL, "async state: OOM reading a sold member's reaction");
+            rd->resolving_funcs[0] = io->next(io->arg);
+            rd->resolving_funcs[1] = io->next(io->arg);
+            rd->handler = io->next(io->arg);
+            list_add_tail(&rd->link, &b->reactions[i]);
+        }
+    }
+    return b;
+}
+
 #ifdef ENABLE_DUMPS // JS_DUMP_PROMISE
 #define promise_trace(ctx, ...) \
    do { \

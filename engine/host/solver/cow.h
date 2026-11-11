@@ -563,8 +563,8 @@ void cow_delta_serial_census(const CowDelta *d, void (*val)(JSValueConst v, void
    head is the part of a delta its member alone holds; the frozen chain below it stays referenced by the stub.
    An entry is written as its values, handed to `take` in entry order with a reference the callee owns, and the
    rest of it as bytes. A target and a record layout are written as the pointers they are, so the bytes are
-   read only in the process that wrote them. Every kind but a property slot and a component's bytes or record
-   is unwritten: `gaps` names each such entry of a parked head ("delta cell", "delta map", "delta " and a
+   read only in the process that wrote them. Every kind but a property slot, a component's bytes or record and
+   a shared async object's settlement is unwritten: `gaps` names each such entry of a parked head ("delta cell", "delta map", "delta " and a
    state kind), and the write asserts there is none. */
 void   cow_delta_head_gaps(const CowDelta *d, void (*gap)(const char *kind, void *arg), void *arg);
 size_t cow_delta_head_write(JSContext *ctx, const CowDelta *d, void (*take)(JSValue v, void *arg), void *arg,
