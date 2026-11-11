@@ -14,6 +14,7 @@
 #include "core/layout/flow_placement.h"
 #include "core/layout/flow_position.h"   /* FlowPoint — the second fact a pass holds about a box */
 #include "core/layout/layout_job.h"   /* the record of the job whose activation holds the thread */
+#include "core/timing/thread_work.h"   /* a closed stack's boxes are appended again only in a residency span */
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ONE ENTRY PER BOX AND TWO FACTS IN IT, WHICH IS ONE TABLE AND NOT TWO. The two questions a whole-tree
@@ -38,9 +39,10 @@ typedef struct {
     CssPx                    cb_width;
     const lxb_dom_element_t *cb_width_cb;
     /* CSS 2.2 §9.2.1.1's anonymous block boxes of this box, appended by its stack; owned. `has_anon` is the
-       stack having answered, which closes the list. */
+       stack having answered, which closes the list. `anon_again` counts the boxes a re-derivation of the closed
+       stack (layout_job_shed's residency span) has appended again, each asserted equal to the one recorded. */
     BlockFlowAnonBox        *anon;
-    size_t                   anon_n, anon_cap;
+    size_t                   anon_n, anon_cap, anon_again;
     /* The stack's state at the run that starts this container's content (`run_first`, on the container's
        entry) and at the run after this box (`run_after`, on the box's entry). */
     FlowRunStart             run_first, run_after;
@@ -379,9 +381,21 @@ void flow_placement_anon_append(const lxb_dom_element_t *el, BlockFlowAnonBox bo
     DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's anonymous-box record was handed a box with no container");
     e = fp_entry_for_write(el);
     if (e == NULL) return;
-    DCHECK(!e->has_anon,
-           "an anonymous block box was appended to a container whose stack already answered; the stack is "
-           "asked once per job, so a second run of it is a memo probe that missed its own key");
+    if (e->has_anon) {
+        const BlockFlowAnonBox *was = e->anon_again < e->anon_n ? &e->anon[e->anon_again] : NULL;
+
+        DCHECK(thread_work_residency_open(),
+               "an anonymous block box was appended to a container whose stack already answered; the stack is "
+               "asked once per job, and only a residency span re-derives an answer a shed released");
+        DCHECKF(was != NULL && was->run.after == box.run.after && was->run.end == box.run.end &&
+                    fp_same_example(was->content_x, box.content_x) &&
+                    fp_same_example(was->content_y, box.content_y) && fp_same_example(was->height, box.height),
+                "a re-derived stack appended anonymous block box %zu of a container whose stack recorded %zu, "
+                "and the two differ; a re-derivation runs the paid body over the same inputs",
+                e->anon_again, e->anon_n);
+        e->anon_again++;
+        return;
+    }
     if (e->anon_n == e->anon_cap) {
         size_t cap = e->anon_cap != 0 ? e->anon_cap * 2 : 4;
         BlockFlowAnonBox *v = lexbor_realloc(e->anon, cap * sizeof *v);
@@ -400,7 +414,14 @@ void flow_placement_anon_close(const lxb_dom_element_t *el)
     DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's anonymous-box record was closed for no container");
     e = fp_entry_for_write(el);
     if (e == NULL) return;
-    DCHECK(!e->has_anon, "a container's stack answered twice in one job; it is asked once and memoized");
+    if (e->has_anon) {
+        DCHECKF(thread_work_residency_open() && e->anon_again == e->anon_n,
+                "a container's stack answered twice in one job with %zu anonymous block boxes against %zu "
+                "recorded; only a residency span re-derives a closed stack, and it lays out the same boxes",
+                e->anon_again, e->anon_n);
+        e->anon_again = 0;
+        return;
+    }
     e->has_anon = true;
 }
 
