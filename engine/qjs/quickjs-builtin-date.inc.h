@@ -272,6 +272,37 @@ static int js_date_this_precheck(JSContext *ctx, const JSStepHdr *h)
     return JS_ThisTimeValue(ctx, &d, h->this_val);
 }
 
+/* The setter's last steps over an unknown t: the new time value is derived from t and the argument a coercion
+   met as unknown, if any (taken off the header, since this answer is the completion), with the steps run on the
+   examples as its example. Writing it is also step 7's arm for a NaN t, whose new value is NaN, the value the
+   slot already holds; setFullYear's and setYear's +0 for a NaN t is in the example the fields computed.
+   Named residual. Not covered: an argument with no example ends the machine at its coercion, so the slot keeps t.
+   Next diff builds: answers_unknown on the setters, deriving from every unknown argument. How its absence shows:
+   a Date read after `d.setHours(u)` with an exampleless `u` answering the time value it held before. */
+static int js_date_set_unknown(JSContext *ctx, JSDateSet *s)
+{
+    JSValueConst ops[2];
+    JSValue ex = JS_UNDEFINED, dv;
+    JSObject *p = JS_VALUE_GET_OBJ(s->hdr.this_val);
+    int magic = s->hdr.arg, n = 0;
+
+    ops[n++] = s->t;
+    if (!JS_IsUninitialized(s->hdr.unknown_operand))
+        ops[n++] = s->hdr.unknown_operand;
+    if (js_concolic_held(s->t))
+        ex = js_float64(!s->res ? NAN : s->nonfinite || s->hdr.argc == 0 ? NAN
+                                     : set_date_fields(s->fields, magic & 0xF));
+    dv = g_concolic.derived(ctx, s->hdr.def->algorithm, ops, n, ex);
+    JS_FreeValue(ctx, s->hdr.unknown_operand);
+    s->hdr.unknown_operand = JS_UNINITIALIZED;
+    DCHECK(js_value_is_concolic(dv), "a Date setter's time value over an unknown t is not unknown");
+    cow_capture_obj(ctx, p);
+    JS_FreeValue(ctx, p->u.object_data);
+    p->u.object_data = js_dup(dv);
+    s->result = dv;
+    return 0;
+}
+
 /* DELETED: set_date_field and js_date_setYear. Both ran their ToNumbers with JS_ToFloat64 from a C entry, and
    js_date_setYear then re-entered set_date_field, which read [[DateValue]] a SECOND time — after the coercion
    that may have changed it. The one machine below performs the read once, at the step the spec puts it. */
@@ -287,17 +318,17 @@ static int js_date_set_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->result = JS_UNDEFINED;
+        s->t = JS_UNINITIALIZED;
         /* steps 1-3: RequireInternalSlot and the [[DateValue]] read, both BEFORE the first coercion. `first_field
            == 0` is B.2.3.2 step 4 / 21.4.4.21 step 5 — the setters that write the YEAR treat a NaN time value as
            +0 instead of returning early. */
         s->res = get_date_fields(ctx, s->hdr.this_val, s->fields, is_local, first_field == 0);
         if (s->res < 0)
             return -1;
-        if (!JS_IsUninitialized(js_date_value_unknown(s->hdr.this_val))) {
-            DFAIL("a Date field setter over an unknown [[DateValue]] (setTime over unknown input): build the new "
-                  "time value derived from the unknown and the coerced fields, as setTime's TimeClip is");
-            return -1;
-        }
+        /* An unknown t is held for the derivation below; `fields` hold its example's, and res says NaN where it
+           has none. */
+        if (!JS_IsUninitialized(js_date_value_unknown(s->hdr.this_val)))
+            s->t = js_dup(js_date_value_unknown(s->hdr.this_val));
         s->n = min_int(s->hdr.argc, end_field - first_field);
         s->i = 0;
         s->nonfinite = false;
@@ -325,6 +356,8 @@ static int js_date_set_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     }
     JS_FreeValue(ctx, cb_result);
 
+    if (!JS_IsUninitialized(s->t))
+        return js_date_set_unknown(ctx, s);
     /* step 7: `If t is NaN, return NaN` — on the value read at step 2, and the [[DateValue]] is NOT written. */
     if (!s->res) {
         s->result = JS_NAN;
@@ -341,12 +374,13 @@ static int js_date_set_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     return JS_IsException(s->result) ? (s->result = JS_UNDEFINED, -1) : 0;
 }
 
-/* WHAT THIS MACHINE OWNS (JSTrampStepDef.visit). Only the result: the captured date fields are doubles read
-   before any argument was coerced, and the argument coercions run on the header's own captures. */
+/* WHAT THIS MACHINE OWNS (JSTrampStepDef.visit): the result and an unknown t. The captured date fields are doubles
+   read before any argument was coerced, and the argument coercions run on the header's own captures. */
 static void js_date_set_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSDateSet *s = st;
     v->val(ctx, &s->result);
+    v->val(ctx, &s->t);
 }
 
 static JSValue js_date_set_fini(JSContext *ctx, void *st, bool take_result)
@@ -367,15 +401,16 @@ static JSValue js_date_set_fini(JSContext *ctx, void *st, bool take_result)
  */
 static JSValue get_date_string_of(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
 
-/* The string forms (§21.4.4.35-21.4.4.43). Over an unknown [[DateValue]]
-   the string is derived from it, with the string of the example time value as its example. */
+/* The string forms (§21.4.4.35-21.4.4.43). Over an unknown [[DateValue]] the string is derived from it, with the
+   string of the example time value as its example; toISOString reaches here over one only on the finite arm of
+   its step 4 fork, where an example that throws leaves the derivation with none. */
 static JSValue get_date_string(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv, int magic)
 {
     JSValue real = get_date_string_of(ctx, this_val, argc, argv, magic);
     const char *op;
 
-    if (JS_IsException(real) || JS_IsUninitialized(js_date_value_unknown(this_val)))
+    if (!JS_IsDate(this_val) || JS_IsUninitialized(js_date_value_unknown(this_val)))
         return real;
     switch (magic) {
     case 0x13: op = "21.4.4.41 Date.prototype.toString"; break;
@@ -1151,7 +1186,7 @@ static const JSCFunctionListEntry js_date_proto_funcs[] = {
     JS_CFUNC_STEP_DEF("[Symbol.toPrimitive]", 1, STEPDEF_DATE_TOPRIM ),
     JS_CFUNC_MAGIC_DEF("toUTCString", 0, get_date_string, 0x03 ),
     JS_ALIAS_DEF("toGMTString", "toUTCString" ),
-    JS_CFUNC_MAGIC_DEF("toISOString", 0, get_date_string, 0x23 ),
+    JS_CFUNC_STEP_DEF("toISOString", 0, STEPDEF_DATE_TOISO ),
     JS_CFUNC_MAGIC_DEF("toDateString", 0, get_date_string, 0x11 ),
     JS_CFUNC_MAGIC_DEF("toTimeString", 0, get_date_string, 0x12 ),
     JS_CFUNC_MAGIC_DEF("toLocaleString", 0, get_date_string, 0x33 ),

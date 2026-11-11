@@ -2699,7 +2699,7 @@ enum {   /* the STEPDEF_* ids used at the registration sites */
     STEPDEF_BIGINT_ASUINTN, STEPDEF_BIGINT_ASINTN, STEPDEF_BIGINT_TOSTRING,
     STEPDEF_OBJ_GOPD, STEPDEF_REFLECT_GOPD,
     STEPDEF_OBJ_VALUES, STEPDEF_OBJ_ENTRIES, STEPDEF_OBJ_ASSIGN, STEPDEF_OBJ_SPREAD,
-    STEPDEF_ARRAY_FROMASYNC, STEPDEF_ARRAY_FLAT, STEPDEF_ARRAY_FLATMAP, STEPDEF_ARRAY_FROMLIKE, STEPDEF_ARRAY_WITH, STEPDEF_ARRAY_FILL, STEPDEF_ARRAY_COPYWITHIN, STEPDEF_BIGINT_CTOR, STEPDEF_TA_WITH, STEPDEF_TA_FILL, STEPDEF_TA_COPYWITHIN, STEPDEF_TA_INDEXOF, STEPDEF_TA_LASTINDEXOF, STEPDEF_TA_INCLUDES, STEPDEF_TA_SUBARRAY, STEPDEF_AB_SLICE, STEPDEF_AB_SLICE_IMM, STEPDEF_SAB_SLICE, STEPDEF_AB_CTOR, STEPDEF_SAB_CTOR, STEPDEF_AB_RESIZE, STEPDEF_SAB_GROW, STEPDEF_AB_TRANSFER, STEPDEF_AB_TRANSFER_IMM, STEPDEF_AB_TRANSFER_FIX, STEPDEF_DATAVIEW_CTOR, STEPDEF_DATE_TOJSON, STEPDEF_DATE_TOPRIM, STEPDEF_DATE_CTOR,
+    STEPDEF_ARRAY_FROMASYNC, STEPDEF_ARRAY_FLAT, STEPDEF_ARRAY_FLATMAP, STEPDEF_ARRAY_FROMLIKE, STEPDEF_ARRAY_WITH, STEPDEF_ARRAY_FILL, STEPDEF_ARRAY_COPYWITHIN, STEPDEF_BIGINT_CTOR, STEPDEF_TA_WITH, STEPDEF_TA_FILL, STEPDEF_TA_COPYWITHIN, STEPDEF_TA_INDEXOF, STEPDEF_TA_LASTINDEXOF, STEPDEF_TA_INCLUDES, STEPDEF_TA_SUBARRAY, STEPDEF_AB_SLICE, STEPDEF_AB_SLICE_IMM, STEPDEF_SAB_SLICE, STEPDEF_AB_CTOR, STEPDEF_SAB_CTOR, STEPDEF_AB_RESIZE, STEPDEF_SAB_GROW, STEPDEF_AB_TRANSFER, STEPDEF_AB_TRANSFER_IMM, STEPDEF_AB_TRANSFER_FIX, STEPDEF_DATAVIEW_CTOR, STEPDEF_DATE_TOJSON, STEPDEF_DATE_TOPRIM, STEPDEF_DATE_TOISO, STEPDEF_DATE_CTOR,
     STEPDEF_MATH_ABS, STEPDEF_MATH_FLOOR, STEPDEF_MATH_CEIL, STEPDEF_MATH_ROUND, STEPDEF_MATH_SQRT, STEPDEF_MATH_ACOS, STEPDEF_MATH_ASIN, STEPDEF_MATH_ATAN, STEPDEF_MATH_COS, STEPDEF_MATH_EXP, STEPDEF_MATH_LOG, STEPDEF_MATH_SIN, STEPDEF_MATH_TAN, STEPDEF_MATH_TRUNC, STEPDEF_MATH_SIGN, STEPDEF_MATH_COSH, STEPDEF_MATH_SINH, STEPDEF_MATH_TANH, STEPDEF_MATH_ACOSH, STEPDEF_MATH_ASINH, STEPDEF_MATH_ATANH, STEPDEF_MATH_EXPM1, STEPDEF_MATH_LOG1P, STEPDEF_MATH_LOG2, STEPDEF_MATH_LOG10, STEPDEF_MATH_CBRT, STEPDEF_MATH_F16ROUND, STEPDEF_MATH_FROUND, STEPDEF_MATH_ATAN2, STEPDEF_MATH_POW, STEPDEF_MATH_MIN, STEPDEF_MATH_MAX, STEPDEF_MATH_HYPOT, STEPDEF_MATH_IMUL, STEPDEF_MATH_CLZ32, STEPDEF_STR_FROMCHARCODE, STEPDEF_STR_FROMCODEPOINT, STEPDEF_DATE_UTC,
     STEPDEF_REGEXP_EXEC, STEPDEF_REGEXP_TEST, STEPDEF_REGEXP_FLAGS, STEPDEF_REGEXP_TOSTRING,
     STEPDEF_REGEXP_SET_INPUT,
@@ -24820,15 +24820,25 @@ typedef struct JSDateCtor {
     JSStepHdr hdr;        /* MUST be first: the generic step driver casts the state to JSStepHdr * */
     JSValue result;       /* DONE (owned) */
     JSValue prim;         /* the one-argument ToPrimitive result (owned) */
-    double fields[7];
+    JSValue dv;           /* the [[DateValue]] where it is unknown input (owned), else JS_UNINITIALIZED */
+    JSValue unk[7];       /* step 5's arguments whose ToNumber is unknown input (owned), else JS_UNINITIALIZED */
+    double fields[7];     /* step 5's numbers; an unknown argument's slot holds its example's ToNumber */
     double val;
     int n, i;
+    bool unheld;          /* an unknown argument of step 5 carries no example, so dv carries none either */
 } JSDateCtor;
 static JSValue js_date_current_time(JSContext *ctx);
 static double time_clip(double t);
 static double set_date_fields(double fields[], int is_local);
 static JSValue js_Date_parse(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSValue get_date_string(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
+
+/* 21.4.4.36 Date.prototype.toISOString step 4 and 21.4.4.37 Date.prototype.toJSON step 3 ask one question of a time
+   value, whether it is a Number that is not finite, so both fork under one name and a flow that answered it in
+   toJSON reads the same arm in the toISOString that toJSON invokes. Completion 0 is finite, 1 is not. */
+#define DATE_TV_NONFINITE_OP "21.4.4.36 step 4 and 21.4.4.37 step 3 (tv is a Number that is not finite)"
+enum { DATE_TV_FINITE, DATE_TV_NONFINITE };
+static int js_date_tv_real(JSContext *ctx, JSValueConst tv);
 
 /* 21.4.4.45 Date.prototype[@@toPrimitive]. It performs OrdinaryToPrimitive on ITSELF — the 7.1.1 walk with step 2
    skipped — and js_date_Symbol_toPrimitive ran that walk from a C entry, so a page's valueOf or toString with a
@@ -25076,6 +25086,13 @@ typedef struct JSDateToJSON {
     JSValue result;       /* DONE (owned) */
     JSValue cb[2];        /* [obj, its toISOString] — the CALL request */
 } JSDateToJSON;
+
+/* 21.4.4.36 Date.prototype.toISOString. A machine because step 4's RangeError over an unknown [[DateValue]] is
+   one completion of a fork, and a C function cannot fork. */
+typedef struct JSDateToISO {
+    JSStepHdr hdr;        /* MUST be first: the generic step driver casts the state to JSStepHdr * */
+    JSValue result;       /* DONE (owned) */
+} JSDateToISO;
 
 /* Array.prototype.copyWithin, 23.1.3.4. ToObject, LengthOfArrayLike, THREE index coercions, then a walk that
    for each position either copies the source element or DELETES the target one (step 9.e.ii, when the source is
@@ -71457,19 +71474,34 @@ static const char *const js_date_ctor_steps[] = { DATECTOR_STAGES(JS_STEP_STAGE_
    nothing else to leave behind. */
 #define DATECTOR_CURSORS  &s->hdr.num_phase, &s->hdr.get_phase, NULL
 
-/* Both coercing arms, step 4.c.iii and steps 5.b-5.h, take UNKNOWN EXTERNAL INPUT through the coercion
-   sub-sequence: an operand with an example is converted over it and the machine runs on, so every later field
-   is still coerced (and its valueOf still runs), and the driver derives the whole completion from the operand
-   with the time value these steps computed as its example (step_coerce_unknown).
-   Named residual. Not covered: an operand with no example stops the machine at that field, so a later field's
-   coercion does not run. Next diff: nothing in this machine; an operand with no example has no value to
-   coerce, and the derivation is its honest result. How its absence shows: a document in which a request
-   composed inside a later argument's `valueOf` is absent while the date built around an exampleless field is
-   present. */
+/* The ToNumber of an unknown's example, where the example is a held primitive whose conversion runs no page
+   code and cannot throw; false otherwise. `parse` takes a String example through 21.4.3.2 Date.parse, as step
+   4.c.ii does. */
+static bool js_date_example_number(JSContext *ctx, JSValueConst unk, bool parse, double *pd)
+{
+    JSValue ex = js_concolic_operand(ctx, unk);
+    bool ok = js_concolic_held(unk) && !JS_IsObject(ex) && !JS_IsSymbol(ex) && !JS_IsBigInt(ex);
+
+    DCHECK(!JS_IsUninitialized(ex), "a Date argument's example was asked of a value that is not unknown");
+    if (ok && parse && JS_IsString(ex)) {
+        JSValue t = js_Date_parse(ctx, JS_UNDEFINED, 1, vc(&ex));
+        ok = !JS_IsException(t) && JS_ToFloat64Free(ctx, pd, t) == 0;
+    } else if (ok) {
+        ok = JS_ToFloat64(ctx, pd, ex) == 0;
+    }
+    DCHECK(ok || !JS_HasException(ctx), "converting a primitive example to a time value threw");
+    JS_FreeValue(ctx, ex);
+    return ok;
+}
+
+/* Every shape builds a Date object, and an unknown time value is held in its [[DateValue]] (`dv`): the clock of
+   step 3.a, the slot of a Date argument at step 4.b.i, the primitive of step 4.c, or any argument of step 5.
+   The definition answers unknown input itself (answers_unknown), so each coercion over one reports it here and
+   step 5 coerces every later argument, whose valueOf runs, before the time value is derived from all of them. */
 static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSDateCtor *s = st;
-    int r;
+    int r, k;
 
     /* THE ARM EACH SHAPE NEEDS IS JUMPED TO, NEVER FALLEN INTO. Step 2's dispatch on numberOfArgs picks one of
        three continuations and the stage list is in ALGORITHM order, so two of the three lie past arms belonging
@@ -71488,37 +71520,39 @@ static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
     {
         JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
         /* FIRST, before anything that can throw: the teardown frees exactly what the state holds. */
-        s->result = JS_UNDEFINED; s->prim = JS_UNDEFINED;
-        s->val = 0; s->i = 0;
+        s->result = JS_UNDEFINED; s->prim = JS_UNDEFINED; s->dv = JS_UNINITIALIZED;
+        for (k = 0; k < 7; k++) s->unk[k] = JS_UNINITIALIZED;
+        s->val = 0; s->i = 0; s->unheld = false;
         /* `Date(...)` called as a FUNCTION ignores its arguments entirely — it does not coerce them. */
         s->n = JS_IsUndefined(s->hdr.this_val) ? 0 : s->hdr.argc;
         if (s->n == 0) {
             JSValue now = js_date_current_time(ctx);               /* step 1.a or step 3.a */
 
-            if (!JS_IsNumber(now)) {
-                /* An unknown current time makes this whole completion unknown: the String of step 1.b, or the
-                   Date of steps 6-8. Each form is its own derivation, so a branch over one decides nothing about
-                   the other. Named residual: the Date form carries no example, since its prototype is
-                   NewTarget's and is read at step 6; a Date the page reads members of then derives examples
-                   from nothing, which shows as unknown time-of-day gates whose arms carry no example. */
-                bool fn = JS_IsUndefined(s->hdr.this_val);
+            if (!JS_IsNumber(now) && JS_IsUndefined(s->hdr.this_val)) {
+                /* Step 1.b's String over an unknown current time, derived from it with the string of its
+                   example. */
                 JSValue real = JS_UNDEFINED, ex = js_concolic_operand(ctx, now);
 
-                if (fn && JS_IsNumber(ex)) {
+                if (JS_IsNumber(ex)) {
                     JSValue d = JS_NewDate(ctx, JS_VALUE_GET_NORM_TAG(ex) == JS_TAG_FLOAT64
                                                 ? JS_VALUE_GET_FLOAT64(ex) : JS_VALUE_GET_INT(ex));
                     real = JS_IsException(d) ? d : get_date_string(ctx, d, 0, NULL, 0x13);
                     JS_FreeValue(ctx, d);
                 }
                 JS_FreeValue(ctx, ex);
-                s->result = js_concolic_derive(ctx, now, fn ? "21.4.2.1 Date ( ...values ) step 1.b ToDateString(now)"
-                                                            : "21.4.2.1 Date ( ...values ) steps 3.a and 6-8, a Date "
-                                                              "whose [[DateValue]] is the current time", real);
+                s->result = js_concolic_derive(ctx, now, "21.4.2.1 Date ( ...values ) step 1.b ToDateString(now)",
+                                               real);
                 JS_FreeValue(ctx, now);
                 DCHECK(!JS_IsUninitialized(s->result), "the current time was not a Number and not unknown");
                 return 0;
             }
-            if (JS_ToFloat64Free(ctx, &s->val, now)) return -1;
+            if (!JS_IsNumber(now)) {
+                /* step 3.a: dv is the current time itself, which step 7 stores */
+                DCHECK(js_value_is_concolic(now), "the current time was not a Number and not unknown");
+                s->dv = now;
+            } else if (JS_ToFloat64Free(ctx, &s->val, now)) {
+                return -1;
+            }
             STEP_GOTO(s->hdr.stage, DATECTOR_CREATE, DATECTOR_CURSORS);
             STEP_JUMP(DATECTOR_CREATE);
         }
@@ -71531,6 +71565,12 @@ static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                 if (p->class_id == JS_CLASS_DATE && JS_IsNumber(p->u.object_data)) {
                     if (JS_ToFloat64(ctx, &s->val, p->u.object_data)) return -1;   /* step 4.b.i */
                     s->val = time_clip(s->val);                                    /* step 4.d */
+                    from_slot = true;
+                } else if (p->class_id == JS_CLASS_DATE) {
+                    /* steps 4.b.i and 4.d over an unknown time value: TimeClip of a time value is itself */
+                    DCHECK(js_value_is_concolic(p->u.object_data),
+                           "a Date's [[DateValue]] is neither a Number nor unknown input");
+                    s->dv = js_dup(p->u.object_data);
                     from_slot = true;
                 }
             }
@@ -71557,71 +71597,57 @@ static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         /* steps 4.c.ii and 4.c.iii, both on a PRIMITIVE, so neither invokes anything */
         v = s->prim;
         s->prim = JS_UNDEFINED;
+        if (js_value_is_concolic(v)) {
+            /* steps 4.c.ii-4.d over unknown input: whether it is a String is a test on the operand that both
+               answers end in an unknown time value derived from it, so one derivation stands for both, with the
+               example run through whichever step its own type takes. */
+            double e;
+            bool held = js_date_example_number(ctx, v, true, &e);
+
+            s->dv = js_concolic_derive(ctx, v, "21.4.2.1 Date ( ...values ) steps 4.c.ii-4.d (dv is TimeClip(tv))",
+                                       held ? js_float64(time_clip(e)) : JS_UNDEFINED);
+            JS_FreeValue(ctx, v);
+            DCHECK(js_value_is_concolic(s->dv), "the time value derived from unknown input is not unknown");
+            STEP_GOTO(s->hdr.stage, DATECTOR_CREATE, DATECTOR_CURSORS);
+            STEP_JUMP(DATECTOR_CREATE);
+        }
         if (JS_IsString(v)) {
             JSValue dv = js_Date_parse(ctx, JS_UNDEFINED, 1, vc(&v));
             JS_FreeValue(ctx, v);
             if (JS_IsException(dv)) return -1;
-            /* 21.4.3.2 Date.parse ( string )'s OWN result and never a coercion of the page's value: that
-               function answers a Number this engine computed, so no operand the page supplied reaches this
-               conversion and the boundary below cannot be asked a question it has no answer for. */
+            /* 21.4.3.2 Date.parse ( string )'s own result, a Number this engine computed. */
             if (JS_ToFloat64Free(ctx, &s->val, dv)) return -1;
         } else {
-            /* step 4.c.iii, ECMAScript 21.4.2.1 Date ( ...values ): "Let tv be ? ToNumber(v)" — ASKED OF THE
-               COERCION SUB-SEQUENCE rather than performed here. This was a JS_ToFloat64Free of the primitive,
-               and that is the shape 7.1.4 ToNumber ( arg )'s own conversion boundary aborts on: 7.1.1
-               ToPrimitive ( input [ , preferredType ] ) over UNKNOWN EXTERNAL INPUT is the IDENTITY, so
-               step_toprim_run above hands a concolic straight back and the boundary — which owes C a real
-               double and says so — is where `new Date({orphan.arg0} * 1000)` ended a whole document, and an
-               aborted instance's findings are discarded. step_tofloat64_run converts the operand's example
-               (or reports JS_STEP_UNKNOWN without one) and the driver completes this machine with the unknown
-               derived under this definition's algorithm and this stage's label, so a later branch over the date
-               still forks and an @S candidate still injects at the source that fed it.
-               AND STEP 4.c.ii's `If v is a String` IS NOT FORKED FOR ONE, which is what makes that answer
-               WHOLE rather than a narrowing. A concolic is not a JS_TAG_STRING, so an unknown takes this arm
-               — and the arm above would have produced an unknown Number too, being 21.4.3.2's parse of a
-               String nobody has. Both arms end in an unknown time value derived from the SAME operand at the
-               SAME stage, whose label names 4.c.ii and 4.c.iii together, so there is one derived identity
-               either way and no arm is deleted. The branch is the BUILTIN'S OWN test on the operand and not
-               the page's, which is why C-stack forbids forking it.
-               IT CANNOT ASK FOR A ToPrimitive: step 4.c.i already made this value primitive, and a REQUEST
-               from here would be re-entered above as that coercion's answer and overwrite the wrong slot. */
-            r = step_tofloat64_run(ctx, &s->hdr, v, JS_UNDEFINED, &s->val, out_cb, out_argc);
-            DCHECK(r != 5, "21.4.2.1 step 4.c.iii's ToNumber asked for a ToPrimitive — step 4.c.i's own "
-                           "primitive is still an Object, which 7.1.4 ToNumber ( arg ) step 9 asserts it "
-                           "is not");
-            JS_FreeValue(ctx, v);
-            if (r) return r < 0 ? -1 : r;
+            /* step 4.c.iii on a primitive that is not unknown, so the conversion invokes nothing */
+            r = JS_ToFloat64Free(ctx, &s->val, v);
+            if (r) return -1;
         }
         s->val = time_clip(s->val);                                /* step 4.d */
         STEP_GOTO(s->hdr.stage, DATECTOR_CREATE, DATECTOR_CURSORS);
         STEP_JUMP(DATECTOR_CREATE);
     }
     STEP_ARM(DATECTOR_FIELD);
-    /* steps 5.b-5.h's ToNumber per field. EVERY provided argument that is coerced AT ALL is coerced in order,
-       before any of them is examined — a NaN in an earlier one does not skip the later coercions the page can
-       observe, and neither does a throw, which is what each step's `?` means. An UNKNOWN in an earlier one
-       DOES: the residual on js_date_ctor_step names that and what would close it. The NUMERIC
-       half runs inside the sub-sequence, on a primitive, so it invokes nothing and needs no stage: a stage
-       between the two would be entered and left inside one step() call and rest at no step at all. The loop
-       condition is `i` and not the stage, so a resume re-enters at the field it parked on and collects its own
-       answer.
-       IT IS ONE CALL AND NOT A ToPrimitive PLUS A CONVERSION OF THIS BODY'S OWN, because ECMAScript
-       21.4.2.1 Date ( ...values ) step 5.b is "Let yearNumber be ? ToNumber(values[0])" and its six siblings
-       are the same shape — 7.1.4 ToNumber ( arg ) over the ARGUMENT, with no step in between that inspects
-       the primitive, which is the one thing that would need the halves apart (step 4.c.ii of the
-       one-argument shape is that step, and that arm keeps them apart for exactly that reason). The
-       hand-decomposed pair was step_toprim_run followed by a JS_ToFloat64Free written here, and 7.1.1
-       ToPrimitive ( input [ , preferredType ] ) over UNKNOWN EXTERNAL INPUT is the IDENTITY — so the pair
-       handed a concolic to the conversion boundary that owes C a real double, and `new Date(u.getFullYear(),
-       m, 1)` over an unknown `u` aborted a whole document. step_tofloat64_run converts the operand's example
-       (or reports JS_STEP_UNKNOWN without one) and the driver completes this machine with the unknown derived
-       under this definition's algorithm and this stage's label: an unknown FIELD makes the whole date unknown,
-       with the date the examples compute as its example. */
+    /* steps 5.b-5.h's ToNumber per field, every provided argument in order before any is examined, so a NaN, a
+       throw's `?` or an unknown in an earlier one skips no later coercion the page can observe. Each is one call to
+       the numeric sub-sequence (ToPrimitive and the conversion with nothing between them), and the loop runs on
+       `i`, so a resume re-enters at the field it parked on. An argument the sub-sequence reports unknown is taken
+       off the header into `unk[i]`, its example's number standing in `fields[i]`, and steps 5.j-5.k derive the
+       time value from all of them. */
     while (s->i < s->n) {
         double a;
         r = step_tofloat64_run(ctx, &s->hdr, step_arg(&s->hdr, s->i), cb_result, &a, out_cb, out_argc);
         cb_result = JS_UNDEFINED;
-        if (r) return r < 0 ? -1 : r;
+        if (r == JS_STEP_UNKNOWN) {
+            DCHECK(JS_IsUninitialized(s->unk[s->i]), "a Date argument was reported unknown twice");
+            s->unk[s->i] = s->hdr.unknown_operand;
+            s->hdr.unknown_operand = JS_UNINITIALIZED;
+            if (!js_date_example_number(ctx, s->unk[s->i], false, &a)) {
+                s->unheld = true;
+                a = 0;
+            }
+        } else if (r) {
+            return r < 0 ? -1 : r;
+        }
         s->fields[s->i] = isfinite(a) ? trunc(a) : NAN;
         /* step 5.i MakeFullYear, over values[0] */
         if (s->i == 0 && isfinite(a) && s->fields[0] >= 0 && s->fields[0] < 100)
@@ -71639,7 +71665,6 @@ static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
 
     STEP_ARM(DATECTOR_CLIP);
     {
-        int k;
         JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
         DCHECK(s->n >= 2,
                "21.4.2.1 steps 5.j-5.k were reached for a Date built from fewer than two arguments — those "
@@ -71649,6 +71674,20 @@ static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         for (k = 0; k < s->n; k++)
             if (!isfinite(s->fields[k])) break;
         s->val = (k == s->n) ? set_date_fields(s->fields, 1) : NAN;
+        {
+            JSValueConst ops[7];
+            int nu = 0;
+
+            for (k = 0; k < s->n; k++)
+                if (!JS_IsUninitialized(s->unk[k])) ops[nu++] = s->unk[k];
+            if (nu > 0) {
+                /* dv over the unknown arguments, with the examples' time value as its example */
+                s->dv = g_concolic.derived(ctx, "21.4.2.1 Date ( ...values ) steps 5.i-5.k (dv is "
+                                                "TimeClip(UTC(finalDate)))", ops, nu,
+                                           s->unheld ? JS_UNDEFINED : js_float64(s->val));
+                DCHECK(js_value_is_concolic(s->dv), "the time value derived from unknown arguments is not unknown");
+            }
+        }
         STEP_GOTO(s->hdr.stage, DATECTOR_CREATE, DATECTOR_CURSORS);
     }
     STEP_ARM(DATECTOR_CREATE);
@@ -71657,7 +71696,12 @@ static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
     r = step_create_from_ctor_run(ctx, &s->hdr, s->hdr.this_val, JS_CLASS_DATE, cb_result, &s->result,
                                   out_cb, out_argc);
     if (r) return r < 0 ? -1 : r;
-    JS_SetObjectData(ctx, s->result, js_float64(s->val));          /* step 7 */
+    if (!JS_IsUninitialized(s->dv)) {                              /* step 7, an unknown dv */
+        JS_SetObjectData(ctx, s->result, s->dv);
+        s->dv = JS_UNINITIALIZED;
+    } else {
+        JS_SetObjectData(ctx, s->result, js_float64(s->val));      /* step 7 */
+    }
     if (JS_IsUndefined(s->hdr.this_val)) {
         /* step 1.b: invoked as a function, the value is ToDateString(now) */
         JSValue str = get_date_string(ctx, s->result, 0, NULL, 0x13);
@@ -71673,8 +71717,13 @@ static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
 static void js_date_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSDateCtor *s = st;
+    int k;
+
     v->val(ctx, &s->result);
     v->val(ctx, &s->prim);
+    v->val(ctx, &s->dv);
+    for (k = 0; k < 7; k++)
+        v->val(ctx, &s->unk[k]);
 }
 
 static JSValue js_date_ctor_fini(JSContext *ctx, void *st, bool take_result)
@@ -71744,6 +71793,7 @@ static JSValue js_date_toprim_fini(JSContext *ctx, void *st, bool take_result)
 #define DATETOJSON_STAGES(X) \
     X(DATETOJSON_OBJ,    "21.4.4.37 step 1 (O is ToObject(this value))") \
     X(DATETOJSON_PRIM,   "21.4.4.37 steps 2-3 (tv is ToPrimitive(O, number); a non-finite tv is null)") \
+    X(DATETOJSON_FINITE, "21.4.4.37 step 3 over an unknown tv (tv is a Number that is not finite)") \
     X(DATETOJSON_METHOD, "21.4.4.37 step 4 via 7.3.20 step 2 (func is GetV(O, \"toISOString\"))") \
     X(DATETOJSON_CALL,   "21.4.4.37 step 4 via 7.3.20 step 3 (Call(func, O))")
 enum { DATETOJSON_STAGES(JS_STEP_STAGE_ENUM) };
@@ -71773,6 +71823,16 @@ static int js_date_tojson_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
             if (JS_ToFloat64(ctx, &d, s->tv) < 0) return -1;
             if (!isfinite(d)) { s->result = JS_NULL; return 0; }
         }
+        s->hdr.stage = js_value_is_concolic(s->tv) ? DATETOJSON_FINITE : DATETOJSON_METHOD;
+    }
+    if (s->hdr.stage == DATETOJSON_FINITE) {
+        /* Step 3 over unknown input forks; `tv` stays on the state, where the sibling's snapshot carries it. */
+        int arm;
+
+        JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
+        r = step_fork_run(ctx, &s->hdr, s->tv, DATE_TV_NONFINITE_OP, 2, js_date_tv_real(ctx, s->tv), &arm);
+        if (r) return r;
+        if (arm == DATE_TV_NONFINITE) { s->result = JS_NULL; return 0; }
         s->hdr.stage = DATETOJSON_METHOD;
     }
     if (s->hdr.stage == DATETOJSON_METHOD) {
@@ -71807,6 +71867,69 @@ static void js_date_tojson_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static JSValue js_date_tojson_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSDateToJSON *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+    if (take_result) s->result = JS_UNDEFINED;
+    return r;
+}
+
+/* The completion of DATE_TV_NONFINITE_OP that the unknown `tv`'s example reaches, or JS_OUTCOME_REAL_UNSTATED
+   where it holds none. An example that is not a Number is not a non-finite Number. */
+static int js_date_tv_real(JSContext *ctx, JSValueConst tv)
+{
+    JSValue ex = js_concolic_operand(ctx, tv);
+    int real = JS_OUTCOME_REAL_UNSTATED;
+    double d;
+
+    DCHECK(!JS_IsUninitialized(ex), "a time value's finiteness was asked as a fork over a value that is not unknown");
+    if (js_concolic_held(tv))
+        real = JS_IsNumber(ex) && JS_ToFloat64(ctx, &d, ex) == 0 && !isfinite(d) ? DATE_TV_NONFINITE : DATE_TV_FINITE;
+    JS_FreeValue(ctx, ex);
+    return real;
+}
+
+#define DATETOISO_STAGES(X) \
+    X(DATETOISO_ENTRY, "21.4.4.36 steps 1-6 (RequireInternalSlot; tv is dateObj.[[DateValue]]; a NaN tv throws " \
+                       "a RangeError; tv in the Date Time String Format)")
+enum { DATETOISO_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_date_toISO_steps[] = { DATETOISO_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* Over an unknown [[DateValue]] step 4 forks: the RangeError, or the String derived from tv (get_date_string). */
+static int js_date_toiso_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSDateToISO *s = st;
+    JSValueConst this_val = s->hdr.this_val;
+    int arm, r;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    s->result = JS_UNDEFINED;
+    if (JS_IsDate(this_val) && js_value_is_concolic(JS_VALUE_GET_OBJ(this_val)->u.object_data)) {
+        JSValueConst tv = JS_VALUE_GET_OBJ(this_val)->u.object_data;
+
+        r = step_fork_run(ctx, &s->hdr, tv, DATE_TV_NONFINITE_OP, 2, js_date_tv_real(ctx, tv), &arm);
+        if (r) return r;
+        if (arm == DATE_TV_NONFINITE) {
+            JS_ThrowRangeError(ctx, "Date value is NaN");
+            return -1;
+        }
+    }
+    s->result = get_date_string(ctx, this_val, 0, NULL, 0x23);
+    if (JS_IsException(s->result)) {
+        s->result = JS_UNDEFINED;
+        return -1;
+    }
+    return 0;
+}
+
+static void js_date_toiso_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSDateToISO *s = st;
+    v->val(ctx, &s->result);
+}
+
+static JSValue js_date_toiso_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSDateToISO *s = st;
     JSValue r = take_result ? s->result : JS_UNDEFINED;
     if (take_result) s->result = JS_UNDEFINED;
     return r;
@@ -75278,6 +75401,9 @@ static const JSTrampStepDef js_date_toJSON_def = { sizeof(JSDateToJSON), js_date
 static const JSTrampStepDef js_date_toPrim_def = { sizeof(JSDateToPrim), js_date_toprim_step, js_date_toprim_fini, 0 , .visit = js_date_toprim_visit,
                      .algorithm = "21.4.4.45 Date.prototype [ @@toPrimitive ]",
                      .steps = js_date_toPrim_steps };
+static const JSTrampStepDef js_date_toISO_def = { sizeof(JSDateToISO), js_date_toiso_step, js_date_toiso_fini, 0, .visit = js_date_toiso_visit,
+                     .algorithm = "21.4.4.36 Date.prototype.toISOString ( )",
+                     .steps = js_date_toISO_steps, .result_types = JS_LANG_TYPE_STRING };
 /* the captured half of an Atomics operation: the length ValidateAtomicAccess reads at step 1, held across the
    index's own coercion, plus the argument vector the body will read. */
 typedef struct JSAtomics {
@@ -75295,6 +75421,8 @@ typedef struct JSAtomics {
 typedef struct JSDateSet {
     JSStepHdr hdr;        /* MUST be first: the generic step driver casts the state to JSStepHdr * */
     JSValue result;       /* DONE (owned) */
+    JSValue t;            /* the [[DateValue]] read at the step before any coercion, where it is unknown input
+                             (owned), else JS_UNINITIALIZED */
     double fields[9];     /* derived from the [[DateValue]] read BEFORE any argument was coerced */
     int res;              /* get_date_fields' answer: 0 = the stored time value was NaN */
     int i, n;             /* the coercion cursor and how many arguments the spec names */
@@ -75302,7 +75430,7 @@ typedef struct JSDateSet {
 } JSDateSet;
 static const JSTrampStepDef js_date_ctor_def = { sizeof(JSDateCtor), js_date_ctor_step, js_date_ctor_fini, 0, .visit = js_date_ctor_visit,
                    .algorithm = "21.4.2.1 Date ( ...values )",
-                   .steps = js_date_ctor_steps };
+                   .steps = js_date_ctor_steps, .answers_unknown = 1 };
 /* An OrdinaryCreateFromConstructor declaration: the CLASS and the body's DECLARED ARGUMENT COUNT in `arg`, the
    post-create body (NULL = the object is the result), and the same precheck hook the coerce-then-compute machines
    use for a leading validation. The count is part of the declaration for the same reason PRIMARGS carries its
@@ -78055,6 +78183,7 @@ static const JSTrampStepDef *const js_tramp_step_defs[STEPDEF_COUNT] = {
     [STEPDEF_SAB_SLICE]     = &js_sab_slice_def,
     [STEPDEF_DATE_TOJSON]   = &js_date_toJSON_def,
     [STEPDEF_DATE_TOPRIM]   = &js_date_toPrim_def,
+    [STEPDEF_DATE_TOISO]    = &js_date_toISO_def,
     [STEPDEF_DATE_CTOR]     = &js_date_ctor_def,
     [STEPDEF_ITERATOR_CTOR] = &js_iterator_ctor_def,
     [STEPDEF_ARRAY_OF]      = &js_array_of_def,
