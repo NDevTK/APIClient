@@ -39,6 +39,15 @@ struct DynBody {
     char      *compile_name;    /* the name the parse borrows across stints, owned here; NULL for a nameless row */
     int        compile_flags;
     char       compile_module;  /* which entry began it */
+    /* The compile's record (dyn_body.h's payment entries): its marks, as the compile's own work from its start,
+       strictly increasing (`marks_n` of them, owned); the furthest work any compile of these bytes ran
+       (`done`); the work of the compile in flight (`at`, 0 with none); and whether the record is whole
+       (`ended`), ending in a SyntaxError (`failed`). `id` names the body in a flow's payments. */
+    uint64_t   id;
+    uint64_t  *marks;
+    uint32_t   marks_n, marks_cap;
+    uint64_t   done, at;
+    char       ended, failed;
 };
 
 /* THE INSTANCE'S TOTAL, kept incrementally rather than walked, because the walk that would answer it is the
@@ -50,6 +59,10 @@ static long g_dyn_body_live;
    dyn_body_parses_held. It is kept here for g_dyn_body_live's reason exactly: there is no list of live bodies
    and there must not be one, so a walk that would answer it does not exist. */
 static long g_dyn_body_parses;
+/* The last body id issued, so no two bodies of the process share one. */
+static uint64_t g_dyn_body_ids;
+/* The body whose compile stint is running, which the stint's marks are recorded on (dyn_body_compile_mark). */
+static DynBody *g_mark_body;
 
 /* `own_decode` IS A PARAMETER AND NOT A DEFAULT THE ENTRIES OVERWRITE, because the two entries are the two
    values and a default would make ONE of them the one a later entry silently inherits. It is the only field
@@ -77,6 +90,11 @@ static DynBody *dyn_body_wrap(char *text, size_t len, int own_decode)
     b->compile_name = NULL;
     b->compile_flags = 0;
     b->compile_module = 0;
+    b->id = ++g_dyn_body_ids;
+    b->marks = NULL;
+    b->marks_n = b->marks_cap = 0;
+    b->done = b->at = 0;
+    b->ended = b->failed = 0;
     g_dyn_body_bytes += (long)len + 1;
     g_dyn_body_live++;
     return b;
@@ -199,6 +217,7 @@ void dyn_body_unref(DynBody *b)
            "the program-text census went negative — every body adds its bytes once when it is made and "
            "removes them once when its last holder releases it, so a negative total is a body freed by "
            "something that is not this file");
+    free(b->marks);
     free(b->text);
     free(b);
 }
@@ -340,6 +359,7 @@ void dyn_body_parse_hold(DynBody *b, JSContext *realm, const char *name, int fla
            "a second finished parse of one program text was offered — a body runs one compile at a time and none "
            "once a parse is held, so two worlds compiled these bytes apart");
     if (b->parse_realm != NULL) return;
+    DCHECK(b->ended && !b->failed, "a parse was held against a body whose compile record does not end in one");
     /* THE NAME IS COPIED BEFORE ANYTHING IS TAKEN, so a failure to copy it leaves the body exactly as it was.
        A KEY THIS FILE CANNOT STATE IS A KEY IT MAY NOT COMPARE, so the parse is simply not shared: that costs
        one re-parse per later timeline and truncates nothing, because a parse is RE-DERIVABLE from the text this
@@ -367,8 +387,11 @@ int dyn_body_compile_parked(const DynBody *b)
 }
 
 /* See dyn_body.h. */
+static void dyn_body_compile_mark(uint64_t at);
+
 int dyn_body_compile_stint(DynBody *b, JSContext *realm, const char *name, int flags, int module, JSValue *pout)
 {
+    uint64_t p0;
     int r;
 
     DCHECK(b != NULL && b->refs > 0, "a compile stint was asked of no body, or after its last holder released it");
@@ -392,12 +415,102 @@ int dyn_body_compile_stint(DynBody *b, JSContext *realm, const char *name, int f
                b->compile_module == (char)(module != 0),
            "a world continued a body's compile under a different realm, name, flag set or entry than the compile "
            "began under — every row holding one body computes one key (dyn_body_parse_ref)");
+    DCHECK(g_mark_body == NULL, "a compile stint began inside another body's stint");
+    p0 = JS_FlowCompileProgressLife();
+    g_mark_body = b;
+    JS_SetCompileMarkHook(dyn_body_compile_mark);
     r = module ? JS_FlowCompileModule(realm, b->text, b->len, b->compile_name, flags, pout, &b->compile)
                : JS_FlowCompileStep(realm, b->text, b->len, b->compile_name, flags, pout, &b->compile);
+    JS_SetCompileMarkHook(NULL);
+    g_mark_body = NULL;
     DCHECK((r == 0) == (b->compile != NULL),
            "a compile stint's answer and the body's carrier disagree about whether the compile is parked");
+    b->at += JS_FlowCompileProgressLife() - p0;
+    DCHECKF(!b->ended || b->at <= b->done,
+            "a re-run of these bytes' ended compile ran %llu units past its record's %llu — a compile's work is a "
+            "function of its bytes", (unsigned long long)b->at, (unsigned long long)b->done);
+    if (b->at > b->done) b->done = b->at;
+    if (r != 0) {
+        DCHECK(!b->ended || ((r < 0) == b->failed && b->at == b->done),
+               "a re-run of these bytes' compile ended elsewhere than its record, or with another answer");
+        b->ended = 1;
+        b->failed = (char)(r < 0);
+        b->at = 0;
+    }
     if (b->compile == NULL) dyn_body_compile_key_release(b);
     return r;
+}
+
+/* JSCompileMarkFunc for the running stint's body: a mark of a compile in flight is appended to the record; one
+   of a re-run is one the record holds. */
+static void dyn_body_compile_mark(uint64_t at)
+{
+    DynBody *b = g_mark_body;
+
+    DCHECK(b != NULL, "a compile mark was reported with no body's stint running");
+    if (b->ended) {
+#if APICLIENT_DEV
+        uint32_t lo = 0, hi = b->marks_n;
+
+        while (lo < hi) {
+            uint32_t mid = lo + (hi - lo) / 2;
+
+            if (b->marks[mid] < at) lo = mid + 1; else hi = mid;
+        }
+        DCHECKF(lo < b->marks_n && b->marks[lo] == at,
+                "a re-run of these bytes' compile marked a unit at %llu that the record does not hold",
+                (unsigned long long)at);
+#endif
+        return;
+    }
+    DCHECKF(b->marks_n == 0 || at > b->marks[b->marks_n - 1],
+            "a compile marked a unit at %llu, not past its last mark %llu", (unsigned long long)at,
+            (unsigned long long)(b->marks_n ? b->marks[b->marks_n - 1] : 0));
+    if (b->marks_n == b->marks_cap) {
+        uint32_t cap = b->marks_cap ? b->marks_cap * 2 : 16;
+        uint64_t *grown = reclaim_realloc(b->marks, (size_t)cap * sizeof *grown);
+
+        CHECK(grown != NULL, "dyn_body: OOM recording a compile's mark");
+        b->marks = grown;
+        b->marks_cap = cap;
+    }
+    b->marks[b->marks_n++] = at;
+}
+
+uint64_t dyn_body_id(const DynBody *b)
+{
+    DCHECK(b != NULL && b->refs > 0, "a body's id was asked of no body, or after its last holder released it");
+    return b->id;
+}
+
+uint64_t dyn_body_compile_done(const DynBody *b)
+{
+    DCHECK(b != NULL && b->refs > 0, "a compile record was asked of no body, or after its last holder released it");
+    return b->done;
+}
+
+int dyn_body_compile_ended(const DynBody *b)
+{
+    DCHECK(b != NULL && b->refs > 0, "a compile record was asked of no body, or after its last holder released it");
+    return b->ended;
+}
+
+uint64_t dyn_body_compile_next(const DynBody *b, uint64_t paid, int *mark)
+{
+    uint32_t lo = 0, hi;
+
+    DCHECK(b != NULL && b->refs > 0 && mark != NULL, "a payment point was asked of no body or with nowhere to say "
+           "whether it is a mark");
+    DCHECKF(paid < b->done, "a payment point past %llu was asked of a record that ends at %llu",
+            (unsigned long long)paid, (unsigned long long)b->done);
+    hi = b->marks_n;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+
+        if (b->marks[mid] <= paid) lo = mid + 1; else hi = mid;
+    }
+    *mark = lo < b->marks_n;
+    return *mark ? b->marks[lo] : b->done;
 }
 
 long dyn_body_total_bytes(void) { return g_dyn_body_bytes; }

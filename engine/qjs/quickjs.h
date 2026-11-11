@@ -2318,6 +2318,21 @@ JS_EXTERN uint64_t JS_FlowTakeRetiredWork(void);
 JS_EXTERN uint64_t JS_FlowParseBytesLife(void);
 /* The share of the retired work that the script tokenizer and the codegen passes charged, over the process. */
 JS_EXTERN uint64_t JS_FlowCompileWorkLife(void);
+/* The compile work run over the thread, charged or re-derived in a residency span: the count a compile's progress
+   and its marks (JS_SetCompileMarkHook) are measured in. */
+JS_EXTERN uint64_t JS_FlowCompileProgressLife(void);
+/* Charges `units` of compile work another world's stint ran and the running flow's path now pays, as compile
+   work (solver/engine.c's compile payment). Between stints, outside a residency span. */
+JS_EXTERN void JS_FlowChargeCompileWork(uint64_t units);
+/* Offers the suspend point a compile stint offers at a mark, for a mark the running flow pays from a record
+   rather than runs: nonzero when the policy takes the thread. */
+JS_EXTERN int JS_FlowCompileOffer(void);
+/* A residency span (core/timing/thread_work.h's): while one is open a compile's work retires nothing and is
+   counted in JS_FlowResidencyWorkLife instead. Spans nest. */
+JS_EXTERN void JS_FlowResidencyBegin(void);
+JS_EXTERN void JS_FlowResidencyEnd(void);
+JS_EXTERN int JS_FlowResidencyOpen(void);
+JS_EXTERN uint64_t JS_FlowResidencyWorkLife(void);
 /* The share of the retired work that ran with no page frame standing (JS_RunningSiteHash would answer 0), compiles
    left out, over the thread: host work the host entered on its own, such as a rendering task's paint. */
 JS_EXTERN uint64_t JS_FlowFramelessWorkLife(void);
@@ -2591,6 +2606,11 @@ JS_EXTERN uint32_t JS_FlowBumpGen(void);
 typedef void JSCompileStintFunc(int open);
 JS_EXTERN void JS_SetCompileStintHook(JSCompileStintFunc *fn);
 JS_EXTERN int  JS_FlowInCompileStint(void);
+/* Called inside a resting compile's stint at each of its marks, with the compile's own work from its start
+   (JS_FlowCompileProgressLife's unit) there: a mark is the first poll a budget period past the last, so the
+   marks are a function of the source and the period, whichever worlds ran the stints. */
+typedef void JSCompileMarkFunc(uint64_t at);
+JS_EXTERN void JS_SetCompileMarkHook(JSCompileMarkFunc *fn);
 /* Is this captured slot's storage a DENSE array element (a fast Array, index inside its dense count)? Only then
    is removing the slot a shrink of the dense part; every other integer-indexed slot on an Array is an ordinary
    property JS_DeleteOwnSlot removes. Pairs with the shrink below — the delta's element half. */

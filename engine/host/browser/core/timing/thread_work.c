@@ -16,8 +16,8 @@ static int64_t  g_cpu_us[THREAD_WORK_N];
 static uint64_t g_discarded;
 static uint64_t g_charged;
 static uint64_t g_charged_input[THREAD_WORK_N];
-/* The open residency spans, and the units charged inside them (thread_work_residency_begin). */
-static int      g_residency_depth;
+/* The units charged inside residency spans (thread_work_residency_begin), whose depth quickjs keeps, since a
+   compile's charges are made there (JS_FlowResidencyBegin). */
 static uint64_t g_residency_units;
 /* The open spans' inner time: `g_inner[d]` is the thread CPU the spans nested directly inside the open span at
    depth `d` took, which that span subtracts from its own. */
@@ -85,23 +85,19 @@ void thread_work_end(ThreadWorkSpan *s, ThreadWorkKind kind, uint64_t bytes)
     }
     if (g_depth > 0) g_inner_input[g_depth - 1] |= g_inner_input[g_depth];
 #endif
-    if (g_residency_depth != 0) return;
+    if (JS_FlowResidencyOpen()) return;
     g_spans[kind]++;
     g_bytes[kind] += bytes;
     g_cpu_us[kind] += took - g_inner[g_depth];
 }
 
-void thread_work_residency_begin(void) { g_residency_depth++; }
+void thread_work_residency_begin(void) { JS_FlowResidencyBegin(); }
 
-void thread_work_residency_end(void)
-{
-    DCHECK(g_residency_depth > 0, "a residency span ended with none open");
-    g_residency_depth--;
-}
+void thread_work_residency_end(void) { JS_FlowResidencyEnd(); }
 
-bool thread_work_residency_open(void) { return g_residency_depth != 0; }
+bool thread_work_residency_open(void) { return JS_FlowResidencyOpen(); }
 
-uint64_t thread_work_residency_units(void) { return g_residency_units; }
+uint64_t thread_work_residency_units(void) { return g_residency_units + JS_FlowResidencyWorkLife(); }
 
 void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
 {
@@ -131,7 +127,7 @@ void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
     units = (bytes * PER_KIB[kind] + 1023) / 1024;
     /* Each charge offers the host its turn after the work it charges (solver/quantum.h): a residency span retires
        nothing on the flow's clock, so the slice's budget never ends it and only the turn hands the thread back. */
-    if (g_residency_depth != 0) {
+    if (JS_FlowResidencyOpen()) {
         g_residency_units += units;
         quantum_step_turn_point(QUANTUM_TURN_RESIDENCY, units);
         return;

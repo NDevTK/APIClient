@@ -1429,7 +1429,7 @@ static void cssd_inline_collect(lxb_dom_element_t *el, CssCascadedStyle *s, CssL
  * other bytes asked of the slot replace it. A text that does not parse is stored as an ended parse with no rules.
  * The table decides no charge. A parse runs in work units (begin, each step, the last with its finish), one
  * charge each, which the slot records; a flow pays each unit the first time its own path asks (solver/flow.h's
- * paid sheet parses): a held unit is charged as recorded, an unheld one is run and charged, and a paid unit the
+ * paid parses): a held unit is charged as recorded, an unheld one is run and charged, and a paid unit the
  * slot no longer holds is run again in a residency span. Each unpaid unit is taken from a resting drive's
  * allowance, so charges and rest points do not depend on which flow parsed first. A paid parse is a free hit.
  *
@@ -1604,7 +1604,7 @@ static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, si
            "the emission is freed at the end of each sheet iteration, so every later comparison would read "
            "freed memory. Copy the bytes at the store");
     /* With no flow running nobody pays, and a charge is discarded: what the slot holds is served. */
-    paid = flow_running() != NULL ? flow_running_sheet_paid(digest, len) : e->units;
+    paid = flow_running() != NULL ? (uint32_t)flow_running_paid(FLOW_PAID_SHEET_UNITS, digest, len) : e->units;
     DCHECKF(!e->parsed || paid <= e->units, "the running flow paid %u units of a sheet parse that ended in %u",
             paid, e->units);
     /* The units the path paid that the slot no longer holds: another flow's build replaced it in between. */
@@ -1619,7 +1619,7 @@ static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, si
                "a residency span asked for a sheet parse the running flow's path never paid for whole, so the "
                "re-derivation did work its no-pressure twin charged elsewhere");
         if (rests && !layout_job_parse_take()) {
-            flow_running_sheet_pay(digest, len, at);
+            flow_running_pay(FLOW_PAID_SHEET_UNITS, digest, len, at);
             *parked = true;
             return NULL;
         }
@@ -1630,7 +1630,7 @@ static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, si
             cssd_sheet_unit_run(e);
         }
     }
-    if (!residency && at != paid) flow_running_sheet_pay(digest, len, at);
+    if (!residency && at != paid) flow_running_pay(FLOW_PAID_SHEET_UNITS, digest, len, at);
     return e->sst != NULL ? e : NULL;
 }
 

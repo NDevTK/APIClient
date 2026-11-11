@@ -26605,6 +26605,44 @@ uint64_t JS_FlowParseBytesLife(void) { return g_flow_parse_bytes; }
    the service of running code; JSON text and regexp patterns are not in it. */
 static uint64_t g_flow_compile_work;
 uint64_t JS_FlowCompileWorkLife(void) { return g_flow_compile_work; }
+/* The compile work run, charged or re-derived in a residency span, over the thread: what a compile's progress and
+   its marks are measured in (JSParseState's `pd_progress`). The residency spans open (JS_FlowResidencyBegin) and
+   the compile work run inside them, which retires nothing. */
+static _Thread_local uint64_t g_flow_compile_progress;
+static _Thread_local int g_flow_residency;
+static _Thread_local uint64_t g_flow_residency_work;
+uint64_t JS_FlowCompileProgressLife(void) { return g_flow_compile_progress; }
+void JS_FlowResidencyBegin(void) { g_flow_residency++; }
+void JS_FlowResidencyEnd(void)
+{
+    DCHECK(g_flow_residency > 0, "a residency span ended with none open");
+    g_flow_residency--;
+}
+int JS_FlowResidencyOpen(void) { return g_flow_residency != 0; }
+uint64_t JS_FlowResidencyWorkLife(void) { return g_flow_residency_work; }
+
+/* `units` of a compile's own work: retired on the running flow's clock as compile work, or, in a residency span,
+   banked as residency work. Either way the compile's progress moves. */
+static inline void js_compile_charge(uint64_t units)
+{
+    g_flow_compile_progress += units;
+    if (g_flow_residency != 0) {
+        g_flow_residency_work += units;
+        return;
+    }
+    g_flow_compile_work += units;
+    g_flow_work_retired += units;
+}
+
+void JS_FlowChargeCompileWork(uint64_t units)
+{
+    DCHECK(g_flow_residency == 0 && !g_compile_stint,
+           "a recorded compile unit was charged inside a residency span or a compile stint — a payment is the "
+           "running flow's, made between stints, and a residency span pays nothing");
+    DCHECK_PRICED("an assert's condition or a dev build's second derivation paid a recorded compile unit");
+    g_flow_compile_work += units;
+    g_flow_work_retired += units;
+}
 uint64_t JS_FlowFramelessWorkLife(void) { return g_flow_frameless_work; }
 /* Pattern bytes regexp compiles have consumed, and the rests a compile inside a machine took, over the process:
    a report for the same census (lre_compile_poll, step_regexp_compile_run). */
@@ -52142,11 +52180,12 @@ typedef struct JSParseState {
         JSStringScan scan;
         bool pending, failed;
     } pd_tok;
-    /* The retired-work count (g_flow_work_retired) at this compile stint's opening or its last offer of a
-       suspend point: js_parse_want_yield offers one each budget period of work past it. Set where a stint
-       begins (__JS_EvalInternal, js_eval_compile_continue), since the scheduler banks the count between
-       stints. */
-    uint64_t pd_offer_at;
+    /* The compile's own work (g_flow_compile_progress, charged or not), measured from its start across every
+       stint: `pd_progress` up to this stint's opening, `pd_progress_open` the lifetime count then, and `pd_mark`
+       the work at which js_parse_want_yield next marks a unit. A poll's work is a function of the source, since
+       every stint polls at the same points (a resumed stint skips only the poll that parked it), so the marks
+       are too. Kept up at the stint's opening (js_eval_compile_continue) and its parks. */
+    uint64_t pd_progress, pd_progress_open, pd_mark;
     /* js_parse_program's CROSS-SUSPENSION STATE: the one break entry that is not on a descent frame (handle
        PD_BE_PGM). push_break_entry links it into JSFunctionDef.top_break for the whole source-element loop, a
        span that suspends, so the PARSE owns it, never an activation. */
@@ -52969,6 +53008,7 @@ static __exception int js_parse_template_part(JSParseState *s,
 
 static bool js_parse_want_yield(JSParseState *s);
 static uint64_t js_parse_count_bytes_to(JSParseState *s, const uint8_t *to);
+static void js_compile_count_to(JSParseState *s, const uint8_t *to);
 
 /* Starts the scan of a string literal's body, or a template part's cooked value, at `p`, the byte after its
    opening quote. The scan owns its buffer until js_parse_string_step completes or fails it. */
@@ -53107,7 +53147,7 @@ static int js_parse_string_step(JSParseState *s, JSStringScan *ss, bool can_rest
             goto fail;
     unit_done:
         ss->p = p;
-        g_flow_compile_work += js_parse_count_bytes_to(s, p);
+        js_compile_count_to(s, p);
         DCHECK(p > unit_at && (*unit_at == '\\' || p - unit_at <= UTF8_CHAR_LEN_MAX),
                "a string literal's scan reached its rest point having consumed no code point, or more than one "
                "code point or escape sequence, since the last: the rest is offered once per such unit");
@@ -53299,7 +53339,7 @@ static int js_parse_regexp_step(JSParseState *s, bool can_rest)
         if (string_buffer_putc(b, c))
             goto fail;
         s->pd_rx.p = p;
-        g_flow_compile_work += js_parse_count_bytes_to(s, p);
+        js_compile_count_to(s, p);
         DCHECK(p > unit_at && p - unit_at <= 1 + UTF8_CHAR_LEN_MAX,
                "a regexp literal's scan reached its rest point having consumed no code point, or more than one "
                "code point and its escape, since the last: the rest is offered once per such unit");
@@ -53317,7 +53357,7 @@ static int js_parse_regexp_step(JSParseState *s, bool can_rest)
             goto fail;
         p = p_next;
         s->pd_rx.p = p;
-        g_flow_compile_work += js_parse_count_bytes_to(s, p);
+        js_compile_count_to(s, p);
         if (can_rest && js_parse_want_yield(s))
             return 1;
     }
@@ -53498,8 +53538,9 @@ static JSAtom parse_ident(JSParseState *s, const uint8_t **pp,
    Deleting the guard is what makes that claim falsifiable rather than decorative: if some path still reaches
    here through C recursion, it now overflows the stack and CRASHES LOUD at the point that recursed, instead of
    being laundered into a RangeError the caller reports as if the source were at fault. */
-/* Charges the source bytes from the counted mark up to `to` (a scan cursor, or buf_ptr) as retired work, once
-   each: a rescan behind the mark adds nothing. */
+/* Counts the source bytes from the counted mark up to `to` (a scan cursor, or buf_ptr) once each, a rescan behind
+   the mark adding nothing, and answers their work, which the caller charges: a script's as compile work
+   (js_compile_count_to), JSON text's as frameless work. */
 static uint64_t js_parse_count_bytes_to(JSParseState *s, const uint8_t *to)
 {
     uint64_t units = 0;
@@ -53511,7 +53552,6 @@ static uint64_t js_parse_count_bytes_to(JSParseState *s, const uint8_t *to)
                       "work a release build does not retire. Check the compile's result, not a second compile");
         units = n * g_flow_control.parse_units_per_byte;
         g_flow_parse_bytes += n;
-        g_flow_work_retired += units;
         s->counted_ptr = to;
     }
     return units;
@@ -53520,6 +53560,12 @@ static uint64_t js_parse_count_bytes_to(JSParseState *s, const uint8_t *to)
 static uint64_t js_parse_count_bytes(JSParseState *s)
 {
     return js_parse_count_bytes_to(s, s->buf_ptr);
+}
+
+/* A script tokenizer's bytes up to `to`, charged as the compile's work. */
+static void js_compile_count_to(JSParseState *s, const uint8_t *to)
+{
+    js_compile_charge(js_parse_count_bytes_to(s, to));
 }
 
 /* Scans the token after the current one, charging the previous token's bytes. A string literal is handed out
@@ -53540,7 +53586,7 @@ static __exception int next_token(JSParseState *s)
 
     if (js_parse_token_finish(s))
         return -1;
-    g_flow_compile_work += js_parse_count_bytes(s);
+    js_compile_count_to(s, s->buf_ptr);
     free_token(s, &s->token);
 
     p = s->last_ptr = s->buf_ptr;
@@ -54200,7 +54246,12 @@ static __exception int json_next_token(JSParseState *s)
     int c;
     JSAtom atom;
 
-    js_flow_frameless_charge(s->ctx->rt, js_parse_count_bytes(s));
+    {
+        uint64_t units = js_parse_count_bytes(s);
+
+        g_flow_work_retired += units;
+        js_flow_frameless_charge(s->ctx->rt, units);
+    }
     json_free_token(s, &s->token);
 
     p = s->last_ptr = s->buf_ptr;
@@ -62715,31 +62766,15 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
 #undef PD_SELF
 }
 
-/* Does the compile give the thread back at this boundary: a production step of the parse, or a unit of a
-   code generation pass. It offers the scheduler's policy a suspend point once a budget period of work has
-   been retired since the stint opened or last offered, as a loop back-edge offers one in the interpreter, and
-   whenever a request stands (a host request or a rank change). The period is counted in work, not in steps,
-   because a step's work is its input's length: one production charges a whole token. So the stretch between
-   two offers is at most a period plus the work of one step, which is that step's indivisible unit.
-   At the period the budget is asked first, so a spent slice raises the host's kind, as the interpreter's
-   budget tick does; a compile runs before its flow's base exists, which is why flow_budget_poll is not
-   called. A `true` parks the compile at this boundary and it resumes from it; no answer makes it cover less. */
-static bool js_parse_want_yield(JSParseState *s)
+/* The suspend point a compile offers: at a mark (`mark`) the budget is asked first, so a spent slice raises the
+   host's kind, as the interpreter's budget tick does, and a request already standing is answered instead; with
+   no mark only a standing request (a host request or a rank change) is. A compile runs before its flow's base
+   exists, which is why flow_budget_poll is not called. */
+static bool js_compile_offer(bool mark)
 {
     int ykind;
-    uint32_t period = g_flow_control.budget_period;
 
-    if (!s->pd_can_yield)
-        return false;
-    DCHECK(g_flow_work_retired >= s->pd_offer_at,
-           "the retired-work count fell inside a compile stint: something banked or discarded it between two "
-           "steps of one stint, so the compile's offer period is measured from a mark the count no longer holds");
-    if (s->pd_rest_owed) {
-        s->pd_rest_owed = false;
-        s->pd_offer_at = g_flow_work_retired;
-        return true;
-    }
-    if (period > 0 && !FLOW_YIELD_KIND() && g_flow_work_retired - s->pd_offer_at >= period)
+    if (mark && !FLOW_YIELD_KIND())
         FLOW_YIELD_REQUEST(g_flow_control.budget != NULL && g_flow_control.budget() ? JS_PREEMPT_HOST
                                                                                       : JS_PREEMPT_BACKEDGE);
     if (likely(!FLOW_YIELD_KIND()))
@@ -62748,8 +62783,59 @@ static bool js_parse_want_yield(JSParseState *s)
     /* Answered here, so cleared here, as the interpreter's poll does: a request left standing after a "no"
        would be re-asked at every step, and one answered "yes" is consumed by the suspension it caused. */
     FLOW_YIELD_SET(0);
-    s->pd_offer_at = g_flow_work_retired;
     return g_flow_control.preempt != NULL && g_flow_control.preempt(ykind);
+}
+
+int JS_FlowCompileOffer(void)
+{
+    DCHECK(!g_compile_stint, "a recorded compile mark was offered inside a compile stint, which offers its own");
+    return js_compile_offer(g_flow_control.budget_period > 0);
+}
+
+static _Thread_local JSCompileMarkFunc *g_compile_mark_hook;
+void JS_SetCompileMarkHook(JSCompileMarkFunc *fn) { g_compile_mark_hook = fn; }
+
+/* The compile's own work so far, from its start. */
+static uint64_t js_compile_progress(const JSParseState *s)
+{
+    DCHECK(g_flow_compile_progress >= s->pd_progress_open,
+           "the compile progress count fell inside a compile stint");
+    return s->pd_progress + (g_flow_compile_progress - s->pd_progress_open);
+}
+
+/* A park: the progress the next stint continues from. */
+static void js_compile_park_progress(JSParseState *s)
+{
+    s->pd_progress = js_compile_progress(s);
+    s->pd_progress_open = g_flow_compile_progress;
+}
+
+/* Does the compile give the thread back at this boundary: a production step of the parse, or a unit of a
+   code generation pass. A unit ends at the first poll once a budget period of the compile's own work has run
+   past the last mark (JS_SetCompileMarkHook reports it), and the policy is offered a suspend point there, as a
+   loop back-edge offers one in the interpreter, and wherever a request stands. The period is counted in work,
+   not in steps, because a step's work is its input's length: one production charges a whole token, so a unit is
+   at most a period plus one step's indivisible work. A `true` parks the compile at this boundary and it resumes
+   from it; no answer makes it cover less. */
+static bool js_parse_want_yield(JSParseState *s)
+{
+    uint32_t period = g_flow_control.budget_period;
+    uint64_t at;
+
+    if (!s->pd_can_yield)
+        return false;
+    if (s->pd_rest_owed) {
+        s->pd_rest_owed = false;
+        return true;
+    }
+    at = js_compile_progress(s);
+    if (period > 0 && at >= s->pd_mark) {
+        s->pd_mark = at + period;
+        if (g_compile_mark_hook != NULL)
+            g_compile_mark_hook(at);
+        return js_compile_offer(true);
+    }
+    return js_compile_offer(false);
 }
 
 /* TURN THE CRANK UNTIL THE PARSE IS DONE OR THE SCHEDULER WANTS THE THREAD. Returning with `pd_suspended`
@@ -65652,8 +65738,7 @@ static inline void js_codegen_charge(uint64_t units)
     DCHECK_PRICED("an assert's condition or a dev build's second derivation ran a codegen pass — its input is "
                   "work a release build does not retire. Check the compile's result, not a second compile");
     g_codegen_input += units;
-    g_flow_compile_work += units;
-    g_flow_work_retired += units;
+    js_compile_charge(units);
 }
 
 /* Does the pass give the thread back before the unit at `cursor`: the parse's own question
@@ -69316,6 +69401,7 @@ static JSValue js_eval_compile_step(JSContext *ctx, JSEvalCompile *ec, int err, 
                "a parse handed the thread back with no carrier to hand it to — pd_can_yield is set from the "
                "slot and nowhere else, so this is a suspension taken by a parse that was told it could not");
         DCHECK(*slot == NULL, "a carrier slot already held a suspended compile");
+        js_compile_park_progress(&ec->s);
         *slot = ec;
         return JS_UNINITIALIZED;
     }
@@ -69330,7 +69416,7 @@ static JSValue js_eval_compile_continue(JSContext *ctx, JSEvalCompile **slot)
     int err;
     DCHECK(ec != NULL, "a compile was continued with nothing parked");
     *slot = NULL;
-    ec->s.pd_offer_at = g_flow_work_retired;
+    ec->s.pd_progress_open = g_flow_compile_progress;
     if (ec->codegen)
         return js_eval_compile_codegen(ctx, ec, slot);
     g_eval_compile_slot = NULL;
@@ -69394,7 +69480,9 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
     /* THE CALLER'S OWN STATEMENT THAT IT CAN HOLD A PARKED PARSE, and the only thing that decides whether the
        seam in js_parse_want_yield is armed at all. */
     s->pd_can_yield = (slot != NULL);
-    s->pd_offer_at = g_flow_work_retired;
+    s->pd_progress = 0;
+    s->pd_progress_open = g_flow_compile_progress;
+    s->pd_mark = g_flow_control.budget_period;
     skip_shebang(&s->buf_ptr, s->buf_end);
 
     eval_type = flags & JS_EVAL_TYPE_MASK;
@@ -69568,6 +69656,7 @@ static JSValue js_eval_compile_codegen(JSContext *ctx, JSEvalCompile *ec, JSEval
                "a code generation rested with no carrier to hand it to — its poll answers yes only in a parse that "
                "was told it could hand back");
         DCHECK(*slot == NULL, "a carrier slot already held a suspended compile");
+        js_compile_park_progress(&ec->s);
         *slot = ec;
         return JS_UNINITIALIZED;
     }

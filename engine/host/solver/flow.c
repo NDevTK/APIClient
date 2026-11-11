@@ -1349,55 +1349,55 @@ const Flow *flow_running_cascade_writes(uint64_t *gen)
     return g_running;
 }
 
-/* One sheet emission's paid units. The digest is FNV-1a 64 over the emission (css_author_sheets.c); a collision
-   could only make one parse's charge another's, never an answer, since the table compares the bytes. */
-struct FlowSheetPaid {
-    uint64_t digest;
-    size_t   len;
-    uint32_t units;
+/* One shared parse's payment by the path (flow.h's FlowPaidKind). A sheet's digest is FNV-1a 64 over the
+   emission (css_author_sheets.c); a collision could only make one parse's charge another's, never an answer,
+   since the table compares the bytes. A body's id is unique over the process. */
+struct FlowPaid {
+    FlowPaidKind kind;
+    uint64_t key, len, amount;
 };
 
-static struct FlowSheetPaid *flow_sheet_paid_of(Flow *f, uint64_t digest, size_t len)
+static struct FlowPaid *flow_paid_of(Flow *f, FlowPaidKind kind, uint64_t key, uint64_t len)
 {
-    for (int i = 0; i < f->sheet_paid_n; i++)
-        if (f->sheet_paid[i].digest == digest && f->sheet_paid[i].len == len) return &f->sheet_paid[i];
+    for (int i = 0; i < f->paid_n; i++)
+        if (f->paid[i].kind == kind && f->paid[i].key == key && f->paid[i].len == len) return &f->paid[i];
     return NULL;
 }
 
-uint32_t flow_running_sheet_paid(uint64_t digest, size_t len)
+uint64_t flow_running_paid(FlowPaidKind kind, uint64_t key, uint64_t len)
 {
-    const struct FlowSheetPaid *p = g_running != NULL ? flow_sheet_paid_of(g_running, digest, len) : NULL;
+    const struct FlowPaid *p = g_running != NULL ? flow_paid_of(g_running, kind, key, len) : NULL;
 
-    return p != NULL ? p->units : 0;
+    return p != NULL ? p->amount : 0;
 }
 
-void flow_running_sheet_pay(uint64_t digest, size_t len, uint32_t units)
+void flow_running_pay(FlowPaidKind kind, uint64_t key, uint64_t len, uint64_t amount)
 {
-    struct FlowSheetPaid *p, *grown;
+    struct FlowPaid *p, *grown;
 
     if (g_running == NULL) return;
-    p = flow_sheet_paid_of(g_running, digest, len);
+    p = flow_paid_of(g_running, kind, key, len);
     if (p != NULL) {
-        DCHECKF(units >= p->units, "a sheet parse's paid units fell from %u to %u — the path's payments only grow",
-                p->units, units);
-        p->units = units;
+        DCHECKF(amount >= p->amount, "a parse's paid amount fell from %llu to %llu — the path's payments only grow",
+                (unsigned long long)p->amount, (unsigned long long)amount);
+        p->amount = amount;
         return;
     }
-    grown = reclaim_realloc(g_running->sheet_paid, (size_t)(g_running->sheet_paid_n + 1) * sizeof *grown);
-    CHECK(grown != NULL, "engine: OOM recording a flow's paid sheet parse");
-    g_running->sheet_paid = grown;
-    grown[g_running->sheet_paid_n++] = (struct FlowSheetPaid){ digest, len, units };
+    grown = reclaim_realloc(g_running->paid, (size_t)(g_running->paid_n + 1) * sizeof *grown);
+    CHECK(grown != NULL, "engine: OOM recording a flow's paid parse");
+    g_running->paid = grown;
+    grown[g_running->paid_n++] = (struct FlowPaid){ kind, key, len, amount };
 }
 
 /* A fork's arm or a snapshot's: the paid parses of the prefix it continues. */
-static void flow_sheet_paid_inherit(Flow *sib, const Flow *from)
+static void flow_paid_inherit(Flow *sib, const Flow *from)
 {
-    DCHECK(sib->sheet_paid == NULL && sib->sheet_paid_n == 0, "a flow inherited its paid sheet parses twice");
-    if (from->sheet_paid_n == 0) return;
-    sib->sheet_paid = reclaim_malloc((size_t)from->sheet_paid_n * sizeof *sib->sheet_paid);
-    CHECK(sib->sheet_paid != NULL, "engine: OOM inheriting a flow's paid sheet parses");
-    memcpy(sib->sheet_paid, from->sheet_paid, (size_t)from->sheet_paid_n * sizeof *sib->sheet_paid);
-    sib->sheet_paid_n = from->sheet_paid_n;
+    DCHECK(sib->paid == NULL && sib->paid_n == 0, "a flow inherited its paid parses twice");
+    if (from->paid_n == 0) return;
+    sib->paid = reclaim_malloc((size_t)from->paid_n * sizeof *sib->paid);
+    CHECK(sib->paid != NULL, "engine: OOM inheriting a flow's paid parses");
+    memcpy(sib->paid, from->paid, (size_t)from->paid_n * sizeof *sib->paid);
+    sib->paid_n = from->paid_n;
 }
 
 /* How many times a finding was offered to the order, and how many of those the order could not be given: the
@@ -2647,7 +2647,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     sib->park_slots = parent->park_slots;
     sib->trail = reply_trail_share(parent->trail);
     sib->trail_seen = parent->trail_seen;
-    flow_sheet_paid_inherit(sib, parent);
+    flow_paid_inherit(sib, parent);
     /* And the drive count, part of the class's identity below. An arm of a drive drives the same body, and the count
        is the one its seed read; a non-drive copies zero to zero; a drive's own seed rewrites the copy it was
        assembled with (flow_set_orphan_seen), after this equality, because the seed is an arrival and not a branch. */
@@ -3491,7 +3491,7 @@ void flow_arrive_on_snapshot(Flow *sib, const Flow *snap, FlowPathMarks at_cut) 
     sib->park_slots = snap->park_slots;
     sib->trail = reply_trail_share(snap->trail);
     sib->trail_seen = snap->trail_seen;
-    flow_sheet_paid_inherit(sib, snap);
+    flow_paid_inherit(sib, snap);
     flow_reads_inherit(sib, snap);
     for (int i = 0; i < snap->assumed_slots_n; i++)
         flow_assumed_slot_push(sib, snap->assumed_slots[i], snap->assumed_slot_names[i]);
@@ -7425,7 +7425,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
         free(f->cand_src); free(f->cand_payload); fire_target_clear(&f->fire);
         free(f->assumed_slots); free(f->assumed_slot_names); free(f->assumed_read_names);
         free(f->env_slots); free(f->env_slot_names);
-        free(f->sheet_paid);
+        free(f->paid);
         for (int k = 0; k < f->cand_dn; k++) { free(f->cand_dsrc[k]); free(f->cand_dval[k]); }
         free(f->cand_dsrc); free(f->cand_dval);
         for (int k = 0; k < f->orphan_chain_n; k++) free(f->orphan_acts[k]);

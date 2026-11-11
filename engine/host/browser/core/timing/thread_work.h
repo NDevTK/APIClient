@@ -124,7 +124,9 @@ void thread_work_charge(ThreadWorkKind kind, uint64_t bytes);
    the record that held it (core/layout/layout_job.h's paid keys). While one is open a charge retires nothing on
    the flow's clock and counts in no census row of this file; its units are banked as residency work
    (`residency_units`, lifetime, read into solver/engine.h's engine_residency_work), so a run that shed nothing
-   and a run that shed retire the same work. Spans nest; `end` asserts one is open. */
+   and a run that shed retire the same work. A script compile's charges are made inside quickjs, so quickjs keeps
+   the span's depth (JS_FlowResidencyBegin) and the compile work it withheld, which `residency_units` includes.
+   Spans nest; `end` asserts one is open. */
 void thread_work_residency_begin(void);
 void thread_work_residency_end(void);
 bool thread_work_residency_open(void);

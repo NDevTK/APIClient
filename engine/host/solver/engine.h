@@ -1203,6 +1203,10 @@ typedef struct {
     long module_compiles;
     int64_t module_compile_bytes;
     long module_parse_shared;
+    /* Compile work flows paid from a body's record rather than ran (either entry), and stints that re-ran an ended
+       record in a residency span for the world asking (solver/engine.c's compile_pay_record). */
+    int64_t compile_paid_work;
+    long compile_rederived;
     /* Compile stints that continued a parse rather than beginning one; contained in
      * arms[STEP_UNIT_COMPILE_YIELDED] (asserted), and that arm minus this is the parses begun and not ended. Near
      * zero means the seam carries every parse forward; large means parses handed back and not picked up. Raised

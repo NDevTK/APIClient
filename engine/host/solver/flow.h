@@ -856,10 +856,10 @@ typedef struct Flow {
        core/css/css_cascade_pass.h lists, which a layout job's held record stamps and checks. Zero at birth,
        never inherited: a fork's arm gets a fresh job, so no record spans the fork. */
     uint64_t cascade_writes;
-    /* The style sheet parses this flow's path paid for (flow_running_sheet_paid): owned, `sheet_paid_n` long, a
-       fact about the executed prefix that a fork's arm inherits. */
-    struct FlowSheetPaid *sheet_paid;
-    int sheet_paid_n;
+    /* The parses another flow may have run that this flow's path paid for (flow_running_paid): owned, `paid_n`
+       long, a fact about the executed prefix that a fork's arm inherits. */
+    struct FlowPaid *paid;
+    int paid_n;
 } Flow;
 
 /* The selected agent's entry in `f`'s agent list, asserted in range. The entry is the flow's own. */
@@ -1933,11 +1933,14 @@ bool    flow_running_continues(WorldId creator);
    nothing and the read answers NULL and 0, since no step's record spans host time. */
 void  flow_running_cascade_written(void);
 const Flow *flow_running_cascade_writes(uint64_t *gen);
-/* How many work units of the parse of one style sheet emission, named by its content digest and length, the
-   running flow's path has charged (core/css/css_style_declaration.c's parse table): 0 for none, and 0 with no flow
-   running, whose charge is discarded. `pay` raises the count to `units`; with no flow running it records nothing. */
-uint32_t flow_running_sheet_paid(uint64_t digest, size_t len);
-void     flow_running_sheet_pay(uint64_t digest, size_t len, uint32_t units);
+/* How much of a shared parse the running flow's path has charged, by kind: the work units of one style sheet
+   emission's parse, named by its content digest and length (core/css/css_style_declaration.c's parse table), or
+   the compile work of one program body, named by its id with `len` 0 (solver/engine.c's compile payment). 0 for
+   none, and 0 with no flow running, whose charge is discarded. `pay` raises the amount, which only grows; with no
+   flow running it records nothing. */
+typedef enum { FLOW_PAID_SHEET_UNITS, FLOW_PAID_COMPILE_WORK } FlowPaidKind;
+uint64_t flow_running_paid(FlowPaidKind kind, uint64_t key, uint64_t len);
+void     flow_running_pay(FlowPaidKind kind, uint64_t key, uint64_t len, uint64_t amount);
 /* A just-seeded drive's product count (flow.h's `orphan_seen`), re-keyed and raised as a rank change. */
 void  flow_set_orphan_seen(Flow *f, int64_t seen);
 /* The member stands at a code site (FlowSite's identity): a code position named by quickjs's JS_RunningSiteHash

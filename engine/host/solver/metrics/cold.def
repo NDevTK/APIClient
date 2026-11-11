@@ -554,6 +554,11 @@ METRIC(classic_parse_shared, "classicParseShared", LIFETIME, "parse", PROCESS, "
 METRIC(module_compiles, "moduleCompiles", LIFETIME, "compile", PROCESS, "solver/engine.c", INT)
 METRIC(module_compile_bytes, "moduleCompileBytes", LIFETIME, "byte", PROCESS, "solver/engine.c", INT)
 METRIC(module_parse_shared, "moduleParseShared", LIFETIME, "parse", PROCESS, "solver/engine.c", INT)
+/* …and the compile work flows paid from a body's record that other worlds' stints ran (a world reaching a held
+   parse, or a compile another world advanced, pays it as its own), and the stints that re-ran an ended record
+   in a residency span for the world asking, which charge nothing (solver/engine.c's compile_pay_record). */
+METRIC(compile_paid_work, "compilePaidWork", LIFETIME, "unit", PROCESS, "solver/engine.c", INT)
+METRIC(compile_rederived, "compileRederived", LIFETIME, "stint", PROCESS, "solver/engine.c", INT)
 /* …and whether a parse handed back was carried forward:
    `stepUnitRuns[compile-handed-the-thread-back]` minus this is the parses begun and not ended.
    Not a subset of `classicCompiles`, and not a rate against it: one is raised per continued

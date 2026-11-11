@@ -205,13 +205,24 @@ void dyn_body_parse_hold(DynBody *b, JSContext *realm, const char *name, int fla
    or JS_FlowCompileStep and answers what the entry answers, 1 with `*pout` the record or closure, which the
    caller owns, 0 with the compile parked on the body, -1 with the exception pending in the running world. The
    stint that finishes it is whichever world's runs last; a failed compile is that world's completion and leaves
-   nothing parked, so the next world to ask begins the compile again.
+   nothing parked, so the next world to ask begins the compile again, a re-run of the record it left.
    The key is the held parse's (realm, name, flags), asserted against the one the compile began under. The body
    keeps its own copy of the name and a reference on the realm while a compile is parked, since the parse borrows
    both across stints and no one world outlives it; the body's last release drops a parked compile through that
    realm. dyn_body_compile_parked answers whether one is parked now. */
 int dyn_body_compile_stint(DynBody *b, JSContext *realm, const char *name, int flags, int module, JSValue *pout);
 int dyn_body_compile_parked(const DynBody *b);
+/* The compile's record, which a flow pays from whoever ran the stints (solver/engine.c's compile payment): its
+   work is the compile's own (quickjs.h's JS_FlowCompileProgressLife) from its start. dyn_body_compile_done is the
+   furthest any stint ran; dyn_body_compile_next the next point a payment from `paid` (< done) stops at, the
+   first of the compile's marks past it (`*mark` set: the stint offered a rest there) or else `done`;
+   dyn_body_compile_ended whether the record is whole, so a stint asked of the body re-runs it for the world
+   asking (a SyntaxError holds nothing, being each world's completion). A re-run's marks and end are asserted
+   to be the record's. dyn_body_id names the body in a flow's payments, unique over the process. */
+uint64_t dyn_body_compile_done(const DynBody *b);
+uint64_t dyn_body_compile_next(const DynBody *b, uint64_t paid, int *mark);
+int      dyn_body_compile_ended(const DynBody *b);
+uint64_t dyn_body_id(const DynBody *b);
 
 /* HOW MANY BODIES ARE HOLDING ONE RIGHT NOW — a GAUGE and not a lifetime count, so it may not be differenced
    across two censuses and its sum over a partition is a live population rather than a total of events. It is

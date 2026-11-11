@@ -271,6 +271,10 @@
     /* write-with-no-reader defect, and this row IS the reader.                  */ \
     X(MODULE_COMPILE_YIELDED,                                                     \
                           "module-compile-handed-the-thread-back", ABOVE)         \
+    /* A rest at a compile's mark while the flow paid the body's record of */    \
+    /* work other worlds' stints ran (either entry): no stint ran, so no     */    \
+    /* stint identity above counts it, and the row has not started.          */    \
+    X(COMPILE_PAID_RESTED, "compile-paid-rested", ABOVE)                          \
     /* AND THE ROW THAT NEVER HAD A PROGRAM TO COMPILE, which is a different  */ \
     /* event and not a shade of the one above: `program-did-not-compile` is a */ \
     /* PARSER verdict on bytes that arrived, and this is HTML §4.12.1.1       */ \

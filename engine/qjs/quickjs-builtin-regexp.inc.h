@@ -916,8 +916,13 @@ int lre_compile_poll(void *opaque, size_t bytes, bool ask)
     DCHECK_PRICED("an assert's condition or a dev build's second derivation compiled a regexp — its pattern bytes "
                   "are work a release build does not retire. Check the compiled program, not a second compile");
     g_regexp_compile_bytes += bytes;
-    g_flow_work_retired += (uint64_t)bytes * g_flow_control.parse_units_per_byte;
-    js_flow_stand_retire((uint64_t)bytes * g_flow_control.parse_units_per_byte);
+    /* A literal's compile inside a script's compile stint is that compile's work, as its tokenizer's is. */
+    if (g_compile_stint) {
+        js_compile_charge((uint64_t)bytes * g_flow_control.parse_units_per_byte);
+    } else {
+        g_flow_work_retired += (uint64_t)bytes * g_flow_control.parse_units_per_byte;
+        js_flow_stand_retire((uint64_t)bytes * g_flow_control.parse_units_per_byte);
+    }
     return ask && g_flow_control.preempt != NULL && g_flow_control.preempt(JS_PREEMPT_BACKEDGE);
 }
 

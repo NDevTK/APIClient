@@ -5699,7 +5699,8 @@ static int step_unit_forced_act(StepUnit u) {
     case STEP_UNIT_RENDERING: case STEP_UNIT_TIMER: case STEP_UNIT_TIMER_ARRIVED: case STEP_UNIT_TIMER_RACED:
     case STEP_UNIT_RENDERING_RACED: case STEP_UNIT_IDLE_PERIOD: case STEP_UNIT_START_PROGRAM:
     case STEP_UNIT_EVALUATE_MODULE: case STEP_UNIT_NO_COMPILE: case STEP_UNIT_COMPILE_YIELDED:
-    case STEP_UNIT_MODULE_COMPILE_YIELDED: case STEP_UNIT_SCRIPT_LOAD_FAILED: case STEP_UNIT_REGISTER_IMPORT_MAP:
+    case STEP_UNIT_MODULE_COMPILE_YIELDED: case STEP_UNIT_COMPILE_PAID_RESTED: case STEP_UNIT_SCRIPT_LOAD_FAILED:
+    case STEP_UNIT_REGISTER_IMPORT_MAP:
     case STEP_UNIT_RESUME_PROGRAM: case STEP_UNIT_AGENT_RESUME_PARKED: case STEP_UNIT_AGENT_RESUME_PROGRAM:
     case STEP_UNIT_AGENT_EVAL_MODULE: case STEP_UNIT_AGENT_COMPILE_PROGRAM: case STEP_UNIT_AGENT_RUN_JOB:
     case STEP_UNIT_END_FRAME: case STEP_UNIT_REPORT_EXCEPTION: case STEP_UNIT_DETACH_PROGRAM:
@@ -9791,6 +9792,64 @@ static void compile_stint_ended(const Flow *f, const DynBody *pb, int parked) {
     g_stint_parked_body = parked ? pb : NULL;
     g_stint_parked_by = parked ? flow_birth_seq(f) : 0;
 }
+/* Compile work charged from a body's record rather than run, and stints run in a residency span to re-run an
+   ended record nothing holds the result of (a SyntaxError is each world's own completion). Lifetime; a report. */
+static int64_t g_compile_paid_work;
+static long    g_compile_rederived;
+/* A flow pays a program body's compile the first time its own path asks for it, whoever ran the stints
+   (solver/dyn_body.h's record): the work the record holds past what the path paid is charged as compile work, and
+   at each of the compile's marks the rest its stint offered there is offered again, so the flow's charges and
+   rest points are the same whichever world parsed first. Answers 1 once the path has paid the whole record, 0
+   when the policy took the thread at a mark. */
+static int compile_pay_record(const DynBody *pb) {
+    uint64_t id = dyn_body_id(pb), done = dyn_body_compile_done(pb);
+    uint64_t paid = flow_running_paid(FLOW_PAID_COMPILE_WORK, id, 0);
+    int rested = 0;
+
+    DCHECK(flow_running() != NULL, "a program's compile was paid with no flow running");
+    DCHECKF(paid <= done, "the running flow paid %llu units of a compile whose record ends at %llu — a record only "
+            "grows", (unsigned long long)paid, (unsigned long long)done);
+    while (paid < done && !rested) {
+        int mark;
+        uint64_t next = dyn_body_compile_next(pb, paid, &mark);
+
+        JS_FlowChargeCompileWork(next - paid);
+        g_compile_paid_work += (int64_t)(next - paid);
+        paid = next;
+        rested = mark && JS_FlowCompileOffer();
+    }
+    flow_running_pay(FLOW_PAID_COMPILE_WORK, id, 0, paid);
+    return !rested;
+}
+/* One stint of the body's compile for the running flow, which has paid the record whole: a stint past the record
+   is charged as it runs and paid, and a re-run of an ended record runs in a residency span. Answers what
+   dyn_body_compile_stint answers. */
+static int compile_paid_stint(DynBody *pb, JSContext *realm, const char *name, int flags, int module,
+                              JSValue *pout) {
+    uint64_t id = dyn_body_id(pb), done = dyn_body_compile_done(pb);
+    uint64_t work0 = JS_FlowCompileWorkLife();
+    int rerun = dyn_body_compile_ended(pb), r;
+
+    DCHECK(flow_running_paid(FLOW_PAID_COMPILE_WORK, id, 0) == done,
+           "a compile stint ran for a flow that has not paid the body's record whole");
+    if (rerun) {
+        g_compile_rederived++;
+        thread_work_residency_begin();
+    }
+    r = dyn_body_compile_stint(pb, realm, name, flags, module, pout);
+    if (rerun) {
+        thread_work_residency_end();
+        DCHECK(JS_FlowCompileWorkLife() == work0 && dyn_body_compile_done(pb) == done,
+               "a re-run of an ended compile charged work or moved its record");
+        return r;
+    }
+    DCHECKF(JS_FlowCompileWorkLife() - work0 == dyn_body_compile_done(pb) - done,
+            "a compile stint charged %llu units of compile work and moved its record by %llu — every unit a stint "
+            "runs is the compile's progress", (unsigned long long)(JS_FlowCompileWorkLife() - work0),
+            (unsigned long long)(dyn_body_compile_done(pb) - done));
+    flow_running_pay(FLOW_PAID_COMPILE_WORK, id, 0, dyn_body_compile_done(pb));
+    return r;
+}
 /* The width of the byte total as a build failure: the runtime check in engine_step_unit_runs is a DCHECKF, compiled
    out in release, the build real pages are measured on. Both the accumulator and the field it is copied into, since
    narrowing either loses the run. */
@@ -11223,6 +11282,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    cannot be it, since every inline module of a document is named by the document's address. */
                 JSValue rec = JS_UNDEFINED;
                 if (!f->in_compile) g_module_rows_reached++;
+                if (!compile_pay_record(pb)) {
+                    f->in_compile = 1;
+                    g_step_unit = STEP_UNIT_COMPILE_PAID_RESTED;
+                    return 0;
+                }
                 int have = dyn_body_parse_ref(pb, prog_ctx, prog_name, src_flags, &rec);
                 if (have) {
                     g_module_parse_shared++;
@@ -11231,7 +11295,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        row and the cursor as they are, and the ladder re-enters here. */
                     uint64_t parsed0 = JS_FlowParseBytesLife();
                     compile_stint_begins(f, pb);
-                    int mr = dyn_body_compile_stint(pb, prog_ctx, prog_name, src_flags, /*module*/1, &rec);
+                    int mr = compile_paid_stint(pb, prog_ctx, prog_name, src_flags, /*module*/1, &rec);
                     g_module_parse_bytes += (int64_t)(JS_FlowParseBytesLife() - parsed0);
                     compile_stint_ended(f, pb, mr == 0);
                     if (mr == 0) {
@@ -11278,12 +11342,13 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    ScriptOrModule name, the module map key and the base of a relative `import()`) and `src_flags`
                    (strictness and JS_EVAL_FLAG_INLINE_SCRIPT). The question is asked before every stint, since
                    the compile in flight is the body's and the stint that finished it may have been any world's. */
-                /* Named residual. Not covered: the parse's charge is not a function of the flow's path, since a
-                   flow that finds the body's parse held, or continues a compile another world parked, retires
-                   none of the bytes another world parsed. Next diff builds: the compile's charges and budget polls
-                   recorded on the body, and each flow charged and polled through them from its own paid count
-                   (solver/flow.h's paid parses, as css_style_declaration.c's sheet parse table charges). Its
-                   absence shows as two arms of one fork reporting different clocks after starting one program. */
+                /* The flow pays the record first (compile_pay_record), so its charge is a function of its path
+                   whichever world ran the stints. */
+                if (!compile_pay_record(pb)) {
+                    f->in_compile = 1;
+                    g_step_unit = STEP_UNIT_COMPILE_PAID_RESTED;
+                    return 0;
+                }
                 JSValue held = JS_UNDEFINED;
                 int shared = dyn_body_parse_ref(pb, prog_ctx, prog_name, src_flags, &held);
                 if (shared) {
@@ -11321,7 +11386,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     uint64_t parsed0 = JS_FlowParseBytesLife();
                     thread_work_begin(&tw);
                     compile_stint_begins(f, pb);
-                    int cr = dyn_body_compile_stint(pb, prog_ctx, prog_name, src_flags, /*module*/0, &fn);
+                    int cr = compile_paid_stint(pb, prog_ctx, prog_name, src_flags, /*module*/0, &fn);
                     compile_stint_ended(f, pb, cr == 0);
                     thread_work_end(&tw, THREAD_WORK_SCRIPT_PARSE, JS_FlowParseBytesLife() - parsed0);
                     if ((int64_t)((JS_FlowParseBytesLife() - parsed0) * THREAD_WORK_UNITS_PER_BYTE_SCRIPT) >=
@@ -11964,6 +12029,8 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->module_compiles             = g_module_compiles;
     out->module_compile_bytes        = g_module_compile_bytes;
     out->module_parse_shared         = g_module_parse_shared;
+    out->compile_paid_work           = g_compile_paid_work;
+    out->compile_rederived           = g_compile_rederived;
     /* The stint partition. A reader wants `arms[STEP_UNIT_COMPILE_YIELDED] - classic_compile_resumed`, the parses
        currently suspended (see g_classic_compile_resumed), a small number, so a skew of one stint between the two
        copies would be the whole of it; both are taken here, before the loop that copies the histogram. */
