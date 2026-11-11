@@ -217,7 +217,7 @@ request is answered from that send's record and nothing leaves (`lib/send-coales
 identity: method, URL, header list, the speak-as set with its Cookie, body, credentials mode and cache
 partition, so composing the key reads the identity's cookies only where the unforced run sent that method to
 that URL). The engine declines
-on the same grade a request whose address holds a value it has no bytes for (`pending_park_request`), and a
+on the same grade a request whose address or method holds a value it has no bytes for (`pending_park_request`), and a
 record that states the address class `unknown` to the zone is refused there too. A request whose body or a
 header value has no bytes is listed with that part's class `unknown` and refused by the zone
 (`blocked-signal:bytes=unknown`). A
@@ -571,7 +571,7 @@ attacker-site arm included, and no grant can name it.
 | `cookies` | `yes`, `no` | certain |
 | `header-authority` | `none`, `unknown` | certain |
 | `witness` | `pinned`, `unpinned`, `unstated` | stated (engine), floored at `pinned` by the document record |
-| `bytes` | `concrete`, `example`, `unknown`, `unstated` | stated (engine): the weakest class over the address, each header value and the body; `example` is the bytes the page computes from an unknown's example; `unknown` is never permitted; `unstated` is a part whose record carries no class, which every engine-named navigation's address is today |
+| `bytes` | `concrete`, `example`, `unknown`, `unstated` | stated (engine): the weakest class over the address, each header value and the body; `example` is the bytes the page computes from an unknown's example; a method grounded on an unknown's example is not yet one of the parts (the engine states its class on the pending record, and no line carries it here); `unknown` is never permitted; `unstated` is a part whose record carries no class, which every engine-named navigation's address is today |
 | `url-authority` | `present`, `unknown` | partial: a miss is `unknown`, never "none" |
 | `lineage` | `unknown` | undetermined |
 | `reaches` | `attacker-site`, `another-party` | certain: the URL parser's host against the attacker site the person configured (`lib/attacker-site.js`); `attacker-site` fires by default, since it is the person's own server |
