@@ -171,8 +171,12 @@ const ROWS = [
    [['POST /api/body-ex', got('POST', '/api/body-ex').length, 1],
     ['its body and type', bodies('POST', '/api/body-ex'),
      JSON.stringify({ u: ORIGIN + '/', l: 'en-US' }) + ' text/plain;charset=UTF-8'],
-    ['how the zone answered it', said(sends('POST', '/api/body-ex')), 'sent/default'],
-    ['what the entry states', bodyIs(sends('POST', '/api/body-ex')), 'example body:example']]],
+    ['how the zone answered the page\'s own ask', said(sends('POST', '/api/body-ex').filter((e) => e.vector !== null &&
+                                                     e.vector.provenance !== 'forced')), 'sent/default'],
+    /* A candidate delivered into location is a forced world whose body carries other bytes: a second request. */
+    ['forced asks answered other than not-sent', sends('POST', '/api/body-ex').filter((e) => e.vector !== null &&
+                                                     e.vector.provenance === 'forced' && e.how !== 'not-sent').length, 0],
+    ['what the entries state', bodyIs(sends('POST', '/api/body-ex')), 'example body:example']]],
   ['a POST on a forced path whose body is serialized over the arm\'s pinned value is recorded and not sent, its ' +
    'body concrete (an equality-pinned value is concrete)',
    [['POST /api/body-forced', got('POST', '/api/body-forced').length, 0],
