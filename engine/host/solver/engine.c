@@ -12025,7 +12025,10 @@ static void flow_switch_out(JSContext *ctx, Flow *f) {   /* pause f: snapshot it
     flow_set_running(NULL);
 }
 
+static void engine_sale_restore(JSContext *ctx, Flow *f);
 static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply its delta + solver state */
+    /* A written stub's pick: its bulk first, read back in place. */
+    if (flow_cold(f)) engine_sale_restore(ctx, f);
     JS_PutParkedFlows(JS_GetRuntime(ctx), f->parked);
     f->parked = NULL;
     /* Nothing the interpreter has counted so far is this flow's: the retired-opcode count moves the event loop's
@@ -12608,8 +12611,14 @@ static int sale_hist_json(char *b, size_t cap, const char *name, const long *h) 
     return n;
 }
 
+typedef struct { char *name; long n; } SaleTally;
+static SaleTally *g_sale_gap_kinds, *g_sale_other_reasons;
+static int g_sale_gap_kinds_n, g_sale_other_reasons_n;
+static int sale_tally_json(char *b, size_t cap, const char *key, const SaleTally *t, int n);
+
 char *engine_sale_census_json(void) {
-    size_t cap = 20480 + (size_t)g_sale_graph.n_gap * 2 * (SALE_GAP_NAME + 32);
+    size_t cap = 20480 + (size_t)(g_sale_graph.n_gap * 2 + g_sale_gap_kinds_n + g_sale_other_reasons_n)
+                         * (SALE_GAP_NAME + 32);
     char *b = malloc(cap);
     int n;
     long g0o, g0b, bo, bb;
@@ -12662,6 +12671,8 @@ char *engine_sale_census_json(void) {
                           pass ? g_sale_graph.gap[k].sales : g_sale_graph.gap[k].refs);
         n += snprintf(b + n, cap - (size_t)n, "}");
     }
+    n += sale_tally_json(b + n, cap - (size_t)n, "waitsGapKinds", g_sale_gap_kinds, g_sale_gap_kinds_n);
+    n += sale_tally_json(b + n, cap - (size_t)n, "waitsOtherReasons", g_sale_other_reasons, g_sale_other_reasons_n);
     n += snprintf(b + n, cap - (size_t)n, "}");
     CHECK((size_t)n < cap, "engine: the sale census outgrew its buffer");
     return b;
@@ -12713,20 +12724,188 @@ static void engine_sale_reserve_retake(int funded) {
     engine_sale_reserve_hold();
 }
 
-/* A sale: the member stays in the registry as a cold-resident stub (flow.h's `cold`) and gives back everything
-   its recipe re-derives. Nothing is written, since the session's park writes a stub from the fields it keeps
-   (cold_park_flow), and no request is cancelled.
-   Named residual. Not covered: a flow captured as a snapshot; a stub holds a recipe and a return re-executes it.
-   Next diff builds: a serialized COW delta and frame chain that a return restores without re-execution. Absence
-   shows as: a returned member's first quantum spent re-running work its path had already done. */
+/* EACH SALE'S OUTCOME, ONE OF FOUR, so the four sum to `sold` (asserted at the sale): the member was written
+   and its pick restores it (`restores`); the sale ran unfunded and wrote nothing; a part of the member has no
+   writer (a gap, tallied by kind, once per sale per kind); or the member holds something its bytes cannot carry
+   back (a named reason). A member that waits returns next session by its recipe. `restored` counts the picks
+   that read a written stub back. */
+static long g_sold_restores, g_sold_waits_unfunded, g_sold_waits_gap, g_sold_waits_other, g_restored;
+static void sale_tally(SaleTally **t, int *n, const char *name) {
+    int k;
+    for (k = 0; k < *n; k++) if (!strcmp((*t)[k].name, name)) break;
+    if (k == *n) {
+        SaleTally *g = realloc(*t, sizeof *g * (size_t)(k + 1));
+        char *c = strdup(name);
+        CHECK(g != NULL && c != NULL, "engine: OOM growing the sale outcome's tally");
+        *t = g;
+        g[k].name = c; g[k].n = 0;
+        (*n)++;
+    }
+    (*t)[k].n++;
+}
+static int sale_tally_json(char *b, size_t cap, const char *key, const SaleTally *t, int n) {
+    int w = snprintf(b, cap, ",\"%s\":{", key);
+    for (int k = 0; k < n && (size_t)w < cap; k++)
+        w += snprintf(b + w, cap - (size_t)w, "%s\"%s\":%ld", k ? "," : "", t[k].name, t[k].n);
+    if ((size_t)w < cap) w += snprintf(b + w, cap - (size_t)w, "}");
+    return w;
+}
+
+/* The values a written member's bytes hold, each a reference the list owns: its function, its register, its
+   drive's claim, its agent's jobs (SALE_WRITE_FIXED), then its delta head's values in the order
+   cow_delta_head_write hands them. */
+enum { SALE_WRITE_FIXED = 4 };
+typedef struct { JSValue *v; int n, cap; } SaleVals;
+static void sale_val_take(JSValue v, void *arg) {
+    SaleVals *l = arg;
+    if (l->n == l->cap) {
+        JSValue *g = realloc(l->v, sizeof *g * (size_t)(l->cap = l->cap ? l->cap * 2 : 64));
+        CHECK(g != NULL, "engine: OOM gathering a sold member's values for its write");
+        l->v = g;
+    }
+    l->v[l->n++] = v;
+}
+static void sale_vals_free(SaleVals *l) {
+    for (int i = 0; i < l->n; i++) JS_FreeValue(g_sess_ctx, l->v[i]);
+    free(l->v);
+}
+
+/* Why a member's bytes could not carry it back though every part has a writer, or NULL. Asked before the sale's
+   hand-backs, which empty what two of the reasons name. Each names a fact a written member would lose. */
+static const char *sale_unwritable(const Flow *f) {
+    /* never switched in and forked from nothing: there is no delta to keep the chain of */
+    if (f->delta == NULL) return "no delta";
+    /* another agent's realm and program are released by the bulk, and no bytes hold them */
+    if (f->n_agents != 1) return "agents";
+    /* a synchronous or async host request is handed back at the sale (g_paged_reqs, the withdrawal) */
+    if (pending_count_kind(f->pending, FLOW_PENDING_HOSTREQ) > 0) return "host request";
+    /* a peer's question is handed back at the sale (engine_retract_flow) */
+    if (flow_perform_pending(f) > 0) return "operation";
+    for (int k = 0; k < f->dyn_n; k++) if (f->dyn_token[k]) return "operation";
+    /* a drive's acts are freed for its replay at the bulk */
+    if (f->orphan) return "drive";
+    /* the graph's reader rebuilds bases, not the rings parked bases stand in */
+    if (f->parked || f->agents[0].parked) return "parked ring";
+    return NULL;
+}
+
+/* A head's unwritten kinds, each once per sale. The kinds are cow.c's static names, so identity is equality. */
+enum { SALE_HEAD_KINDS = 16 };
+typedef struct { const char *seen[SALE_HEAD_KINDS]; int n; } SaleHeadGaps;
+static void sale_head_gap(const char *kind, void *arg) {
+    SaleHeadGaps *h = arg;
+    for (int i = 0; i < h->n; i++) if (h->seen[i] == kind) return;
+    DCHECK(h->n < SALE_HEAD_KINDS, "a delta head names more unwritten kinds than cow.c has entry kinds");
+    h->seen[h->n++] = kind;
+}
+
+/* The gaps a write of `f` would meet, each kind tallied once for this sale: a DOM head (dom_cow.c writes none),
+   the delta head's kinds with no writer, and the graph survey's over the roots the write takes. Only the one
+   agent's roots are gathered; a member of several agents waits on its reason whatever its gaps. The roots and
+   the head's bytes are left in `vals`/`head` for the write. */
+static int sale_write_gaps(Flow *f, SaleVals *vals, uint8_t **head, size_t *head_n) {
+    char name[SALE_GAP_NAME];
+    uint32_t refs, n_gaps;
+    JSFlowGraph *g;
+    JSValue *frames[1] = { f->agents[0].frame };
+    JSFlowGraphRoots gr;
+    SaleHeadGaps hg = { .n = 0 };
+    int gaps = 0;
+
+    sale_val_take(JS_DupValue(g_sess_ctx, f->fn), vals);
+    sale_val_take(JS_DupValue(g_sess_ctx, f->pending), vals);
+    sale_val_take(JS_DupValue(g_sess_ctx, f->orphan_claim_fn), vals);
+    sale_val_take(JS_DupValue(g_sess_ctx, f->agents[0].jobs), vals);
+    if (f->dom_n) { sale_tally(&g_sale_gap_kinds, &g_sale_gap_kinds_n, "dom head"); gaps++; }
+    if (f->delta) cow_delta_head_gaps((const CowDelta *)f->delta, sale_head_gap, &hg);
+    for (int i = 0; i < hg.n; i++) { sale_tally(&g_sale_gap_kinds, &g_sale_gap_kinds_n, hg.seen[i]); gaps++; }
+    if (hg.n == 0 && f->delta)
+        *head_n = cow_delta_head_write(g_sess_ctx, (const CowDelta *)f->delta, sale_val_take, vals, head);
+    gr = (JSFlowGraphRoots){ .vals = vals->v, .frames = frames, .n_vals = vals->n, .n_frames = frames[0] != NULL };
+    g = JS_FlowGraphSurvey(g_sess_ctx, &gr, f->delta ? cow_delta_fork_gen((const CowDelta *)f->delta) : 0);
+    n_gaps = JS_FlowGraphGap(g_sess_ctx, g, UINT32_MAX, name, sizeof name, &refs);
+    for (uint32_t i = 0; i < n_gaps; i++) {
+        JS_FlowGraphGap(g_sess_ctx, g, i, name, sizeof name, &refs);
+        sale_tally(&g_sale_gap_kinds, &g_sale_gap_kinds_n, name);
+        gaps++;
+    }
+    JS_FlowGraphFree(g_sess_ctx, g);
+    return gaps;
+}
+
+/* The write itself, over the roots and head bytes sale_write_gaps gathered and found whole. */
+static FlowSold *sale_write(Flow *f, SaleVals *vals, uint8_t *head, size_t head_n) {
+    FlowSold *s = calloc(1, sizeof *s);
+    JSValue *frames[1] = { f->agents[0].frame };
+    JSFlowGraphRoots gr = { .vals = vals->v, .frames = frames, .n_vals = vals->n, .n_frames = frames[0] != NULL };
+
+    CHECK(s != NULL, "engine: OOM writing a sold member");
+    DCHECK(f->delta != NULL && head != NULL, "a member was written with no delta head to write");
+    s->g = JS_FlowGraphWriteFlow(g_sess_ctx, &gr, cow_delta_fork_gen((const CowDelta *)f->delta));
+    s->n_vals = vals->n;
+    s->head = head;
+    s->head_n = head_n;
+    s->framed = frames[0] != NULL;
+    s->track_n = pending_track_states(f->pending, &s->track);
+    return s;
+}
+
+/* A written stub's pick (flow_switch_in): its bulk read back from its bytes in place, so it keeps its rank, its
+   register taking over from its stand-ins, then resident again. Runs before the switch-in applies its delta. */
+static void engine_sale_restore(JSContext *ctx, Flow *f) {
+    FlowSold *s = f->sold;
+    JSValue *vals, *frames[1] = { NULL };
+    JSValue stand_ins = f->pending;
+    int used;
+
+    DCHECK(f->cold && s != NULL && s->n_vals >= SALE_WRITE_FIXED && f->n_agents == 1 && f->delta != NULL &&
+               JS_IsUndefined(f->fn) && JS_IsUndefined(f->agents[0].jobs) && f->agents[0].frame == NULL,
+           "a restore was asked of a member that is not a written stub holding no bulk");
+    vals = malloc(sizeof *vals * (size_t)s->n_vals);
+    CHECK(vals != NULL, "engine: OOM reading a sold member back");
+    CHECK(JS_FlowGraphReadFlow(ctx, s->g, vals, frames) == 0, "engine: a sold member's graph did not read back");
+    f->fn = vals[0];
+    f->pending = vals[1];
+    f->orphan_claim_fn = vals[2];
+    f->agents[0].jobs = vals[3];
+    used = cow_delta_head_read(ctx, (CowDelta *)f->delta, s->head, s->head_n, vals + SALE_WRITE_FIXED,
+                               s->n_vals - SALE_WRITE_FIXED);
+    CHECK(used == s->n_vals - SALE_WRITE_FIXED, "engine: a sold member's head took another number of values than "
+                                                "its write handed");
+    if (s->framed) f->agents[0].frame = frames[0];
+    pending_restore(f->pending, stand_ins, s->track, s->track_n);
+    pending_free(ctx, &stand_ins);
+    free(vals);
+    flow_sold_free(ctx, s);
+    f->sold = NULL;
+    g_restored++;
+    flow_restore_end(f);
+}
+
+/* A sale: the member stays in the registry as a cold-resident stub (flow.h's `cold`) and gives back what its
+   bytes or its recipe hold. A member whose every part has a writer is written (sale_write) and its pick
+   restores it within the session; any other waits for the session's park, which writes its recipe
+   (cold_park_flow). No request is cancelled.
+   Named residual. Not covered: a member with a gap or a named reason (sale_unwritable) is not written, and its
+   return re-executes its recipe next session. Next diff builds: the writers the outcome's gap tally names, most
+   sales first. Absence shows as: `soldWaitsGap` and `soldWaitsOther` above zero beside `soldRestores`. */
 static void engine_sale_release(Flow *tail) {
     /* Which population is sold, read before the sale: `cand_src` is the whole question (solver/engine.h). */
     const int was_cand = tail->cand_src != NULL;
     const int funded = engine_sale_reserve_give();
+    const char *other = NULL;
+    int gaps = 0;
+    SaleVals vals = { 0 };
+    uint8_t *head = NULL;
+    size_t head_n = 0;
     JSValue stand_ins;
 
     if (funded) engine_sale_census_take(tail);
     else g_sale_unfunded++;
+    if (funded) {
+        gaps = sale_write_gaps(tail, &vals, &head, &head_n);
+        other = sale_unwritable(tail);
+    }
     /* The synchronous requests leave with the flow, counted (see g_paged_reqs); an answered HOSTREQ entry still
        awaits answers from other peer timelines and stays counted. */
     g_paged_reqs += pending_count_kind(tail->pending, FLOW_PENDING_HOSTREQ);
@@ -12739,6 +12918,18 @@ static void engine_sale_release(Flow *tail) {
     engine_retract_flow(g_sess_ctx, tail);
     flow_job_retract_external(g_sess_ctx, tail);
     flow_withdraw_async_sends(g_sess_ctx, tail);
+    /* After the hand-backs, so a job the second moved to `deliver_q` (in place, in the array the roots name) is
+       not also in the bytes. */
+    if (!funded) g_sold_waits_unfunded++;
+    else if (gaps) g_sold_waits_gap++;
+    else if (other) { g_sold_waits_other++; sale_tally(&g_sale_other_reasons, &g_sale_other_reasons_n, other); }
+    else {
+        tail->sold = sale_write(tail, &vals, head, head_n);
+        head = NULL;
+        g_sold_restores++;
+    }
+    sale_vals_free(&vals);
+    free(head);
     /* Named residual. Not covered: the sold member's return within this session. A stub is out of the pick, so its
        work waits for the session's park and the next session's cold_resume. Next diff builds: the stub in the
        order's index and, at the pick, a replaying body built from its recipe and served its prefix's replies from
@@ -12760,6 +12951,10 @@ static void engine_sale_release(Flow *tail) {
     DCHECKF(g_sale_census.n + g_sale_unfunded == g_flows_sold,
             "%ld sales took their census and %ld ran unfunded, against %ld sold — a sale does one or the other",
             g_sale_census.n, g_sale_unfunded, g_flows_sold);
+    DCHECKF(g_sold_restores + g_sold_waits_unfunded + g_sold_waits_gap + g_sold_waits_other == g_flows_sold,
+            "the sale outcomes (%ld restores, %ld unfunded, %ld gap, %ld other) do not sum to %ld sold — each sale "
+            "takes exactly one", g_sold_restores, g_sold_waits_unfunded, g_sold_waits_gap, g_sold_waits_other,
+            g_flows_sold);
 }
 
 static void engine_shed_standby(JSContext *ctx, Flow *s);
@@ -14734,6 +14929,11 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->paged_shed         = g_reclaim_shed;
     out->paged_sales        = g_reclaim_sales;
     out->sale_unfunded = g_sale_unfunded;
+    out->sold_restores = g_sold_restores;
+    out->sold_waits_unfunded = g_sold_waits_unfunded;
+    out->sold_waits_gap = g_sold_waits_gap;
+    out->sold_waits_other = g_sold_waits_other;
+    out->restored = g_restored;
     out->sale_over_reserve = g_sale_over_reserve;
     out->sale_reserve_kib = g_sale_reserve ? (long)(g_sale_reserve_bytes / 1024) : 0;
     out->sale_need_max_kib = (long)(g_sale_need_max / 1024);

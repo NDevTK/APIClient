@@ -1606,6 +1606,58 @@ JSValue pending_stand_ins(JSValueConst reg)
     return out;
 }
 
+int pending_track_states(JSValueConst reg, uint8_t **out)
+{
+    int n = JS_IsObject(reg) ? pend_len(reg) : 0;
+    uint8_t *t = malloc(n ? (size_t)n : 1);
+
+    CHECK(t != NULL, "engine: OOM recording a sold register's standing in the outstanding set");
+    DCHECK(!JS_IsObject(reg) || pend_rv_at(reg) < 0,
+           "a register owed a rendezvous was written for a restore — the sale writes only a register owing none");
+    for (int i = 0; i < n; i++) {
+        JSValue e = pending_entry(reg, i);
+        t[i] = pending_index_keyed(e) ? 2 : pending_index_tracked(e) ? 1 : 0;
+        JS_FreeValue(pend_ctx(), e);
+    }
+    *out = t;
+    return n;
+}
+
+void pending_restore(JSValueConst reg, JSValueConst stand_ins, const uint8_t *track, int n)
+{
+    static const int answer[] = { PEND_VALUE, PEND_REPLY_ID, PEND_WORK_SEQ, PEND_DECLINED, PEND_HAVE_VALUE };
+    int k = 0, ns = JS_IsObject(stand_ins) ? pend_len(stand_ins) : 0;
+
+    DCHECK(n == (JS_IsObject(reg) ? pend_len(reg) : 0),
+           "a restored register holds another number of records than its sale recorded");
+    for (int i = 0; i < n; i++) {
+        JSValue e = pending_entry(reg, i), c = JS_UNDEFINED;
+        int answered = pending_get_int(e, PEND_HAVE_VALUE) || pending_entry_declined(e);
+
+        if (track[i] == 2) {
+            DCHECK(k < ns, "a keyed record of a sold register has no stand-in — pending_stand_ins copies one per "
+                           "keyed record, in register order");
+            c = pending_entry(stand_ins, k++);
+        }
+        if (track[i] == 0 || answered) { JS_FreeValue(pend_ctx(), c); JS_FreeValue(pend_ctx(), e); continue; }
+        if (pending_index_tracked(e)) {
+            /* a record a sibling's register still names: this register names it again */
+            pending_index_ref(e);
+        } else if (!JS_IsUndefined(c) && (pending_get_int(c, PEND_HAVE_VALUE) || pending_entry_declined(c))) {
+            /* the stand-in was answered while the member was cold: the answer and its sequence move over */
+            for (size_t f = 0; f < sizeof answer / sizeof answer[0]; f++)
+                pending_set(e, answer[f], pending_get(c, answer[f]));
+        } else {
+            pending_index_track(e);
+            if (track[i] == 2) pend_index_sync(e, PEND_URL);
+            DCHECK(track[i] != 2 || pending_index_keyed(e), "a restored record did not key under its pair");
+        }
+        JS_FreeValue(pend_ctx(), c);
+        JS_FreeValue(pend_ctx(), e);
+    }
+    DCHECK(k == ns, "a sold register's stand-ins outnumber its keyed records");
+}
+
 JSValue pending_unshare(JSValueConst reg, int i)
 {
     JSValue src = pending_entry(reg, i);

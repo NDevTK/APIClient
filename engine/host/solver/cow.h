@@ -559,4 +559,20 @@ uint32_t cow_delta_fork_gen(const CowDelta *d);   /* the generation its last for
 void cow_delta_serial_census(const CowDelta *d, void (*val)(JSValueConst v, void *arg), void *arg,
                              CowSerialCensus *out);
 
+/* A SOLD MEMBER'S HEAD, WRITTEN AND READ BACK WITHIN THE SESSION (solver/engine.c's sale and its restore). The
+   head is the part of a delta its member alone holds; the frozen chain below it stays referenced by the stub.
+   An entry is written as its values, handed to `take` in entry order with a reference the callee owns, and the
+   rest of it as bytes. A target and a record layout are written as the pointers they are, so the bytes are
+   read only in the process that wrote them. Every kind but a property slot and a component's bytes or record
+   is unwritten: `gaps` names each such entry of a parked head ("delta cell", "delta map", "delta " and a
+   state kind), and the write asserts there is none. */
+void   cow_delta_head_gaps(const CowDelta *d, void (*gap)(const char *kind, void *arg), void *arg);
+size_t cow_delta_head_write(JSContext *ctx, const CowDelta *d, void (*take)(JSValue v, void *arg), void *arg,
+                            uint8_t **bytes);
+/* The head freed and the chain kept: the delta then holds no entry of its own. The head is not applied. */
+void   cow_delta_head_drop(JSContext *ctx, CowDelta *d);
+/* The head rebuilt into a delta that holds none, from the bytes cow_delta_head_write wrote and the values read
+   back in the order it handed them (`vals`, n of them, whose references it takes). Returns how many it took. */
+int    cow_delta_head_read(JSContext *ctx, CowDelta *d, const uint8_t *bytes, size_t n, JSValue *vals, int n_vals);
+
 #endif

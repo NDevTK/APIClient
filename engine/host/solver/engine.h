@@ -1305,6 +1305,10 @@ typedef struct {
     long paged_shed;         /* …answered by shedding a held snapshot (solver/source_cut.h) */
     long paged_sales;        /* …answered by a sale of the frontier's tail */
     long sale_unfunded;       /* sales that found no reserve held and ran without their census */
+    /* Each sale's one outcome (engine.c), summing to `sold`: written for an in-session restore, or waiting for
+       the session's park because it ran unfunded, met a part with no writer, or holds a named reason. */
+    long sold_restores, sold_waits_unfunded, sold_waits_gap, sold_waits_other;
+    long restored;            /* written stubs a pick read back */
     long sale_over_reserve;   /* funded sales whose allocations asked for more than the block they gave back */
     long sale_reserve_kib;    /* the sale reserve held now, 0 when the allocator refused it */
     long sale_need_max_kib;   /* the most one sale's allocations asked for (c_alloc.h's span) */

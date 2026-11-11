@@ -132,6 +132,8 @@ static int64_t g_departures = 0;
    `g_departures` is raised on the line that removes. */
 static int64_t g_departures_teardown = 0;
 static Flow *g_running = NULL;   /* the flow currently holding the worker (the scheduler sets it) */
+/* The written stubs (flow.h's `sold`), each standing until its pick restores it or the registry releases it. */
+static Flow *g_rest_head;
 /* How many times the thread changed hands (flow_set_running), for the life of the process: never reset, so two
    readings that agree name one tenure of one flow and not two tenures of it with another flow's between. */
 static uint64_t g_running_switches = 0;
@@ -1135,6 +1137,11 @@ int flow_cow_entries_naming(JSValueConst v)
         ds[n++] = g_flows[i]->delta;
     r = cow_entries_naming_in(v, ds, n);
     free(ds);
+    for (Flow *m = g_rest_head; m; m = m->rest_next) {
+        const JSValue *a;
+        uint32_t na = JS_FlowGraphAnchors(m->sold->g, &a);
+        for (uint32_t k = 0; k < na; k++) r += JS_VALUE_GET_PTR(a[k]) == JS_VALUE_GET_PTR(v);
+    }
     return r;
 }
 
@@ -2682,9 +2689,39 @@ static void flow_rows_release(Flow *f);
 
 /* The stubs standing and the stubs departed (flow.h). */
 static int g_cold_n;
+static void flow_rest_link(Flow *f) {
+    f->rest_prev = NULL; f->rest_next = g_rest_head;
+    if (g_rest_head) g_rest_head->rest_prev = f;
+    g_rest_head = f;
+}
+static const Flow *g_sale_of;   /* the member a sale is open on, NULL between sales */
+static void flow_rest_unlink(Flow *f) {
+    DCHECK(f->rest_prev != NULL || g_rest_head == f, "a stub left the written list without standing on it");
+    if (f->rest_prev) f->rest_prev->rest_next = f->rest_next;
+    else g_rest_head = f->rest_next;
+    if (f->rest_next) f->rest_next->rest_prev = f->rest_prev;
+    f->rest_prev = f->rest_next = NULL;
+}
+
+void flow_sold_free(JSContext *ctx, FlowSold *s) {
+    if (s->g) JS_FlowGraphFree(ctx, s->g);
+    free(s->head);
+    free(s->track);
+    free(s);
+}
+
+void flow_restore_end(Flow *f) {
+    DCHECK(f != NULL && f->cold && f->sold == NULL && f->bulk_released && !f->ix_in && !flow_host_owed(f) &&
+               f != g_running && g_sale_of == NULL,
+           "a restore ended on a member that is not a stub its pick read back, or one still host-owed");
+    flow_rest_unlink(f);
+    f->cold = 0;
+    f->bulk_released = 0;
+    g_cold_n--;
+    flow_ix_insert(f);
+    frontier_rank_changed();
+}
 static int64_t g_cold_departed;
-/* The member a sale is open on, NULL between sales, and its order key as the sale found it. */
-static const Flow *g_sale_of;
 
 int flow_cold(const Flow *f) { return f->cold; }
 int flow_cold_count(void) { return g_cold_n; }
@@ -2738,7 +2775,9 @@ void flow_sale_begin(Flow *f) {
     flow_sale_key_read(f, &g_sale_key);
 #endif
     if (f->ix_in) flow_ix_remove(f);
-    else { flow_owed_unlink(f); f->owed_gen = 0; }
+    else { flow_owed_unlink(f); if (!f->sold) f->owed_gen = 0; }
+    /* A written stub keeps its mark, so a clear of it is the event that makes its pick due. */
+    if (f->sold) flow_rest_link(f);
     f->cold = 1;
     g_cold_n++;
     /* The eligible set lost a member, as when one is held: a stub is out of the pick while it is cold. */
@@ -2753,11 +2792,13 @@ void flow_sale_end(Flow *f, JSValue stand_ins) {
            "something a stub keeps, so move that release out of the bulk");
     /* What a replay re-derives and no collection frees (the bulk release gave back the rest). The references on
        the history's snapshots go so a standby nothing else names can be shed; the delivery log and an open hold
-       stay, since a replay delivers by them. */
-    source_cut_flow_cold(f);
-    flow_rows_release(f);
-    /* A stub stands at no row and in no row's compile: its replay starts the sequence again. */
-    f->script_i = 0; f->last_compiled = -1; f->imm_at = -1; f->imm_next = 0; f->in_compile = 0;
+       stay, since a replay delivers by them. A written stub keeps them, since its restore runs no replay. */
+    if (!f->sold) {
+        source_cut_flow_cold(f);
+        flow_rows_release(f);
+        /* A stub stands at no row and in no row's compile: its replay starts the sequence again. */
+        f->script_i = 0; f->last_compiled = -1; f->imm_at = -1; f->imm_next = 0; f->in_compile = 0;
+    }
     f->pending = stand_ins;
 #if APICLIENT_DEV
     {
@@ -2783,7 +2824,7 @@ void flow_release_bulk(JSContext *ctx, Flow *f) {
     f->bulk_reads = flow_park_reads(f);
 #endif
     /* Out of every query first. A member being sold left them at flow_sale_begin. */
-    DCHECK(!f->cold || (f == g_sale_of && !f->ix_in && !flow_host_owed(f)),
+    DCHECK(!f->cold || (f == g_sale_of && !f->ix_in && (f->sold || !flow_host_owed(f))),
            "a stub's bulk was released outside its sale, or while a query still holds it");
     if (f->cold)        { }
     else if (f->ix_in)  flow_ix_remove(f);
@@ -2817,13 +2858,22 @@ void flow_release_bulk(JSContext *ctx, Flow *f) {
        strings go with one release. */
     pending_free(ctx, &f->pending);
     cow_release_scope_end();
-    cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
+    /* A written stub keeps its frozen chain, its DOM base and its pin blob for its restore; its head is in the
+       bytes and its DOM head is empty (the sale writes none other). */
+    if (f->sold) {
+        DCHECK(f->delta != NULL && f->dom_n == 0, "a written stub holds no delta, or a DOM head its bytes do not");
+        cow_delta_head_drop(ctx, (CowDelta *)f->delta);
+    } else {
+        cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
+    }
     /* The head before the chain below it: a head node inserted under a segment's node is that node's child, and a
        child is freed before its parent is freed deep. */
     if (f->dom) dom_buf_free(f->dom, f->dom_n);
     f->dom = NULL; f->dom_n = f->dom_cap = 0;
-    dom_base_release(f->dom_base); f->dom_base = NULL;
-    concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
+    if (!f->sold) {
+        dom_base_release(f->dom_base); f->dom_base = NULL;
+        concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
+    }
     /* A stub also gives back, here so one release scope sees them, the values a replay re-derives: its queued
        jobs, and a drive's function, which leaves the drive waiting for its body as the cold tier's rebuild leaves
        one (the chain names every member a replay calls). A stub's record reads the locator, not the function. */
@@ -2863,6 +2913,14 @@ void flow_release(JSContext *ctx, Flow *f) {
     DCHECK(f != g_sale_of, "a member was released inside its own sale");
     /* A stub's register holds its stand-ins; the drop of a pair's last naming withdraws the request. */
     if (f->cold) pending_free(ctx, &f->pending);
+    /* A written stub never picked: its bytes, and what it kept for its restore. */
+    if (f->cold && f->sold) {
+        flow_rest_unlink(f);
+        flow_sold_free(ctx, f->sold); f->sold = NULL;
+        cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
+        dom_base_release(f->dom_base); f->dom_base = NULL;
+        concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
+    }
     if (!f->bulk_released) {
         /* A paged flow is not a dropped one. Five things a released flow can still carry are work items on the one
            frontier: a parked continuation, the suspended frame (its whole heap-frame chain), replies the host still
@@ -5391,8 +5449,8 @@ void flow_set_host_owed(Flow *f) {
 void flow_clear_host_owed(Flow *f) {
     DCHECK(f != NULL, "a host event cleared the mark of no flow at all");
     /* A clear reaches marked and unmarked members alike (the host answers whoever it reaches), and only a marked one
-       comes back into the order's index. */
-    int was_owed = flow_host_owed(f);
+       comes back into the order's index. A stub is on neither list: a written one's clear makes it pickable. */
+    int was_owed = flow_host_owed(f) && !f->cold;
     if (was_owed) flow_owed_unlink(f);
     f->owed_gen = 0;   /* never equal to g_owed_gen, which starts at 1 and only ever moves forward */
     if (was_owed) flow_ix_insert(f);
@@ -5734,6 +5792,21 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, FlowScan why) {
                                 "member, and only the rival ask excludes");
         flow_count_plateau(seed, &a, &g_ix_entries);
     }
+    /* A written stub keeps its rank (its order key stood still across its sale), so it is weighed beside the
+       index's answer and wins only strictly, as any rival of the seed does; its pick restores it (engine.c).
+       Named residual. Not covered: the written stubs are weighed one by one, O(written stubs not host-owed) per
+       ask. Next diff builds: a written stub in the order's index as a class of its own, out of the tail query.
+       Absence shows as: `scanOtherWeights` and the dispatch scans' weights per ask rising with `cold`. */
+    {
+        double bw = a.best ? flow_weight(a.best) : 0.0;
+        for (Flow *m = g_rest_head; m; m = m->rest_next) {
+            double w;
+            if (m == exclude || flow_host_owed(m)) continue;
+            DCHECK(m->cold && m->sold != NULL, "a member on the written list is not a written stub");
+            w = flow_weight(m); g_scan_weights[why]++;
+            if (!a.best || w > bw) { a.best = m; bw = w; }
+        }
+    }
     return a.best;
 }
 
@@ -5782,8 +5855,10 @@ static void flow_ix_check(void) {
             continue;
         }
         if (m->cold) {
-            DCHECK(!m->ix_in && !flow_host_owed(m) && m->bulk_released,
-                   "a stub stands in the order's index or is marked host-owed, or holds its bulk");
+            DCHECK(!m->ix_in && (m->sold || !flow_host_owed(m)) && m->bulk_released &&
+                       (m->sold != NULL) == (m->rest_prev != NULL || g_rest_head == m),
+                   "a stub stands in the order's index, is marked host-owed without being written, holds its bulk, "
+                   "or stands on the written list exactly when it is not written");
             continue;
         }
         if (flow_host_owed(m)) {

@@ -2500,6 +2500,202 @@ void cow_delta_serial_census(const CowDelta *d, void (*val)(JSValueConst v, void
     }
 }
 
+/* The written head (cow.h). An entry's bytes: its kind ('P' slot, 'H' component bytes or a body mark, 'R'
+   component record), then its kind's fields; its values go to `take` in the order the reader takes them. */
+#define COW_GAP_NAME(id, name) "delta " name,
+static const char *const g_cow_state_gap[] = { COW_STATE_KINDS(COW_GAP_NAME) };
+#undef COW_GAP_NAME
+static const char *cow_entry_unwritten(const CowEntry *e) {
+    if (e->is_gendata) return "delta coroutine";
+    if (e->is_map) return "delta map";
+    if (e->is_state)
+        return e->state_kind == COW_STATE_HOST || e->state_kind == COW_STATE_BODY ||
+               e->state_kind == COW_STATE_HOST_REC ? NULL : g_cow_state_gap[e->state_kind];
+    return e->vref ? "delta cell" : NULL;
+}
+
+void cow_delta_head_gaps(const CowDelta *d, void (*gap)(const char *kind, void *arg), void *arg) {
+    DCHECK(d != NULL && !d->head_applied, "a head's gaps were asked of a delta whose head is on the heap");
+    for (int i = 0; i < d->n; i++) {
+        const char *k = cow_entry_unwritten(&d->e[i]);
+        if (k) gap(k, arg);
+    }
+}
+
+typedef struct { uint8_t *b; size_t n, cap; } CowBytes;
+static void cow_bytes_put(CowBytes *o, const void *p, size_t n) {
+    if (o->n + n > o->cap) {
+        size_t c = o->cap ? o->cap : 256;
+        uint8_t *g;
+        while (c < o->n + n) c *= 2;
+        g = realloc(o->b, c);
+        CHECK(g != NULL, "cow: OOM writing a sold member's head");
+        o->b = g; o->cap = c;
+    }
+    memcpy(o->b + o->n, p, n);
+    o->n += n;
+}
+static void cow_bytes_blob(CowBytes *o, const void *blob, size_t n) {
+    uint8_t has = blob != NULL;
+    cow_bytes_put(o, &has, 1);
+    if (has) cow_bytes_put(o, blob, n);
+}
+/* A record blob's values, each a reference `take` owns, in val_off order. */
+static void cow_rec_vals(JSContext *ctx, const CowRecord *rec, const void *blob, void (*take)(JSValue, void *),
+                         void *arg) {
+    if (blob == NULL) return;
+    for (int i = 0; i < rec->n_val; i++)
+        take(JS_DupValue(ctx, *(const JSValue *)((const char *)blob + rec->val_off[i])), arg);
+}
+
+size_t cow_delta_head_write(JSContext *ctx, const CowDelta *d, void (*take)(JSValue v, void *arg), void *arg,
+                            uint8_t **bytes) {
+    CowBytes o = { 0 };
+    int32_t n;
+
+    DCHECK(d != NULL && !d->head_applied, "a head was written while it is on the heap — its flow-side values are "
+                                          "the live heap's, not the entries'");
+    n = d->n;
+    cow_bytes_put(&o, &n, sizeof n);
+    for (int i = 0; i < d->n; i++) {
+        const CowEntry *e = &d->e[i];
+        uint8_t kind = e->is_state ? (e->state_kind == COW_STATE_HOST_REC ? 'R' : 'H') : 'P';
+
+        DCHECKF(cow_entry_unwritten(e) == NULL, "a sold member's head was written holding an entry of kind %s, "
+                "which has no writer — the sale writes only a head cow_delta_head_gaps found whole",
+                cow_entry_unwritten(e));
+        cow_bytes_put(&o, &kind, 1);
+        take(JS_DupValue(ctx, e->obj), arg);
+        if (kind == 'P') {
+            int32_t f[4] = { e->existed, e->base.flags, e->cur.flags, e->cur_state };
+            cow_bytes_put(&o, f, sizeof f);
+            take(JS_AtomToValue(ctx, e->atom), arg);
+            take(JS_DupValue(ctx, e->base.value), arg);
+            take(JS_DupValue(ctx, e->base.getter), arg);
+            take(JS_DupValue(ctx, e->base.setter), arg);
+            take(JS_DupValue(ctx, e->cur.value), arg);
+            take(JS_DupValue(ctx, e->cur.getter), arg);
+            take(JS_DupValue(ctx, e->cur.setter), arg);
+            continue;
+        }
+        {
+            int32_t sk = e->state_kind;
+            uint64_t len = kind == 'R' ? e->rec->size : e->a_len;
+            cow_bytes_put(&o, &sk, sizeof sk);
+            cow_bytes_put(&o, &e->target, sizeof e->target);
+            cow_bytes_put(&o, &e->rec, sizeof e->rec);
+            cow_bytes_put(&o, &len, sizeof len);
+            /* A record's value slots are written as values; the bytes keep what a memcpy of them held, which
+               the reader overwrites. */
+            cow_bytes_blob(&o, e->a_base, (size_t)len);
+            cow_bytes_blob(&o, e->a_cur, (size_t)len);
+            if (kind == 'R') {
+                cow_rec_vals(ctx, e->rec, e->a_base, take, arg);
+                cow_rec_vals(ctx, e->rec, e->a_cur, take, arg);
+            }
+        }
+    }
+    *bytes = o.b;
+    return o.n;
+}
+
+void cow_delta_head_drop(JSContext *ctx, CowDelta *d) {
+    DCHECK(d != NULL && !d->head_applied && d != g_current,
+           "a head was dropped while it is on the heap or captures are routed to it");
+    cow_entries_free(ctx, d->e, d->n);
+    free(d->e); d->e = NULL;
+    free(d->hash); d->hash = NULL;
+    d->n = d->cap = d->hash_cap = 0;
+}
+
+typedef struct { const uint8_t *p, *end; } CowRead;
+static void cow_read_take(CowRead *r, void *dst, size_t n) {
+    CHECK((size_t)(r->end - r->p) >= n, "cow: a sold member's head ends inside an entry");
+    memcpy(dst, r->p, n);
+    r->p += n;
+}
+static void *cow_read_blob(CowRead *r, size_t n) {
+    uint8_t has;
+    void *b;
+    cow_read_take(r, &has, 1);
+    if (!has) return NULL;
+    b = reclaim_malloc(n ? n : 1);
+    CHECK(b != NULL, "cow: OOM reading a sold member's head");
+    cow_read_take(r, b, n);
+    return b;
+}
+
+int cow_delta_head_read(JSContext *ctx, CowDelta *d, const uint8_t *bytes, size_t n, JSValue *vals, int n_vals) {
+    CowRead r = { bytes, bytes + n };
+    int32_t count;
+    int v = 0;
+
+    DCHECK(d != NULL && d->n == 0 && d->e == NULL && !d->head_applied,
+           "a head was read into a delta that already holds one, or whose head is on the heap");
+    cow_read_take(&r, &count, sizeof count);
+    CHECK(count >= 0, "cow: a sold member's head names a negative entry count");
+    /* The read allocates, so it can sell a flow; inside a capture scope that sale's release raises no capture. */
+    cow_capture_begin();
+    if (count) {
+        d->e = cow_delta_alloc(NULL, (size_t)count * sizeof *d->e);
+        CHECK(d->e != NULL, "cow: OOM reading a sold member's head");
+        d->cap = count;
+    }
+    for (int i = 0; i < count; i++) {
+        CowEntry *e = &d->e[i];
+        uint8_t kind;
+
+        cow_entry_init(e);
+        cow_read_take(&r, &kind, 1);
+        CHECK(kind == 'P' || kind == 'H' || kind == 'R', "cow: a sold member's head names an entry kind it has no "
+                                                         "reader for");
+        CHECK(v < n_vals, "cow: a sold member's head holds more values than were read back");
+        e->obj = vals[v++];
+        if (kind == 'P') {
+            int32_t f[4];
+            cow_read_take(&r, f, sizeof f);
+            CHECK(v + 7 <= n_vals, "cow: a sold member's head holds more values than were read back");
+            e->existed = f[0]; e->base.flags = f[1]; e->cur.flags = f[2]; e->cur_state = f[3];
+            e->atom = JS_ValueToAtom(ctx, vals[v]);
+            CHECK(e->atom != JS_ATOM_NULL, "cow: a sold member's slot key did not read back as a key");
+            JS_FreeValue(ctx, vals[v++]);
+            e->base.value = vals[v++]; e->base.getter = vals[v++]; e->base.setter = vals[v++];
+            e->cur.value = vals[v++]; e->cur.getter = vals[v++]; e->cur.setter = vals[v++];
+        } else {
+            int32_t sk;
+            uint64_t len;
+            cow_read_take(&r, &sk, sizeof sk);
+            cow_read_take(&r, &e->target, sizeof e->target);
+            cow_read_take(&r, &e->rec, sizeof e->rec);
+            cow_read_take(&r, &len, sizeof len);
+            CHECK(kind == 'R' ? sk == COW_STATE_HOST_REC && e->rec != NULL && len == e->rec->size
+                              : (sk == COW_STATE_HOST || sk == COW_STATE_BODY) && e->rec == NULL,
+                  "cow: a sold member's state entry names a kind or a layout its bytes do not fit");
+            e->is_state = 1;
+            e->state_kind = sk;
+            /* the identity a capture files the entry under (cow_state_entry_set): the target for these kinds */
+            e->state_key = e->target;
+            e->a_len = kind == 'R' ? 0 : (size_t)len;
+            e->a_base = cow_read_blob(&r, (size_t)len);
+            e->a_cur = cow_read_blob(&r, (size_t)len);
+            if (kind == 'R') {
+                for (int h = 0; h < 2; h++) {
+                    char *blob = h ? e->a_cur : e->a_base;
+                    if (blob == NULL) continue;
+                    CHECK(v + e->rec->n_val <= n_vals, "cow: a sold member's head holds more values than were read "
+                                                       "back");
+                    for (int k = 0; k < e->rec->n_val; k++) *(JSValue *)(blob + e->rec->val_off[k]) = vals[v++];
+                }
+            }
+        }
+        d->n = i + 1;
+    }
+    CHECK(r.p == r.end, "cow: a sold member's head has bytes past its last entry");
+    if (d->n) cow_hash_rebuild(d);
+    cow_capture_end();
+    return v;
+}
+
 /* See cow.h. */
 void cow_delta_objects(const CowDelta *d, CowSegEnter enter, CowObjectVisit visit, void *arg) {
     DCHECK(d != NULL && enter != NULL && visit != NULL,

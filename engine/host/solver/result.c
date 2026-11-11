@@ -1636,6 +1636,11 @@ char *result_cold_json(void) {
     METRIC_SET(sold_cands, e.sold_cands);
     METRIC_SET(cold, flow_cold_count());
     METRIC_SET(sale_unfunded, e.sale_unfunded);
+    METRIC_SET(sold_restores, e.sold_restores);
+    METRIC_SET(sold_waits_unfunded, e.sold_waits_unfunded);
+    METRIC_SET(sold_waits_gap, e.sold_waits_gap);
+    METRIC_SET(sold_waits_other, e.sold_waits_other);
+    METRIC_SET(restored, e.restored);
     METRIC_SET(sale_over_reserve, e.sale_over_reserve);
     METRIC_SET(sale_reserve_kib, e.sale_reserve_kib);
     METRIC_SET(sale_need_max_kib, e.sale_need_max_kib);

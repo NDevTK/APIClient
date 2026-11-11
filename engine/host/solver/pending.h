@@ -875,6 +875,13 @@ JSValue pending_fork(JSValueConst reg);
    pair stays listed while the flow's own register is released, the reply fills and stamps it, and no cancel is
    sent. JS_UNDEFINED when no entry is keyed. Built before `reg` is released. */
 JSValue pending_stand_ins(JSValueConst reg);
+/* Each record's standing in the outstanding set, for a sold register its sale writes: 0 untracked, 1 tracked,
+   2 keyed. `*out` is malloc'd, one byte per record; returns the count. The register owes no rendezvous. */
+int     pending_track_states(JSValueConst reg, uint8_t **out);
+/* A restored register takes over from its stub's stand-ins: a record tracked at the sale is named again (a
+   sibling still naming it), takes its stand-in's answer, value, reply id and work sequence where the reply came
+   while the member was cold, or is tracked and keyed afresh. The stand-ins are the caller's to free after. */
+void    pending_restore(JSValueConst reg, JSValueConst stand_ins, const uint8_t *track, int n);
 
 /* GIVE THIS REGISTER ITS OWN COPY OF ENTRY `i`, replacing the shared record in the slot. Returns the copy,
    owned. There is exactly one field that must DIFFER between two arms — the unanswered synchronous request's

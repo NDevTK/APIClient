@@ -174,6 +174,21 @@ typedef struct {
     int n_agents, dyn_n, cand_dn, orphan_chain_n;
 } FlowParkReads;
 
+/* A sold member written for its return within the session (engine.c's sale): its private graph (its function,
+   register, jobs, frame and the values of its delta's head, JS_FlowGraphWriteFlow), its head's entries around
+   those values (cow_delta_head_write), and each register record's standing in the outstanding set at the sale
+   (pending_track_states). Owned by the stub; the restore (engine.c) reads and frees it, flow_release frees it
+   unread. */
+typedef struct FlowSold {
+    struct JSFlowGraph *g;
+    uint8_t *head;
+    size_t head_n;
+    uint8_t *track;
+    int track_n;
+    int n_vals;   /* the graph's value roots */
+    int framed;   /* the one agent held a frame, the graph's one base */
+} FlowSold;
+
 typedef struct Flow {
     /* This flow's slot in the frontier's array, so locating a member is a load rather than a walk. It names a
        slot, never a rank: the array is in arrival order and the order is by weight, so no term of flow_weight
@@ -443,8 +458,11 @@ typedef struct Flow {
        ranks it, and its recipe: the decision blob, the candidate, drive and commitment fields, the routed records
        it has not delivered, the log of those it has, and its reply trail. What a replay of that recipe re-derives
        is given back, and its register holds only stand-ins for the parks the host can still answer
-       (pending_stand_ins). It is out of the order's index and the host-owed list, so no query picks or sells it. */
+       (pending_stand_ins). It is out of the order's index and the host-owed list, so no query picks or sells it.
+       A stub whose sale wrote it (`sold`) keeps its host-owed mark and stands on the written list, which the pick
+       weighs beside the index; its pick restores it in place (engine.c). */
     int cold;
+    FlowSold *sold;
     /* Is the fork assembling this sibling (flow_assembly_begin to flow_assembly_end)? It is then out of the order's
        index and the host-owed list, so no sale can pick it while its fields are being written. */
     int assembling;
@@ -808,6 +826,8 @@ typedef struct Flow {
        (members out of the index, re-admitted by flow_clear_host_owed_all). NULL-linked, owned by flow.c. */
     struct Flow *away_prev, *away_next;
     struct Flow *owed_prev, *owed_next;
+    /* …and the written list (stubs whose sale wrote them, flow.c's g_rest_head), which the pick weighs. */
+    struct Flow *rest_prev, *rest_next;
     /* Its links on its family's list of indexed observed-class members (flow.c's flow_observed_class), and whether
        it stands on it. Owned by flow.c. */
     struct Flow *obs_prev, *obs_next;
@@ -2070,9 +2090,17 @@ void  flow_release_bulk(JSContext *ctx, Flow *f);
    runs flow_release_bulk, which for a stub also gives back its queued jobs and a drive's function (the drive is
    left waiting for its body, as a rebuilt one is); end gives back the program rows and the references on its
    history's snapshots, installs `stand_ins` (owned) as its register and asserts the order key is the one begin
-   read. One sale at a time, asserted. flow_release frees a stub's remainder like any member's. */
+   read. One sale at a time, asserted. flow_release frees a stub's remainder like any member's.
+   A stub the sale wrote (`sold`, set before begin) is on the written list with its host-owed mark kept, and
+   keeps what its restore reads and the bytes do not hold: its delta's frozen chain, its DOM base, its pin blob,
+   its program rows and cursor, and its snapshot references. */
 void  flow_sale_begin(Flow *f);
 void  flow_sale_end(Flow *f, JSValue stand_ins);
+/* The flow.c half of a written stub's restore, once engine.c has read its bulk back: it is resident again, off
+   the written list and in the order's index (it was picked, so it is not host-owed), with its rank unmoved. */
+void  flow_restore_end(Flow *f);
+/* Frees a written member's bytes and the graph's anchors. */
+void  flow_sold_free(JSContext *ctx, FlowSold *s);
 int   flow_cold(const Flow *f);
 /* The stubs standing, and the stubs that have left the registry (flow_remove): every member ever sold is one or
    the other. */
@@ -2099,8 +2127,8 @@ int   flow_is_member(const Flow *f);
    register living on the flows needs. flow_best answers which one to run; this answers who exists. */
 Flow *flow_at(int i);
 /* How many COW entries name `v` across every member's delta and the running one, each shared segment once
-   (cow_entries_naming_in): the references the frontier's deltas hold. Cold members hold none (their deltas
-   are released). */
+   (cow_entries_naming_in), and how many written stubs' graphs anchor it: the references the frontier's deltas
+   hold. A written stub's head is in its bytes, whose anchors are its references; another stub holds none. */
 int   flow_cow_entries_naming(JSValueConst v);
 
 /* How many unstarted programs the whole frontier holds for the realm whose serial is `realm`: rows whose
