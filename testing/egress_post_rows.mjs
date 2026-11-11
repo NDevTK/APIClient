@@ -139,13 +139,18 @@ const ROWS = [
     ['its body', got('POST', '/api/xhr-post').map((a) => a.body).join('|'), '{"x":1}'],
     ['its content type', got('POST', '/api/xhr-post').map((a) => a.type).join('|'), 'application/json'],
     ['the request the reply\'s value names', got('GET', '/api/xhr-read').map((a) => a.query).join('|'), '?n=1'],
-    ['how the zone answered it', said(sends('POST', '/api/xhr-post')), 'sent/default']]],
+    /* An XMLHttpRequest is asked by request id, once per flow that sends it, so the asks are counted as a set:
+       one send, and every other ask answered from it. */
+    ['the sends the zone made', sends('POST', '/api/xhr-post').filter((e) => e.how === 'sent').length, 1],
+    ['every other ask answered from that send', said(sends('POST', '/api/xhr-post')).split(' | ')
+      .every((w) => w === 'sent/default' || w === 'answered-locally/default'), true]]],
   ['an XMLHttpRequest body of bytes arrives as those bytes',
    [['POST /api/xhr-bin', got('POST', '/api/xhr-bin').length, 1],
     ['its bytes in hex', got('POST', '/api/xhr-bin').map((a) => a.hex).join('|'), '00ff0180']]],
   ['an XMLHttpRequest POST on a forced path is recorded and not sent',
    [['POST /api/xhr-forced', got('POST', '/api/xhr-forced').length, 0],
-    ['how the zone answered it', said(sends('POST', '/api/xhr-forced')), 'not-sent/none provenance=forced']]],
+    ['how every ask was answered', distinct(said(sends('POST', '/api/xhr-forced')).split(' | ')),
+     'not-sent/none provenance=forced']]],
 ];
 let bad = 0;
 for (const [label, notes] of ROWS) {
