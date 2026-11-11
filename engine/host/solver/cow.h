@@ -559,7 +559,7 @@ uint32_t cow_delta_fork_gen(const CowDelta *d);   /* the generation its last for
 void cow_delta_serial_census(const CowDelta *d, void (*val)(JSValueConst v, void *arg), void *arg,
                              CowSerialCensus *out);
 
-/* A SOLD MEMBER'S HEAD, WRITTEN AND READ BACK WITHIN THE SESSION (solver/engine.c's sale and its restore). The
+/* A sold member's head, written and read back within the session (solver/engine.c's sale and its restore). The
    head is the part of a delta its member alone holds; the frozen chain below it stays referenced by the stub.
    An entry is written as its values, handed to `take` in entry order with a reference the callee owns, and the
    rest of it as bytes. A target and a record layout are written as the pointers they are, so the bytes are

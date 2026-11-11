@@ -12724,7 +12724,7 @@ static void engine_sale_reserve_retake(int funded) {
     engine_sale_reserve_hold();
 }
 
-/* EACH SALE'S OUTCOME, ONE OF FOUR, so the four sum to `sold` (asserted at the sale): the member was written
+/* Each sale's outcome, one of four, so the four sum to `sold` (asserted at the sale): the member was written
    and its pick restores it (`restores`); the sale ran unfunded and wrote nothing; a part of the member has no
    writer (a gap, tallied by kind, once per sale per kind); or the member holds something its bytes cannot carry
    back (a named reason). A member that waits returns next session by its recipe. `restored` counts the picks
