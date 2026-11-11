@@ -335,7 +335,12 @@ struct FlowCodeSite {
     struct FlowCodeSite *hnext;     /* its chain in `fam->codes` */
     int kind;
     uint64_t key;
-    int64_t served;                 /* lifetime: work members ran while dispatched from here, compiles left out */
+    /* Lifetime: the page code members ran while dispatched from here. A compile, and work retired with no page frame
+       standing (a rendering task's paint, a parse between programs), are left out: neither runs code at a site.
+       Evidence (the order lane's mdn replay at 34523cb4): charged here, the example's world's first paint put
+       4,545,048 of 4,549,500 units on the entry of a program it had left, which ranked it under the floor every
+       priced member at a fresh site reads, and 5,459 of 5,465 dispatches went to assumed members. */
+    int64_t served;
     FlowSite *classes;              /* its standing classes that hold a member, linked through `cnext`/`cprev` */
 };
 
@@ -380,11 +385,14 @@ static long g_acct_live;
    folding every bucket, before a second registry comes up. Microseconds received, never reset, unlike the members'
    turns. */
 static int64_t g_charged_work = 0;
-/* The part of that total that was a compile's, and the work charged to code sites (flow_code_charge): lifetime. */
+/* The part of that total that was a compile's, the part that ran with no page frame standing, and the work charged
+   to code sites (flow_code_charge): lifetime. */
 static int64_t g_compile_work = 0;
+static int64_t g_frameless_work = 0;
 static int64_t g_site_work = 0;
 int64_t flow_site_work_lifetime(void) { return g_site_work; }
 int64_t flow_compile_work_lifetime(void) { return g_compile_work; }
+int64_t flow_frameless_work_lifetime(void) { return g_frameless_work; }
 int64_t flow_charged_work_lifetime(void) { return g_charged_work; }
 static int64_t g_branch_retired_work = 0;
 
@@ -2206,12 +2214,16 @@ int flow_path_peer_pinned(const Flow *f) {
    No `if (g_running)` guard: the one caller charges between a switch-in and a finish, so a charge with nothing
    running means the scheduler lost track of which flow burned the time, and discarding it would stop a monopolizer
    aging. */
-void flow_age_running(int64_t us, int64_t compile) {
+void flow_age_running(int64_t us, int64_t compile, int64_t frameless) {
     DCHECK(g_running != NULL,
            "work was charged with no flow running — the scheduler charges the flow it just stepped");
     DCHECK(compile >= 0 && compile <= us,
            "a step's compile work is negative or exceeds the step's work — both are differences of counters the "
            "one step bracket reads");
+    DCHECKF(frameless >= 0 && frameless <= us - compile,
+            "a step's frameless work (%lld) is negative or exceeds what it ran apart from its compile (%lld) — the "
+            "two are raised at disjoint retire sites of the counter the step's work is a difference of",
+            (long long)frameless, (long long)(us - compile));
     /* What the step ran, apart from what it compiled. A compile is banked to the family's work alone: it reads as
        no service at the code site the member stands at and moves no member's turn, since parsing a body is not
        running the code there and every world that reaches the body owes the same parse. */
@@ -2277,18 +2289,22 @@ void flow_age_running(int64_t us, int64_t compile) {
     g_running->acct->branch->sub_work += us;
     g_charged_work += us;
     g_compile_work += compile;
+    g_frameless_work += frameless;
     /* And the site the member stands at: Level 2's UCB count is the service its code site has received, in pulls of
        one quantum (Level 1's unit, a real number). Any charge reprices the site, which re-ranks every member
-       standing there at once, so the site is re-filed and the order told. */
-    DCHECKF(g_running->site_banked >= 0 && g_running->site_banked <= ran,
-            "a step banked %lld units to sites it moved off and ended having run %lld — the bank reads the same "
-            "counters the step's charge is a difference of", (long long)g_running->site_banked, (long long)ran);
-    if (ran - g_running->site_banked > 0) {
+       standing there at once, so the site is re-filed and the order told. Service is what the step ran under a
+       page frame (FlowCodeSite says why the frameless part is not); the bank reads the same three counters. */
+    const int64_t framed = ran - frameless;
+    DCHECKF(g_running->site_banked >= 0 && g_running->site_banked <= framed,
+            "a step banked %lld units to sites it moved off and ended having run %lld under a page frame — the "
+            "bank reads the same counters the step's charge is a difference of",
+            (long long)g_running->site_banked, (long long)framed);
+    if (framed - g_running->site_banked > 0) {
         FlowSite *st = g_running->at;
         DCHECK(st != NULL && st->fam == g_running->family,
                "the running flow stands at no site, or at one in another family's ledger — flow_new, the fork and "
                "flow_stand_at keep `at` in the member's own family");
-        flow_code_charge(st->code, ran - g_running->site_banked);
+        flow_code_charge(st->code, framed - g_running->site_banked);
     }
     /* The units the step ran went to the turn and to the family's work, and its compile to the family's alone. This
        is the only site that adds to either, so a charge reaching `work` and missing `fam_work` would make a turn
@@ -6359,6 +6375,7 @@ void flow_wfq_census(WfqCensus *out) {
     out->br_retired_work = g_branch_retired_work;
     out->charged_work = g_charged_work;
     out->compile_work = g_compile_work;
+    out->frameless_work = g_frameless_work;
     out->site_work = g_site_work;
     /* A fresh mark for this scan, past zero, so a node minted since the last census (calloc'd to 0) reads as
        unmarked. The bucket walk shares this generation value with a mark of its own (`branch_gen`), because a root
@@ -7166,11 +7183,12 @@ void flow_wfq_census(WfqCensus *out) {
     DCHECK(out->br_held_work + out->br_empty_work == out->br_work_sum,
            "the work of live and empty branch buckets does not sum to the time attributed to buckets — "
            "branch_take raises the two in the two arms of one condition");
-    DCHECKF(out->site_work - (g_running ? g_running->site_banked : 0) + out->compile_work == out->charged_work,
-            "the work charged to code sites (%lld, less what the open step banked) and the compile work (%lld) do not "
-            "make up the work charged (%lld) — a charge reached a site with a compile in it, or bypassed "
-            "flow_age_running", (long long)out->site_work, (long long)out->compile_work,
-            (long long)out->charged_work);
+    DCHECKF(out->site_work - (g_running ? g_running->site_banked : 0) + out->compile_work + out->frameless_work ==
+                out->charged_work,
+            "the work charged to code sites (%lld, less what the open step banked), the compile work (%lld) and the "
+            "frameless work (%lld) do not make up the work charged (%lld) — a charge reached a site with a compile "
+            "or frameless work in it, or bypassed flow_age_running", (long long)out->site_work,
+            (long long)out->compile_work, (long long)out->frameless_work, (long long)out->charged_work);
     DCHECK(out->br_work_sum + out->br_retired_work == out->charged_work,
            "the work attributed to branch buckets plus the retired term does not equal the time charged — "
            "every unit lands on one bucket, and a freed bucket's total is folded into the retired term");

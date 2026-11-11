@@ -5006,12 +5006,19 @@ static void js_gc_object_census(JSRuntime *rt, const char *tag)
     (free)(n);
 }
 
+/* The runtime that base runs in, written beside it wherever a base is entered, so a host charge with no runtime
+   in hand can ask which frames stand (js_flow_frameless_charge). Read only while g_flow_base_gen is set, and
+   dropped by JS_FreeRuntime, so it never names a freed runtime. */
+static _Thread_local JSRuntime *g_flow_base_rt = NULL;
+
 void JS_FreeRuntime(JSRuntime *rt)
 {
     struct list_head *el, *el1;
     bool leak = false;
     int i;
 
+    if (g_flow_base_rt == rt)
+        g_flow_base_rt = NULL;
     rt->in_free = true;
     DCHECK(JS_IsUndefined(rt->suspended_on),
            "JS_FreeRuntime with a suspension the host never took (JS_TakeSuspension)");
@@ -26410,6 +26417,29 @@ void JS_RequestFlowYield(void) { FLOW_YIELD_REQUEST(JS_PREEMPT_HOST); }
  * work or a finished flow's residue, neither of them the incoming flow's. */
 static _Thread_local uint64_t g_flow_work_retired __attribute__((tls_model("local-exec"))) = 0;
 #define FLOW_WORK_RETIRE()  (g_flow_work_retired++, g_js_dispatch_life++)
+
+/* The nearest frame running a page's bytecode, walking outward past call roots and frames with no bytecode body,
+   or NULL: the frame JS_RunningSiteHash names. A C function this engine runs for the page code beneath it (a DOM
+   mutator, a step machine the page called) stands on that code's frame; one the host entered on its own (a
+   rendering task's step machine, a parse between programs) stands on none. */
+static JSStackFrame *js_page_frame(JSRuntime *rt)
+{
+    for (JSStackFrame *sf = rt->current_stack_frame; sf != NULL; sf = sf->prev_frame)
+        if (!sf->is_call_root && JS_GetFunctionBytecode(sf->cur_func) != NULL)
+            return sf;
+    return NULL;
+}
+
+/* The retired work no page frame stood over, compiles left out, over the thread (JS_FlowFramelessWorkLife):
+   raised by every retire site but the opcode dispatch, which runs page bytecode by construction, and the compile
+   charges, which the host banks apart already. `rt` is the runtime the work ran in, NULL for none (no flow base
+   holds the thread, so no page code of any flow can stand). */
+static _Thread_local uint64_t g_flow_frameless_work = 0;
+static inline void js_flow_frameless_charge(JSRuntime *rt, uint64_t units)
+{
+    if (rt == NULL || js_page_frame(rt) == NULL)
+        g_flow_frameless_work += units;
+}
 uint64_t JS_FlowDiscardRetiredWork(void)
 {
     uint64_t u = g_flow_work_retired;
@@ -26424,6 +26454,7 @@ void JS_FlowRetireWork(uint64_t units)
 {
     if (APICLIENT_UNPRICED_OPEN()) return;
     g_flow_work_retired += units;
+    js_flow_frameless_charge(g_flow_base_gen != NULL ? g_flow_base_rt : NULL, units);
 }
 
 /* Source bytes the tokenizers have consumed, over the process: a report for the host's thread-work census.
@@ -26436,6 +26467,7 @@ uint64_t JS_FlowParseBytesLife(void) { return g_flow_parse_bytes; }
    the service of running code; JSON text and regexp patterns are not in it. */
 static uint64_t g_flow_compile_work;
 uint64_t JS_FlowCompileWorkLife(void) { return g_flow_compile_work; }
+uint64_t JS_FlowFramelessWorkLife(void) { return g_flow_frameless_work; }
 /* Pattern bytes regexp compiles have consumed, and the rests a compile inside a machine took, over the process:
    a report for the same census (lre_compile_poll, step_regexp_compile_run). */
 static uint64_t g_regexp_compile_bytes, g_regexp_compile_rests;
@@ -30827,6 +30859,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     /* A machine step is a dispatch of a built-in and retires one unit, as an opcode does, past
                        the offer above so a step that parks in front of it is counted once, when it runs. */
                     FLOW_WORK_RETIRE();
+                    js_flow_frameless_charge(rt, 1);
                     DCHECK(!g_compile_stint,
                            "a built-in's step machine was invoked inside a compile stint — a compile runs no code "
                            "of any world; the parse production that reached it must do the work in the parser");
@@ -45335,6 +45368,7 @@ int JS_FlowResume(JSContext *ctx, JSValue *flow, JSValue *pres) {
     if (s->base_kind == FLOW_BASE_ASYNC_CALL) {
         JSAsyncFunctionData *d = flow_async_data(s);
         JSValue r;
+        g_flow_base_rt = ctx->rt;
         g_flow_base_gen = s;
         s->throw_flag = false;   /* a preempt-resume is a continuation, never a re-throw */
         r = async_func_resume(ctx, s);
@@ -45387,6 +45421,7 @@ int JS_FlowResume(JSContext *ctx, JSValue *flow, JSValue *pres) {
        is page code, and it belongs on a flow like everything else. */
     if (s->base_kind == FLOW_BASE_STEP_ROOT) {
         JSValue r;
+        g_flow_base_rt = ctx->rt;
         g_flow_base_gen = s;
         s->throw_flag = false;   /* a preempt-resume is a continuation, never a re-throw */
         r = async_func_resume(ctx, s);
@@ -45414,6 +45449,7 @@ int JS_FlowResume(JSContext *ctx, JSValue *flow, JSValue *pres) {
         return result;
     }
     for (;;) {
+        g_flow_base_rt = ctx->rt;
         g_flow_base_gen = s;   /* this is the flow's BASE activation — a branch here may snapshot-fork; a branch
                                   in a nested async call (different gen_state) forks by replay instead */
         JSValue r = async_func_resume(ctx, s);
@@ -49591,6 +49627,7 @@ static bool js_async_function_resume_as_flow(JSContext *ctx, JSAsyncFunctionData
     JSAsyncFunctionState *prev_base = g_flow_base_gen;
     JSValue func_ret, jv;
 
+    g_flow_base_rt = ctx->rt;
     g_flow_base_gen = &s->func_state;
     func_ret = async_func_resume(ctx, &s->func_state);
     g_flow_base_gen = prev_base;
@@ -53252,7 +53289,7 @@ static __exception int json_next_token(JSParseState *s)
     int c;
     JSAtom atom;
 
-    (void)js_parse_count_bytes(s);
+    js_flow_frameless_charge(s->ctx->rt, js_parse_count_bytes(s));
     json_free_token(s, &s->token);
 
     p = s->last_ptr = s->buf_ptr;
@@ -84440,6 +84477,7 @@ static JSValue reaction_flow_step(JSContext *ctx, JSReactionFlow *rf)
         JSValue res;
 
         rf->fs.throw_flag = false;   /* a preempt-resume is a continuation, never a re-throw */
+        g_flow_base_rt = ctx->rt;
         g_flow_base_gen = &rf->fs;
         res = async_func_resume(ctx, &rf->fs);
         g_flow_base_gen = prev_base;
@@ -85632,20 +85670,16 @@ int JS_RunningSiteHash(JSContext *ctx, uint64_t *out)
 {
     JSRuntime *rt = ctx->rt;
     JSStackFrame *sf;
+    JSFunctionBytecode *b;
 
     DCHECK(out != NULL, "a call-site name was asked for with nowhere to put it — the answer is the whole of "
                         "what this walk produces, so a caller with no out-parameter is asking nothing");
-    for (sf = rt->current_stack_frame; sf != NULL; sf = sf->prev_frame) {
-        JSFunctionBytecode *b;
-        if (sf->is_call_root)
-            continue;
-        b = JS_GetFunctionBytecode(sf->cur_func);
-        if (b == NULL)
-            continue;
-        *out = orphan_hash_u32(orphan_hash_body(rt, b), js_frame_pc_pos(sf, b));
-        return 1;
-    }
-    return 0;
+    sf = js_page_frame(rt);
+    if (sf == NULL)
+        return 0;
+    b = JS_GetFunctionBytecode(sf->cur_func);
+    *out = orphan_hash_u32(orphan_hash_body(rt, b), js_frame_pc_pos(sf, b));
+    return 1;
 }
 
 int JS_RunningCallPathHash(JSContext *ctx, uint64_t *out)

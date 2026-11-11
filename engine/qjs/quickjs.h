@@ -2291,6 +2291,9 @@ JS_EXTERN uint64_t JS_FlowTakeRetiredWork(void);
 JS_EXTERN uint64_t JS_FlowParseBytesLife(void);
 /* The share of the retired work that the script tokenizer and the codegen passes charged, over the process. */
 JS_EXTERN uint64_t JS_FlowCompileWorkLife(void);
+/* The share of the retired work that ran with no page frame standing (JS_RunningSiteHash would answer 0), compiles
+   left out, over the thread: host work the host entered on its own, such as a rendering task's paint. */
+JS_EXTERN uint64_t JS_FlowFramelessWorkLife(void);
 /* Pattern bytes regexp compiles have consumed, and the rests a resting compile took, over the process (a report). */
 JS_EXTERN uint64_t JS_RegExpCompileBytesLife(void);
 JS_EXTERN uint64_t JS_RegExpCompileRestsLife(void);

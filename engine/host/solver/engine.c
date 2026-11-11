@@ -5582,6 +5582,7 @@ static int engine_reclaim_set(int v);
 static int64_t g_service_work;
 static int64_t g_step_open_work;
 static int64_t g_step_open_compile;   /* …and on quickjs's compile-work counter */
+static int64_t g_step_open_frameless; /* …and on its frameless-work counter */
 static int g_in_step;
 
 /* Which account an assembled arm takes: its parent's (a fork, flow_fork_inherit), or a new one at the frontier's
@@ -5626,15 +5627,19 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
     {
         uint64_t site;
         if (parent == flow_running() && JS_RunningSiteHash(ctx, &site)) {
-            /* The work this step ran from the site the parent is leaving is that site's, banked before the move;
-               the rest of the step is charged at its end to wherever the parent then stands. */
-            int64_t ran = g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
-                          - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile);
+            /* The work this step ran from the site the parent is leaving is that site's, banked before the move:
+               what it retired with a page frame standing, the compile and the frameless work left out, as the
+               step's closing charge reads the same three counters (flow_age_running). The rest of the step is
+               charged at its end to wherever the parent then stands. */
+            int64_t framed = g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
+                             - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile)
+                             - ((int64_t)JS_FlowFramelessWorkLife() - g_step_open_frameless);
 
-            DCHECK(g_in_step > 0 && ran >= parent->site_banked,
-                   "a fork moved the running member outside a step, or what the step has run so far, its compile "
-                   "work left out, fell below what it already banked — both read the step's two counters");
-            flow_site_bank_running(ran - parent->site_banked);
+            DCHECKF(g_in_step > 0 && framed >= parent->site_banked,
+                    "a fork moved the running member outside a step, or the work the step has retired under a page "
+                    "frame (%lld) fell below what it already banked (%lld) — both read the step's three counters",
+                    (long long)framed, (long long)parent->site_banked);
+            flow_site_bank_running(framed - parent->site_banked);
             flow_stand_at(parent, FLOW_SITE_CODE, site);
         }
     }
@@ -10041,12 +10046,12 @@ typedef struct {
    digest, a job's by JS_JobSiteHash over its callee. A member's site is thus the last decision it reached (the fork
    stands it there) or the entry of the unit it began since, never where a quantum ended: the quantum is the
    scheduler's rest granularity, and no ranking term may move with it.
+   A host rung or a step-machine job names no entry: its own work runs with no page frame and serves no site.
    Named residual. Not covered: the agent choice of a flow with more than one agent, and the rungs below
-   run-a-task, answer HOOK_UNDECIDED; and the host rungs (from link-connected to the spin, but for the checkpoint)
-   and a job whose callee is a step machine name no entry. Next diff builds: those hooks as due reads beside their
-   performs, and the code each host rung hands control to (a settled reply's head reaction, a timer task's
-   handler). Absence shows as: an `observedTerms` row at unit 0 whose next step runs new code without its
-   siteServed moving. */
+   run-a-task, answer HOOK_UNDECIDED; and page code such a unit hands control to (a settled reply's head reaction,
+   a timer task's handler, an animation frame callback) is served at the member's previous stand. Next diff builds:
+   those hooks as due reads beside their performs, and a stand at each callback's entry. Absence shows as: a
+   member's previous site served by steps that ran a callback's code and no code of that site's subtree. */
 static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry, int task_done) {
     FlowNextUnit nu = { .arm = NEXT_IDLE, .due = NEXT_DUE, .index = -1, .row = ROW_NONE };
     int stack_empty;
@@ -14005,8 +14010,10 @@ static int engine_sched_slice(int resume) {
                everything banked from here to the step's close is this flow's. */
             const int64_t step_work0 = g_service_work;
             const int64_t step_compile0 = (int64_t)JS_FlowCompileWorkLife();
+            const int64_t step_frameless0 = (int64_t)JS_FlowFramelessWorkLife();
             g_step_open_work = step_work0;
             g_step_open_compile = step_compile0;
+            g_step_open_frameless = step_frameless0;
             /* The same bracket in the other currency, opened on the clock's line so the two readings are of one
                span: the overrun test below compares `now - t_slice0`, and this counts the suspend points offered
                across that interval. From here rather than the turn's `t0`, because the pick, switch and delta swap
@@ -14296,7 +14303,8 @@ static int engine_sched_slice(int resume) {
                    "or `step_us` was narrowed");
             g_step_us += now - t0;
             g_step_work += step_work;
-            flow_age_running(step_work, (int64_t)JS_FlowCompileWorkLife() - step_compile0);
+            flow_age_running(step_work, (int64_t)JS_FlowCompileWorkLife() - step_compile0,
+                             (int64_t)JS_FlowFramelessWorkLife() - step_frameless0);
             /* The service just charged was the site the flow stood at while it ran. A member about to begin a unit
                stands at that unit's entry (flow_next_unit: the program or task the ladder starts next, the head of a
                checkpoint); one in the middle of a unit keeps its last decision or that unit's entry. */
