@@ -562,8 +562,8 @@ function _provenanceOf(opts) {
 /* The zone's record of the document holding this request (lib/document-record.js): its reach grade, drive
    mark and witness mark, written once when the zone provisioned it and never by the engine. It is a floor under
    the engine's per-request words: the `doc-reach` row reads its grade, a `page` request from a driven document
-   reads `actor=tool`, and one from a pinned document reads `witness=pinned`, whatever the engine's record
-   states. A CHECK for the provenance reason: an absent record would make the observed arm's conjunction
+   reads `actor=drive`, and one from a pinned document reads `witness=pinned`, whatever the engine's record
+   states. A CHECK for the provenance reason: an absent record would make every default arm's conjunction
    unsatisfiable and let a driven or pinned document's request read as the page's own. */
 function _docOf(opts) {
   CHECK(docRecordIs(opts.doc),
@@ -811,39 +811,34 @@ function _urlAuthorityMarker(u) {
   if ((u.pathname + u.search).indexOf("eyJ") >= 0) return "jws";
   return null;
 }
-/* The registry: one declaration, read by the firing walk and by the surface. The order is the refusal's
-   order: the refusal names the first gating signal whose value the origin does not permit, so `destination`
-   comes first and the coarsest sentence ("this origin does not permit data requests") is the one a person
-   reads. `gates` is asserted rather than styled: a non-gating signal has exactly one value at this
-   chokepoint, and `_signalRegistryCheck` aborts host startup if one grows a second. A non-gating signal is
-   still shown, because it is a fact a person is entitled to see before permitting anything. */
+/* The registry: one declaration, read by the firing walk and by the surface. The order is the surface's, and
+   the refusal's only among rows the deciding rule does not name (`_firingDecision`). `gates` is asserted
+   rather than styled: a non-gating signal has exactly one value at this chokepoint, and
+   `_signalRegistryCheck` aborts host startup if one grows a second. A non-gating signal is still shown,
+   because it is a fact a person is entitled to see before permitting anything. */
 var _SIGNALS = [
-  /* Fetch §2.2.5 "Requests"' destination, read as the distinctions the policy turns on, each by its own
-     predicate over the one string: `_isScriptLike` answers CORB's "is this code", and the others answer whose
-     act the request is. A program load and a subresource load are the page loading itself (the app's own
-     bytes, served identically to every visitor). Every other request is `value`, a navigation included: by
-     the project owner's decision a new navigable, like a postMessage, is judged by the same rows as a
-     `fetch()`, since each reaches another document's state.
+  /* Fetch §2.2.5 "Requests"' destination, as three classes, each by its own predicate over the one string:
+     `_isScriptLike` answers CORB's "is this code", a document's other subresources are `subresource`, and
+     every other request is `value`, a navigation included. No default arm reads it: whose act a request is
+     does not depend on what its reply becomes. It is a row a person permits at a widened origin.
      The cascade order is load-bearing because §2.2.5's sets overlap: `script`, `audioworklet` and
      `paintworklet` are script-like and subresources, while `serviceworker`, `sharedworker` and `worker` are
-     script-like only. Asking the CORB set first keeps all six reading `program`; the other order would leave
-     the last three in no arm. */
+     script-like only. Asking the CORB set first keeps all six reading `program`. */
   { name: "destination", gates: true, certainty: "stated",
     values: ["program", "subresource", "value"],
     of: function (f) {
       if (_isScriptLike(f.destination)) return "program";
       return _isDocumentSubresource(f.destination) ? "subresource" : "value";
     } },
-  /* Whose act this request is (see `_actorOf`). Second, so after "this origin does not permit data requests"
-     a person reads "and this is a request this tool composed rather than one your page made". `certain`, the
-     one gating row that can say so: it is a literal in trusted-zone source at every asker, while the grades
-     beside it are words the attacker-controlled engine composes. A `page` request the engine states it minted
-     inside a flow this tool drives (`driven`: a drive of uncalled code or a candidate run, see
-     `_drivenOf`), or made from a document this zone recorded as reached by one (`_docOf`), reads `tool`:
-     either word can only narrow the row, never widen it. */
-  { name: "actor", gates: true, certainty: "certain", values: _ACTOR_WORDS,
+  /* Whose act this request is: the caller's word (see `_actorOf`), with a `page` request the engine states it
+     minted inside a flow this tool drives (`driven`: a drive of uncalled code or a candidate run, see
+     `_drivenOf`), or made from a document this zone recorded as reached by one (`_docOf`), reading `drive`. The
+     page's code composed such a request and this tool chose to run that code, so it is neither the page's own
+     act nor a request this zone composed. `certain`: the caller's word is a literal in trusted-zone source,
+     and the engine's mark can only move `page` to `drive`. */
+  { name: "actor", gates: true, certainty: "certain", values: ["page", "tool", "drive"],
     of: function (f) {
-      return f.actor === "page" && (f.driven === "driven" || f.doc.driven === "driven") ? "tool" : f.actor;
+      return f.actor === "page" && (f.driven === "driven" || f.doc.driven === "driven") ? "drive" : f.actor;
     } },
   /* The request's provenance (see `_provenanceOf`). `stated`: the engine composes it at the park from the
      park's kind and the flow's `path_forced`, and the CHECK catches only a word outside the three. */
@@ -951,16 +946,22 @@ function _signalRegistryCheck() {
   /* The default arms against the same registry. An arm naming an undeclared signal or value compares against
      `undefined` and is false for ever, silently revoking what it permitted (for the page's own `fetch()`,
      every waiting flow stays parked with no crash). A CHECK, because release cannot proceed correctly through
-     an arm this build shipped broken. */
+     an arm this build shipped broken. Exactly one arm is the rule a refusal is read against. */
+  CHECK(_DEFAULT_ARMS.filter(function (a) { return a.decides === true; }).length === 1,
+        "the default egress arms name no deciding rule, or more than one — a refusal names the fact of that " +
+        "one rule a request failed, so with none it names a row of an empty table and with two it names " +
+        "whichever was written first");
   for (i = 0; i < _DEFAULT_ARMS.length; i++) {
     CHECK(Array.isArray(_DEFAULT_ARMS[i].when) && _DEFAULT_ARMS[i].when.length >= 1,
           "a default egress arm states no condition — an arm is a permission matched on the conjunction it " +
           "names, and one naming none would fire for EVERY request at every origin, which is this file's " +
           "whole decision deleted by an empty array");
     _DEFAULT_ARMS[i].when.forEach(function (c) {
-      var why = safeFetchSignalUsable(c.signal, c.value);
+      var why = !Array.isArray(c.values) || c.values.length < 1 ? "no-values" : c.values.map(function (value) {
+        return safeFetchSignalUsable(c.signal, value);
+      }).find(function (w) { return w !== null; }) || null;
       CHECK(why === null,
-            "a default egress arm names `" + c.signal + "=" + c.value + "`, which this file's registry " +
+            "a default egress arm names `" + c.signal + "=" + String(c.values) + "`, which this file's registry " +
             "answers `" + why + "` — an arm is matched by comparing the signal's computed value, so an " +
             "unknown name compares against `undefined` and an unknown value against nothing: the arm is " +
             "false for every request for ever, and what it was permitting is refused with no crash, no " +
@@ -1034,68 +1035,45 @@ function _signalVector(facts) {
   }
   return v;
 }
-/* What fires without anybody saying so, as data the surface shows. Every arm is the page loading itself, as a
-   browser would: its program loads (scripts, module imports, lazy chunks), its other subresources, the
-   requests of a document reached by observation, the page's own unpinned data requests, and child navigables
-   its markup or code names. No probe, no discovery and no tool-composed data fetch fires until the origin is
-   deliberately widened. The discriminator for every arm is whose act the request is, not what its reply
-   becomes.
-   The two mistakes are not the same size. Refusing the page's own request silently parks every flow waiting
-   on its reply, with no crash and an empty report; permitting it relays a request the person's own browser
-   made anyway. Each arm is one entry to delete if the intended reading is narrower, and the refusal that
-   follows names the signal. These are permissions only, so nothing here narrows the table. */
+/* What leaves without anybody saying so, as data the surface shows. One rule decides for every kind of act (a
+   value request, a navigation, a program or subresource load, a post to another document): the page's own act
+   on its own unforced run. The destination is no part of it: a lazy chunk a forced branch asked for is a
+   request the page did not make, and its reply is evidence about a request no client sends. The other two
+   arms are no second rule: one reaches no other party, and one is the load a person asked this zone for.
+   A refused request is still derived in full and recorded, and is sent once the person widens its origin.
+   These are permissions only, so nothing here narrows the table. A condition holds when the signal's value is
+   one of `values`; `decides` marks the rule a refusal is read against (`_firingDecision`). */
 var _DEFAULT_ARMS = [
   /* A request to the person's own attacker site, which they configured as a server they run: it reaches no
      other party's state, so it fires at every other row's value, a live verify's attacker page among them. */
-  { when: [{ signal: "reaches", value: "attacker-site" }],
+  { when: [{ signal: "reaches", values: ["attacker-site"] }],
     why: "the request reaches the attacker site the person configured as their own server, and no other " +
          "party's state" },
-  /* Program loads are destination-keyed alone. A forced segment in a program's address does not move it
-     across the line: `import("/chunks/" + region + ".js")` with `region` pinned by forcing is still the app's
-     own code, served to anyone who asks, and is the gated surface this product exists to reach. So the
-     `witness` row cannot narrow this arm. */
-  { when: [{ signal: "destination", value: "program" }],
-    why: "a script, a module import or a lazy chunk is the page loading itself — the app's own code, served " +
-         "byte-identically to every visitor, revealing nothing about this person" },
-  /* The rest of what a document loads in order to be itself: a subresource the page's markup names or its
-     running code computes is fetched as a browser fetches it. Read by CORB's question alone a stylesheet would
-     be refused and the page would render with UA defaults, which is a different document. Destination-keyed
-     alone for the program arm's reason. A conjunction with `provenance=observed` would be inert, since no
-     subresource park is graded `observed` (`pending_prov_compose` grades only a parser-inserted `<script>`
-     so). Reach: every §2.2.5 subresource destination outside the script-like set, except the empty string. */
-  { when: [{ signal: "destination", value: "subresource" }],
-    why: "a stylesheet, an image, a font or any other subresource the document's own markup or its own " +
-         "running code names is the page loading itself — the same request the person's own browser would " +
-         "have made, for bytes served byte-identically to every visitor" },
-  /* The requests a real load of an observed document makes. It is a conjunction because `provenance=observed`
-     alone would also admit every request made inside a document this tool reached by a derived or forced
-     route, which the engine correctly grades `observed`; `doc-reach` is that second population's row. Today
-     only a parser-inserted `<script>` request is graded `observed`, so for page requests this arm overlaps
-     the program arm. It is also what fires the ambient seed's document load, which states `observed` for
-     both; deleting it would refuse every document this tool opens. */
-  { when: [{ signal: "provenance", value: "observed" }, { signal: "doc-reach", value: "observed" }],
-    why: "the page made exactly this request, in a document this browser actually navigated to — so " +
-         "relaying it is this browser being a browser" },
-  /* The analysed page's own requests, by the project owner's decision: a `fetch()`, an XHR or a navigation
-     whose address carries no value this path pinned fires at every origin, while anything a fork pinned, and
-     every probe, is refused. A navigation is not special-cased: a new navigable, like a postMessage, reaches
-     another document's state exactly as a data request reaches a server's. Each conjunct carries one clause:
-     `witness: unpinned` refuses an address a fork pinned and `actor: page` refuses the probe; removing either
-     admits a population the other names. It is keyed on `pinned`, not `forced`: a forced-but-unpinned path
-     determined no value, so its address holds no witness the engine chose, and keying on `forced` would
-     refuse the boot of any SPA whose boot flow forks.
-     Reach: the empty-string destination (the page's own `fetch()` off the pending line and its XHR off the
-     `xhr.send` record) and §2.2.5's navigation destinations, of which the engine states only `document`
-     (HTML §7.4.5 "Populating a session history entry"). A data request is uncredentialed; a navigation
-     carries the session only same-origin (`navigationCarriesSession`), and the deny list applies to it.
-     Never write `destination=value` alone: it passes every assert in this file and permits every such
-     request at every origin. */
-  { when: [{ signal: "destination", value: "value" },
-           { signal: "witness", value: "unpinned" },
-           { signal: "actor", value: "page" }],
-    why: "the analysed page's own code made this request or navigation and composed its address out of " +
-         "nothing this engine pinned — so what fires is the app asking for its own state, not a probe this " +
-         "tool built" }
+  /* The load a person asked for: the seed, and this zone's repeat of a request the person's browser was
+     observed making, each `actor=tool` by a literal at its caller, in a document reached the same way. It
+     roots a session: without it nothing is loaded. A drive's request reads `drive` and a page's `page`, so
+     this arm admits neither. */
+  { when: [{ signal: "actor", values: ["tool"] },
+           { signal: "provenance", values: ["observed"] },
+           { signal: "doc-reach", values: ["observed"] }],
+    why: "the person named this address, or their own browser made exactly this request, in a document it " +
+         "navigated to — so loading it is this browser being a browser" },
+  /* The rule. Each conjunct refuses one population: `provenance` a request on a path that stood on a
+     contradicted arm; `doc-reach` every request of a document such a path navigated to, whose own paths the
+     engine grades from that document's start; `actor` a probe this zone composed and a request a drive
+     minted; `witness` an address resting on a value the engine pinned, which a `derived` path can hold.
+     The order is the one a refusal names a failed condition in.
+     `derived` is the page's code computing from real inputs, and a document the unforced run navigated to
+     is reached `derived`, so both words belong to the unforced run. Never drop a conjunct: each one alone
+     passes every assert in this file. */
+  { decides: true,
+    when: [{ signal: "provenance", values: ["observed", "derived"] },
+           { signal: "doc-reach", values: ["observed", "derived"] },
+           { signal: "actor", values: ["page"] },
+           { signal: "witness", values: ["unpinned"] }],
+    why: "the analysed page's own code made this request on its own unforced run, from a document that run " +
+         "reached, with an address resting on nothing this engine chose — what a browser loading the page " +
+         "sends" }
 ];
 var _EXPLORED = Object.create(null);
 /* The per-site settings the same table holds beside the signals, keyed by a site's serialization (HTML
@@ -1180,7 +1158,7 @@ function safeFetchEgressStating(promise) {
    surface that explained it in its own words would be a second copy of the list. */
 function safeFetchDefaultArms() {
   return _DEFAULT_ARMS.map(function (a) {
-    return { when: a.when.map(function (c) { return { signal: c.signal, value: c.value }; }), why: a.why };
+    return { when: a.when.map(function (c) { return { signal: c.signal, values: c.values.slice() }; }), why: a.why };
   });
 }
 /* The host states the table once, before anything may ask it: restored grants, or the empty table as the
@@ -1386,17 +1364,18 @@ function safeFetchPermitted(origin) {
   }
   return out;
 }
-/* The firing decision, answering "signal=value" for the first gating signal this origin does not permit, or
-   null to fire. A default arm whose every condition matches fires first; otherwise every gating signal's
-   value must be permitted at the request URL's origin.
+/* The firing decision, answering "signal=value" for the fact that refused, or null to fire. A default arm
+   whose every condition holds fires first; otherwise every gating signal's value must be permitted at the
+   request URL's origin.
    It answers a signal and value, never a score, so a person reading a frontier that will not drain is told
-   which fact held it; the order is the registry's, not a ranking of harm. A permission changes which act may
-   be spent, never what a reply is worth: `forced` still marks a reply as evidence about a request no client
-   makes. Wherever this refuses, the address is still derived in full and reported. */
-/* Whether a default arm admits the vector `v`: the page loading itself, as a browser would, and so the page's
-   act rather than this tool's. */
+   which fact held it. A permission changes which act may be spent, never what a reply is worth: `forced`
+   still marks a reply as evidence about a request no client makes. Wherever this refuses, the address is
+   still derived in full and reported. */
+/* The first default arm that admits the vector `v`, or -1. */
 function _defaultArmAdmitting(v) {
-  return _DEFAULT_ARMS.findIndex(function (a) { return a.when.every(function (c) { return v[c.signal] === c.value; }); });
+  return _DEFAULT_ARMS.findIndex(function (a) {
+    return a.when.every(function (c) { return c.values.indexOf(v[c.signal]) >= 0; });
+  });
 }
 function _firingRefusal(facts) {
   return _firingDecision(facts).refusal;
@@ -1406,7 +1385,7 @@ function _firingRefusal(facts) {
    for a request that fires only because a person widened its origin (this tool's act: a forked value, a probe,
    a tool-composed request), and null beside a refusal. */
 function _firingDecision(facts) {
-  var v, i, s, arm;
+  var v, i, s, arm, unpermitted = [], failed;
   v = _signalVector(facts);
   /* No pairing of `provenance` with `doc-reach` is asserted. `observed` with a `forced` reach is the tempting
      one to forbid, and it is exactly a page this tool chose to open making its own `fetch()`, which the
@@ -1434,9 +1413,19 @@ function _firingDecision(facts) {
     if (!s.gates) continue;
     if (_EXPLORED[facts.url.origin] && _EXPLORED[facts.url.origin][s.name] &&
         _EXPLORED[facts.url.origin][s.name][v[s.name]] === true) continue;
-    return { vector: v, admittedBy: null, refusal: s.name + "=" + v[s.name] };
+    unpermitted.push(s.name);
   }
-  return { vector: v, admittedBy: { kind: "widened", origin: facts.url.origin }, refusal: null };
+  if (unpermitted.length === 0)
+    return { vector: v, admittedBy: { kind: "widened", origin: facts.url.origin }, refusal: null };
+  /* The refusal names the fact that decided it: the first condition of the deciding rule this request fails
+     whose value the origin does not permit either, so a forced request at an origin nobody widened reads
+     `provenance=forced`. Where the person permitted every such fact, a row they have not answered holds the
+     request, and the first of those in registry order is named. */
+  failed = _DEFAULT_ARMS.find(function (a) { return a.decides === true; }).when.find(function (c) {
+    return c.values.indexOf(v[c.signal]) < 0 && unpermitted.indexOf(c.signal) >= 0;
+  });
+  s = failed === undefined ? unpermitted[0] : failed.signal;
+  return { vector: v, admittedBy: null, refusal: s + "=" + v[s] };
 }
 /* The zone's count of the entries its reply records carried, keyed "<how> <what admitted it>": `default` or
    `widened` for a judged request, `none` for a refused one, `cache` for a hop the HTTP cache answered. */

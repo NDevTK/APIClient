@@ -2216,8 +2216,8 @@ async function _frontierRederive(e, held) {
        history entry: "destination `document` … credentials mode `include`"). `credentialed` is this zone's
        willingness to spend the session; safe-fetch.js's `_credentialedOf` composes the two and requires a mode
        wherever the session pays. */
-    /* `actor: "tool"`: no page asked for this load; the frontier did. It changes no outcome here, since the
-       witness mark is `unstated`. */
+    /* `actor: "tool"`: no page asked for this load; the frontier did. safe-fetch.js's seed arm admits it only
+       where the entry's own words are `observed` for the request and for its document. */
     /* `mode: "navigate"`: the navigate algorithm's own request (Fetch §2.2.5 Requests). */
     try { r = await self.safeFetch(e.sourceUrl, { pageOrigin: e.origin,
                                                   destination: "document", mode: "navigate",

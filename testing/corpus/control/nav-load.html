@@ -183,13 +183,13 @@
      THE GATE IS A TRUTHINESS TEST AND NOT AN EQUALITY, AND THAT IS LOAD-BEARING RATHER THAN INCIDENTAL.
      `flow_mark_pinned_value` is reached only under decide.c's `eq_holds` — `(op == OPCMP_EQ && arm == 1) ||
      (op == OPCMP_NE && arm == 0)` — so a truthiness fork leaves `path_pinned` clear and the witness mark
-     `unpinned`. That is exactly what lets the fetch below go over the wire: asked of the chokepoint,
-     `destination=value actor=page provenance=forced witness=unpinned` FIRES, while the same vector at
-     `witness=pinned` is REFUSED at `destination=value`. Written as `__FLAGS.role === "admin"` this rung would
-     lose its own reachability witness and its zero would be unreadable. */
+     `unpinned`. The fetch below does not go over the wire at an origin nobody widened: asked of the chokepoint,
+     `actor=page provenance=forced witness=unpinned` is refused at `provenance=forced`, and at `witness=pinned`
+     it is refused at the same row. Its witness is the engine's record of the request in the result document
+     and the zone's `@EGRESS` line for it, never the server's log. */
   if (window.__FLAGS && window.__FLAGS.admin) {
-    /* RUNG 3's REACHABILITY WITNESS, and it is a `fetch` rather than anything cleverer because it needs no
-       orphan drive and no frame: it fires the instant the forced arm runs. A CONSTANT address. */
+    /* Rung 3's reachability witness, a `fetch` because it needs no orphan drive and no frame: it is recorded
+       the instant the forced arm runs. A constant address. */
     fetch('/api/navload-forced-reached');
     /* …AND THE FORCED CHILD NAVIGABLE ITSELF. The element is created and inserted with no `src`, so §4.8.5
        processes its attributes and finds nothing to fetch; the ASSIGNMENT is an attribute change, which runs

@@ -93,8 +93,9 @@ const SITES = [
     facts: { destination: 'document', actor: 'page', driven: 'undriven', pinned: 'pinned',
              provenance: 'derived',
              doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: true, headers: null } },
-  { label: '…the same, on a FORCED path that pinned nothing (FIRES — judged like a fetch, whose bound is the witness)',
-    want: 'FIRES',
+  /* The project owner's decision of 2026-11-11: only the page's own unforced run leaves an unwidened origin. */
+  { label: '…the same, on a FORCED path that pinned nothing (must REFUSE — the provenance conjunct)',
+    want: 'REFUSED',
     grep: 'as above; the provenance word is engine_provenance_of_running_path\'s',
     facts: { destination: 'document', actor: 'page', driven: 'undriven', pinned: 'unpinned',
              provenance: 'forced',
@@ -149,9 +150,9 @@ const CONTROLS = [
              doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: false, headers: null } },
   { label: 'CONTROL must FIRE: the page loading its own code',
     want: 'FIRES',
-    facts: { destination: 'script', actor: 'page', driven: 'undriven', pinned: 'unstated',
-             provenance: 'forced',
-             doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: true, headers: null } },
+    facts: { destination: 'script', actor: 'page', driven: 'undriven', pinned: 'unpinned',
+             provenance: 'derived',
+             doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: false, headers: null } },
   /* THE ZONE'S DOCUMENT RECORD IS A FLOOR UNDER THE ENGINE'S WORDS (lib/document-record.js). The page's own
      unpinned `fetch()` with the engine stating `undriven` and `unpinned`, from three documents: one the zone
      recorded with no mark (the control, which fires), one it recorded as reached by a drive, and one it
@@ -184,15 +185,16 @@ const URL_UNDER_TEST = 'https://example.test/x';
    document's record, and its marks are taken from field 3 as engine/trusted.mjs and bridge.js take them, then
    handed to safeFetchCrossDocumentRefusal. It is scored against the fetch that states the same signals at the
    receiving origin: a page `fetch()` from the same record, with no cookie jar and no header list. Every row
-   must agree with its fetch. `differs` is the armed control: the act beside a fetch whose destination differs,
-   which must disagree, so agreement below is not a comparison that cannot fail. */
+   must agree with its fetch. `differs` is the armed control: the act beside a fetch whose actor differs,
+   which must disagree, so agreement below is not a comparison that cannot fail. The destination cannot arm it:
+   the default reads none, so the control's fetch differs in its actor. */
 const POST_ORIGIN = 'https://example.test';
 const W = 'root:1:1';
 const POSTS = [
   { label: 'post, derived path, nothing pinned (fires, as the page fetch() does)',
     record: `windowproxy.post\tpeer\t${W}\tderived,undriven,unpinned\t*\teA==`,
     doc: ['observed', 'undriven', 'unpinned', 'none'] },
-  { label: 'post, forced path, nothing pinned (fires: the bound is the witness)',
+  { label: 'post, forced path, nothing pinned (refused: the provenance conjunct)',
     record: `windowproxy.post\tpeer\t${W}\tforced,undriven,unpinned\t*\teA==`,
     doc: ['observed', 'undriven', 'unpinned', 'none'] },
   { label: 'post on a path that PINNED a witness (refused: the witness conjunct)',
@@ -216,12 +218,12 @@ const POSTS = [
   { label: 'object.set from a document the zone recorded as DRIVEN (refused: the record\'s actor)',
     record: `object.set\tpeer\t${W}\tderived,undriven,unpinned\t-\t7\tk\tv`,
     doc: ['derived', 'driven', 'unpinned', 'none'] },
-  { label: 'CONTROL: the pinned post beside a program load, which must DISAGREE',
+  { label: 'CONTROL: the pinned post beside a request this tool composed, which must DISAGREE',
     record: `windowproxy.post\tpeer\t${W}\tderived,undriven,pinned\t*\teA==`,
-    doc: ['observed', 'undriven', 'unpinned', 'none'], differs: 'script' },
-  { label: 'CONTROL: the pinned windowproxy.get beside a program load, which must DISAGREE',
+    doc: ['observed', 'undriven', 'unpinned', 'none'], differs: 'tool' },
+  { label: 'CONTROL: the pinned windowproxy.get beside a request this tool composed, which must DISAGREE',
     record: `windowproxy.get\tpeer\t${W}\tderived,undriven,pinned\t-\tlength`,
-    doc: ['observed', 'undriven', 'unpinned', 'none'], differs: 'script' },
+    doc: ['observed', 'undriven', 'unpinned', 'none'], differs: 'tool' },
 ];
 /* The sending document a record's world names, read as both hosts read it: the head's name, before its last two
    colons. A root name holding a colon is the case the last-two rule exists for. */
@@ -235,8 +237,8 @@ function askPost(Z, row) {
   const m = marks.split(',');
   const doc = Z.docRecord(...row.doc, 'public');
   const post = Z.safeFetchCrossDocumentRefusal({ targetOrigin: POST_ORIGIN, marks, doc });
-  const fetch = Z.safeFetchFiringRefusal({ url: POST_ORIGIN + '/', destination: row.differs || '', provenance: m[0],
-                                           pinned: m[2], doc, actor: 'page', driven: m[1], credentialed: false,
+  const fetch = Z.safeFetchFiringRefusal({ url: POST_ORIGIN + '/', destination: '', provenance: m[0],
+                                           pinned: m[2], doc, actor: row.differs || 'page', driven: m[1], credentialed: false,
                                            headers: null });
   return { post, fetch };
 }
@@ -264,7 +266,7 @@ function main() {
   const arms = Z.safeFetchDefaultArms();
   console.log('DEFAULT ARMS, read off safeFetchDefaultArms() and not copied:');
   arms.forEach((a, i) => console.log('  [' + i + '] ' +
-    a.when.map((c) => c.signal + '=' + c.value).join(' AND ')));
+    a.when.map((c) => c.signal + '=' + c.values.join('|')).join(' AND ')));
   console.log('');
 
   let bad = 0;

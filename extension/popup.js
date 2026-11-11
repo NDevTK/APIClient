@@ -1222,7 +1222,7 @@ async function renderEgressPolicy(act) {
        population fires which does not — the same "one row, two populations" the arm list itself was changed
        to stop. `join(" and ")` is the sentence, and an arm of one condition reads exactly as it did. */
       joinNodes(r.defaults.map((d) => [
-        joinNodes(d.when.map((c) => domElement("code", {}, [c.signal + "=" + c.value])), " and "),
+        joinNodes(d.when.map((c) => domElement("code", {}, [c.signal + "=" + c.values.join("|")])), " and "),
         " (" + d.why + ")",
       ]), "; "),
     ]),

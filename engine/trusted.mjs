@@ -589,13 +589,9 @@ async function main() {
      RESTATEMENT. No document issued this request — a person typed the address on this process's command
      line — so the context it is made from is the person's own act, which is the strongest grade there is and
      is what every document this run reaches is composed against. */
-  /* AND THE ACT IS THIS TOOL'S AND NOT ANY PAGE'S, WHICH IS A DELIBERATE ANSWER AND NOT A DEFAULT. A person
-     named this address on a command line, which is the strongest authorization there is — and it is a fact on
-     a DIFFERENT axis, carried where that axis asks it. This row asks who COMPOSED the request, and no analysed
-     document exists yet when a seed is fetched, so `page` would be false. It changes no outcome: the
-     observed/observed arm already admits this load, and the `actor` arm requires `page`. See
-     safe-fetch.js's `_actorOf`, which records that a value chosen for correctness rather than for effect is
-     exactly the kind nothing tests. */
+  /* The act is this zone's and no page's: a person named this address on a command line, and no analysed
+     document exists yet when a seed is fetched. `actor: 'tool'` with `observed` for the request and for the
+     document is what safe-fetch.js's seed arm admits; the page rule requires `page`. */
   const seed = await ZONE.safeFetch(target, { destination: 'document', mode: 'navigate',
                                               provenance: 'observed', pinned: 'unpinned',
                                               actor: 'tool', driven: 'unstated',
