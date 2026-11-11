@@ -33,6 +33,7 @@
 #include "core/realm.h"
 #include "core/timing/hr_time.h"
 #include "solver/concolic.h"   /* §8.1.7.3's frameTimestamp is a MOMENT, and a moment can be unknown */
+#include "core/idl_member_types.h"
 
 /* ---- the shapes ------------------------------------------------------------------------------------------
  *
@@ -775,11 +776,13 @@ static bool io_compute_visibility(JSContext *ctx, JSValueConst state)
    only place in this component where a geometry becomes a JS value. */
 static JSValue io_rect_value(JSContext *rctx, IoRect r)
 {
+    unsigned types = idl_member_types("DOMRectReadOnly", "x");   /* its four members share one type */
+
     return dom_rect_readonly_new_values(rctx,
-                                        viewport_env_derived(r.x, JS_NewFloat64(rctx, r.x.px)),
-                                        viewport_env_derived(r.y, JS_NewFloat64(rctx, r.y.px)),
-                                        viewport_env_derived(r.w, JS_NewFloat64(rctx, r.w.px)),
-                                        viewport_env_derived(r.h, JS_NewFloat64(rctx, r.h.px)));
+                                        viewport_env_derived(r.x, types, JS_NewFloat64(rctx, r.x.px)),
+                                        viewport_env_derived(r.y, types, JS_NewFloat64(rctx, r.y.px)),
+                                        viewport_env_derived(r.w, types, JS_NewFloat64(rctx, r.w.px)),
+                                        viewport_env_derived(r.h, types, JS_NewFloat64(rctx, r.h.px)));
 }
 
 /* §3.2.6 "QUEUE AN IntersectionObserverEntry":
@@ -815,7 +818,10 @@ static void io_queue_entry(JSContext *ctx, JSValueConst observer, JSValueConst s
                                             io_rect_value(rctx, root), io_rect_value(rctx, target_rect),
                                             io_rect_value(rctx, inter),
                                             JS_NewBool(rctx, is_intersecting), JS_NewBool(rctx, is_visible),
-                                            viewport_env_derived(ratio, JS_NewFloat64(rctx, ratio.px)),
+                                            viewport_env_derived(ratio,
+                                                                 idl_member_types("IntersectionObserverEntry",
+                                                                                  "intersectionRatio"),
+                                                                 JS_NewFloat64(rctx, ratio.px)),
                                             target);
     io_push(ctx, entries, entry);                                         /* step 2 */
     JS_FreeValue(ctx, entries);

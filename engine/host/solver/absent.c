@@ -810,7 +810,7 @@ JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JS
        an emitted row whose address rests on a member of a record no element of the served markup spells,
        reading as a class that says a parse of the markup could have stated it. */
     absent_declare_precondition(src);
-    r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_SERVED, JS_DupValue(ctx, value));
+    r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_SERVED, CONCOLIC_TYF_ALL, JS_DupValue(ctx, value));
     /* The record holds the member and its value is `undefined`: those are its bytes, not an absence. */
     if (JS_IsUndefined(value) && concolic_is(r)) concolic_hold_undefined(r);
 done:
@@ -878,7 +878,7 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name, JSConcol
     /* The world's: this is the miss arm, so the served document states nothing about the member, and no byte
        this run received holds what a server would inject. An address composed from it reads `unknown`. */
     absent_declare_precondition(src);
-    r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
+    r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, CONCOLIC_TYF_ALL, JS_UNDEFINED);
     /* The example is the absence, so an arm against it takes the member as present (decide.c's assumption). */
     if (concolic_is(r)) concolic_source_precondition_absent(ABSENT_COMPONENT, src);
     /* What this session itself reads here. A property read that misses answers undefined (§10.1.8.1

@@ -152,7 +152,8 @@ JSValue data_block_wrap_text(JSContext *ctx, lxb_dom_element_t *el, JSValue text
        it FORKS instead of being decided for the whole run. A parse of those bytes states this value, so
        §What-the-tool-produces' "it exists only at run time" is FALSE of an address composed from it — which
        is why this is a member of its own and not the world's. */
-    r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_SERVED, text);   /* consumes `text` as the example */
+    /* Child text content is a String; `text` is consumed as the example. */
+    r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_SERVED, CONCOLIC_TYF_STRING, text);
     free(shape);
     free(src);
     return r;

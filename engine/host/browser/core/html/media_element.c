@@ -90,6 +90,7 @@
 #include "core/realm.h"
 #include "solver/compose.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include "solver/decide.h"
 
 /* §4.8.11.4's network states and §4.8.11.7's ready states, as the IDL's own constants. */
@@ -387,7 +388,8 @@ static JSValue media_resource_value(JSContext *ctx, JSValueConst st)
     JSValue v;
 
     media_source_id(ctx, st, &shape, &src);
-    v = concolic_source_wrap(ctx, shape, src, JS_UNDEFINED);
+    /* The resource's bytes, which no declaration types: every type, with no example. */
+    v = concolic_source_wrap(ctx, shape, src, CONCOLIC_TYF_ALL, JS_UNDEFINED);
     free(shape);
     free(src);
     return v;
@@ -1865,7 +1867,7 @@ static JSValue js_media_duration(JSContext *ctx, JSValueConst this_val, int magi
         char *shape, *src;
 
         media_source_id(ctx, st, &shape, &src);
-        out = concolic_source_wrap(ctx, shape, src, out);
+        out = concolic_source_wrap(ctx, shape, src, idl_member_types("HTMLMediaElement", "duration"), out);
         free(shape);
         free(src);
     }

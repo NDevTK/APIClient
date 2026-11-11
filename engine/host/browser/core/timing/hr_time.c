@@ -412,7 +412,7 @@ JSValue hr_time_wall_now(JSContext *ctx)
         elapsed = fl;
     }
     start = concolic_is_exploring()
-          ? concolic_new(ctx, "{Date.now()}", "Date.now()", CONCOLIC_WHOSE_WORLD,
+          ? concolic_new(ctx, "{Date.now()}", "Date.now()", CONCOLIC_WHOSE_WORLD, CONCOLIC_TYF_NUMBER,
                          JS_NewFloat64(ctx, g_session_wall_ms))
           : JS_NewFloat64(ctx, g_session_wall_ms);
     if (!concolic_is(start) && !concolic_is(elapsed)) {

@@ -13,6 +13,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/permissions/permission_store.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 
 /* §3.1's THREE STATES. The strings are the IDL's, and they are the values a page compares against — a bundle
    writes `state === "granted"` and nothing else, so the string IS the value and the enum is only how this
@@ -737,7 +738,8 @@ void permission_store_init(JSContext *ctx)
         DCHECK(strlen(PF_NAME[i]) + 24 < sizeof(shape), "a powerful feature name longer than any in the registry");
         snprintf(shape, sizeof(shape), "{permission %s}", PF_NAME[i]);
         snprintf(src, sizeof(src), "navigator.permissions.%s", PF_NAME[i]);
-        v = concolic_source_wrap(ctx, shape, src, JS_NewString(ctx, permission_state_str(PF_DEFAULT[i])));
+        v = concolic_source_wrap(ctx, shape, src, idl_member_types("PermissionStatus", "state"),
+                                 JS_NewString(ctx, permission_state_str(PF_DEFAULT[i])));
         CHECK(!JS_IsException(v), "a powerful feature's permission state source could not be minted");
         JS_SetPropertyUint32(ctx, g_sources, (uint32_t)i, v);
     }

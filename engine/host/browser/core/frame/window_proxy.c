@@ -29,6 +29,7 @@
 #include "core/frame/window_proxy.h"
 #include "solver/cow.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include "solver/world.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
@@ -1768,7 +1769,8 @@ JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy)
        often an attacker's, and nothing in this document's served bytes states it. It is minted through the one
        source seam, which records the read on the flow's history. */
     if (window_proxy_name_is_source(ctx, proxy))
-        return concolic_source_wrap(ctx, WINDOW_NAME_SHAPE, WINDOW_NAME_SRC, JS_NewStringLen(ctx, "", 0));
+        return concolic_source_wrap(ctx, WINDOW_NAME_SHAPE, WINDOW_NAME_SRC, idl_member_types("Window", "name"),
+                                    JS_NewStringLen(ctx, "", 0));
     if (window_proxy_browsing_context_null(ctx, proxy)) return JS_NewStringLen(ctx, "", 0);
     return JS_IsUndefined(p->name_val) ? JS_NewString(ctx, p->name ? p->name : "") : JS_DupValue(ctx, p->name_val);
 }
@@ -3633,7 +3635,8 @@ static JSValue proxy_declined_member(JSContext *ctx, JSValueConst nav, int magic
     n = snprintf(src, sizeof src, "%s.%s#%u", world_doc_name(p->doc), PROXY_MEMBER[magic], req);
     CHECK(n > 0 && (size_t)n < sizeof src, "a declined cross-agent read's source name did not fit its room");
     snprintf(shape, sizeof shape, "{%s}", src);
-    return concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, example);
+    return concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, idl_member_types("Window", PROXY_MEMBER[magic]),
+                        example);
 }
 
 #define PROXY_GET_STAGES(X) \

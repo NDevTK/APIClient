@@ -6634,8 +6634,11 @@ static JSValue engine_attacker_message_event(JSContext *ctx, uint64_t hash, int 
     engine_attacker_post_sources(hash, pos, dsrc, osrc, sizeof dsrc);
     snprintf(dshape, sizeof dshape, "{%s}", dsrc);
     snprintf(oshape, sizeof oshape, "{%s}", osrc);
-    data = concolic_new(ctx, dshape, dsrc, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
-    origin = concolic_new(ctx, oshape, osrc, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
+    /* A message's data crossed HTML §2.7.3 StructuredSerializeInternal, which throws for a Symbol and for a
+       callable; MessageEvent's origin is a USVString. */
+    data = concolic_new(ctx, dshape, dsrc, CONCOLIC_WHOSE_WORLD,
+                        CONCOLIC_TYF_ALL & ~(CONCOLIC_TYF_SYMBOL | CONCOLIC_TYF_FUNCTION), JS_UNDEFINED);
+    origin = concolic_new(ctx, oshape, osrc, CONCOLIC_WHOSE_WORLD, CONCOLIC_TYF_STRING, JS_UNDEFINED);
     ports = JS_NewArray(ctx);
     CHECK(!JS_IsException(ports), "engine: OOM building an attacker message's ports");
     noid = JS_NewString(ctx, "");
@@ -6752,13 +6755,13 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
         /* This engine's own instrument: the argument stood in no byte anywhere, so nothing is learned about whose
            value an address composed from it rests on; the provenance says so, as the assert says it of the
            example. */
-        args[k] = concolic_new(ctx, id, id, CONCOLIC_WHOSE_INSTRUMENT, JS_UNDEFINED);
+        args[k] = concolic_new(ctx, id, id, CONCOLIC_WHOSE_INSTRUMENT, CONCOLIC_TYF_ALL, JS_UNDEFINED);
         ORPHAN_BINDS_OPEN(args[k], id);
     }
     if (pos > 0) snprintf(id, sizeof id, "{orphan%016llx#%d.this}", (unsigned long long)hash, pos);
     else snprintf(id, sizeof id, "{orphan%016llx.this}", (unsigned long long)hash);
     /* The receiver is the same fact. */
-    self = concolic_new(ctx, id, id, CONCOLIC_WHOSE_INSTRUMENT, JS_UNDEFINED);
+    self = concolic_new(ctx, id, id, CONCOLIC_WHOSE_INSTRUMENT, CONCOLIC_TYF_ALL, JS_UNDEFINED);
     ORPHAN_BINDS_OPEN(self, id);
 #undef ORPHAN_BINDS_OPEN
 

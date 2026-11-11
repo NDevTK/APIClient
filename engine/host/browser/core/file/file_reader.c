@@ -313,7 +313,8 @@ static JSValue fr_source_wrap(JSContext *ctx, JSValueConst blob, FileReadType ty
         return computed;
     if (!blob_source_of(blob, &shape, &src))
         return computed;
-    return concolic_source_wrap(ctx, shape, src, computed);
+    /* File API §6.2's three String arms: `result` is a DOMString for each. */
+    return concolic_source_wrap(ctx, shape, src, CONCOLIC_TYF_STRING, computed);
 }
 
 /* ---- §6.1 The File Reading Task Source's tasks ---------------------------------------------------------- */

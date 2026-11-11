@@ -81,6 +81,7 @@
 #include "core/xhr/xml_http_request.h"
 #include "core/timing/timer.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include "solver/cow.h"
 #include "solver/endpoint.h"   /* the @H surface — every request host-edge funnels one endpoint into it */
 #include "solver/engine.h"
@@ -1469,7 +1470,7 @@ static JSValue js_xhr_set_response_type(JSContext *ctx, JSValueConst this_val, J
  * THE NAME IS core/fetch/reply_source.h's, NOT THIS FILE'S. `fetch()` and this component are two doors onto
  * one fact and a name minted at each door is two names for one unknown; the address they name it after is
  * §3.6.1 The responseURL getter's on this side and `response.url` on the other. */
-static JSValue xhr_reply_content(JSContext *ctx, XhrData *d, JSValue value)
+static JSValue xhr_reply_content(JSContext *ctx, XhrData *d, unsigned types, JSValue value)
 {
     const char *url;
     size_t ulen = 0;
@@ -1512,7 +1513,7 @@ static JSValue xhr_reply_content(JSContext *ctx, XhrData *d, JSValue value)
        against — reporting a page that read no attacker source as one that read many. */
     /* THE WORLD'S: a reply is bytes a SERVER stated, which the comment above already distinguishes from the
        attacker door. Either way nothing in the document this engine was served spells them. */
-    r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, value);   /* consumes `value` as the example */
+    r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, types, value);   /* consumes `value` as the example */
     /* The text arms make a String and the json arm a ParseJSON value, whatever the reply sends. A pin answers
        the bytes themselves, whose reads are real. */
     if (concolic_is(r))
@@ -1561,11 +1562,8 @@ static JSValue xhr_text_response(JSContext *ctx, XhrData *d)
        whose address assert holds for every response that has a body. A page reads this whenever a handler
        runs after a failed request (`onloadend`, or a handler the solver drives uncalled). */
     if (d->network_error) return JS_NewString(ctx, "");
-    JSValue r = xhr_reply_content(ctx, d, xhr_decode_text(ctx, d));
-
     /* Step 5 returns the result of decode, a String whatever bytes the server sends. */
-    if (concolic_is(r)) concolic_state_string(r);
-    return r;
+    return xhr_reply_content(ctx, d, idl_member_types("XMLHttpRequest", "responseText"), xhr_decode_text(ctx, d));
 }
 
 /* §3.6.6 "set a document response". The HTML arm is lexbor's parser over a document with NO browsing context —
@@ -1796,7 +1794,7 @@ json:
            object once it is set, so `xhr.response === xhr.response` — minting per read would hand the page two
            records where the spec gives it one, and only the first read's would be the one a later gate is
            deciding about. */
-        xhr_set(ctx, d, &d->response_object, xhr_reply_content(ctx, d, parsed));
+        xhr_set(ctx, d, &d->response_object, xhr_reply_content(ctx, d, CONCOLIC_TYF_JSON, parsed));
         *presult = JS_DupValue(ctx, d->response_object);
         return 0;
     }

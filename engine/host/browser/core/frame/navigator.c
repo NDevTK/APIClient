@@ -56,6 +56,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
 #include "core/agent_state.h"
 #include "core/file/storage_manager.h"
@@ -536,7 +537,7 @@ static void nav_env(JSContext *ctx, JSValueConst rec, int idx, JSValue example)
        semantics and NOT the source overlay (the conformance runner does exactly that) gets the plain value
        back. Minting directly made every environment member of this interface answer an OBJECT there, so
        `typeof navigator.userAgent` was "object" in the one host whose whole job is measuring fidelity. */
-    v = concolic_source_wrap(ctx, hole, path, example);
+    v = concolic_source_wrap(ctx, hole, path, idl_member_types("Navigator", NAV_NAME[idx]), example);
     CHECK(!JS_IsException(v), "minting a Navigator environment value failed");
     JS_SetPropertyUint32(ctx, rec, (uint32_t)idx, v);
 }

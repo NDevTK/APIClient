@@ -457,7 +457,7 @@ static int el_deadline_before_next_arrival(JSContext *ctx, JSValueConst when)
 
     snprintf(src, sizeof src, "%s, number %u", EL_ARRIVAL, (unsigned)flow_running()->replies_taken + 1);
     snprintf(shape, sizeof shape, "{%s}", src);   /* a source's shape is its provenance in braces */
-    arrival = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
+    arrival = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, CONCOLIC_TYF_NUMBER, JS_UNDEFINED);
     first = event_loop_before(ctx, when, arrival);
     JS_FreeValue(ctx, arrival);
     if (first) el_num_set(ctx, g_atom_licence, 1);

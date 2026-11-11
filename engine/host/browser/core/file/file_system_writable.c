@@ -114,7 +114,8 @@ static JSValue fw_keep_taint(JSContext *ctx, JSValue computed, JSValueConst a, J
     JSValueConst src = concolic_is(a) ? a : (concolic_is(b) ? b : JS_UNDEFINED);
 
     if (!concolic_is(src)) return computed;
-    return concolic_source_wrap(ctx, concolic_shape_c(src), concolic_src_c(src), computed);
+    return concolic_source_wrap(ctx, concolic_shape_c(src), concolic_src_c(src), concolic_operand_types(src),
+                                computed);
 }
 
 /* §2.5's write command, over the buffer: pad to `pos` with NUL, splice `data` in, keep the tail. The old

@@ -1931,7 +1931,9 @@ static JSValue concolic_random_hook(JSContext *ctx) {
     w = snprintf(src, sizeof src, "Math.random()#%u", ord);
     DCHECK(w > 0 && (size_t)w < sizeof src, "a Math.random call's provenance did not fit its buffer");
     (void)w;
-    return concolic_new(ctx, "{Math.random()}", src, CONCOLIC_WHOSE_WORLD, JS_NewFloat64(ctx, ex));
+    /* §21.3.2.28 Math.random ( ) returns a Number. */
+    return concolic_new(ctx, "{Math.random()}", src, CONCOLIC_WHOSE_WORLD, CONCOLIC_TYF_NUMBER,
+                        JS_NewFloat64(ctx, ex));
 }
 
 /* The pin this flow holds for `src`, as the value it is. The in-file read sites take a JSValue, never bytes, so
@@ -5891,7 +5893,6 @@ int concolic_example_present(JSValueConst v) {
 
 /* See concolic.h. The answer is a string or absent, so no caller can read a held `undefined` as absence. */
 void concolic_state_string(JSValueConst v) { concolic_type_state(v, CTY_STRING); }
-void concolic_state_string_or_null(JSValueConst v) { concolic_type_state(v, CTY_STRING | CTY_NULL); }
 
 int concolic_type_is_string(JSValueConst v) { return concolic_is(v) && cty_of_operand(v) == CTY_STRING; }
 
@@ -9035,8 +9036,19 @@ static JSValue concolic_derived_shaped(JSContext *ctx, const char *shape, const 
 /* A source read, the root of every identity. Its identity is its provenance, because nothing derived it. A
    source with no provenance has no identity either, which keeps both arms of every branch over it. */
 static JSValue source_mint(JSContext *ctx, const char *shape, const char *src, const char *root,
-                          ConcolicRootWhose whose, JSValue example) {
+                          ConcolicRootWhose whose, unsigned types, JSValue example) {
     const char *f[1];
+
+    DCHECKF(types != 0 && !(types & ~(unsigned)CONCOLIC_TYF_ALL),
+            "the source `%s` was minted with the type set 0x%x, which is empty or holds a bit that is no "
+            "ECMAScript language type", src ? src : "(no src)", types);
+    /* A primitive example is what a declared algorithm computed, and that declaration fixes its type. */
+    DCHECKF(types != CONCOLIC_TYF_ALL || whose != CONCOLIC_WHOSE_WORLD || JS_IsUndefined(example) ||
+                JS_IsObject(example),
+            "the environment value `%s` was minted holding a primitive example and stating every type, so each "
+            "equality and typeof test over it forks an arm no world takes. State the types its declaration "
+            "fixes: core/idl_member_types.h answers a Web IDL member, and an ECMAScript algorithm names its own",
+            src ? src : "(no src)");
 
     /* A source's shape names a hole, in braces, asserted at the one mint every source goes through.
        concolic_hole_key is the only route from a shape to a domain and reads a hole by its braces, so an
@@ -9123,6 +9135,8 @@ static JSValue source_mint(JSContext *ctx, const char *shape, const char *src, c
        `src` itself here, so the mask is empty exactly when the root is NULL. */
         JSValue r = concolic_derived(ctx, shape, src, root, src ? (1u << whose) : 0u,
                                      concolic_ident_compose("s", f, 1), example);
+        /* Every type is the unstated set (`ty` 0), so one representation says a value takes any type. */
+        if (types != CONCOLIC_TYF_ALL) concolic_type_state(r, cty_of_tyf(types));
         /* …and its own identity, the precondition the pin arm above stands on, recorded as `src_self` so a seam
            that holds the value long after the mint (the CSS cascade, reading the DOM taint shadow) can ask. */
         pin_src_names_self(r);
@@ -9154,14 +9168,14 @@ static JSValue source_mint(JSContext *ctx, const char *shape, const char *src, c
 }
 
 JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, ConcolicRootWhose whose,
-                     JSValue example) {
-    return source_mint(ctx, shape, src, src, whose, example);
+                     unsigned types, JSValue example) {
+    return source_mint(ctx, shape, src, src, whose, types, example);
 }
 
 JSValue concolic_new_rooted(JSContext *ctx, const char *shape, const char *src, const char *root,
-                            ConcolicRootWhose whose, JSValue example) {
+                            ConcolicRootWhose whose, unsigned types, JSValue example) {
     DCHECK(root != NULL && *root, "a rebuilt source was minted with no delivery root");
-    return source_mint(ctx, shape, src, root, whose, example);
+    return source_mint(ctx, shape, src, root, whose, types, example);
 }
 
 int concolic_is(JSValueConst v) {
@@ -10458,7 +10472,7 @@ void concolic_install_source_overlay(void)
    mechanism as broken. Scoped to declared sources: an undeclared one may carry a shape that is not its name
    (`{hidden|visible}` is a domain, `navigator.userAgent` a member path), since a shape states what the value
    can be. */
-JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src, JSValue computed)
+JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src, unsigned types, JSValue computed)
 {
     /* The host must have answered before this seam is asked: the answer decides whether the value forks, and a
        caller minting for a realm's lifetime cannot ask again (see the three states above). */
@@ -10496,7 +10510,7 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
     if (src && src_row(src, strlen(src)) >= 0) source_read_note(src);
     /* A declared attacker source is the world's: its component models a channel a person or a server drives,
        from outside the bytes this engine was served. This seam is that population's one door. */
-    return concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, computed);
+    return concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, types, computed);
 }
 
 /* Asked by Location's search, hash and href getters, Window's name getter, Document's referrer getter, and the
@@ -10572,7 +10586,7 @@ static void joint_compose(const char *const *shapes, const char *const *srcs, in
 }
 
 JSValue concolic_source_wrap_joint(JSContext *ctx, const char *const *shapes, const char *const *srcs,
-                                   int n, JSValue computed)
+                                   int n, unsigned types, JSValue computed)
 {
     char *shape, *src;
     JSValue out;
@@ -10580,7 +10594,7 @@ JSValue concolic_source_wrap_joint(JSContext *ctx, const char *const *shapes, co
     if (!g_source_overlay)
         return computed;
     joint_compose(shapes, srcs, n, &shape, &src);
-    out = concolic_source_wrap(ctx, shape, src, computed);
+    out = concolic_source_wrap(ctx, shape, src, types, computed);
     free(shape); free(src);
     return out;
 }
@@ -10619,6 +10633,7 @@ JSValue concolic_source_wrap_joint_affine(JSContext *ctx, const char *const *sha
     af->k[0] = 1.0;
     af->c = c;
     out = concolic_derived(ctx, shape, src, src, 1u << CONCOLIC_WHOSE_WORLD, aff_ident(af), computed);
+    concolic_type_state(out, CTY_NUMBER);   /* `c + T` over integers is a Number in every world */
     aff_attach(out, af);
     free(shape); free(src);
     return out;

@@ -874,7 +874,10 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
            because a reader alone would default and a writer alone would be a field nothing consumes. HOW ITS
            ABSENCE WOULD SHOW: a value posted through §2.7 and read back answering UNSTATED where the same
            value answered a member before it was serialized. */
-        nv = concolic_new_rooted(ctx, shape, csrc, croot, CONCOLIC_WHOSE_UNSTATED, ex);
+        /* Named residual. Not covered: the sender's stated types do not cross, so the rebuilt value states
+           every type. Next diff: the serializer writes the type set beside the shape and the rebuild reads it.
+           Absence shows as: an equality over a posted source forking an arm the sender's own value decided. */
+        nv = concolic_new_rooted(ctx, shape, csrc, croot, CONCOLIC_WHOSE_UNSTATED, CONCOLIC_TYF_ALL, ex);
         /* RETIRED — THIS ASSERT WAS WRONG AND IT ABORTED EVERY DEV RUN THAT REBUILT A DETERMINED SOURCE.
            It read `DCHECK(concolic_is(nv), "a rebuilt triple is not concolic — the arriving value would
            stand for the example alone, so a branch on it would be DECIDED where the sender forked")`, and it

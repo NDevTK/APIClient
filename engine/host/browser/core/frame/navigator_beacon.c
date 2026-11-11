@@ -68,6 +68,7 @@
 #include "core/agent_state.h"
 #include "core/url/url.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include "solver/endpoint.h"
 #include "solver/engine.h"     /* the ONE composition of what a request this running code builds is evidence of */
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
@@ -122,7 +123,7 @@ static JSValue beacon_queue_result(JSContext *ctx, const char *url_text)
     snprintf(hole, (size_t)n + 1, "{%s}", name);
     /* THE SEAM, not concolic_new: a host that is not exploring (the conformance runner installs the value
        semantics and NOT the source overlay) gets the plain boolean back, which is what a spec test reads. */
-    v = concolic_source_wrap(ctx, hole, name, JS_TRUE);
+    v = concolic_source_wrap(ctx, hole, name, idl_member_types("Navigator", "sendBeacon"), JS_TRUE);
     free(name);
     free(hole);
     return v;

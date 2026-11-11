@@ -46,6 +46,7 @@
 #include "core/dom/shadow_root.h"
 #include "core/dom/flat_tree.h"
 #include "core/frame/viewport.h"
+#include "core/idl_member_types.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/used_value.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
@@ -3230,7 +3231,7 @@ static JSValue css_resolved_px(JSContext *ctx, CssPx len)
     JSValue v = JS_NewString(ctx, text);
 
     free(text);
-    return viewport_env_derived(len, v);
+    return viewport_env_derived(len, idl_member_types("CSSStyleDeclaration", "getPropertyValue"), v);
 }
 
 /* The computed value, for a property whose resolved value §9 says the computed value IS. A length-valued one
@@ -3303,7 +3304,7 @@ static JSValue css_resolved_computed(JSContext *ctx, lxb_dom_element_t *el, cons
             /* The percentage is unresolved, so what this string DERIVES from is the length term's facts — a
                `calc(100% - 2rem)` reports a different `calc(100% - Npx)` to a reader whose default font size
                differs, and that is the same fork `css_resolved_px` mints for a bare `2rem`. */
-            return viewport_env_derived(len.px, out);
+            return viewport_env_derived(len.px, idl_member_types("CSSStyleDeclaration", "getPropertyValue"), out);
         }
         DCHECK(len.kind == CSS_LENGTH_KEYWORD,
                "a computed length is none of the four kinds css_length.h defines — the parse answers exactly "

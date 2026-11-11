@@ -98,7 +98,7 @@ static int instantiate_after(JSContext *ctx, InstantiateState *s, WasmExecStatus
         s->over = concolic_is_exploring()
                       ? concolic_new(ctx, c->kind == WASM_CHOICE_TABLE_GROW ? "{WebAssembly table.grow}"
                                                                             : "{WebAssembly memory.grow}",
-                                     s->src, CONCOLIC_WHOSE_WORLD, JS_TRUE)
+                                     s->src, CONCOLIC_WHOSE_WORLD, CONCOLIC_TYF_BOOLEAN, JS_TRUE)
                       : JS_TRUE;
         CHECK(!JS_IsException(s->over), "a WebAssembly grow's outcome could not be allocated");
         s->hdr.stage = INST_CHOOSE;

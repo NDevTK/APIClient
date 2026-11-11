@@ -253,7 +253,8 @@ static int picker_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
             picker_fire_cancel(ctx, hdr->this_val);
             return JS_STEP_DONE;
         }
-        s->dismissed = concolic_source_wrap(ctx, PICKER_DIALOG_SHAPE, PICKER_DIALOG_SRC, JS_FALSE);
+        s->dismissed = concolic_source_wrap(ctx, PICKER_DIALOG_SHAPE, PICKER_DIALOG_SRC, CONCOLIC_TYF_BOOLEAN,
+                                            JS_FALSE);
         CHECK(!JS_IsException(s->dismissed),
               "showPicker: the file dialog's outcome could not be allocated");
         STEP_GOTO(hdr->stage, SP_DIALOG, &s->ua_phase, NULL);

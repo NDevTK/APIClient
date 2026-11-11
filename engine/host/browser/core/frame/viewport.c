@@ -22,6 +22,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE TOP-LEVEL TRAVERSABLE's viewport. A UA answering the question CSS hands it, exactly as rendering.c
@@ -326,7 +327,7 @@ static int viewport_env_members(CssPx len, ViewportEnvMembers *m)
     return n;
 }
 
-JSValue viewport_env_derived(CssPx len, JSValue computed)
+JSValue viewport_env_derived(CssPx len, unsigned types, JSValue computed)
 {
     ViewportEnvMembers m;
     int n;
@@ -339,7 +340,7 @@ JSValue viewport_env_derived(CssPx len, JSValue computed)
         return computed;
     }
     n = viewport_env_members(len, &m);
-    return concolic_source_wrap_joint(len.realm, m.shapes, m.srcs, n, computed);
+    return concolic_source_wrap_joint(len.realm, m.shapes, m.srcs, n, types, computed);
 }
 
 /* An atom spelled by its name (core/css/css_length.h's css_px_atom_name), the digest of its definition with facts
@@ -437,7 +438,8 @@ JSValue viewport_env_derived_long(CssPx len, JSValue computed)
     char *term;
     JSValue out;
 
-    if (len.env == CSS_ENV_NONE || !len.form->known) return viewport_env_derived(len, computed);
+    /* This seam's members are a Web IDL `long`, a Number. */
+    if (len.env == CSS_ENV_NONE || !len.form->known) return viewport_env_derived(len, CONCOLIC_TYF_NUMBER, computed);
     n = viewport_env_members(len, &m);
     /* The form evaluated at this realm's facts is the example the layout computed: a writer that replaced the
        number and kept the form would fail here (css_px_atom is the route that replaces it). */
@@ -468,14 +470,14 @@ JSValue viewport_env_derived_long(CssPx len, JSValue computed)
    reason it matters here is `innerWidth` and `devicePixelRatio`: the breakpoint and the retina gate, branched
    on by nearly every responsive bundle, whose every recorded bound went to concolic_hole_key and came back
    NULL. visualViewport reaches this same seam with its member already qualified, so the two never collide. */
-JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed)
+JSValue viewport_env_value(JSContext *ctx, const char *member, unsigned types, JSValue computed)
 {
     char src[VIEWPORT_SRC_MAX], hole[VIEWPORT_SRC_MAX];
 
     viewport_src_key(ctx, member, src, sizeof src);
     DCHECK(strlen(member) + 3 <= sizeof hole, "a CSSOM VIEW member name too long to brace");
     snprintf(hole, sizeof hole, "{%s}", member);
-    return concolic_source_wrap(ctx, hole, src, computed);
+    return concolic_source_wrap(ctx, hole, src, types, computed);
 }
 
 /* ---- CSSOM VIEW §4's `scrollX`/`scrollY`, WHICH ARE NOW A READ OF REAL PER-FLOW STATE ---------------------- */
@@ -779,7 +781,7 @@ static const char *vp_member_name(ViewportMember m)
    document's answer for this member. */
 static JSValue vp_env_long(JSContext *ctx, const char *member, double v)
 {
-    return viewport_env_value(ctx, member, vp_long(ctx, v));
+    return viewport_env_value(ctx, member, idl_member_types("Window", member), vp_long(ctx, v));
 }
 
 /* THE CLIENT WINDOW'S POSITION, AS A VALUE A PAGE CAN FORK ON — §4's `screenX`/`screenLeft` and
@@ -829,7 +831,8 @@ static JSValue vp_screen_pos(JSContext *ctx, bool vertical, double v)
            "identity, so this position would be keyed as a function of one fact twice over — the two are "
            "different facts (`availWidth < width` is the taskbar question) and one key for both would let a "
            "branch over either decide the other");
-    return concolic_source_wrap_joint(ctx, shapes, srcs, 2, vp_long(ctx, v));
+    return concolic_source_wrap_joint(ctx, shapes, srcs, 2, idl_member_types("Window", vertical ? "screenY" : "screenX"),
+                                      vp_long(ctx, v));
 }
 
 static JSValue js_vp_get(JSContext *ctx, JSValueConst this_val, int magic)
@@ -884,7 +887,7 @@ static JSValue js_vp_get(JSContext *ctx, JSValueConst this_val, int magic)
     /* §4's DETERMINE THE DEVICE PIXEL RATIO: with no output device return 1; otherwise the CSS pixel size
        divided by the device pixel size. This engine models an output device (screen.c), so it is the ratio —
        and it is a source, because `devicePixelRatio > 1` is the retina gate. */
-    case VP_DPPX:     return viewport_env_value(ctx, "devicePixelRatio",
+    case VP_DPPX:     return viewport_env_value(ctx, "devicePixelRatio", idl_member_types("Window", "devicePixelRatio"),
                                                 JS_NewFloat64(ctx, viewport_device_pixel_ratio(ctx)));
     }
     DFAIL("a CSSOM VIEW §4 Window member was read with a magic no member of this file declares — the magic IS "

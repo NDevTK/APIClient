@@ -53,7 +53,7 @@
 #define BYTE_READER_MAX 8
 #define BYTE_READER_IFACE_MAX 4
 
-static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, JSValue value);
+static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, unsigned types, JSValue value);
 
 static const ByteReaderIface *g_iface[BYTE_READER_IFACE_MAX];
 static int g_iface_stepid[BYTE_READER_IFACE_MAX][BYTE_READER_MAX];
@@ -266,7 +266,8 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
             s->value = JS_GetException(ctx);
             reject = 1;
         } else {
-            s->value = s->content ? byte_reader_content(ctx, s->hdr.this_val, out) : out;
+            /* The reader's callee is %JSON.parse%, so `out` is a value §25.5.2.1 ParseJSON ( text ) produces. */
+            s->value = s->content ? byte_reader_content(ctx, s->hdr.this_val, CONCOLIC_TYF_JSON, out) : out;
         }
         if (byte_reader_capability(ctx, s, reject) < 0) return JS_STEP_ABRUPT;
         STEP_GOTO(s->hdr.stage, BR_SETTLE, &s->cphase, NULL);
@@ -404,7 +405,7 @@ void byte_reader_install(JSContext *ctx, JSValueConst proto, int handle)
  * wrap applied to a container is a defect and an unasked question is a gap.
  *
  * `value` is CONSUMED. A host that is not exploring gets exactly what its spec says to return. */
-static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, JSValue value)
+static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, unsigned types, JSValue value)
 {
     const ByteReaderIface *f;
     bool attacker = false;
@@ -442,8 +443,8 @@ static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, JSValue va
        an attacker authored one and a server the other, and no parse of this document's served bytes states
        either. `concolic_source_wrap` states the same word at its own entry, so the two arms agree by
        construction rather than by this line and that one matching. */
-    r = attacker ? concolic_source_wrap(ctx, shape, src, value)
-                 : concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, value);
+    r = attacker ? concolic_source_wrap(ctx, shape, src, types, value)
+                 : concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, types, value);
     /* Whatever bytes a reply sends, text() makes a String and json() a ParseJSON value. A pin or a candidate
        answers the bytes themselves, whose reads are real. */
     if (concolic_is(r))
@@ -479,7 +480,7 @@ JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, s
     CHECK(text != NULL, "byte reader: OOM running Encoding §6's UTF-8 decode over a body");
     out = JS_NewStringLen(ctx, text, n);
     free(text);
-    return byte_reader_content(ctx, recv, out);
+    return byte_reader_content(ctx, recv, CONCOLIC_TYF_STRING, out);
 }
 
 JSValue byte_reader_json_string(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)

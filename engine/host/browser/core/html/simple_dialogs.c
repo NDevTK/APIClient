@@ -15,6 +15,7 @@
 #include "core/infra_strings.h"
 #include "core/json_buf.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 
 static JSRuntime *g_rt;
 static int g_id_alert = -1, g_id_confirm = -1, g_id_prompt = -1;
@@ -176,7 +177,8 @@ static JSValue js_sd_confirm(JSContext *ctx, JSValueConst this_val, int argc, JS
     if (!message) return JS_EXCEPTION;
     sd_show("confirm", message);                                   /* step 4 */
     free(message);
-    accepted = concolic_source_wrap(ctx, SD_CONFIRM_SHAPE, SD_CONFIRM_SRC, JS_TRUE);   /* steps 5-10 */
+    accepted = concolic_source_wrap(ctx, SD_CONFIRM_SHAPE, SD_CONFIRM_SRC, idl_member_types("Window", "confirm"),
+                                    JS_TRUE);   /* steps 5-10 */
     CHECK(!JS_IsException(accepted), "simple dialogs: a confirm's response could not be allocated");
     return accepted;
 }
@@ -229,8 +231,8 @@ static JSValue js_sd_prompt(JSContext *ctx, JSValueConst this_val, int argc, JSV
     /* STEP 5'S "The response must be defaulted to the value given by default", as this member's EXAMPLE. A
        real string is those bytes; an unknown default hands over ITS OWN example, which is undefined exactly
        when the run computed none — so the two arms are one expression and neither invents anything. */
-    result = concolic_source_wrap(ctx, SD_PROMPT_SHAPE, SD_PROMPT_SRC,
-                                  concolic_is(argv[1]) ? concolic_example(ctx, argv[1])
+    result = concolic_source_wrap(ctx, SD_PROMPT_SHAPE, SD_PROMPT_SRC, idl_member_types("Window", "prompt"),
+                                  concolic_is(argv[1]) ? concolic_example_string(ctx, argv[1])
                                                        : (JS_IsString(argv[1]) ? JS_DupValue(ctx, argv[1])
                                                                                : JS_UNDEFINED));
     CHECK(!JS_IsException(result), "simple dialogs: a prompt's response could not be allocated");

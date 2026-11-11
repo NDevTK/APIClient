@@ -12,6 +12,7 @@
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include "solver/decide.h"
 
 /* THE SOURCE IDENTITY. One string, used by both members and by the engine's own read, because it is the key
@@ -61,6 +62,7 @@ static JSValue js_vis_state(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)this_val; (void)magic;
     return concolic_source_wrap(ctx, "{" VIS_HIDDEN "|" VIS_VISIBLE "}", VIS_SRC,
+                                idl_member_types("Document", "visibilityState"),
                                 JS_NewString(ctx, vis_state_of(ctx)));
 }
 

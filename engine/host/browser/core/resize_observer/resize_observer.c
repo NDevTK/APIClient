@@ -23,6 +23,7 @@
 #include "core/events/error_event.h"
 #include "core/events/event_target.h"
 #include "core/frame/viewport.h"
+#include "core/idl_member_types.h"
 #include "core/frame/window_proxy.h"
 #include "core/geometry/dom_rect.h"
 #include "core/idl_args.h"
@@ -287,7 +288,8 @@ static CssPx ro_box_length(JSContext *rctx, lxb_dom_element_t *el, RoBoxOption b
    768` is, and a bare `JS_NewFloat64` at either site would delete the arm the other viewport takes. */
 static JSValue ro_length_value(JSContext *rctx, CssPx len)
 {
-    return viewport_env_derived(len, JS_NewFloat64(rctx, len.px));
+    return viewport_env_derived(len, idl_member_types("ResizeObserverSize", "inlineSize"),
+                                JS_NewFloat64(rctx, len.px));
 }
 
 /* §3.4.8's WHOLE RESULT as a page-visible ResizeObserverSize, minted in `rctx` — the observer's realm, because

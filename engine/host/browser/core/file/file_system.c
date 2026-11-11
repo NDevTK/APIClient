@@ -639,7 +639,8 @@ void file_system_local_add(JSContext *ctx, const char *name, const char *type,
        gets the plain byte sequence back, so §2.3.1's File carries exactly what was put on the device; a solver
        host gets a concolic whose EXAMPLE is those same bytes, so `f.text()` reaches a sink carrying both the
        real contents and the fact that an attacker chose them. */
-    data = concolic_source_wrap(ctx, shape, src, file_system_bytes_value(ctx, bytes, len));
+    /* A byte sequence's value is the String file_system_bytes_value makes of it. */
+    data = concolic_source_wrap(ctx, shape, src, CONCOLIC_TYF_STRING, file_system_bytes_value(ctx, bytes, len));
     file_system_set_data(ctx, entry, data);
     JS_FreeValue(ctx, entry);
 }
@@ -656,7 +657,7 @@ JSValue file_system_user_file_new(JSContext *ctx, const char *name)
     snprintf(src, sizeof src, "file:%s", name);
     fs_declare_bytes_source(src);
     /* No example: the person's file is the attacker's, and no byte of it was supplied to this engine. */
-    data = concolic_source_wrap(ctx, shape, src, file_system_bytes_value(ctx, "", 0));
+    data = concolic_source_wrap(ctx, shape, src, CONCOLIC_TYF_STRING, file_system_bytes_value(ctx, "", 0));
     f = fs_file_over(ctx, data, "", name, 0);
     JS_FreeValue(ctx, data);
     return f;

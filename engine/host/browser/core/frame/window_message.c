@@ -63,6 +63,7 @@
 #include "core/dom/document.h"
 #include "core/url/url.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/post_index.h"
@@ -324,7 +325,10 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
                 shape = lexbor_malloc(strlen(name) + 3);
                 CHECK(shape != NULL, "window message: OOM composing a delivery's data-source shape");
                 sprintf(shape, "{%s}", name);
-                data = concolic_source_wrap(tctx, shape, name, data);
+                /* HTML §2.7.3 StructuredSerializeInternal throws for a Symbol and for a callable, so a
+                   message's data is neither. */
+                data = concolic_source_wrap(tctx, shape, name,
+                                            CONCOLIC_TYF_ALL & ~(CONCOLIC_TYF_SYMBOL | CONCOLIC_TYF_FUNCTION), data);
                 free(shape);
                 JS_FreeCString(ctx, name);
             }
@@ -742,7 +746,8 @@ void window_message_deliver_remote(JSContext *ctx, const char *record, const cha
 
         window_message_delivery_sources(record, NULL, sender_doc, dsrc, osrc, sizeof dsrc);
         snprintf(oshape, sizeof oshape, "{%s}", osrc);
-        org = concolic_source_wrap(ctx, oshape, osrc, JS_NewString(ctx, sender_origin));
+        org = concolic_source_wrap(ctx, oshape, osrc, idl_member_types("MessageEvent", "origin"),
+                                   JS_NewString(ctx, sender_origin));
         JS_SetPropertyUint32(ctx, entry, PQ_DATA_SRC, JS_NewString(ctx, dsrc));
         /* A CONFORMANCE HOST HAS NO SOURCE OVERLAY and gets the string back unchanged (solver/concolic.h), so
            this line is not a fork in behaviour — it is the same delivery with the solver's half added where

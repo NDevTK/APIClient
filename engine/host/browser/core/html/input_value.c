@@ -88,6 +88,7 @@
 #include "core/idl_args.h"
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include "solver/dom_cow.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
@@ -583,7 +584,8 @@ void input_value_user_edit(JSContext *ctx, JSValueConst wrap, const char *src, c
     }
     n = snprintf(shape, sizeof shape, "{%s}", src);
     CHECK(n > 0 && (size_t)n < sizeof shape, "input: a typed source's name does not fit its shape");
-    typed = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
+    typed = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, idl_member_types("HTMLInputElement", "value"),
+                         JS_UNDEFINED);
     now = iv_sanitize(ctx, el, st, typed, NULL);
     dom_cow_set_prop_taint(ctx, el, IV_VALUE, now);
     JS_FreeValue(ctx, now);

@@ -41,6 +41,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
 #include "core/agent_state.h"
 #include "core/frame/screen.h"
@@ -274,7 +275,8 @@ static void screen_env(JSContext *ctx, JSValueConst rec, int idx, JSValue exampl
     DCHECK(idx >= 0 && idx < SCR_N, "a Screen environment value was minted for a non-member index");
     CHECK(!JS_IsException(example), "a Screen member's example could not be allocated");
     /* The world's: a Screen member is the device's, supplied from outside the bytes this engine was served. */
-    v = concolic_new(ctx, SCR_HOLE[idx], SCR_SRC[idx], CONCOLIC_WHOSE_WORLD, example);
+    v = concolic_new(ctx, SCR_HOLE[idx], SCR_SRC[idx], CONCOLIC_WHOSE_WORLD,
+                     idl_member_types("Screen", SCR_NAME[idx]), example);
     CHECK(!JS_IsException(v), "minting a Screen environment value failed");
     JS_SetPropertyUint32(ctx, rec, (uint32_t)idx, v);
 }

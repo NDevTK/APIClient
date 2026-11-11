@@ -167,8 +167,9 @@ JSValue idle_deadline_new_for_idle_period(JSContext *ctx)
     /* THE WORLD'S, because the deadline is a fact about the HOST'S IDLE PERIOD read off the clock above and
        no parse of the bytes this engine was served states it — which is exactly the population
        §What-the-tool-produces' bar exists for. */
+    /* A deadline is a DOMHighResTimeStamp, a Number. */
     deadline = concolic_new(ctx, "{IdleDeadline.deadline}", "IdleDeadline.deadline",
-                            CONCOLIC_WHOSE_WORLD, ex);
+                            CONCOLIC_WHOSE_WORLD, CONCOLIC_TYF_NUMBER, ex);
     CHECK(!JS_IsException(deadline), "minting §4.3's deadline failed");
     JS_SetProperty(ctx, rec, g_atom_deadline, deadline);
     JS_SetProperty(ctx, rec, g_atom_timeout, JS_FALSE);   /* §4.3: "initially false" */

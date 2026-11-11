@@ -1324,7 +1324,8 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
            carries. A starting directory with NOTHING SELECTABLE is not a second unknown but a decided one:
            there is nothing for step 7.5's prompt to offer, so no selection is reachable and the dismissal is
            the only completion — forking it would park a sibling flow that does what this one does. */
-        s->dismissed = concolic_source_wrap(ctx, PICKER_DIALOG_SHAPE, PICKER_DIALOG_SRC, JS_FALSE);
+        s->dismissed = concolic_source_wrap(ctx, PICKER_DIALOG_SHAPE, PICKER_DIALOG_SRC, CONCOLIC_TYF_BOOLEAN,
+                                            JS_FALSE);
         CHECK(!JS_IsException(s->dismissed), "file picker: the dialog's outcome could not be allocated");
         STEP_GOTO(hdr->stage, FPK_DIALOG, &s->cphase, &s->ua_phase, NULL);
         return JS_STEP_YIELD;

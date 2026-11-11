@@ -37,6 +37,7 @@
 #include "core/layout/table_box.h"
 #include "core/layout/used_value.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include "solver/metrics.h"
 #include "solver/rest_unit.h"
 #include "solver/reclaim.h"
@@ -239,7 +240,7 @@ static JSValue ev_length_long(JSContext *ctx, CssPx px)
    sources and the scroll positions are not. */
 static JSValue ev_env_long(JSContext *ctx, const EvTarget *t, const char *member, double v)
 {
-    return viewport_env_value(t->dctx, member, ev_long(ctx, v));
+    return viewport_env_value(t->dctx, member, idl_member_types("Element", member), ev_long(ctx, v));
 }
 
 /* THE `scrollX`/`scrollY` ATTRIBUTES' OWN ANSWER, which four of the steps below invoke by name, is
@@ -1282,7 +1283,8 @@ static JSValue ev_client_edge(JSContext *ctx, const EvTarget *t, bool vertical)
    `innerHeight < 600` is. CONSUMES nothing; the caller owns the returned value. */
 static JSValue ev_client_px(JSContext *ctx, CssPx v)
 {
-    return viewport_env_derived(v, JS_NewFloat64(ctx, v.px));
+    /* A DOMRect coordinate: each member is the `x` member's `unrestricted double`. */
+    return viewport_env_derived(v, idl_member_types("DOMRectReadOnly", "x"), JS_NewFloat64(ctx, v.px));
 }
 
 /* A matrix entry that is the concrete number `k` in every world. */

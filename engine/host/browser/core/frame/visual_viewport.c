@@ -13,6 +13,7 @@
 #include "core/agent_state.h"
 #include "core/events/event_target.h"
 #include "core/frame/viewport.h"
+#include "core/idl_member_types.h"
 #include "core/frame/visual_viewport.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -260,7 +261,7 @@ static JSValue js_vv_get(JSContext *ctx, JSValueConst this_val, int magic)
            "a VisualViewport member name longer than any in the IDL — a truncated one would key two members' "
            "branches together");
     snprintf(member, sizeof member, "visualViewport.%s", VV_NAME[magic]);
-    return viewport_env_value(env, member, v);
+    return viewport_env_value(env, member, idl_member_types("VisualViewport", VV_NAME[magic]), v);
 }
 
 JSValue visual_viewport_object(JSContext *ctx)

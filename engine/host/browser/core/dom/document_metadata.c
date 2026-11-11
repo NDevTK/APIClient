@@ -45,6 +45,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include "core/dom/document.h"
 #include "core/dom/document_metadata.h"
 #include "core/dom/node.h"
@@ -169,7 +170,8 @@ static JSValue js_doc_metadata(JSContext *ctx, JSValueConst this_val, int magic)
        and the value is still the SOURCE, because the referrer is attacker-influenced (the attacker links to the
        page from a document they control) and a branch on it must fork. Its delivery is declared in _init. */
     case DM_REFERRER:
-        return concolic_source_wrap(ctx, DM_REFERRER_SHAPE, DM_REFERRER_SRC, JS_NewStringLen(ctx, "", 0));
+        return concolic_source_wrap(ctx, DM_REFERRER_SHAPE, DM_REFERRER_SRC,
+                                    idl_member_types("Document", "referrer"), JS_NewStringLen(ctx, "", 0));
     /* §3.1.4's cookie GETTER, in the standard's own order: cookie-averse first, then the opaque-origin throw,
        then "the cookie-string for the document's URL for a 'non-HTTP' API".
        THE SOURCE IS MINTED PER READ, never once at the install — see the file header — and the AGENT-WIDE store
@@ -197,6 +199,7 @@ static JSValue js_doc_metadata(JSContext *ctx, JSValueConst this_val, int magic)
            that source's piece of the string the page parses. */
         {
             JSValue rest = concolic_source_wrap(ctx, "{document.cookie}", "document.cookie",
+                                                idl_member_types("Document", "cookie"),
                                                 JS_NewStringLen(ctx, "", 0));
             size_t n = 1;
 

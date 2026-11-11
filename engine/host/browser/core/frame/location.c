@@ -87,6 +87,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include "solver/solve.h"        /* §7.2.4's three whole-URL algorithms are the @S URL-context sink */
 #include "solver/world.h"        /* this agent HOSTS this Document — §7.2.4's security check's whole premise */
 #include "core/agent_state.h"
@@ -387,12 +388,11 @@ static JSValue loc_component(JSContext *ctx, const UrlRecord *rec, bool want_que
    String in every world. */
 static JSValue loc_source(JSContext *ctx, const UrlRecord *rec, bool want_query)
 {
-    JSValue v = want_query
-        ? concolic_source_wrap(ctx, LOCATION_SEARCH_SHAPE, LOCATION_SEARCH_SRC, loc_component(ctx, rec, true))
-        : concolic_source_wrap(ctx, LOCATION_HASH_SHAPE, LOCATION_HASH_SRC, loc_component(ctx, rec, false));
-
-    concolic_state_string(v);
-    return v;
+    return want_query
+        ? concolic_source_wrap(ctx, LOCATION_SEARCH_SHAPE, LOCATION_SEARCH_SRC,
+                               idl_member_types("Location", "search"), loc_component(ctx, rec, true))
+        : concolic_source_wrap(ctx, LOCATION_HASH_SHAPE, LOCATION_HASH_SRC,
+                               idl_member_types("Location", "hash"), loc_component(ctx, rec, false));
 }
 
 /* §7.2.4's href getter: URL §4.5 "URL serializing" of this Location's url, which §7.2.4's stringifier and

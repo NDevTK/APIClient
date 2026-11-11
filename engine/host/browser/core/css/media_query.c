@@ -25,6 +25,7 @@
 #include "core/frame/window_proxy.h"
 #include "solver/compose.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 #include "solver/decide.h"
 #include "solver/flow.h"   /* the cascade input generation a memo is valid under */
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
@@ -1713,7 +1714,8 @@ JSValue media_query_matches_value(JSContext *ctx, const MediaQuerySet *set)
     mq_source(ctx, set, &shape, &src);
     /* concolic_source_wrap hands back the plain boolean where no source overlay is installed (a conformance
        host), which is what keeps this component testable against the standard. */
-    v = concolic_source_wrap(ctx, shape, src, JS_NewBool(ctx, media_query_matches(ctx, set)));
+    v = concolic_source_wrap(ctx, shape, src, idl_member_types("MediaQueryList", "matches"),
+                             JS_NewBool(ctx, media_query_matches(ctx, set)));
     /* The mint COPIES both, which is what concolic_exotic_get's own `free(shape)` after its `concolic_alloc`
        already relies on; a borrow here would be a use-after-free at every later read of this value's shape. */
     free(shape);

@@ -1436,7 +1436,7 @@ JSValue fetch_reply_unknown(JSContext *ctx, const char *url, const char *mode)
         snprintf(shape, n, "{%s}", src);   /* a source's shape is its provenance in braces (concolic.h) */
         /* The world's: a server states these bytes, and no example: no server was asked. A candidate re-fire
            substituting its payload at this source answers those bytes instead. */
-        body = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
+        body = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, CONCOLIC_TYF_ALL, JS_UNDEFINED);
         free(shape);
         free(src);
     }

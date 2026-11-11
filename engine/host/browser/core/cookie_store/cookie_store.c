@@ -177,7 +177,8 @@ JSValue cookie_store_list_item(JSContext *ctx, JSValueConst pair)
     value = JS_GetPropertyUint32(ctx, pair, 1);
     CHECK(!JS_IsException(name) && !JS_IsException(value),
           "a cookie-list entry did not carry the two strings cookie_jar_cookie_list puts on it");
-    value = concolic_source_wrap(ctx, "{cookieStore}", CS_SOURCE, value);
+    /* A CookieListItem's `value` is a USVString. */
+    value = concolic_source_wrap(ctx, "{cookieStore}", CS_SOURCE, CONCOLIC_TYF_STRING, value);
     CHECK(JS_SetPropertyStr(ctx, item, "name", name) >= 0 &&
           JS_SetPropertyStr(ctx, item, "value", value) >= 0,
           "a CookieListItem refused its own name and value");

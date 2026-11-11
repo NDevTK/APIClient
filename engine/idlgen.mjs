@@ -3416,6 +3416,93 @@ emitGenerated("idl_indexed_getters.h", indexedH,
               "core/idl_indexed.c installs §3.7.9 step 1.1's @@iterator from it, so a stale table is an " +
               "indexed interface `for…of` cannot walk, or an @@iterator on one that has no indexed getter.");
 
+/* Web IDL §3.2 JavaScript type mapping, generated: the ECMAScript language types each attribute's or
+   operation's declared type converts to, as quickjs-step.h's JS_LANG_TYPE_* bits. core/idl_member_types.c
+   answers a component minting a member's value as an unknown, so the mint states the type the IDL fixes. A
+   row is `Interface.member`; an operation's overloads are joined; a member that only returns undefined has no
+   value to mint and no row. */
+const langBit = (() => {
+  const text = readFileSync(join(HERE, "qjs", "quickjs-step.h"), "utf8");
+  const bits = new Map();
+  for (const m of text.matchAll(/JS_LANG_TYPE_([A-Z]+) = 1u << (\d+)/g)) bits.set(m[1], 1 << Number(m[2]));
+  for (const n of ["UNDEFINED", "NULL", "BOOLEAN", "STRING", "SYMBOL", "NUMBER", "BIGINT", "OBJECT", "FUNCTION"])
+    if (!bits.has(n)) throw new Error(`[idl-audit] quickjs-step.h declares no JS_LANG_TYPE_${n}`);
+  return (n) => bits.get(n);
+})();
+const LT_OBJECT = langBit("OBJECT") | langBit("FUNCTION");
+const LT_ALL = ["UNDEFINED", "NULL", "BOOLEAN", "STRING", "SYMBOL", "NUMBER", "BIGINT"].reduce((a, n) => a | langBit(n), LT_OBJECT);
+const LT_NAMED = new Map([
+  ["any", LT_ALL], ["undefined", langBit("UNDEFINED")], ["boolean", langBit("BOOLEAN")],
+  ["bigint", langBit("BIGINT")], ["object", LT_OBJECT], ["symbol", langBit("SYMBOL")],
+  ...["DOMString", "ByteString", "USVString"].map((n) => [n, langBit("STRING")]),
+  ...["byte", "octet", "short", "unsigned short", "long", "unsigned long", "long long", "unsigned long long",
+      "float", "unrestricted float", "double", "unrestricted double"].map((n) => [n, langBit("NUMBER")]),
+  /* §3.2.26 Buffer source types, which the corpus declares nowhere. */
+  ...["ArrayBuffer", "SharedArrayBuffer", "DataView", "Int8Array", "Int16Array", "Int32Array", "Uint8Array",
+      "Uint16Array", "Uint32Array", "Uint8ClampedArray", "BigInt64Array", "BigUint64Array", "Float16Array",
+      "Float32Array", "Float64Array"].map((n) => [n, langBit("OBJECT")]),
+  /* CSSOM §3 CSSOMString is DOMString or USVString by implementation, a String either way. */
+  ["CSSOMString", langBit("STRING")],
+  /* HTML's WindowProxy and SVG's three legacy aliases are objects the corpus names without declaring. */
+  ...["WindowProxy", "SVGRect", "SVGMatrix", "SVGPoint"].map((n) => [n, langBit("OBJECT")]),
+]);
+const ltKinds = { enums: new Set(), callbacks: new Set(), typedefs: new Map() };
+for (const n of idl.declarations) {
+  if (n.type === "enum" && n.name) ltKinds.enums.add(n.name);
+  else if (n.type === "callback" && n.name) ltKinds.callbacks.add(n.name);
+  else if (n.type === "typedef" && n.name) ltKinds.typedefs.set(n.name, n.idlType);
+}
+function langTypes(t, where, seen = new Set()) {
+  let r;
+  if (t.union) r = t.idlType.reduce((a, x) => a | langTypes(x, where, seen), 0);
+  else if (t.generic) r = langBit("OBJECT");   /* §3.2.21 to §3.2.24, §3.2.27, §3.2.28: each an Object */
+  else if (typeof t.idlType !== "string") r = langTypes(t.idlType, where, seen);
+  else {
+    const n = t.idlType;
+    if (LT_NAMED.has(n)) r = LT_NAMED.get(n);
+    else if (ltKinds.enums.has(n)) r = langBit("STRING");                    /* §3.2.18 Enumeration types */
+    else if (ltKinds.callbacks.has(n)) r = LT_OBJECT;                        /* §3.2.19 Callback function types */
+    else if (ltKinds.typedefs.has(n)) {
+      if (seen.has(n)) throw new Error(`[idl-audit] typedef \`${n}\` names itself (${where})`);
+      seen.add(n);
+      r = langTypes(ltKinds.typedefs.get(n), where, seen);
+      seen.delete(n);
+    }
+    else if (dictByName.has(n)) r = langBit("OBJECT");                       /* §3.2.17 Dictionary types */
+    else if (byName.has(n)) r = LT_OBJECT;                                   /* §3.2.15, §3.2.16 */
+    else throw new Error(`[idl-audit] \`${where}\` is typed \`${n}\`, which the corpus declares nowhere and ` +
+                         `the §3.2 mapping here does not name`);
+  }
+  return t.nullable ? r | langBit("NULL") : r;                               /* §3.2.20 Nullable types — T ? */
+}
+const memberTypeRows = [];
+for (const [iface, node] of byName) {
+  if (node.type !== "interface" && node.type !== "namespace") continue;
+  const acc = new Map();
+  for (const m of node.members) {
+    if (!m.name || (m.type !== "attribute" && m.type !== "operation")) continue;
+    acc.set(m.name, (acc.get(m.name) || 0) | langTypes(m.idlType, `${iface}.${m.name}`));
+  }
+  for (const [name, types] of acc)
+    if (types !== langBit("UNDEFINED")) memberTypeRows.push([`${iface}.${name}`, types]);
+}
+memberTypeRows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));   /* strcmp order: the engine bsearches it */
+const memberTypesH =
+  "/* GENERATED by engine/idlgen.mjs from @webref/idl — DO NOT EDIT.\n" +
+  " * Web IDL §3.2 JavaScript type mapping: the ECMAScript language types (quickjs-step.h's JS_LANG_TYPE_* bits)\n" +
+  " * the declared type of each interface's attribute or operation converts to, mixin members under each\n" +
+  " * including interface. core/idl_member_types.c answers a component's source mint from it. Regenerate after\n" +
+  " * `npm install @webref/idl webidl2`, and commit the result — the build has no network and this table is not\n" +
+  " * optional. */\n" +
+  "#ifndef APICLIENT_IDL_MEMBER_TYPES_H\n#define APICLIENT_IDL_MEMBER_TYPES_H\n\n" +
+  "typedef struct { const char *member; unsigned short types; } IdlMemberTypes;\n" +
+  "static const IdlMemberTypes IDL_MEMBER_TYPES[] = {\n" +
+  memberTypeRows.map(([k, t]) => `    { "${k}", 0x${t.toString(16).padStart(3, "0")} },`).join("\n") + "\n};\n\n#endif\n";
+emitGenerated("idl_member_types.h", memberTypesH,
+              `${memberTypeRows.length} attributes and operations with the language types their declared type converts to`,
+              "core/idl_member_types.c states a minted member's type from it, so a stale table is a type test " +
+              "decided against a type the member can take, or forked over one it cannot.");
+
 /* THE CENSUS BEHIND THAT TABLE. Step 1.1 is structural, so a built prototype cannot lack @@iterator; what can go
    wrong is the getter it iterates. %Array.prototype.values% reads `length` and `[i]`, so an interface whose
    prototype this engine builds while no IdlIndexedDecl answers its indices walks nothing, silently — a partial

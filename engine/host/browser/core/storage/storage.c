@@ -55,6 +55,7 @@
 #include "core/storage/storage.h"
 #include "core/storage/storage_shed.h"
 #include "solver/concolic.h"
+#include "core/idl_member_types.h"
 
 static JSValue   g_key = JS_UNDEFINED;   /* the private Symbol this interface's slots hang off */
 static JSClassID g_class;
@@ -269,10 +270,9 @@ static JSValue st_absent_value(JSContext *ctx, JSValueConst slots, JSAtom key)
         concolic_declare_source_precondition("storage", src, SRC_PRE_SAME_ORIGIN_STORE);
         concolic_source_precondition_absent("storage", src);
     }
-    r = concolic_source_wrap(ctx, shape, src, JS_NULL);
     /* §12.2.1's `getter DOMString? getItem(DOMString key)`: a prior session's value is a String or null in every
        world. */
-    concolic_state_string_or_null(r);
+    r = concolic_source_wrap(ctx, shape, src, idl_member_types("Storage", "getItem"), JS_NULL);
     js_free(ctx, shape);
     js_free(ctx, src);
     return r;

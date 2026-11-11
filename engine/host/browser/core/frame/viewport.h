@@ -119,7 +119,8 @@ bool viewport_exists(JSContext *ctx);
    key would let a branch taken in the parent decide the iframe's.
    Where no source overlay is installed — a conformance host — it hands `computed` back unchanged, which is
    what keeps these members testable against what CSSOM VIEW says a viewport of this size reports. */
-JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed);
+/* `types` is the member's declared type as concolic_new takes it (core/idl_member_types.h). */
+JSValue viewport_env_value(JSContext *ctx, const char *member, unsigned types, JSValue computed);
 
 /* THIS REALM's viewport, in CSS pixels — the MODELLED ANSWER, which is the example the member above carries.
    Answered for the realm passed, never for a remembered one. */
@@ -195,7 +196,8 @@ bool viewport_canvas_region(JSContext *ctx, CssPx out[4]);
    `computed` is the SERIALIZED example the member's own IDL type demanded (CSSOM §6.7.2's `1264px` for a
    resolved value, §6's `long` for a client extent) and is CONSUMED. A length whose `env` is CSS_ENV_NONE is
    handed back unchanged — that is the positive statement css_length.h describes, not a missing domain. */
-JSValue viewport_env_derived(CssPx len, JSValue computed);
+/* `types` is the declared type of the member `computed` serializes for, as concolic_new takes it. */
+JSValue viewport_env_derived(CssPx len, unsigned types, JSValue computed);
 
 /* Environment fact `fact`'s value in `realm`: the one number a length minted from it carries as its example and
    a form is evaluated at (core/css/css_length.h). Each fact is picked per realm and does not move while the

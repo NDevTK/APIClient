@@ -121,13 +121,18 @@ int         concolic_root_every(JSValueConst v, int (*member)(const char *p, siz
    return a bare primitive with nowhere for a mark to live, so a caller stamping the fact AFTER this call
    would lose it for exactly that population and silently; stating it here puts the write past both
    returns, which is the same reason `src_self` is written by this mint and not by its callers. */
+/* `types` is the set of ECMAScript language types (CONCOLIC_TYF_* bits) the value takes in every world, as the
+   source's declaration fixes it: a Web IDL attribute's type through core/idl_member_types.h, or the type an
+   ECMAScript algorithm returns. Required for `whose`'s reason, since an unstated type keeps an arm no world
+   takes at every equality and typeof test. CONCOLIC_TYF_ALL is the statement that nothing fixes one, and is
+   refused for a world source holding a primitive example. The example is asserted to be of a stated type. */
 JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, ConcolicRootWhose whose,
-                     JSValue example);
+                     unsigned types, JSValue example);
 /* concolic_new for a value whose delivery root is not its own identity: a source value that crossed §2.7
    StructuredSerialize as data and is rebuilt with the shape, identity and root it was written with, so the
    receiving realm's sink names the source an attacker delivers at (the sender's), not the identity alone. */
 JSValue concolic_new_rooted(JSContext *ctx, const char *shape, const char *src, const char *root,
-                            ConcolicRootWhose whose, JSValue example);
+                            ConcolicRootWhose whose, unsigned types, JSValue example);
 
 /* State that every reply could only make `v` a value ECMAScript §25.5.2.1 ParseJSON ( text ) produces: a
    String, Number, Boolean, null, or an object an Array or Object literal defines, whose own keys are Strings.
@@ -235,13 +240,10 @@ int         concolic_example_present(JSValueConst v);
    converts to — when it holds one whose ToString runs no page code (a primitive other than a Symbol), and
    JS_UNDEFINED otherwise. A new reference the caller frees. Asserts `v` is a concolic. */
 JSValue     concolic_example_string(JSContext *ctx, JSValueConst v);
-/* States that a freshly minted unknown is a String in every world — a mint whose algorithm returns a string
-   type, such as a Web IDL USVString getter. Once per value; a non-concolic `v` (a candidate re-fire's bytes) is
-   left alone. */
+/* States that a freshly derived unknown is a String in every world: a derivation whose algorithm returns a
+   string type, such as a body's text(). A source states its type at its mint (concolic_new). Once per value; a
+   non-concolic `v` (a candidate re-fire's bytes) is left alone. */
 void        concolic_state_string(JSValueConst v);
-/* The same for a mint whose algorithm returns a nullable String (a Web IDL `DOMString?`), such as a storage
-   area's getItem: a String or null in every world. */
-void        concolic_state_string_or_null(JSValueConst v);
 /* Whether `v` is an unknown whose stated type set is exactly String, so a runtime type test over it (a
    §3.2.25 union arm) has one answer in every world. Side-effect-free. */
 int         concolic_type_is_string(JSValueConst v);
@@ -472,7 +474,8 @@ int concolic_own_key_mint(JSContext *ctx, JSValueConst record, int n);
 /* THE ONE SEAM a browser component hands a computed value through to become an attacker SOURCE. Returns
    `computed` unchanged where no source overlay is installed, and a concolic carrying it as the EXAMPLE where
    one is. `computed` is consumed either way. */
-JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src, JSValue computed);
+/* `types` is concolic_new's: the language types the member's declaration fixes. */
+JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src, unsigned types, JSValue computed);
 /* The seam's other half, asked by a component's reading machine before a read of declared sources `srcs`: 1 when
    the read must first rest so the solver can take a snapshot standing before it (solver/source_cut.h); the
    machine then returns JS_STEP_YIELD and asks again when re-entered. 0 where no source overlay explores. */
@@ -511,7 +514,7 @@ int concolic_source_cut_due(const char *const *srcs, int n);
  * n == 1 composes to the member itself, so there is one path and no second spelling for a single source.
  * `computed` is CONSUMED and becomes the joint value's example. */
 JSValue concolic_source_wrap_joint(JSContext *ctx, const char *const *shapes, const char *const *srcs,
-                                   int n, JSValue computed);
+                                   int n, unsigned types, JSValue computed);
 /* …AND THE SAME JOINT DOMAIN FOR A VALUE WHOSE AFFINE FORM THE COMPONENT KNOWS: `computed` is `c + T`, where
  * `T` is an integer-valued function of the facts named by `term`, an identity the caller composes canonically
  * so that two values over one function of the facts name one term. Provenance and display are the joint's.
@@ -1353,6 +1356,10 @@ enum { CONCOLIC_TYF_UNDEFINED = JS_LANG_TYPE_UNDEFINED, CONCOLIC_TYF_NULL = JS_L
        CONCOLIC_TYF_SYMBOL = JS_LANG_TYPE_SYMBOL, CONCOLIC_TYF_NUMBER = JS_LANG_TYPE_NUMBER,
        CONCOLIC_TYF_BIGINT = JS_LANG_TYPE_BIGINT, CONCOLIC_TYF_OBJECT = JS_LANG_TYPE_OBJECT,
        CONCOLIC_TYF_FUNCTION = JS_LANG_TYPE_FUNCTION, CONCOLIC_TYF_ALL = JS_LANG_TYPE_ALL };
+/* The types of a value ECMAScript §25.5.2.1 ParseJSON ( text ) produces: null, a Boolean, a Number, a String or
+   an Object an array or object literal defines. */
+#define CONCOLIC_TYF_JSON (CONCOLIC_TYF_NULL | CONCOLIC_TYF_BOOLEAN | CONCOLIC_TYF_NUMBER | CONCOLIC_TYF_STRING | \
+                           CONCOLIC_TYF_OBJECT)
 int         concolic_equality_facet(JSContext *ctx, JSValueConst cond, int holds);
 /* Whether the equality `cond` records holds, as far as the compared value's facet decides it: 1 or 0 where the
    facet leaves only one arm's types (`typeof d === 'string'` once `d == null` held answers 0), -1 where both

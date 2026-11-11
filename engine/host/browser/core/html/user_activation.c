@@ -126,7 +126,8 @@ static void ua_set(JSContext *rctx, const char *field, JSValue v)
    plain arithmetic, so test262 sees the standard's own answers and forks nothing. */
 static JSValue ua_never_activated(JSContext *ctx)
 {
-    return concolic_source_wrap(ctx, UA_SHAPE, UA_SRC, JS_NewFloat64(ctx, INFINITY));
+    /* A timestamp or an infinity: a Number. */
+    return concolic_source_wrap(ctx, UA_SHAPE, UA_SRC, CONCOLIC_TYF_NUMBER, JS_NewFloat64(ctx, INFINITY));
 }
 
 /* ONE QUESTION OVER THE UNKNOWN, through the seam a step machine forks at. The operand is BORROWED for the
