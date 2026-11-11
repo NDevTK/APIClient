@@ -1352,6 +1352,8 @@ static int tf_replytwice_pay(JSContext *ctx) {
 #define TF_DKREV_PRE_URL "https://x.test/api/dkrev-pre"
 static struct {
     char *refused;      /* the judged line whose refusal is owed, or NULL */
+    char *rework;       /* the refused line, kept from the refusal's write to the next bill, which works the pair
+                           again as the zones do once the answer is written; or NULL */
     int refusal_due;    /* a bill showed the pair since with a vector other than `forced` */
     int refusals;       /* refusals written for the pair */
     int unforced_shown; /* bills that showed the pair with a vector other than `forced` */
@@ -1359,7 +1361,7 @@ static struct {
     char *replied;      /* the line whose reply is owed for TF_DKREV_URL, or NULL */
     int rev_pre_at;     /* the payment that answered TF_DKREV_PRE_URL, or -1 */
     int rev_answered;   /* replies written for TF_DKREV_URL */
-} g_tf_dk = { NULL, 0, 0, 0, 0, NULL, -1, 0 };
+} g_tf_dk = { NULL, NULL, 0, 0, 0, 0, NULL, -1, 0 };
 
 /* Whether two bill lines name one request: the seven identity fields PendRequestKey holds. */
 static int tf_line_same_request(const char *a, const char *b) {
@@ -1384,6 +1386,8 @@ static int tf_line_same_request(const char *a, const char *b) {
 /* Whether the bill line `line` for `abs`, of provenance `provenance`, is owed rather than answered now. */
 static int tf_dk_hold(const char *abs, const char *line, const char *provenance) {
     if (!strcmp(abs, TF_DK_URL)) {
+        free(g_tf_dk.rework);
+        g_tf_dk.rework = NULL;
         if (strcmp(provenance, PENDING_PROVENANCE_FORCED)) g_tf_dk.unforced_shown++;
         if (g_tf_dk.refused) {
             if (strcmp(provenance, PENDING_PROVENANCE_FORCED)) g_tf_dk.refusal_due = 1;
@@ -1407,6 +1411,7 @@ static int tf_dk_hold(const char *abs, const char *line, const char *provenance)
 /* The provider's statement of what it holds (engine_set_provider). */
 static int tf_dk_holds(const char *line) {
     return (g_tf_dk.refused && tf_line_same_request(line, g_tf_dk.refused)) ||
+           (g_tf_dk.rework && tf_line_same_request(line, g_tf_dk.rework)) ||
            (g_tf_dk.replied && tf_line_same_request(line, g_tf_dk.replied));
 }
 static int tf_provider_holds(const char *line) { return tf_replytwice_holds(line) || tf_dk_holds(line); }
@@ -1418,7 +1423,7 @@ static int tf_dk_pay(JSContext *ctx) {
     if (g_tf_dk.refused && g_tf_dk.refusal_due) {
         filled += engine_decline(ctx, g_tf_dk.refused, "blocked-signal:provenance=forced");
         g_tf_dk.refusals++;
-        free(g_tf_dk.refused);
+        g_tf_dk.rework = g_tf_dk.refused;
         g_tf_dk.refused = NULL;
         g_tf_dk.refusal_due = 0;
     }
