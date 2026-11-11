@@ -27858,7 +27858,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    there is no `b`. Dispatch the pre-pushed [this, closure, arg] through do_step_tramp; itail=1 routes
                    completion via do_return -> done, and the STEP_ROOT arm at `done` settles without touching b. Once
                    parked, the deepest (callback) frame resumes via tramp_top below, never through this branch. */
+                DCHECK(sf->cur_pc == NULL, "a fresh call root's frame names a program counter — it runs no "
+                                           "bytecode, and reaction_call_flow_init builds it with none");
                 b = NULL;
+                /* and the interpreter's own position is none: a park on this frame (a machine the root calls
+                   resting in its anchor, do_preempt) records `sf->cur_pc = pc`, and a call root has no body */
+                pc = NULL;
                 ctx = caller_ctx;
                 local_buf = arg_buf = sf->arg_buf;
                 var_buf = stack_buf = sf->var_buf;
