@@ -51741,6 +51741,16 @@ typedef struct JSToken {
     } u;
 } JSToken;
 
+/* A string literal's body scan (ECMA-262 §12.9.4 String Literals), or a template's cooked value: its cursor,
+   the value built so far (owned while `live`), the closing quote, whether an error is thrown, and whether the
+   scan is strict code, read where the scan began. */
+typedef struct JSStringScan {
+    const uint8_t *p;
+    StringBuffer b;
+    int sep;
+    bool live, do_throw, strict;
+} JSStringScan;
+
 struct JSParseFrame;
 typedef struct JSParsePos {
     int last_line_num;
@@ -51850,6 +51860,14 @@ typedef struct JSParseState {
         int last_tok, bits;
         bool live, no_line_terminator;
     } pd_skip;
+    /* The current token's string literal body, scanned after next_token handed the token out (TOK_STRING with
+       its opening quote read, buf_ptr at the quote): `pending` until js_parse_token_step completes it. `failed`
+       once its scan threw a SyntaxError: the token is then TOK_ERROR and every later ask of the token stream
+       fails with that error standing, until a lookahead's restore (js_parse_seek_token) re-scans. */
+    struct {
+        JSStringScan scan;
+        bool pending, failed;
+    } pd_tok;
     /* The retired-work count (g_flow_work_retired) at this compile stint's opening or its last offer of a
        suspend point: js_parse_want_yield offers one each budget period of work past it. Set where a stint
        begins (__JS_EvalInternal, js_eval_compile_continue), since the scheduler banks the count between
@@ -52415,8 +52433,20 @@ static void json_free_token(JSParseState *s, JSToken *token) {
     }
 }
 
+/* Drops the current token's pending string body unscanned: a lookahead's restore, or a parse dropped or failed
+   with the body pending. */
+static void js_parse_token_release(JSParseState *s)
+{
+    if (s->pd_tok.scan.live)
+        string_buffer_free(&s->pd_tok.scan.b);
+    s->pd_tok.scan.live = false;
+    s->pd_tok.pending = false;
+}
+
 static void free_token(JSParseState *s, JSToken *token)
 {
+    if (token == &s->token)
+        js_parse_token_release(s);
     switch(token->val) {
     case TOK_NUMBER:
         JS_FreeValue(s->ctx, token->u.num.val);
@@ -52504,14 +52534,21 @@ static void __attribute((unused)) dump_token(JSParseState *s,
     }
 }
 
+static int js_parse_token_finish(JSParseState *s);
+
 int JS_PRINTF_FORMAT_ATTR(2, 3) js_parse_error(JSParseState *s, JS_PRINTF_FORMAT const char *fmt, ...)
 {
     JSContext *ctx = s->ctx;
     va_list ap;
     int backtrace_flags;
-    /* The SyntaxError and its trace are the running world's (JS_ThrowError2). */
-    bool stint = js_compile_stint_pause();
+    bool stint;
 
+    /* A pending string body is scanned first, so its own SyntaxError is the one thrown, as when next_token
+       scanned it whole; once the token stream has failed, its error stands. */
+    if (js_parse_token_finish(s))
+        return -1;
+    /* The SyntaxError and its trace are the running world's (JS_ThrowError2). */
+    stint = js_compile_stint_pause();
     va_start(ap, fmt);
     JS_ThrowError2(ctx, JS_SYNTAX_ERROR, false, fmt, ap);
     va_end(ap);
@@ -52592,6 +52629,9 @@ static __exception int js_parse_template_part(JSParseState *s,
     StringBuffer b_s, *b = &b_s;
     JSValue str;
 
+    DCHECK(!s->pd_tok.pending, "a template part was scanned with a string token's body still pending: the part "
+           "begins after the current token, whose end is not known until its body is scanned");
+
     /* p points to the first byte of the template part */
     if (string_buffer_init(s->ctx, b, 32))
         goto fail;
@@ -52653,20 +52693,41 @@ static __exception int js_parse_template_part(JSParseState *s,
     return -1;
 }
 
-static __exception int js_parse_string(JSParseState *s, int sep,
-                                       bool do_throw, const uint8_t *p,
-                                       JSToken *token, const uint8_t **pp)
+static bool js_parse_want_yield(JSParseState *s);
+static uint64_t js_parse_count_bytes_to(JSParseState *s, const uint8_t *to);
+
+/* Starts the scan of a string literal's body, or a template part's cooked value, at `p`, the byte after its
+   opening quote. The scan owns its buffer until js_parse_string_step completes or fails it. */
+static __exception int js_parse_string_begin(JSParseState *s, JSStringScan *ss, int sep, bool do_throw,
+                                             const uint8_t *p)
 {
-    const uint8_t *p_next;
-    int ret;
+    DCHECK(!ss->live, "a string literal's scan began while another was still held in its state");
+    if (string_buffer_init(s->ctx, &ss->b, 32))
+        return -1;
+    ss->p = p;
+    ss->sep = sep;
+    ss->do_throw = do_throw;
+    ss->strict = s->cur_func->is_strict_mode;
+    ss->live = true;
+    return 0;
+}
+
+/* One stint of the scan: 0 with `token` the literal (`*pp` past its closing quote, or past a template part's
+   `${`), -1 on a SyntaxError (thrown when `do_throw`), 1 when the policy took the thread with the cursor
+   parked. Each code point, or an escape sequence and the code point it denotes, is charged as it is consumed
+   and with `can_rest` the policy is asked after it, so that is the scan's indivisible unit. */
+static int js_parse_string_step(JSParseState *s, JSStringScan *ss, bool can_rest, JSToken *token,
+                                const uint8_t **pp)
+{
+    const uint8_t *p = ss->p, *p_next, *unit_at;
+    int ret, sep = ss->sep;
     uint32_t c;
-    StringBuffer b_s, *b = &b_s;
+    StringBuffer *b = &ss->b;
     JSValue str;
 
-    /* string */
-    if (string_buffer_init(s->ctx, b, 32))
-        goto fail;
+    DCHECK(ss->live, "a string literal's scan was stepped with no scan held");
     for(;;) {
+        unit_at = p;
         if (p >= s->buf_end)
             goto invalid_char;
         c = *p;
@@ -52696,7 +52757,7 @@ static __exception int js_parse_string(JSParseState *s, int sep,
                 if (p >= s->buf_end) {
                     if (sep != '`')
                         goto invalid_char;
-                    if (do_throw)
+                    if (ss->do_throw)
                         js_parse_error(s, "Unexpected end of input");
                     goto fail;
                 }
@@ -52721,7 +52782,7 @@ static __exception int js_parse_string(JSParseState *s, int sep,
                     s->eol = &p[-1];
                     s->mark = p;
                 }
-                continue;
+                goto unit_done;
             default:
                 if (c == '0' && !(p[1] >= '0' && p[1] <= '9')) {
                     /* accept isolated \0 */
@@ -52729,8 +52790,8 @@ static __exception int js_parse_string(JSParseState *s, int sep,
                     c = '\0';
                 } else
                 if ((c >= '0' && c <= '9')
-                &&  (s->cur_func->is_strict_mode || sep == '`')) {
-                    if (do_throw) {
+                &&  (ss->strict || sep == '`')) {
+                    if (ss->do_throw) {
                         js_parse_error(s, "%s are not allowed in %s",
                                        (c >= '8') ? "\\8 and \\9" : "Octal escape sequences",
                                        (sep == '`') ? "template strings" : "strict mode");
@@ -52744,11 +52805,11 @@ static __exception int js_parse_string(JSParseState *s, int sep,
                     p = p_next;
                     /* LS or PS are skipped */
                     if (c == CP_LS || c == CP_PS)
-                        continue;
+                        goto unit_done;
                 } else {
                     ret = lre_parse_escape(&p, true);
                     if (ret == -1) {
-                        if (do_throw) {
+                        if (ss->do_throw) {
                             js_parse_error(s, "Invalid %s escape sequence",
                                            c == 'u' ? "Unicode" : "hexadecimal");
                         }
@@ -52770,7 +52831,16 @@ static __exception int js_parse_string(JSParseState *s, int sep,
         }
         if (string_buffer_putc(b, c))
             goto fail;
+    unit_done:
+        ss->p = p;
+        g_flow_compile_work += js_parse_count_bytes_to(s, p);
+        DCHECK(p > unit_at && (*unit_at == '\\' || p - unit_at <= UTF8_CHAR_LEN_MAX),
+               "a string literal's scan reached its rest point having consumed no code point, or more than one "
+               "code point or escape sequence, since the last: the rest is offered once per such unit");
+        if (can_rest && js_parse_want_yield(s))
+            return 1;
     }
+    ss->live = false;
     str = string_buffer_end(b);
     if (JS_IsException(str))
         return -1;
@@ -52781,15 +52851,75 @@ static __exception int js_parse_string(JSParseState *s, int sep,
     return 0;
 
  invalid_utf8:
-    if (do_throw)
+    if (ss->do_throw)
         js_parse_error(s, "invalid UTF-8 sequence");
     goto fail;
  invalid_char:
-    if (do_throw)
+    if (ss->do_throw)
         js_parse_error(s, "unexpected end of string");
  fail:
     string_buffer_free(b);
+    ss->live = false;
     return -1;
+}
+
+/* The scan whole, for a template part's cooked value, which its production reads at once. */
+static __exception int js_parse_string(JSParseState *s, int sep,
+                                       bool do_throw, const uint8_t *p,
+                                       JSToken *token, const uint8_t **pp)
+{
+    JSStringScan ss = { 0 };
+
+    if (js_parse_string_begin(s, &ss, sep, do_throw, p))
+        return -1;
+    return js_parse_string_step(s, &ss, false, token, pp);
+}
+
+/* One stint of the current token's pending string body (pd_tok): 0 when the token is complete (its value set,
+   buf_ptr past its closing quote), 1 when the policy took the thread with the scan parked, -1 when the scan
+   threw its SyntaxError, which leaves the token TOK_ERROR and the token stream failed. */
+static int js_parse_token_step(JSParseState *s, bool can_rest)
+{
+    const uint8_t *end;
+    int r;
+
+    DCHECK(s->pd_tok.pending && s->token.val == TOK_STRING,
+           "a string literal's body was stepped with no string token pending");
+    /* Not pending while it runs, so a SyntaxError the scan throws (js_parse_error) does not finish it again. */
+    s->pd_tok.pending = false;
+    r = js_parse_string_step(s, &s->pd_tok.scan, can_rest, &s->token, &end);
+    if (r > 0) {
+        s->pd_tok.pending = true;
+        return 1;
+    }
+    if (r < 0) {
+        s->token.val = TOK_ERROR;
+        s->pd_tok.failed = true;
+        return -1;
+    }
+    s->buf_ptr = end;
+    return 0;
+}
+
+/* Completes the current token's pending string body whole, for a read of its value or its end before the drive
+   rests: 0, or -1 when the token stream has failed (the SyntaxError is thrown). */
+static int js_parse_token_finish(JSParseState *s)
+{
+    if (s->pd_tok.failed)
+        return -1;
+    if (!s->pd_tok.pending)
+        return 0;
+    return js_parse_token_step(s, false);
+}
+
+/* The current string token's value. Its body is complete: a production reading it before the drive rests
+   after next_token calls js_parse_token_finish first. */
+static JSValueConst js_parse_token_str(JSParseState *s)
+{
+    DCHECK(!s->pd_tok.pending,
+           "a string token's value was read with its body still pending: the read follows next_token within one "
+           "production step, so it must call js_parse_token_finish before it");
+    return s->token.u.str.str;
 }
 
 static inline bool token_is_pseudo_keyword(JSParseState *s, JSAtom atom) {
@@ -52797,8 +52927,6 @@ static inline bool token_is_pseudo_keyword(JSParseState *s, JSAtom atom) {
         !s->token.u.ident.has_escape;
 }
 
-static bool js_parse_want_yield(JSParseState *s);
-static uint64_t js_parse_count_bytes_to(JSParseState *s, const uint8_t *to);
 
 /* Releases a regexp literal's scan that did not complete: an error, or a parse dropped while it rested. */
 static void js_parse_regexp_release(JSParseState *s)
@@ -53120,13 +53248,15 @@ static uint64_t js_parse_count_bytes(JSParseState *s)
     return js_parse_count_bytes_to(s, s->buf_ptr);
 }
 
-/* Scans the token after the current one, charging the previous token's bytes. Named residual. Not covered: a
-   token this scans (a string literal, a template's head, a comment before a token, an identifier or a number)
-   is scanned whole inside the production step that asked for it, so one long token is one stint between two
-   offers; only a regexp literal's body and the bracket lookahead at an AssignmentExpression rest inside
-   themselves. Next diff builds: this scan as a machine on the parse, parked mid-token, with each of its
-   callers in js_parse_drive a resume point, the string literal arms first. Absence shows as: a document's
-   `sliceOverrunGapWork` near its longest token's length in units. */
+/* Scans the token after the current one, charging the previous token's bytes. A string literal is handed out
+   with its opening quote read and its body pending (pd_tok): the drive's next dispatch scans the body, resting
+   per code point, so no call site resumes mid-token; a read of its value or end before that dispatch scans it
+   whole (js_parse_token_finish). Its column is its first byte's.
+   Named residual. Not covered: a template's head, a comment before a token, an identifier or a number is
+   scanned whole here, and a string whose value its production reads before resting (a module specifier, an
+   import or export name, a directive) is scanned whole at that read. Next diff builds: the template's raw and
+   cooked scans as the same machine, resting at the dispatch. Absence shows as: `sliceOverrunGapWork` near a
+   document's longest template, comment or identifier in units. */
 static __exception int next_token(JSParseState *s)
 {
     const uint8_t *p, *p_next;
@@ -53134,6 +53264,8 @@ static __exception int next_token(JSParseState *s)
     bool ident_has_escape;
     JSAtom atom;
 
+    if (js_parse_token_finish(s))
+        return -1;
     g_flow_compile_work += js_parse_count_bytes(s);
     free_token(s, &s->token);
 
@@ -53165,8 +53297,12 @@ static __exception int next_token(JSParseState *s)
         break;
     case '\'':
     case '\"':
-        if (js_parse_string(s, c, true, p + 1, &s->token, &p))
+        if (js_parse_string_begin(s, &s->pd_tok.scan, c, true, p + 1))
             goto fail;
+        s->token.val = TOK_STRING;
+        s->token.u.str.sep = c;
+        s->token.u.str.str = JS_UNDEFINED;
+        s->pd_tok.pending = true;
         break;
     case '\r':  /* accept DOS and MAC newline sequences */
         if (p[1] == '\n') {
@@ -54006,7 +54142,12 @@ static int simple_next_token(const uint8_t **pp, bool no_line_terminator)
 
 static int peek_token(JSParseState *s, bool no_line_terminator)
 {
-    const uint8_t *p = s->buf_ptr;
+    const uint8_t *p;
+
+    /* The token after this one begins at this one's end. */
+    if (js_parse_token_finish(s))
+        return TOK_ERROR;
+    p = s->buf_ptr;
     return simple_next_token(&p, no_line_terminator);
 }
 
@@ -55018,8 +55159,12 @@ static bool token_starts_property_name(int tok)
 }
 
 
+/* Records the current token's position for js_parse_seek_token; its body is scanned first, so `eol` and `mark`
+   are the scan's past it, as a restore re-reads them. -1 when that scan failed (the position is still recorded). */
 static int js_parse_get_pos(JSParseState *s, JSParsePos *sp)
 {
+    int r = js_parse_token_finish(s);
+
     sp->last_line_num = s->last_line_num;
     sp->last_col_num = s->last_col_num;
     sp->line_num = s->token.line_num;
@@ -55029,11 +55174,15 @@ static int js_parse_get_pos(JSParseState *s, JSParsePos *sp)
     sp->eol = s->eol;
     sp->mark = s->mark;
     sp->got_lf = s->got_lf;
-    return 0;
+    return r;
 }
 
 static __exception int js_parse_seek_token(JSParseState *s, const JSParsePos *sp)
 {
+    /* The token read last is abandoned, its pending body with it, and a failure of its scan is re-met, if at
+       all, when the parse reads it again. */
+    js_parse_token_release(s);
+    s->pd_tok.failed = false;
     s->token.line_num = sp->last_line_num;
     s->token.col_num = sp->last_col_num;
     s->line_num = sp->line_num;
@@ -56189,6 +56338,7 @@ static void js_parse_descent_abandon(JSContext *ctx, JSParseState *s)
     }
     js_parse_regexp_release(s);
     js_parse_skip_release(s);
+    js_parse_token_release(s);
     s->pd_rest_owed = false;
     pd_release(ctx, s);
     s->pd_suspended = false;
@@ -56362,6 +56512,15 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     if (resuming) {
         resuming = false;
     } else {
+        s->pd_suspends++;
+        s->pd_suspended = true;
+        return 0;
+    }
+    /* The string literal next_token handed out is scanned here, before any production reads it, resting inside
+       it where the policy asks. A scan that fails leaves the token TOK_ERROR, which the production refuses with
+       the scan's SyntaxError standing. */
+    if (s->pd_tok.pending && js_parse_token_step(s, s->pd_can_yield) > 0) {
+        s->pd_rest_owed = true;
         s->pd_suspends++;
         s->pd_suspended = true;
         return 0;
@@ -57385,7 +57544,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             PD_RET(-1);
         goto pfx_after_switch;
     case TOK_STRING:
-        if (emit_push_const(s, s->token.u.str.str, 1))
+        if (emit_push_const(s, js_parse_token_str(s), 1))
             PD_RET(-1);
         if (next_token(s))
             PD_RET(-1);
@@ -58402,7 +58561,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             }
         }
     } else if (s->token.val == TOK_STRING) {
-        f->atom = JS_ValueToAtom(ctx, s->token.u.str.str);
+        f->atom = JS_ValueToAtom(ctx, js_parse_token_str(s));
         if (f->atom == JS_ATOM_NULL)
             goto pn_fail;
         if (next_token(s))
@@ -58492,7 +58651,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
         cooked = s->token;
         if (f->op) {
             if (JS_DefinePropertyValueUint32(ctx, f->raw_array, f->arg_count,
-                                             js_dup(s->token.u.str.str),
+                                             js_dup(js_parse_token_str(s)),
                                              JS_PROP_ENUMERABLE | JS_PROP_THROW) < 0) {
                 PD_RET(-1);
             }
@@ -61289,7 +61448,9 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             if (token_is_ident(s->token.val)) {
                 f->atom = JS_DupAtom(ctx, s->token.u.ident.atom);
             } else if (s->token.val == TOK_STRING) {
-                f->atom = JS_ValueToAtom(ctx, s->token.u.str.str);
+                if (js_parse_token_finish(s))
+                    goto exp_fail;
+                f->atom = JS_ValueToAtom(ctx, js_parse_token_str(s));
                 if (f->atom == JS_ATOM_NULL)
                     goto exp_fail;
                 f->st_b1 = true;
@@ -61305,12 +61466,16 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                 if (token_is_ident(s->token.val)) {
                     f->atom2 = JS_DupAtom(ctx, s->token.u.ident.atom);
                 } else if (s->token.val == TOK_STRING) {
-                    JSString *p = JS_VALUE_GET_STRING(s->token.u.str.str);
+                    JSString *p;
+
+                    if (js_parse_token_finish(s))
+                        goto exp_fail;
+                    p = JS_VALUE_GET_STRING(js_parse_token_str(s));
                     if (p->is_wide_char && has_unmatched_surrogate(str16(p), p->len)) {
                         js_parse_error(s, "illegal export name");
                         goto exp_fail;
                     }
-                    f->atom2 = JS_ValueToAtom(ctx, s->token.u.str.str);
+                    f->atom2 = JS_ValueToAtom(ctx, js_parse_token_str(s));
                     if (f->atom2 == JS_ATOM_NULL) {
                         goto exp_fail;
                     }
@@ -61367,7 +61532,9 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             if (token_is_ident(s->token.val)) {
                 f->atom2 = JS_DupAtom(ctx, s->token.u.ident.atom);
             } else if (s->token.val == TOK_STRING) {
-                f->atom2 = JS_ValueToAtom(ctx, s->token.u.str.str);
+                if (js_parse_token_finish(s))
+                    goto exp_fail;
+                f->atom2 = JS_ValueToAtom(ctx, js_parse_token_str(s));
                 if (f->atom2 == JS_ATOM_NULL) {
                     goto exp_fail;
                 }
@@ -62686,7 +62853,9 @@ static __exception int js_parse_with_clause(JSParseState *s, JSReqModuleEntry *r
         return -1;
     while (s->token.val != '}') {
         if (s->token.val == TOK_STRING) {
-            key = JS_ValueToAtom(ctx, s->token.u.str.str);
+            if (js_parse_token_finish(s))
+                return -1;
+            key = JS_ValueToAtom(ctx, js_parse_token_str(s));
             if (key == JS_ATOM_NULL)
                 return -1;
         } else {
@@ -62731,7 +62900,7 @@ static __exception int js_parse_with_clause(JSParseState *s, JSReqModuleEntry *r
                 }
             }
             ret = JS_DefinePropertyValue(ctx, rme->attributes, key,
-                                         js_dup(s->token.u.str.str), JS_PROP_C_W_E);
+                                         js_dup(js_parse_token_str(s)), JS_PROP_C_W_E);
             if (ret < 0) {
                 JS_FreeAtom(ctx, key);
                 return -1;
@@ -62770,7 +62939,9 @@ static __exception int js_parse_from_clause(JSParseState *s, JSModuleDef *m)
         js_parse_error(s, "string expected");
         return -1;
     }
-    module_name = JS_ValueToAtom(s->ctx, s->token.u.str.str);
+    if (js_parse_token_finish(s))
+        return -1;
+    module_name = JS_ValueToAtom(s->ctx, js_parse_token_str(s));
     if (module_name == JS_ATOM_NULL)
         return -1;
     if (next_token(s)) {
@@ -62863,7 +63034,9 @@ static __exception int js_parse_import(JSParseState *s)
 
     first_import = m->import_entries_count;
     if (s->token.val == TOK_STRING) {
-        module_name = JS_ValueToAtom(ctx, s->token.u.str.str);
+        if (js_parse_token_finish(s))
+            return -1;
+        module_name = JS_ValueToAtom(ctx, js_parse_token_str(s));
         if (module_name == JS_ATOM_NULL)
             return -1;
         if (next_token(s)) {
@@ -62925,7 +63098,9 @@ static __exception int js_parse_import(JSParseState *s)
                 if (token_is_ident(s->token.val)) {
                     import_name = JS_DupAtom(ctx, s->token.u.ident.atom);
                 } else if (s->token.val == TOK_STRING) {
-                    import_name = JS_ValueToAtom(ctx, s->token.u.str.str);
+                    if (js_parse_token_finish(s))
+                        return -1;
+                    import_name = JS_ValueToAtom(ctx, js_parse_token_str(s));
                     if (import_name == JS_ATOM_NULL)
                         return -1;
                 } else {
@@ -68272,7 +68447,9 @@ static __exception int js_parse_directives(JSParseState *s)
     js_parse_get_pos(s, &pos);
 
     while(s->token.val == TOK_STRING) {
-        /* Copy actual source string representation */
+        /* Copy actual source string representation, which ends where its scan does. */
+        if (js_parse_token_finish(s))
+            return -1;
         snprintf(str, sizeof str, "%.*s",
                  (int)(s->buf_ptr - s->token.ptr - 2), s->token.ptr + 1);
 
@@ -69039,6 +69216,9 @@ static JSValue js_eval_compile_finish(JSContext *ctx, JSEvalCompile *ec, int err
         ec->fd = NULL;
         return js_eval_compile_fail(ctx, ec);
     }
+    DCHECK(!s->pd_tok.failed && !s->pd_tok.pending,
+           "a parse succeeded with its token stream failed or a string body pending: every production refuses "
+           "TOK_ERROR and the program ends at TOK_EOF, so a string's SyntaxError went unreported");
 
     if (m != NULL) {
         m->has_tla = fd->has_await;
