@@ -10969,11 +10969,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * predicate, so the state is impossible in release too, where the exit's no-held-work DCHECK is
              * compiled out and reads `jobs` rather than `dyn`. It also decides the name, being a fact about the
              * flow's own sequence. */
-            /* An answer still ahead on this path and nothing else to run: the flow waits for it, its reply clock
-               moving to the earliest due point (the landing at the next step's entry takes it, or the due rung
-               waits on the host for it). */
-            else if (pending_next_due(f->pending) > engine_reply_clock(f)) {
-                f->reply_skip += pending_next_due(f->pending) - engine_reply_clock(f);
+            /* An answer not yet landed on this path and nothing else to run: the flow waits for it and is not
+               finished. Its reply clock moves to the earliest due point if that is ahead; the landing at the next
+               step's entry takes it, or the due rung waits on the host for it. Asked of the register, not of the
+               clock: the asks above retire work after this step's landing, so the point may already be behind. */
+            else if (pending_next_due(f->pending) > 0) {
+                int64_t due = pending_next_due(f->pending), now = engine_reply_clock(f);
+
+                if (due > now) f->reply_skip += due - now;
                 g_step_unit = STEP_UNIT_REPLY_CLOCK_MOVE;
                 return 0;
             }

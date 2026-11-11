@@ -4345,8 +4345,8 @@ TF_UNIT void malloc_accounting_selftest(void)
     CHECK(p[0] != NULL, "the accounting witness could not grow a large block");
     JS_GetLiveCounts(rt, &c1);
     CHECKF(js_malloc_usable_size_rt(rt, p[0]) == 5000 && c1.malloc_size - c0.malloc_size == 5000 - usable[0],
-           "growing a large block from %zu to 5000 bytes reports %zu usable and moves malloc_size by %zu",
-           usable[0], js_malloc_usable_size_rt(rt, p[0]), c1.malloc_size - c0.malloc_size);
+           "growing a large block from %zu to 5000 bytes reports %zu usable and moves malloc_size by %lld",
+           usable[0], js_malloc_usable_size_rt(rt, p[0]), (long long)(c1.malloc_size - c0.malloc_size));
     for (int i = 0; i < 3; i++)
         js_free_rt(rt, p[i]);
     JS_FreeRuntime(rt);
