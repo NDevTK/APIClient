@@ -284,6 +284,9 @@ function devEngineRunsSection(runs) {
            "an engine run record reached the diagnostics page without its egress census — bridge.js raises " +
            "both halves in engineServiceFetch's one loop and asserts their containment before writing them " +
            "onto every non-crashed record, so a missing or mistyped half is that relay broken");
+    DCHECK(m.egressHow && typeof m.egressHow === "object" && !Array.isArray(m.egressHow),
+           "an engine run record reached the diagnostics page without its fired-send census — bridge.js " +
+           "composes it from the instance's own list on every non-crashed record");
     let _decl = 0;
     for (const k of Object.keys(m.egressDeclined)) _decl += m.egressDeclined[k];
     const egress = m.egressAsked === 0
@@ -296,6 +299,9 @@ function devEngineRunsSection(runs) {
           + `own policy · ${histCells(m.egressDeclined)} — which is a different fact from a page this engine `
           + `never derived the request for, and the two take opposite work: widen the origin, or improve the `
           + `driving.`;
+    const egressHow = Object.keys(m.egressHow).length === 0
+      ? `sends: no request of this instance reached the chokepoint's firing question`
+      : `sends, by how each left and what admitted it: ${histCells(m.egressHow)}`;
     /* The frontier order (solver/result.c's `_wfq`, relayed whole): readings of one instant, rendered
        generically from the census's own rows so a row added there reaches this page unedited. A finalize
        composes its document after the frontier drained or parked, so `members: 0` is a sentence, never an
@@ -367,7 +373,7 @@ function devEngineRunsSection(runs) {
       label([orphan]),
       label([surface]),
       label([witnessRow]),
-      label([egress]),
+      label([egress]), label([egressHow]),
       label([order]), denom, censusRows,
     ]);
   });

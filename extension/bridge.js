@@ -858,6 +858,8 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            was composed, out of step with `egressAsked`. Null-prototype in (exact `in`), plain object out, like
            every other census on the row. */
         egressAsked: eng._egress.asked, egressDeclined: Object.assign({}, eng._egress.declined),
+        /* The instance's fired-send list as a census, "<how> <what admitted it>" (egressHowCensus). */
+        egressHow: egressHowCensus(eng._egress.sends),
         /* How this instance's replies were delivered (lib/reply-schedule.js): service rounds, answers handed
            over, rounds that waited on the wire for a due answer, and the work skipped at stalls. `waits` is the
            one row the wire's speed may move; every other row of this record is a function of the paths. */
@@ -974,6 +976,9 @@ function linesToAnalysis(lines, msg, outcome, eng) {
     sourceUrl: msg.sourceUrl,
     /* What this analysis is a record of (see `outcome` above); written on every arm, so consumers assert it. */
     _run: outcome,
+    /* The instance's fired-send list so far, restated whole by every analysis of it (analysisEgressRefusal);
+       null for a record no instance made. It is this zone's record, so it is on both arms. */
+    egressSends: eng === null ? null : eng._egress.sends.slice(),
   };
   /* The engine-owned fields, added only where the engine stated them, read straight off `result` so no object
      here exists for a document to be defaulted into. */
@@ -988,6 +993,77 @@ function linesToAnalysis(lines, msg, outcome, eng) {
     analysis._instanceGaps = result._instanceGaps;
   }
   return analysis;
+}
+/* The fired-send record of one instance: every entry safeFetch stated on the reply record of a request the
+   instance asked (lib/safe-fetch.js's `egress` list), in the order the requests settled, each with its
+   request's method. `asked` and `declined` are the census engineServiceFetch raises.
+   Named residual. Not covered: a document load no instance asked (the ambient seed, a declared route, a cold
+   entry's re-derivation) is validated where it settles and is on no instance's list. Next diff: the instance
+   such a load roots takes the load's entries at its reservation. Its absence shows as an analysis whose list
+   holds no entry for its own document's address. */
+function egressLog() {
+  return { asked: 0, declined: Object.create(null), sends: [] };
+}
+const EGRESS_HOWS = ["sent", "answered-locally", "not-sent"];
+const EGRESS_ADMITTED = ["default", "widened", "record"];
+/* Why one entry is not safeFetch's, or null. A hit of the HTTP cache has a null vector and nothing admitted it;
+   every other entry states its vector; an entry the wire or a record answered names what admitted it. */
+function egressEntryRefusal(e) {
+  if (!docIsRecord(e)) return "an entry is not a record";
+  if (typeof e.url !== "string" || e.url === "") return "an entry states no address";
+  if (EGRESS_HOWS.indexOf(e.how) < 0) return "an entry states the how " + JSON.stringify(e.how);
+  if (e.vector !== null && !docIsRecord(e.vector)) return "an entry's vector is neither a vector nor null";
+  if (e.admittedBy !== null && (!docIsRecord(e.admittedBy) || EGRESS_ADMITTED.indexOf(e.admittedBy.kind) < 0))
+    return "an entry states the admitting kind " + JSON.stringify(e.admittedBy && e.admittedBy.kind);
+  if (e.refusal !== null && typeof e.refusal !== "string") return "an entry's refusal is neither a token nor null";
+  if (e.vector === null) return e.admittedBy === null && e.how === "answered-locally" ? null
+    : "an entry with no vector is not a cache hit";
+  if ((e.admittedBy === null) !== (e.how === "not-sent")) return "an entry is " + e.how + " and " +
+    (e.admittedBy === null ? "nothing admitted it" : "something admitted it");
+  return null;
+}
+/* Why a reply record's fired-send list is not safeFetch's, or null. An absent list is refused: read as empty
+   it would say the request asked for no send. */
+function egressRecordRefusal(r) {
+  if (!docIsRecord(r) || !Array.isArray(r.egress)) return "the reply record states no `egress` list";
+  for (const e of r.egress) {
+    const why = egressEntryRefusal(e);
+    if (why !== null) return "the reply record's `egress` list: " + why;
+  }
+  return null;
+}
+/* Takes a settled request's entries into `log`. A CHECK: the record is this zone's own, and a list dropped in
+   release is a send nothing accounts for. */
+function egressTake(log, method, r) {
+  const why = egressRecordRefusal(r);
+  CHECK(why === null, "a " + method + " request settled and " + why);
+  CHECK(log && Array.isArray(log.sends), "a settled request's sends were taken into no instance's log");
+  for (const e of r.egress)
+    log.sends.push({ method, url: e.url, vector: e.vector, admittedBy: e.admittedBy, how: e.how,
+                     refusal: e.refusal });
+}
+/* The census of a list, keyed as safeFetchEgressCensus keys the zone's: "<how> <what admitted it>". */
+function egressHowCensus(sends) {
+  const c = {};
+  for (const e of sends) {
+    const k = e.how + " " + (e.vector === null ? "cache" : e.admittedBy === null ? "none" : e.admittedBy.kind);
+    c[k] = (k in c ? c[k] : 0) + 1;
+  }
+  return c;
+}
+/* Why an analysis does not state its instance's fired-send list, or null: a list of entries each with a
+   method, or null for a record no instance made. */
+function analysisEgressRefusal(a) {
+  if (!docIsRecord(a) || !("egressSends" in a)) return "the analysis states no `egressSends`";
+  if (a.egressSends === null) return null;
+  if (!Array.isArray(a.egressSends)) return "the analysis's `egressSends` is neither a list nor null";
+  for (const e of a.egressSends) {
+    if (!docIsRecord(e) || typeof e.method !== "string" || e.method === "")
+      return "the analysis's `egressSends` holds an entry with no method";
+    const why = egressEntryRefusal(e);
+    if (why !== null) return "the analysis's `egressSends`: " + why;
+  }
+  return null;
 }
 /* The engine-document fields every consumer reads, refused at linesToAnalysis' door when any is absent. */
 const ENGINE_DOC_FIELDS = ["fetchCallSites", "securitySinks", "_park", "_parkWhy", "_novelty", "_instanceGaps"];
@@ -2236,6 +2312,10 @@ async function _frontierRederive(e, held) {
                                                                          e.sourceUrl, DOCUMENT_REQUEST_UNSTATED)
                                                     : null }); }
     catch (err) { RETHROW_FATAL(err); r = null; }
+    if (r !== null) {
+      const _egressWhy = egressRecordRefusal(r);
+      CHECK(_egressWhy === null, "a cold entry's re-derivation of " + e.sourceUrl + " settled and " + _egressWhy);
+    }
   }
   const landed = r && Array.isArray(r.urlList) && r.urlList.length ? r.urlList[r.urlList.length - 1] : null;
   if (r && r.ok && landed === e.sourceUrl && r.body instanceof Uint8Array && r.headers) {
@@ -3012,9 +3092,9 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc,
     const d = await self.safeFetchSchemeData(abs);
     if (d.refusal)
       return { url: abs, headers: {}, bytes: null, declined: null, setCookies: [], credentialed: false,
-               unavailable: { kind: "network", detail: d.statusText } };
+               egress: [], unavailable: { kind: "network", detail: d.statusText } };
     return { url: abs, headers: d.headers, bytes: d.body, unavailable: null, declined: null, setCookies: [],
-             credentialed: false };
+             egress: [], credentialed: false };
   }
   const speaker = navigationCredentialed(abs, principalOrigin, readerOpaque) ? await speakerOf() : null;
   const credentialed = speaker !== null;
@@ -3052,6 +3132,10 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc,
                                           doc: fromDoc, actor: actor, driven: driven,
                                           pinned: pinned, onBodyRead,
                                           credentials: "include", credentialed, identity });
+    /* The load's fired-send list rides every answer below, for the instance that asked to take (`egress`: the
+       list, `[]` for a data: URL, which asks no egress question, and null where the fetch threw). */
+    const _egressWhy = egressRecordRefusal(r);
+    CHECK(_egressWhy === null, "a document load of " + abs + " settled and " + _egressWhy);
     DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && r.headers && typeof r.headers === "object",
            "safeFetch answered a document load with something other than its reply record — HTML §7.4.5 " +
            "\"Populating a session history entry\"'s attempt-to-populate reads the BODY and the POLICY off " +
@@ -3095,12 +3179,12 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc,
            field telling "nothing committed" (creator-origin `about:blank`) from "a load failed" (opaque error
            page). */
         return { url: finalUrl, headers: {}, bytes: null, unavailable: null, declined: r.refusal.reason,
-                 setCookies: [], credentialed };
+                 setCookies: [], credentialed, egress: r.egress };
       }
     }
     if (r.status === 0)
       return { url: finalUrl, headers: {}, bytes: null, declined: null, setCookies: [], credentialed,
-               unavailable: { kind: "network", detail: r.statusText } };
+               egress: r.egress, unavailable: { kind: "network", detail: r.statusText } };
     /* The response's credentialed Set-Cookie fields, each with the URL it answered, for the asking flow's own
        jar: stored during the fetch (Fetch §4.7), so an error response's count too. */
     DCHECK(Array.isArray(r.setCookies), "safeFetch answered a document load with no Set-Cookie list");
@@ -3108,17 +3192,17 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc,
        An error response's body is never used as the document. */
     if (!r.ok)
       return { url: finalUrl, headers: {}, bytes: null, declined: null, setCookies: r.setCookies, credentialed,
-               unavailable: { kind: "status", status: r.status } };
+               egress: r.egress, unavailable: { kind: "status", status: r.status } };
     /* The bytes, because a Document is parsed from a byte sequence: HTML §13.2.3.2 Determining the character
        encoding is the engine's algorithm. And the whole header list: which names matter (opener policy,
        embedder policy, `Origin-Agent-Cluster`) is the engine's question. */
     return { url: finalUrl, headers: r.headers, bytes: r.body, unavailable: null, declined: null,
-             setCookies: r.setCookies, credentialed };
+             setCookies: r.setCookies, credentialed, egress: r.egress };
   } catch (e) {
     /* A thrown fetch is a network error (Fetch §5.6 Fetch methods) and a real outcome; an invariant abort
        thrown through this catch is not, so it is rethrown. */
     RETHROW_FATAL(e);
-    return { url: abs, headers: {}, bytes: null, declined: null, setCookies: [], credentialed,
+    return { url: abs, headers: {}, bytes: null, declined: null, setCookies: [], credentialed, egress: null,
              unavailable: { kind: "network", detail: String((e && e.message) || e) } };
   }
 }
@@ -3388,7 +3472,7 @@ function engineReserve(cluster, docId, msg, referenced) {
                    the map. `asked` is raised at the call and `declined` at the refusal in engineServiceFetch's
                    one loop, so the sum is bounded by `asked`. Both are lifetime counts of ask events, not of
                    distinct addresses (an @S candidate re-fire asks again). */
-                _egress: { asked: 0, declined: Object.create(null) } };
+                _egress: egressLog() };
   _pool.push(eng);
   _provisioned.set(docId, { groupId: msg.groupId, ended: null });
   _reserveStats.made++;
@@ -3828,6 +3912,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
                      identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, "engine:" + eng.docId, abs, credentials, mode,
                                                    referrerPolicy, referrer) };
       const r = await self.safeFetch(abs, opts);
+      egressTake(eng._egress, method, r);
       /* The chokepoint's record is fixed: safe-fetch.js returns {ok,status,statusText,headers,body,urlList} on
          every path, blocked ones included, so a malformed answer is asserted rather than turned into a network
          error. The body is bytes; a string would mean safeFetch ran `text()` (Fetch §5.3 Body mixin) and the
@@ -3925,6 +4010,9 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "whole of what this check replaces: a load arm that forgot to state it read as a load this zone " +
            "fetched, so a frame the chokepoint had refused would be answered with its bytes-less reply through " +
            "the ANSWER path and the engine would park on a rendezvous nothing would ever refuse");
+    DCHECK(r.egress === null || Array.isArray(r.egress),
+           "a §7.4 navigation's result states no fired-send list — navigationLoad writes one on every arm");
+    if (r.egress !== null) egressTake(eng._egress, "GET", r);
     return { url: r.url, headers: r.headers, bytes: r.bytes, declined: r.declined, setCookies: r.setCookies };
   };
   /* The routing table is the pool. `docId` (which document this instance holds) and `origin` (the value
@@ -4416,6 +4504,7 @@ async function engineFetchXhr(eng, rec, doc, signal, onBodyRead) {
                                           identity: await pageRequestIdentity(stampOrigin(eng.origin), eng.msg.sourceUrl, "engine:" + eng.docId, abs,
                                                                         q.credentials, q.mode,
                                                                         q.referrerPolicy, q.referrer) });
+    egressTake(eng._egress, q.method, r);
     DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
            r.headers && typeof r.headers === "object",
            "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +

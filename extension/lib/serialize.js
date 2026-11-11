@@ -338,6 +338,16 @@ function serializeTabData(tab) {
              "document's own list there, so anything else is that relay broken");
       return tab._instanceGaps;
     })(),
+    /* The fired-send list of this document's engine instance (offscreen-brain.js's _recordEgressSends): each
+       request it asked, the signal vector it was judged on, what admitted it and whether it was sent. `null`
+       states that no instance's analysis has reached the document. */
+    egressSends: (function () {
+      if (tab._egressSends === undefined) return null;
+      DCHECK(Array.isArray(tab._egressSends),
+             "a DocView's _egressSends is present but is not an array — offscreen-brain.js writes the " +
+             "analysis's own list there");
+      return tab._egressSends;
+    })(),
     /* WHETHER THIS DOCUMENT'S BUNDLE EVER REACHED THE ANALYSIS, WHICH `analysisRun` ABOVE CANNOT SAY. A page
        whose page source could not be obtained never starts a run, so `analysisRun` is `null` for it — and
        `null` is also what a page still being explored carries, and what a page nobody has reported on

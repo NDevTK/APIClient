@@ -818,7 +818,7 @@ async function mintDrive(minted, slices) {
   const inst = (o) => Object.assign({ state: 'hot', docId: 'step-doc', msg: { sourceUrl: 'https://a.test/' }, lines: [],
                                       origin: 'https://a.test',
                                       _novelty: { spelling: null, n: 0 }, _noveltyCounted: new Map(),
-                                      _replyClock: ZONE.replyClock(0),
+                                      _replyClock: ZONE.replyClock(0), _egress: ZONE.egressLog(),
                                       _replyDelivery: { rounds: 0, delivered: 0, passed: 0, waits: 0, skipped: 0 },
                                       level1: { runnable: true, paid: 3, pulls: 2, acct: { value: 3, pulls: 2, at: 1 } } }, o);
   const refusedRun = (e) => {
@@ -947,7 +947,7 @@ async function mintDrive(minted, slices) {
   for (const [label, text, names] of lines) {
     let fired = 0;
     const e = inst({ docId: 'gap-doc', joinedDocIds: [], _inflight: new Map(), residentBytes: 131072,
-                     _egress: { asked: 0 },
+                     _egress: ZONE.egressLog(),
                      records: new Map([['gap-doc', ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public')]]),
                      fetched: async () => { fired++; return null; },
                      r: { renderer: { getServiceWork: async () => ({ work: 0, workingSetBytes: 65536 }), getPending: async () => ({ requests: text }),
@@ -1028,7 +1028,7 @@ async function mintDrive(minted, slices) {
                                       ['an id that is not a number', 'x\tgap-doc\tnoop', 'positive'],
                                       ['a valid line naming an op this zone does not answer (the control)', '7\tgap-doc\tother.op', null]]) {
     let acted = 0;
-    const e = inst({ docId: 'gap-doc', joinedDocIds: [], _inflight: new Map(), residentBytes: 131072, _egress: { asked: 0 },
+    const e = inst({ docId: 'gap-doc', joinedDocIds: [], _inflight: new Map(), residentBytes: 131072, _egress: ZONE.egressLog(),
                      records: new Map([['gap-doc', ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public')]]),
                      r: { renderer: { getServiceWork: async () => ({ work: 0, workingSetBytes: 65536 }), getPending: async () => ({ requests: '' }),
                                       getHostNotices: async () => ({ notices: '' }),
@@ -1153,7 +1153,7 @@ async function mintDrive(minted, slices) {
     for (const via of ['host request', 'post']) {
       let acted = 0;
       const e = inst({ docId: 'gap-doc', joinedDocIds: rec === 'own' ? [target] : [], groupId: 'g1', _inflight: new Map(),
-                       _remoteAsked: new Set(), residentBytes: 131072, _egress: { asked: 0 },
+                       _remoteAsked: new Set(), residentBytes: 131072, _egress: ZONE.egressLog(),
                        records: new Map([['gap-doc', ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public')]]),
                        r: { renderer: { getServiceWork: async () => ({ work: 0, workingSetBytes: 65536 }), getPending: async () => ({ requests: '' }),
                                         getHostNotices: async () => ({ notices: '' }),
@@ -1279,7 +1279,7 @@ async function mintDrive(minted, slices) {
 {
   const realSafeFetch = ZONE.safeFetch;
   let sent = 0;
-  ZONE.safeFetch = async () => { sent++; return { status: 200, statusText: '', headers: {}, body: runInContext('new Uint8Array(0)', ZONE),
+  ZONE.safeFetch = async () => { sent++; return { status: 200, statusText: '', headers: {}, body: runInContext('new Uint8Array(0)', ZONE), egress: runInContext('[]', ZONE),
                                                   computedType: '', refusal: null, urlList: ['https://a.test/api'] }; };
   const valid = { url: '/api', method: 'GET', credentials: 'same-origin', mode: 'cors', referrerPolicy: '',
                   referrer: 'https://a.test/', useCorsPreflight: false, provenance: 'derived', pinned: 'unpinned',
@@ -1288,7 +1288,8 @@ async function mintDrive(minted, slices) {
                                        ['mode no-cors', JSON.stringify(Object.assign({}, valid, { mode: 'no-cors' })), true],
                                        ['text that is not JSON', '{"url":', true]]) {
     const before = sent;
-    const e = { state: 'hot', msg: { sourceUrl: 'https://a.test/' }, origin: 'https://a.test', docId: 'xhr-doc', lines: [] };
+    const e = { state: 'hot', msg: { sourceUrl: 'https://a.test/' }, origin: 'https://a.test', docId: 'xhr-doc', lines: [],
+                _egress: ZONE.egressLog() };
     let a, threw = null;
     try { a = await ZONE.engineFetchXhr(e, rec, ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public'),
                                         new AbortController().signal); } catch (x) { threw = x; }

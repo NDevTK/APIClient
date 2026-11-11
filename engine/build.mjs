@@ -8568,6 +8568,12 @@ STAGES.push(onHost(runProgram("egress rows", [join(ROOT, "testing", "egress_rows
                        "predicts: read the row's own line. A row that must refuse and was sent is the default " +
                        "widened; exit 2 means the control's send never reached the server."),
   STAGE_HOST.SOURCE));
+/* The fired-send record across extension/bridge.js (egressTake, the analysis's `egressSends`), asked of the
+   bridge's own functions; it sends nothing. A source stage. Exit 2 means bridge.js did not load. */
+STAGES.push(onHost(runProgram("egress relay rows", [join(ROOT, "testing", "egress_relay_rows.mjs")],
+                       "bridge.js no longer takes a reply record's `egress` list into its instance's list, or " +
+                       "accepts a record or an analysis that states none: read the row's own line."),
+  STAGE_HOST.SOURCE));
 /* THE FIFTH AREA: IS EVERY FILE IN THE TEST CORPUS COLLECTED BY SOMEBODY. §Testing — "A TEST FILE THE GATE
    DOES NOT COLLECT IS AN EXCLUDED TEST, AND AN EXCLUDED TEST IS A FAILURE … worse, because the total LOOKS
    complete." engine/gate_collect.mjs is the walk that answers it: a file under engine/tests is either a

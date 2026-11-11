@@ -496,6 +496,7 @@ function _clearDocLearning() {
     delete doc._securityFindings;
     delete doc._resolverErrors;
     delete doc._instanceGaps;
+    delete doc._egressSends;
     delete doc._epNorm;
   });
 }
@@ -613,6 +614,14 @@ function _recordEngineGaps(doc, analysis) {
          "without one and copies it onto the analysis, so its absence is that relay broken and a page whose " +
          "engine crossed unbuilt code would read as one that crossed none");
   doc._instanceGaps = analysis._instanceGaps;
+}
+/* The instance's fired-send list onto a document (bridge.js's `egressSends`): every analysis of an instance
+   restates the whole list, so a delivery supersedes; an analysis no instance made states null and what the
+   document holds stands. */
+function _recordEgressSends(doc, analysis) {
+  const why = analysisEgressRefusal(analysis);
+  DCHECK(why === null, "an analysis reached a document and " + why);
+  if (analysis.egressSends !== null) doc._egressSends = analysis.egressSends;
 }
 
 /* Merge ONE engine advance — a mid-run snapshot of a live document, or the whole output of an engine with no
@@ -738,6 +747,7 @@ function _mergeFrontierResult(sourceUrl, documentIds, result, epoch) {
          have widened a path that still drops them. */
       _recordEnginePageErrors(doc, result);
       _recordEngineGaps(doc, result);
+      _recordEgressSends(doc, result);
       mergeASTResultsIntoVDD(doc, [result]);
       mergeToGlobal(doc);
     }
@@ -1173,6 +1183,7 @@ async function _dispatchDocument(docKey) {
      the host's own `@E`/`@WHY` rows. */
   _recordEnginePageErrors(tab, analysis);
   _recordEngineGaps(tab, analysis);
+  _recordEgressSends(tab, analysis);
 
   /* WHETHER THIS RUN PRODUCED A DOCUMENT AT ALL, ASKED ONCE AND USED THREE TIMES BELOW. It is a fact about
      the RECORD, not a length: bridge.js writes the two finding arrays exactly where the engine handed it an
