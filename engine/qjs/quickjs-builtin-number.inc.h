@@ -181,12 +181,6 @@ static JSValue js_thisNumberValue(JSContext *ctx, JSValueConst this_val)
     return JS_ThrowTypeError(ctx, "not a number");
 }
 
-static JSValue js_number_valueOf(JSContext *ctx, JSValueConst this_val,
-                                 int argc, JSValueConst *argv)
-{
-    return js_thisNumberValue(ctx, this_val);
-}
-
 static int js_get_radix(JSContext *ctx, JSValueConst val)
 {
     int radix;
@@ -415,7 +409,7 @@ static const JSCFunctionListEntry js_number_proto_funcs[] = {
     JS_CFUNC_STEP_DEF("toPrecision", 1, STEPDEF_NUM_TOPRECISION ),
     JS_CFUNC_STEP_DEF("toString", 1, STEPDEF_NUM_TOSTRING ),
     JS_CFUNC_STEP_DEF("toLocaleString", 0, STEPDEF_NUM_TOLOCALESTRING ),
-    JS_CFUNC_DEF("valueOf", 0, js_number_valueOf ),
+    JS_CFUNC_STEP_DEF("valueOf", 0, STEPDEF_NUMBER_VALUEOF ),
 };
 
 

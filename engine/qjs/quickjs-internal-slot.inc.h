@@ -149,3 +149,106 @@ static int js_step_slot_check(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSSl
     *out = js_slot_value(ctx, v, k);
     return 0;
 }
+
+/* THE BUILT-INS WHOSE WHOLE ALGORITHM IS THE RECEIVER CHECK AND ONE STEP OVER ITS VALUE, as one machine, so the
+   check over an unknown carrier can fork: §20.3.3.2 Boolean.prototype.toString, §20.3.3.3 valueOf, §20.4.3.3
+   Symbol.prototype.toString, §20.4.3.4 valueOf, §20.4.3.5 [ %Symbol.toPrimitive% ], §21.1.3.7
+   Number.prototype.valueOf, §21.2.3.4 BigInt.prototype.valueOf, §22.1.3.29 String.prototype.toString and
+   §22.1.3.35 valueOf. The def's `arg` names the row. */
+typedef enum JSThisValueRow {
+    JS_THISV_BOOLEAN_TOSTRING, JS_THISV_BOOLEAN_VALUEOF, JS_THISV_SYMBOL_TOSTRING, JS_THISV_SYMBOL_VALUEOF,
+    JS_THISV_NUMBER_VALUEOF, JS_THISV_BIGINT_VALUEOF, JS_THISV_STRING_VALUEOF,
+} JSThisValueRow;
+
+static JSValue js_thisBooleanValue(JSContext *ctx, JSValueConst this_val);
+static JSValue js_thisSymbolValue(JSContext *ctx, JSValueConst this_val);
+static JSValue js_thisNumberValue(JSContext *ctx, JSValueConst this_val);
+static JSValue js_thisBigIntValue(JSContext *ctx, JSValueConst this_val);
+static JSValue js_thisStringValue(JSContext *ctx, JSValueConst this_val);
+/* The step over the slot's value `v` (taken), which may be unknown. */
+static JSValue js_boolean_string(JSContext *ctx, JSValue v);
+static JSValue js_symbol_descriptive_string(JSContext *ctx, JSValue v);
+
+static const struct { JSSlotKind kind; JSValue (*known)(JSContext *, JSValueConst); } js_thisv_rows[] = {
+    [JS_THISV_BOOLEAN_TOSTRING] = { JS_SLOT_BOOLEAN_DATA, js_thisBooleanValue },
+    [JS_THISV_BOOLEAN_VALUEOF] = { JS_SLOT_BOOLEAN_DATA, js_thisBooleanValue },
+    [JS_THISV_SYMBOL_TOSTRING] = { JS_SLOT_SYMBOL_DATA, js_thisSymbolValue },
+    [JS_THISV_SYMBOL_VALUEOF] = { JS_SLOT_SYMBOL_DATA, js_thisSymbolValue },
+    [JS_THISV_NUMBER_VALUEOF] = { JS_SLOT_NUMBER_DATA, js_thisNumberValue },
+    [JS_THISV_BIGINT_VALUEOF] = { JS_SLOT_BIGINT_DATA, js_thisBigIntValue },
+    [JS_THISV_STRING_VALUEOF] = { JS_SLOT_STRING_DATA, js_thisStringValue },
+};
+
+typedef struct JSThisValue {
+    JSStepHdr hdr;        /* MUST be first: the generic step driver casts the state to JSStepHdr * */
+    JSValue result;       /* DONE (owned) */
+} JSThisValue;
+
+#define THISV_STAGES(X) \
+    X(THISV_ENTRY, "the receiver check (a This*Value operation) and the step over the value it answers")
+enum { THISV_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_thisv_steps[] = { THISV_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_thisv_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSThisValue *s = st;
+    JSThisValueRow row = (JSThisValueRow)s->hdr.arg;
+    JSValue v;
+    int r;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    s->result = JS_UNDEFINED;
+    if (js_value_is_concolic(s->hdr.this_val)) {
+        r = js_step_slot_check(ctx, &s->hdr, s->hdr.this_val, js_thisv_rows[row].kind, &v);
+        if (r) return r;
+    } else {
+        v = js_thisv_rows[row].known(ctx, s->hdr.this_val);
+        if (JS_IsException(v)) return -1;
+    }
+    switch (row) {
+    case JS_THISV_BOOLEAN_TOSTRING: s->result = js_boolean_string(ctx, v); break;
+    case JS_THISV_SYMBOL_TOSTRING: s->result = js_symbol_descriptive_string(ctx, v); break;
+    case JS_THISV_BOOLEAN_VALUEOF: case JS_THISV_SYMBOL_VALUEOF: case JS_THISV_NUMBER_VALUEOF:
+    case JS_THISV_BIGINT_VALUEOF: case JS_THISV_STRING_VALUEOF: s->result = v; break;
+    }
+    if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; return -1; }
+    return 0;
+}
+
+static void js_thisv_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSThisValue *s = st;
+    v->val(ctx, &s->result);
+}
+
+static JSValue js_thisv_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSThisValue *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+    if (take_result) s->result = JS_UNDEFINED;
+    return r;
+}
+
+#define THISV_DEF(ROW, ALG, TYPES) { sizeof(JSThisValue), js_thisv_step, js_thisv_fini, ROW, \
+    .visit = js_thisv_visit, .algorithm = ALG, .steps = js_thisv_steps, .result_types = TYPES }
+static const JSTrampStepDef js_boolean_tostring_def =
+    THISV_DEF(JS_THISV_BOOLEAN_TOSTRING, "20.3.3.2 Boolean.prototype.toString ( )", JS_LANG_TYPE_STRING);
+static const JSTrampStepDef js_boolean_valueof_def =
+    THISV_DEF(JS_THISV_BOOLEAN_VALUEOF, "20.3.3.3 Boolean.prototype.valueOf ( )", JS_LANG_TYPE_BOOLEAN);
+static const JSTrampStepDef js_symbol_tostring_def =
+    THISV_DEF(JS_THISV_SYMBOL_TOSTRING, "20.4.3.3 Symbol.prototype.toString ( )", JS_LANG_TYPE_STRING);
+static const JSTrampStepDef js_symbol_valueof_def =
+    THISV_DEF(JS_THISV_SYMBOL_VALUEOF, "20.4.3.4 Symbol.prototype.valueOf ( )", JS_LANG_TYPE_SYMBOL);
+static const JSTrampStepDef js_symbol_toprim_def =
+    THISV_DEF(JS_THISV_SYMBOL_VALUEOF, "20.4.3.5 Symbol.prototype [ %Symbol.toPrimitive% ] ( hint )",
+              JS_LANG_TYPE_SYMBOL);
+static const JSTrampStepDef js_number_valueof_def =
+    THISV_DEF(JS_THISV_NUMBER_VALUEOF, "21.1.3.7 Number.prototype.valueOf ( )", JS_LANG_TYPE_NUMBER);
+static const JSTrampStepDef js_bigint_valueof_def =
+    THISV_DEF(JS_THISV_BIGINT_VALUEOF, "21.2.3.4 BigInt.prototype.valueOf ( )", JS_LANG_TYPE_BIGINT);
+static const JSTrampStepDef js_string_tostring_def =
+    THISV_DEF(JS_THISV_STRING_VALUEOF, "22.1.3.29 String.prototype.toString ( )", JS_LANG_TYPE_STRING);
+static const JSTrampStepDef js_string_valueof_def =
+    THISV_DEF(JS_THISV_STRING_VALUEOF, "22.1.3.35 String.prototype.valueOf ( )", JS_LANG_TYPE_STRING);
+#undef THISV_DEF

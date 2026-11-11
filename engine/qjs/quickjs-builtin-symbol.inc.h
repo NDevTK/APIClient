@@ -59,8 +59,7 @@ static JSValue js_thisSymbolValue(JSContext *ctx, JSValueConst this_val)
     return JS_ThrowTypeError(ctx, "not a symbol");
 }
 
-/* §20.4.3.3.1 SymbolDescriptiveString ( symbol ) over an unknown Symbol: derived from it, with the example's
-   string as its example. */
+/* An unknown Symbol's string: derived from it, with the example's string as its example. */
 static JSValue js_symbol_derive_string(JSContext *ctx, JSValue sym, const char *op, bool description)
 {
     JSValue ex = js_concolic_operand(ctx, sym), real = JS_UNDEFINED, r;
@@ -84,13 +83,11 @@ static JSValue js_symbol_derive_string(JSContext *ctx, JSValue sym, const char *
     return r;
 }
 
-static JSValue js_symbol_toString(JSContext *ctx, JSValueConst this_val,
-                                  int argc, JSValueConst *argv)
+/* §20.4.3.3.1 SymbolDescriptiveString ( symbol ), over the Symbol `val` (taken), which may be unknown. */
+static JSValue js_symbol_descriptive_string(JSContext *ctx, JSValue val)
 {
-    JSValue val, ret;
-    val = js_thisSymbolValue(ctx, this_val);
-    if (JS_IsException(val))
-        return val;
+    JSValue ret;
+
     if (js_value_is_concolic(val))
         return js_symbol_derive_string(ctx, val, "20.4.3.3 Symbol.prototype.toString", false);
     /* String(sym)'s description branch, inlined: the argument is a SYMBOL, so there is no coercion and nothing
@@ -100,12 +97,6 @@ static JSValue js_symbol_toString(JSContext *ctx, JSValueConst this_val,
       ret = JS_ConcatString3(ctx, "Symbol(", JS_AtomToString(ctx, js_get_atom_index(ctx->rt, p)), ")"); }
     JS_FreeValue(ctx, val);
     return ret;
-}
-
-static JSValue js_symbol_valueOf(JSContext *ctx, JSValueConst this_val,
-                                 int argc, JSValueConst *argv)
-{
-    return js_thisSymbolValue(ctx, this_val);
 }
 
 static JSValue js_symbol_get_description(JSContext *ctx, JSValueConst this_val)
@@ -129,10 +120,10 @@ static JSValue js_symbol_get_description(JSContext *ctx, JSValueConst this_val)
 }
 
 static const JSCFunctionListEntry js_symbol_proto_funcs[] = {
-    JS_CFUNC_DEF("toString", 0, js_symbol_toString ),
-    JS_CFUNC_DEF("valueOf", 0, js_symbol_valueOf ),
+    JS_CFUNC_STEP_DEF("toString", 0, STEPDEF_SYMBOL_TOSTRING ),
+    JS_CFUNC_STEP_DEF("valueOf", 0, STEPDEF_SYMBOL_VALUEOF ),
     // XXX: should have writable: false
-    JS_CFUNC_DEF("[Symbol.toPrimitive]", 1, js_symbol_valueOf ),
+    JS_CFUNC_STEP_DEF("[Symbol.toPrimitive]", 1, STEPDEF_SYMBOL_TOPRIM ),
     JS_PROP_STRING_DEF("[Symbol.toStringTag]", "Symbol", JS_PROP_CONFIGURABLE ),
     JS_CGETSET_DEF("description", js_symbol_get_description, NULL ),
 };

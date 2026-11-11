@@ -3424,13 +3424,6 @@ static JSValue JS_NewUTF32String(JSContext *ctx, const uint32_t *buf, int len)
 }
 
 
-/* also used for String.prototype.valueOf */
-static JSValue js_string_toString(JSContext *ctx, JSValueConst this_val,
-                                  int argc, JSValueConst *argv)
-{
-    return js_thisStringValue(ctx, this_val);
-}
-
 /* String Iterator */
 
 static JSValue js_string_iterator_next(JSContext *ctx, JSValueConst this_val,
@@ -3577,8 +3570,8 @@ static const JSCFunctionListEntry js_string_proto_funcs[] = {
     JS_ALIAS_DEF("trimRight", "trimEnd" ),
     JS_CFUNC_STEP_DEF("trimStart", 0, STEPDEF_STR_TRIMSTART ),
     JS_ALIAS_DEF("trimLeft", "trimStart" ),
-    JS_CFUNC_DEF("toString", 0, js_string_toString ),
-    JS_CFUNC_DEF("valueOf", 0, js_string_toString ),
+    JS_CFUNC_STEP_DEF("toString", 0, STEPDEF_STRING_TOSTRING ),
+    JS_CFUNC_STEP_DEF("valueOf", 0, STEPDEF_STRING_VALUEOF ),
     JS_CFUNC_STEP_DEF("localeCompare", 1, STEPDEF_STR_LOCALECOMPARE ),
     JS_CFUNC_STEP_DEF("normalize", 0, STEPDEF_STR_NORMALIZE ),
     JS_CFUNC_STEP_DEF("toLowerCase", 0, STEPDEF_STR_TOLOWER ),

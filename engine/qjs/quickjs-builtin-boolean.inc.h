@@ -74,12 +74,9 @@ static JSValue js_thisBooleanValue(JSContext *ctx, JSValueConst this_val)
     return JS_ThrowTypeError(ctx, "not a boolean");
 }
 
-static JSValue js_boolean_toString(JSContext *ctx, JSValueConst this_val,
-                                   int argc, JSValueConst *argv)
+/* §20.3.3.2 steps 2-3 over the Boolean `val` (taken), which may be unknown. */
+static JSValue js_boolean_string(JSContext *ctx, JSValue val)
 {
-    JSValue val = js_thisBooleanValue(ctx, this_val);
-    if (JS_IsException(val))
-        return val;
     if (js_value_is_concolic(val)) {
         JSValue ex = js_concolic_operand(ctx, val), r;
 
@@ -97,14 +94,8 @@ static JSValue js_boolean_toString(JSContext *ctx, JSValueConst this_val,
                        JS_ATOM_true : JS_ATOM_false);
 }
 
-static JSValue js_boolean_valueOf(JSContext *ctx, JSValueConst this_val,
-                                  int argc, JSValueConst *argv)
-{
-    return js_thisBooleanValue(ctx, this_val);
-}
-
 static const JSCFunctionListEntry js_boolean_proto_funcs[] = {
-    JS_CFUNC_DEF("toString", 0, js_boolean_toString ),
-    JS_CFUNC_DEF("valueOf", 0, js_boolean_valueOf ),
+    JS_CFUNC_STEP_DEF("toString", 0, STEPDEF_BOOLEAN_TOSTRING ),
+    JS_CFUNC_STEP_DEF("valueOf", 0, STEPDEF_BOOLEAN_VALUEOF ),
 };
 

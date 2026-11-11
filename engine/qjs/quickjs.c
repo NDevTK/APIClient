@@ -2824,6 +2824,9 @@ enum {   /* the STEPDEF_* ids used at the registration sites */
        STEPDEF_COUNT + n, so an id inserted mid-enum renumbers both populations for a tidier neighbourhood. */
     STEPDEF_STR_TOLOCALELOWER, STEPDEF_STR_TOLOCALEUPPER,
     STEPDEF_TA_FROMLIKE,
+    STEPDEF_BOOLEAN_TOSTRING, STEPDEF_BOOLEAN_VALUEOF, STEPDEF_SYMBOL_TOSTRING, STEPDEF_SYMBOL_VALUEOF,
+    STEPDEF_SYMBOL_TOPRIM, STEPDEF_NUMBER_VALUEOF, STEPDEF_BIGINT_VALUEOF, STEPDEF_STRING_TOSTRING,
+    STEPDEF_STRING_VALUEOF,
     STEPDEF_COUNT
 };
 #define HINT_NONE    2
@@ -78773,6 +78776,15 @@ static const JSTrampStepDef *const js_tramp_step_defs[STEPDEF_COUNT] = {
     [STEPDEF_DATE_TOJSON]   = &js_date_toJSON_def,
     [STEPDEF_DATE_TOPRIM]   = &js_date_toPrim_def,
     [STEPDEF_DATE_TOISO]    = &js_date_toISO_def,
+    [STEPDEF_BOOLEAN_TOSTRING] = &js_boolean_tostring_def,
+    [STEPDEF_BOOLEAN_VALUEOF] = &js_boolean_valueof_def,
+    [STEPDEF_SYMBOL_TOSTRING] = &js_symbol_tostring_def,
+    [STEPDEF_SYMBOL_VALUEOF] = &js_symbol_valueof_def,
+    [STEPDEF_SYMBOL_TOPRIM] = &js_symbol_toprim_def,
+    [STEPDEF_NUMBER_VALUEOF] = &js_number_valueof_def,
+    [STEPDEF_BIGINT_VALUEOF] = &js_bigint_valueof_def,
+    [STEPDEF_STRING_TOSTRING] = &js_string_tostring_def,
+    [STEPDEF_STRING_VALUEOF] = &js_string_valueof_def,
     [STEPDEF_DATE_CTOR]     = &js_date_ctor_def,
     [STEPDEF_ITERATOR_CTOR] = &js_iterator_ctor_def,
     [STEPDEF_ARRAY_OF]      = &js_array_of_def,
