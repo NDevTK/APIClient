@@ -20308,12 +20308,28 @@ static long abs_census_last(const char *js, const char *key) {
     return last ? strtol(last + k, NULL, 10) : -1;
 }
 
+/* How many steps took step unit `unit`, read off the result document's last `stepUnitRuns` object, or -1 where
+   the document has none. Other census objects are keyed by the same unit names, so the read stays inside it. */
+static long tf_step_unit_runs(const char *js, const char *unit) {
+    static const char OBJ[] = "\"stepUnitRuns\":{";
+    char pat[96];
+    const char *p, *last = NULL, *end, *hit;
+    int k = snprintf(pat, sizeof pat, "\"%s\":", unit);
+
+    CHECK(k > 0 && (size_t)k < sizeof pat, "a step unit's name did not fit its pattern buffer");
+    for (p = strstr(js, OBJ); p; p = strstr(p + 1, OBJ)) last = p;
+    if (last == NULL) return -1;
+    end = strchr(last, '}');
+    hit = strstr(last, pat);
+    return hit && end && hit < end ? strtol(hit + k, NULL, 10) : -1;
+}
+
 /* The rows of the `declwake` document (fixture/declwake.h), read off the terminal step-unit census. */
 TF_UNIT void probes_declwake(const char *js, Probe *tab, int *n) {
     static char why[320];
-    long forks = abs_census_last(js, "fork-over-a-declined-request");
-    long rests = abs_census_last(js, "await-a-refused-request");
-    long replies = abs_census_last(js, "deliver-one-reply");
+    long forks = tf_step_unit_runs(js, "fork-over-a-declined-request");
+    long rests = tf_step_unit_runs(js, "await-a-refused-request");
+    long replies = tf_step_unit_runs(js, "deliver-one-reply");
     const char *w_why = NULL; int w_tt = 1;
 
     fold_row(&w_tt, &w_why, forks > 0 && replies >= 12,
