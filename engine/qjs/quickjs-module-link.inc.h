@@ -51,6 +51,7 @@ static int js_create_module_bytecode_function(JSContext *ctx, JSModuleDef *m)
     p = JS_VALUE_GET_OBJ(func_obj);
     p->u.func.function_bytecode = b;
     JS_REF_COUNT(b)++;
+    js_orphan_fn_add(ctx->rt, p);
     p->u.func.home_object = NULL;
     p->u.func.var_refs = NULL;
     /* A MODULE'S OWN FUNCTION OBJECT IS NOT A CLOSURE THE PAGE CREATED, so it takes no creation ordinal: it is

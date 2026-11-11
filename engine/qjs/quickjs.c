@@ -456,6 +456,13 @@ struct JSRuntime {
        when it has not. Wraps at 2^32 as a MONOTONE COUNTER is entitled to — a host compares it for INEQUALITY
        only, so a wrap costs one redundant walk and never a skipped one. */
     uint32_t orphan_gen;
+    /* The function objects the orphan take enumerates: every object of a bytecode class whose body is set, linked
+       in creation order (js_orphan_fn_add at each site that sets `u.func.function_bytecode`, js_orphan_fn_remove in
+       its finalizer), with an address map from object to node. The take reads this population rather than the
+       whole heap, of which these objects are a small part. */
+    struct list_head orphan_fns;
+    struct JSOrphanFnNode **orphan_fn_map;
+    uint32_t orphan_fn_map_cap, orphan_fn_n;
     /* …AND WHO WANTS TO BE TOLD AS IT HAPPENS — JS_SetOrphanBornHook. The generation above answers "could the
        set have grown"; this is for the part of the set no later walk can see, a body whose only closure is
        released with the frame that built it. NULL on every runtime until a host installs one. */
@@ -471,10 +478,8 @@ struct JSRuntime {
        take. That residual states the question in its own words: "how many live, never-entered, non-program
        JSFunctionBytecode exist at ask time", and that it is what separates the TWO READINGS of a `driven` 0 —
        a page that ships no uncalled code, and a frontier that never reached the question.
-       `walks` AND `entries` ARE THE PRICE. The walk enumerates `gc_obj_list`, so `entries / walks` is the mean
-       heap length one take reads, which is the number every repair of this seam has to be weighed against: a
-       candidate list pays only if candidates are far fewer than entries, and until these rows existed nobody
-       could say. Both are LIFETIME counts and may be differenced across two censuses of one run.
+       `walks` AND `entries` ARE THE PRICE. The walk enumerates the function objects (`orphan_fns`), so
+       `entries / walks` is the mean number of them one take reads. Both are LIFETIME counts and may be differenced across two censuses of one run.
        `walks_full` AND `full_candidates` ARE THE POPULATION, AND THE SPLIT IS NOT DECORATION. This walk EXITS
        EARLY when a preferred candidate's script stands at the lowest quota, so a walk that exited has seen a
        FLOOR of the candidate set and not the set — a count over every walk would be a floor wearing a total's
@@ -492,7 +497,7 @@ struct JSRuntime {
     uint64_t orphan_walk_full_candidates;
     /* HOW MANY TAKES EACH SCRIPT HAS ALREADY HAD, AND THE QUOTA EVERY SCRIPT IS CURRENTLY ENTITLED TO — the
        FAIRNESS half of JS_OrphanTakeOne's order, which the preference bit alone does not supply. The walk
-       enumerates `gc_obj_list`, i.e. HEAP ALLOCATION ORDER, so without this the whole orphan budget goes to
+       enumerates the function objects in CREATION ORDER, so without this the whole orphan budget goes to
        whichever chunk a bundle happened to evaluate first: measured on app.gitpod.io, 179 drives in 75 seconds
        all landed inside the HLS player its `@mux` chunk ships, while the request builders of the same page sat
        in the same heap unreached. That is one flow class monopolising the thread, which is exactly what
@@ -2621,6 +2626,8 @@ static void js_c_function_finalizer(JSRuntime *rt, JSValueConst val);
 static void js_c_function_mark(JSRuntime *rt, JSValueConst val,
                                JS_MarkFunc *mark_func);
 static void js_bytecode_function_finalizer(JSRuntime *rt, JSValueConst val);
+static void js_orphan_fn_add(JSRuntime *rt, JSObject *p);
+static void js_orphan_fn_remove(JSRuntime *rt, JSObject *p);
 static void js_bytecode_function_mark(JSRuntime *rt, JSValueConst val,
                                 JS_MarkFunc *mark_func);
 static void js_bound_function_finalizer(JSRuntime *rt, JSValueConst val);
@@ -4087,6 +4094,7 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     init_list_head(&rt->context_list);
     init_list_head(&rt->agent_list);
     init_list_head(&rt->gc_obj_list);
+    init_list_head(&rt->orphan_fns);
     init_list_head(&rt->gc_zero_ref_count_list);
     init_list_head(&rt->gc_ctx_sweep_list);
     init_list_head(&rt->net_site_bodies);
@@ -5239,6 +5247,10 @@ void JS_FreeRuntime(JSRuntime *rt)
        script name for the life of the runtime for no reader, and releasing them would release a reference this
        table never took — so the only thing owed is the array. */
     js_free_rt(rt, rt->orphan_script_takes);
+    DCHECKF(rt->orphan_fn_n == 0 && list_empty(&rt->orphan_fns),
+            "the runtime went down with %u function object(s) still in the orphan index — every one is freed with "
+            "the heap above and its finalizer unlinks it", (unsigned)rt->orphan_fn_n);
+    js_free_rt(rt, rt->orphan_fn_map);
     js_free_rt(rt, rt->class_array);
     list_for_each_safe(el, el1, &rt->agent_list) {
         JSAgentRecord *agent = list_entry(el, JSAgentRecord, link);
@@ -10314,6 +10326,7 @@ static void js_bytecode_function_finalizer(JSRuntime *rt, JSValueConst val)
     }
     b = p->u.func.function_bytecode;
     if (b) {
+        js_orphan_fn_remove(rt, p);
         var_refs = p->u.func.var_refs;
         if (var_refs) {
             for(i = 0; i < b->closure_var_count; i++)
@@ -19280,6 +19293,7 @@ static JSValue js_closure2(JSContext *ctx, JSValue func_obj,
     p->u.func.function_bytecode = b;
     p->u.func.home_object = NULL;
     p->u.func.var_refs = NULL;
+    js_orphan_fn_add(ctx->rt, p);
     /* A NEW FUNCTION OBJECT EXISTS, which is the ONE event that can add to the set JS_OrphanTakeOne enumerates —
        and this is the one line every function object in this runtime passes through, whether it came from a
        fresh compile or from an enclosing body running for the first time and instantiating a body that had no
@@ -48304,6 +48318,7 @@ static void fg_rclosure(FGReader *r, JSObject *p)
     CHECK(JS_VALUE_GET_TAG(bv) == JS_TAG_FUNCTION_BYTECODE, "flow graph: a closure's body is not a function body");
     b = JS_VALUE_GET_PTR(bv);
     p->u.func.function_bytecode = b;   /* the anchor's dup is the closure's reference */
+    js_orphan_fn_add(r->ctx->rt, p);
     CHECK(JS_IsNull(home) || JS_IsObject(home), "flow graph: a closure's home object is neither absent nor an object");
     p->u.func.home_object = JS_IsObject(home) ? JS_VALUE_GET_OBJ(home) : NULL;
     p->u.func.creation_ord = fg_r32(r);
@@ -86291,6 +86306,76 @@ void JS_SetOrphanBornHook(JSRuntime *rt, JSOrphanBornFn *hook, void *opaque)
    compiled as a function because that is how the interpreter runs them, and the scheduler already owns running
    them — calling one as an orphan would run a whole script a second time, with its side effects, against a
    delta that may already hold them. */
+/* The orphan index (JSRuntime's `orphan_fns`): one node per function object with a body, in creation order, and an
+   open-addressed map from the object's address to its node, deleted by backward shift so no probe chain breaks. */
+typedef struct JSOrphanFnNode {
+    struct list_head link;
+    JSObject *p;
+} JSOrphanFnNode;
+
+static uint32_t orphan_fn_slot(const JSRuntime *rt, const JSObject *p)
+{
+    return (uint32_t)(((uintptr_t)p >> 4) * 0x9E3779B97F4A7C15ULL >> 32) & (rt->orphan_fn_map_cap - 1);
+}
+
+static void js_orphan_fn_add(JSRuntime *rt, JSObject *p)
+{
+    JSOrphanFnNode *n;
+    uint32_t i;
+
+    DCHECK(js_class_has_bytecode(p->class_id) && p->u.func.function_bytecode != NULL,
+           "a function object entered the orphan index with no body or of a class that has none");
+    if ((rt->orphan_fn_n + 1) * 2 > rt->orphan_fn_map_cap) {
+        uint32_t cap = rt->orphan_fn_map_cap ? rt->orphan_fn_map_cap * 2 : 1024;
+        JSOrphanFnNode **old = rt->orphan_fn_map;
+        uint32_t old_cap = rt->orphan_fn_map_cap;
+
+        rt->orphan_fn_map = js_mallocz_rt(rt, sizeof(*rt->orphan_fn_map) * cap);
+        CHECK(rt->orphan_fn_map != NULL, "quickjs: OOM growing the orphan index's address map");
+        rt->orphan_fn_map_cap = cap;
+        for (uint32_t k = 0; k < old_cap; k++) {
+            if (!old[k]) continue;
+            for (i = orphan_fn_slot(rt, old[k]->p); rt->orphan_fn_map[i]; i = (i + 1) & (cap - 1)) {}
+            rt->orphan_fn_map[i] = old[k];
+        }
+        js_free_rt(rt, old);
+    }
+    n = js_malloc_rt(rt, sizeof *n);
+    CHECK(n != NULL, "quickjs: OOM adding a function object to the orphan index");
+    n->p = p;
+    list_add_tail(&n->link, &rt->orphan_fns);
+    for (i = orphan_fn_slot(rt, p); rt->orphan_fn_map[i]; i = (i + 1) & (rt->orphan_fn_map_cap - 1))
+        DCHECK(rt->orphan_fn_map[i]->p != p, "a function object entered the orphan index twice");
+    rt->orphan_fn_map[i] = n;
+    rt->orphan_fn_n++;
+}
+
+static void js_orphan_fn_remove(JSRuntime *rt, JSObject *p)
+{
+    uint32_t mask = rt->orphan_fn_map_cap - 1, i, j;
+    JSOrphanFnNode *n;
+
+    CHECK(rt->orphan_fn_map_cap != 0, "quickjs: a function object with a body was freed and the orphan index was "
+                                      "never built — every site that sets a body adds the object");
+    for (i = orphan_fn_slot(rt, p); rt->orphan_fn_map[i] && rt->orphan_fn_map[i]->p != p; i = (i + 1) & mask) {}
+    n = rt->orphan_fn_map[i];
+    CHECK(n != NULL, "quickjs: a function object with a body was freed and is not in the orphan index — a site that "
+                     "sets `u.func.function_bytecode` did not add it, and the take would read the freed object");
+    list_del(&n->link);
+    js_free_rt(rt, n);
+    rt->orphan_fn_map[i] = NULL;
+    rt->orphan_fn_n--;
+    /* Backward shift: a later entry of the probe chain whose home slot does not lie in (i, j] moves into the hole. */
+    for (j = (i + 1) & mask; rt->orphan_fn_map[j]; j = (j + 1) & mask) {
+        uint32_t h = orphan_fn_slot(rt, rt->orphan_fn_map[j]->p);
+
+        if (i <= j ? (h > i && h <= j) : (h > i || h <= j)) continue;
+        rt->orphan_fn_map[i] = rt->orphan_fn_map[j];
+        rt->orphan_fn_map[j] = NULL;
+        i = j;
+    }
+}
+
 static bool orphan_candidate(JSGCObjectHeader *gp, JSObject **pp, JSFunctionBytecode **pb)
 {
     JSObject *p;
@@ -86395,7 +86480,7 @@ int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
        PREFERRED set (a body that spells a door's entry) and index 0 is every candidate; a preferred candidate
        is in both, which is why the fallback arm is reachable only when the preferred one is empty rather than
        by a second filter. `best_q` is that set's lowest per-script take count so far and the comparison is
-       STRICT, which is what keeps a tie on the earliest candidate in heap order. */
+       STRICT, which is what keeps a tie on the earliest candidate in creation order. */
     JSObject *best_p[2] = { NULL, NULL };
     JSFunctionBytecode *best_b[2] = { NULL, NULL };
     uint32_t best_q[2] = { 0, 0 };
@@ -86415,8 +86500,8 @@ int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
        requires `spells_net_entry`. So every body this walk would ever have handed over it still hands over, and
        all that moves is WHEN — nothing is dropped, no candidate is decided not to happen, and there is no
        seen-set here beyond the pre-existing `entered` mark that makes a body a work item taken once.
-       WHY AN ORDER IS OWED AT ALL, MEASURED RATHER THAN ARGUED: this walk enumerates `rt->gc_obj_list`, which is
-       HEAP ALLOCATION ORDER, so it is a property of which chunk a bundle happened to evaluate first. On
+       Why an order is owed: this walk enumerates the function objects (`rt->orphan_fns`) in creation order, a
+       property of which chunk a bundle happened to evaluate first. On
        app.gitpod.io — an application whose entire API surface is 131 protobuf RPC methods — 179 drives in 75
        seconds of engine time all landed inside the HLS video player its `@mux` chunk ships: every fork site the
        census recorded names `BYTERANGE`, `encryptedFragments`, `canSkipUntil`, `skippedSegments`, `videoCodec`,
@@ -86455,17 +86540,17 @@ int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
        THE SETS ARE UNCHANGED, WHICH IS WHAT MAKES THIS AN ORDER AND NOT A BOUND. The fallback set is every
        candidate and the preferred set is the cut of those that spell a door's entry, exactly as the two passes
        had them; the minimum is still the smallest per-script take count WITHIN each set, and a tie is still
-       kept by the earliest candidate in heap order because the comparison is strict. So every body this walk
+       kept by the earliest candidate in creation order because the comparison is strict. So every body this walk
        would ever have handed over it still hands over, nothing is decided not to happen, and all that moves is
        how many times the list is read to decide it.
        THE EARLY EXIT IS THE OLD SCAN'S AND IS KEPT, on the PREFERRED set only: a preferred candidate whose
        script has no takes at all stands at the lowest value the quota can reach and is the earliest such in
-       heap order, so nothing later in the list can displace it and the rest of the walk cannot change which
+       creation order, so nothing later in the list can displace it and the rest of the walk cannot change which
        body is handed over. The fallback set has no such exit here because reaching it means the preferred set
        is empty, which is the rare case and the one the old fallback pass walked twice anyway. */
     rt->orphan_walks++;
-    list_for_each(el, &rt->gc_obj_list) {
-        JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
+    list_for_each(el, &rt->orphan_fns) {
+        JSGCObjectHeader *gp = &list_entry(el, JSOrphanFnNode, link)->p->header;
         JSObject *p;
         JSFunctionBytecode *b;
         uint32_t t;

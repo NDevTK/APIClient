@@ -7471,8 +7471,8 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
         return engine_orphan_redrive(ctx, f);
     }
     /* Named residual. An empty walk is not "this bundle ships no uncalled code": the take can hand over only a
-       body with a live function object of its own (JS_OrphanTakeOne walks rt->gc_obj_list's JS_GC_OBJ_TYPE_JS_OBJECT
-       entries and reads `p->u.func.function_bytecode`). Not covered: a body whose only closure was released, the
+       body with a live function object of its own (JS_OrphanTakeOne walks the runtime's function objects,
+       `orphan_fns`, and reads `p->u.func.function_bytecode`). Not covered: a body whose only closure was released, the
        ordinary shape of a minified bundle's inner helpers. Its bytecode survives only while its enclosing chain's
        root is held (`cpool` is a parent-to-child edge and JSFunctionBytecode has no parent pointer), and for a
        document script the root is the program function object flow_step's completion arm releases through
