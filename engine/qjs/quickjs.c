@@ -204,7 +204,7 @@ typedef enum {
     JS_GC_CYCLE_IDLE,
     JS_GC_CYCLE_DECREF,   /* subtracting the references GC objects hold on each other */
     JS_GC_CYCLE_SCAN,     /* restoring what is reachable from a reference held outside the graph */
-    JS_GC_CYCLE_FREE,     /* the verdict stands: tmp_obj_list is unreachable and is being freed */
+    JS_GC_CYCLE_FREE,     /* the verdict stands: tmp_obj_list is unreachable and is being freed, step by step */
 } JSGCCycleStep;
 
 /* A cycle collection's progress record. A trial is over a set of objects: every object (a whole-heap trial,
@@ -215,17 +215,19 @@ typedef enum {
    `decref_done` (or to tmp_obj_list when nothing outside the set holds it), the scan to `scan_done`, pulling
    back from tmp_obj_list what it finds reachable. The trial counts and the visited mark live in each object's
    header under `serial`, never in ref_count, so the mutator may run between two steps; a step that finds
-   gc_mut_reading moved since the trial began restarts it by rejoining the lists and taking a new serial. */
+   gc_mut_reading moved since the trial began restarts it by rejoining the lists and taking a new serial.
+   The verdict spans the freeing's steps too. From the scan's end until the collection is idle, tmp_obj_list and
+   `zombies` hold what the verdict frees, and no counted reference outside them names a member, so a mutator
+   reaches one only through a holder that names a GC object without counting it. Each such holder asks
+   gc_cycle_frees before it reads the object (WeakRef deref, the shape hash, the realm walk, and an embedder's
+   own tables through JS_GCCondemned). */
 /* Named residual. Not covered: a cycle wholly at or below the floor of the last scope that released it (state
    every sharer of which was sold) waits for a whole-heap trial, which only the allocation threshold owes. Next
    diff builds: a pressure-side owe of that trial, once a sweep shows the residue. Absence shows as: a
    whole-heap collection freeing much right after scoped ones freed little.
-   Named residual. Not covered: the freeing runs to its end inside the scan's last step (JS_GCStep). Next diff
-   builds: the freeing as steps under a verdict that spans them, every holder that names a GC object without
-   counting it (WeakRef, the shape hash, an embedder's realm table) asking gc_cycle_frees first. Absence shows
-   as: the largest freeing step (@HEAP gcFreeStepMax) at the garbage's size.
-   Named residual. Not covered: one object's own edges are visited whole by a step. Next diff builds: an edge
-   cursor per object on this record. Absence shows as: a step past its budget by its last object's edges. */
+   Named residual. Not covered: one object's own edges are visited whole by a step, and its teardown runs whole
+   in one. Next diff builds: an edge cursor per object on this record. Absence shows as: a step past its budget
+   by its last object's edges. */
 /* Opcodes dispatched on this thread, lifetime: every opcode may store into the graph, so a trial that any opcode
    followed is restarted (gc_mut_reading). Raised beside the flow's retired work, which the scheduler resets. */
 static _Thread_local uint64_t g_js_dispatch_life __attribute__((tls_model("local-exec"))) = 0;
@@ -235,9 +237,12 @@ typedef struct JSGCScope { size_t end; uint32_t floor; } JSGCScope;
 typedef struct JSGCCycle {
     JSGCCycleStep step;
     struct list_head pending, decref_done, scan_done;
-    /* Cycle members freed while another member still counts a reference to them: their memory, released when
-       the collection ends. */
+    /* Cycle members torn down while another member still counts a reference to them: their memory, released by
+       the freeing's last steps. Until tmp_obj_list is empty it also parks the shapes, cells and realms the cursor
+       met, which the teardown of what holds them frees. */
     struct list_head zombies;
+    /* A freeing step is on the C stack: an allocation threshold its finalizers cross is the collection's own. */
+    bool in_free_step;
     /* Release scopes (JS_GCReleaseScopeBegin). `rel` holds one counted reference per release a scope noted,
        scope after scope from `rel_head`; scope i ends at scopes[i].end and its trial's floor is scopes[i].floor.
        A scoped trial takes the oldest scope, a whole-heap trial all of them. */
@@ -3267,8 +3272,9 @@ static void js_trigger_gc(JSRuntime *rt, size_t size)
         }
 #endif
         /* Crossed by a finalizer of the collection that is freeing its cycles: that collection answers it,
-           since the threshold moves when it finishes. */
-        if (rt->gc_cycle.step == JS_GC_CYCLE_FREE)
+           since the threshold moves when it finishes. A mutator's crossing between two of its steps is owed
+           or run like any other; JS_RunGC finishes the freeing first. */
+        if (rt->gc_cycle.in_free_step)
             return;
         if (rt->gc_driven) {
             /* Owed, not run: the embedder's scheduler begins it at its next step, where no mutator stands
@@ -4235,6 +4241,9 @@ JSContext *JS_NextRealm(JSRuntime *rt, JSContext *prev)
     struct list_head *el = prev ? prev->link.next : rt->context_list.next;
 
     DCHECK(prev == NULL || prev->rt == rt, "a realm walk was continued from a realm of another runtime");
+    /* The list names realms without counting them: one a standing collection's verdict frees is passed over. */
+    while (el != &rt->context_list && gc_cycle_frees(rt, &list_entry(el, JSContext, link)->header))
+        el = el->next;
     return el == &rt->context_list ? NULL : list_entry(el, JSContext, link);
 }
 
@@ -5044,13 +5053,13 @@ void JS_FreeRuntime(JSRuntime *rt)
     /* A parked cleanup entry that never became a job still owns its callback, held value and context, so it is
        released here rather than reported as a leak by the walk below. */
     js_finrec_drain(rt, false);
-    /* No realm is waiting for the second half of its teardown: every collection and every release loop ends
-       with the worklist empty, and this is outside both. */
+
+    JS_RunGC(rt);
+    /* No realm is waiting for the second half of its teardown: a collection ends with the worklist empty, and
+       the one above finished any freeing that stood with realms parked. */
     DCHECK(list_empty(&rt->gc_ctx_sweep_list),
            "a realm was still waiting for the second half of its teardown when the runtime went — a collection "
            "ended without reaching the release loop, so that realm's tables and its own memory were dropped");
-
-    JS_RunGC(rt);
     DCHECK(rt->gc_cycle.rel_n == 0 && rt->gc_cycle.scope_n == 0,
            "a release scope's references outlived the runtime's last collection — a whole-heap trial takes "
            "every scope");
@@ -8493,7 +8502,8 @@ static int add_shape_property(JSContext *ctx, JSShape **psh,
 }
 
 /* find a hashed empty shape matching the prototype. Return NULL if
-   not found */
+   not found. The table names shapes without counting them, so a shape a standing collection's verdict frees
+   is passed over here and in find_hashed_shape_prop: a new object must not take a share of it. */
 static JSShape *find_hashed_shape_proto(JSRuntime *rt, JSObject *proto)
 {
     JSShape *sh1;
@@ -8504,7 +8514,8 @@ static JSShape *find_hashed_shape_proto(JSRuntime *rt, JSObject *proto)
     for(sh1 = rt->shape_hash[h1]; sh1 != NULL; sh1 = sh1->shape_hash_next) {
         if (sh1->hash == h &&
             sh1->proto == proto &&
-            sh1->prop_count == 0) {
+            sh1->prop_count == 0 &&
+            !gc_cycle_frees(rt, &sh1->header)) {
             return sh1;
         }
     }
@@ -8528,7 +8539,8 @@ static JSShape *find_hashed_shape_prop(JSRuntime *rt, JSShape *sh,
            shapes really match */
         if (sh1->hash == h &&
             sh1->proto == sh->proto &&
-            sh1->prop_count == ((n = sh->prop_count) + 1)) {
+            sh1->prop_count == ((n = sh->prop_count) + 1) &&
+            !gc_cycle_frees(rt, &sh1->header)) {
             for(i = 0; i < n; i++) {
                 if (unlikely(get_shape_prop(sh1)[i].atom != get_shape_prop(sh)[i].atom) ||
                     unlikely(get_shape_prop(sh1)[i].flags != get_shape_prop(sh)[i].flags))
@@ -10408,8 +10420,13 @@ static void free_gc_object(JSRuntime *rt, JSGCObjectHeader *gp)
    weak references are to be reset, and JS_FreeContext parks a realm on gc_ctx_sweep_list. So a cascade of any
    length (`for (;;) a = {next: a}` dropped, a chain of weak keys, realms freeing each other's tables) is one
    iteration per item and no C frames. Dead objects go first, then weak resets, and a realm's tables only once
-   nothing dead remains that could read them. engine/recgate.mjs still reports the static cycle through here,
-   since a call graph cannot see the phase; the depth assert is what makes the bound measured. */
+   nothing dead remains that could read them: while a freeing stands its members are such readers, so parked
+   realms wait for the loop the freeing ends with. engine/recgate.mjs still reports the static cycle through
+   here, since a call graph cannot see the phase; the depth assert is what makes the bound measured.
+   Named residual. Not covered: the loop runs to its end, so the last reference to an acyclic structure frees
+   all of it inside one opcode, or inside the collector step whose teardowns dropped that reference. Next diff
+   builds: the loop as budgeted steps, a queued object answering as dead to every holder gc_cycle_frees
+   guards. Absence shows as: an opcode or a collector step whose thread time is far past its work. */
 static void free_zero_refcount(JSRuntime *rt)
 {
     struct list_head *el;
@@ -10439,7 +10456,7 @@ static void free_zero_refcount(JSRuntime *rt)
             continue;
         }
         el = rt->gc_ctx_sweep_list.next;
-        if (el != &rt->gc_ctx_sweep_list) {
+        if (el != &rt->gc_ctx_sweep_list && rt->gc_cycle.step != JS_GC_CYCLE_FREE) {
             /* A realm whose last reference went away inside a collection or inside this loop released its
                references then (js_context_release_refs) and left its tables and its own memory for here. */
             list_del(el);
@@ -11317,64 +11334,117 @@ static bool gc_scan_step(JSRuntime *rt, uint64_t budget)
     return true;
 }
 
-/* At the verdict: the references the trial's scopes held go back, with no free of their own (a kept object has
-   another holder, a cycle member is the freeing's), and the scopes are spent. */
-static void gc_trial_scopes_spent(JSRuntime *rt)
+/* One reference a spent scope held on `p`, given back. A member of the cycles is the freeing's, so its count
+   only drops; anything else is released like any reference, because a mutator may have dropped its other
+   holders since the verdict. */
+static void gc_scope_ref_back(JSRuntime *rt, JSGCObjectHeader *p)
 {
-    JSGCCycle *c = &rt->gc_cycle;
-    size_t i;
-
-    DCHECK(c->seed == c->seed_end, "the verdict was reached with a noted release not subtracted");
-    for (i = c->rel_head; i < c->seed_end; i++) {
-        JSGCObjectHeader *p = c->rel[i];
-
+    if (gc_cycle_frees(rt, p)) {
         JS_REF_COUNT(p)--;
-        DCHECK(JS_REF_COUNT(p) > 0 || gc_cycle_frees(rt, p),
-               "an object the trial kept lost its last reference when its scope's went back — the trial "
-               "counted a holder that does not exist");
+        return;
     }
-    c->work += c->seed_end - c->rel_head;
-    c->rel_head = c->seed_end;
-    c->scope_head = c->scopes_after;
-    if (c->rel_head == c->rel_n) {
-        DCHECK(c->scope_head == c->scope_n, "every noted release is spent and a scope is still closed over some");
-        c->rel_head = c->rel_n = 0;
-        c->scope_head = c->scope_n = 0;
+    DCHECK(JS_REF_COUNT(p) > 1 || gc_mut_reading(rt) != rt->gc_cycle.mut_epoch0,
+           "an object the trial kept loses its last reference as its scope's goes back, with no mutator since "
+           "the verdict — the trial counted a holder that does not exist");
+    switch (JS_GC_TYPE(p)) {
+    case JS_GC_OBJ_TYPE_JS_OBJECT:
+        JS_FreeValueRT(rt, JS_MKPTR(JS_TAG_OBJECT, p));
+        return;
+    case JS_GC_OBJ_TYPE_FUNCTION_BYTECODE:
+        JS_FreeValueRT(rt, JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, p));
+        return;
+    case JS_GC_OBJ_TYPE_VAR_REF:
+        free_var_ref(rt, (JSVarRef *)p);
+        return;
+    case JS_GC_OBJ_TYPE_ASYNC_FUNCTION:
+        js_async_function_free(rt, (JSAsyncFunctionData *)p);
+        return;
+    case JS_GC_OBJ_TYPE_SHAPE:
+    case JS_GC_OBJ_TYPE_JS_CONTEXT:
+        break;
     }
+    DFAIL("a release scope holds a reference on a GC object of a kind no release notes");
 }
 
-static void gc_free_cycles(JSRuntime *rt)
+/* What tearing `p` down costs in the collector's unit: the object and the slots its teardown releases. Read
+   before the teardown, which gives the shape back. */
+static uint64_t gc_free_cost(const JSGCObjectHeader *gp)
 {
-    struct list_head *el, *el1;
+    switch (JS_GC_TYPE(gp)) {
+    case JS_GC_OBJ_TYPE_JS_OBJECT: {
+        const JSObject *p = (const JSObject *)gp;
+        uint64_t n = 1 + (uint64_t)p->shape->prop_count;
+
+        if (p->class_id == JS_CLASS_ARRAY || p->class_id == JS_CLASS_ARGUMENTS)
+            n += p->u.array.count;
+        return n;
+    }
+    case JS_GC_OBJ_TYPE_FUNCTION_BYTECODE:
+        return 1 + (uint64_t)((const JSFunctionBytecode *)gp)->cpool_count;
+    case JS_GC_OBJ_TYPE_ASYNC_FUNCTION:
+    case JS_GC_OBJ_TYPE_SHAPE:
+    case JS_GC_OBJ_TYPE_VAR_REF:
+    case JS_GC_OBJ_TYPE_JS_CONTEXT:
+        break;
+    }
+    return 1;
+}
+
+/* The freeing, for at most `budget` units of work, in three parts that each resume where a step left them: the
+   references the trial's scopes held go back; tmp_obj_list's first members are torn down; the memory of the
+   members another still counted at their turn is released. Returns true when the collection is idle. A step
+   ends by releasing what its teardowns left with no holder, so a mutator meets no dead object the verdict does
+   not answer for. */
+static bool gc_free_step(JSRuntime *rt, uint64_t budget)
+{
+    JSGCCycle *c = &rt->gc_cycle;
     JSGCObjectHeader *p;
+    uint64_t spent = 0, cost;
+    bool done;
 #ifdef ENABLE_DUMPS // JS_DUMP_GC_FREE
     bool header_done = false;
 #endif
 
-    DCHECKF(rt->gc_cycle.step == JS_GC_CYCLE_FREE,
-            "the cycles were freed with the collection at step %d — tmp_obj_list is the cycles only once the scan "
-            "has finished", (int)rt->gc_cycle.step);
-    rt->gc_phase = JS_GC_PHASE_REMOVE_CYCLES;
+    DCHECKF(c->step == JS_GC_CYCLE_FREE,
+            "a freeing step ran with the collection at step %d — tmp_obj_list is the cycles only once the scan "
+            "has finished", (int)c->step);
+    DCHECK(!c->scope_open, "a freeing step ran inside a release scope — the references it gives back would be "
+                           "noted again");
+    DCHECK(!c->in_free_step, "a freeing step was entered from inside one — a finalizer drove the collector");
+    c->in_free_step = true;
 
-    for(;;) {
-        el = rt->tmp_obj_list.next;
-        if (el == &rt->tmp_obj_list)
-            break;
-        p = list_entry(el, JSGCObjectHeader, link);
-        /* Only need to free the GC object associated with JS
-           values. The rest will be automatically removed because they
-           must be referenced by them. */
-        switch(JS_GC_TYPE(p)) {
+    /* While every member is whole: a kept object released here to its end frees nothing a member reads. */
+    while (spent < budget && c->scope_head < c->scopes_after) {
+        if (c->rel_head < c->seed_end) {
+            gc_scope_ref_back(rt, c->rel[c->rel_head++]);
+            spent++;
+            continue;
+        }
+        c->scope_head = c->scopes_after;
+        if (c->rel_head == c->rel_n) {
+            DCHECK(c->scope_head == c->scope_n,
+                   "every noted release is spent and a scope is still closed over some");
+            c->rel_head = c->rel_n = 0;
+            c->scope_head = c->scope_n = 0;
+        }
+        c->scopes_after = c->scope_head;
+        c->seed = c->seed_end = c->rel_head;
+    }
+
+    rt->gc_phase = JS_GC_PHASE_REMOVE_CYCLES;
+    while (spent < budget && c->scope_head == c->scopes_after && !list_empty(&rt->tmp_obj_list)) {
+        p = list_entry(rt->tmp_obj_list.next, JSGCObjectHeader, link);
+        switch (JS_GC_TYPE(p)) {
         case JS_GC_OBJ_TYPE_JS_OBJECT:
         case JS_GC_OBJ_TYPE_FUNCTION_BYTECODE:
-        /* AND THE ASYNC ACTIVATION, which the comment above no longer covers. "The rest will be automatically
-           removed because they must be referenced by them" was true while an activation's only holders were its
-           resolving functions; a cell aliasing its frame roots it too, and that pair is two GC objects and no
-           JSObject — so nothing in the walk would ever reach it and both members ended on the zero-refcount
-           list, where the assert at the end of this function is what would have reported it. */
+        /* An activation and a cell aliasing its frame can be a cycle with no JSObject in it, so the walk
+           tears an activation down itself (js_async_function_free0). */
         case JS_GC_OBJ_TYPE_ASYNC_FUNCTION:
-            rt->gc_cycle.freed++;
-            rt->gc_cycle.work++;
+            cost = gc_free_cost(p);
+            if (cost > c->object_work_max)
+                c->object_work_max = cost;
+            spent += cost;
+            c->freed++;
 #ifdef ENABLE_DUMPS // JS_DUMP_GC_FREE
             if (check_dump_flag(rt, JS_DUMP_GC_FREE)) {
                 if (!header_done) {
@@ -11387,35 +11457,47 @@ static void gc_free_cycles(JSRuntime *rt)
 #endif
             free_gc_object(rt, p);
             break;
-        default:
+        case JS_GC_OBJ_TYPE_SHAPE:
+        case JS_GC_OBJ_TYPE_VAR_REF:
+        case JS_GC_OBJ_TYPE_JS_CONTEXT:
+            /* Freed by the teardown of the member that holds it; off the cursor until then. */
             list_del(&p->link);
-            list_add_tail(&p->link, &rt->gc_cycle.zombies);
+            list_add_tail(&p->link, &c->zombies);
+            spent++;
             break;
         }
     }
     rt->gc_phase = JS_GC_PHASE_NONE;
 
-    list_for_each_safe(el, el1, &rt->gc_cycle.zombies) {
-        p = list_entry(el, JSGCObjectHeader, link);
-        /* ONLY THE KINDS THAT DEFER THEIR OWN MEMORY reach this raw free. Everything else on this list got here
-           from the walk above and is expected to have been unlinked by the teardown of whatever referenced it —
-           so a REALM still sitting here is one nothing released, which is not a spare pointer to free but an
-           entire realm (its global, its prototypes, its modules) about to go with no teardown at all. The async
-           activation joined the list of deferrers when the collector began tearing one down directly
-           (js_async_function_free0): torn down in the phase, memory released here, exactly as free_object's is. */
+    while (spent < budget && c->scope_head == c->scopes_after && list_empty(&rt->tmp_obj_list) &&
+           !list_empty(&c->zombies)) {
+        p = list_entry(c->zombies.next, JSGCObjectHeader, link);
+        /* Every member is torn down, so what a member held has unlinked itself: only the kinds that leave
+           their memory to the collection are here. A realm here is one nothing released
+           (js_context_release_refs never ran). */
         DCHECK(JS_GC_TYPE(p) == JS_GC_OBJ_TYPE_JS_OBJECT || JS_GC_TYPE(p) == JS_GC_OBJ_TYPE_FUNCTION_BYTECODE ||
                JS_GC_TYPE(p) == JS_GC_OBJ_TYPE_ASYNC_FUNCTION,
-               "a collected GC object of a kind that does not own its own deferred memory reached the raw free "
-               "at the end of a collection — for a realm that means nothing released its last reference "
-               "(js_context_release_refs never ran) and the whole realm is being dropped rather than torn down");
+               "a collected GC object of a kind that does not leave its memory to the collection is still "
+               "listed when every member is torn down — no member's teardown released it (a realm), or a "
+               "holder that names objects without counting them took a share of it after the verdict");
+        DCHECKF(JS_REF_COUNT(p) == 0,
+                "a collected GC object still has %d reference(s) with every member torn down — a holder that "
+                "names objects without counting them took one after the verdict, without asking "
+                "gc_cycle_frees", (int)JS_REF_COUNT(p));
+        list_del(&p->link);
         js_free_rt(rt, p);
+        spent++;
     }
 
-    init_list_head(&rt->gc_cycle.zombies);
-    rt->gc_cycle.step = JS_GC_CYCLE_IDLE;   /* nothing is on the verdict's list: gc_cycle_frees answers no */
-    /* After the zombies' memory: the loop frees what the freeing queued (an object outside the cycles whose last
-       holder was one of them, the realms, the weak resets), and that can run host code. */
+    c->work += spent;
+    done = c->scope_head == c->scopes_after && list_empty(&rt->tmp_obj_list) && list_empty(&c->zombies);
+    if (done)
+        c->step = JS_GC_CYCLE_IDLE;   /* nothing is on the verdict's lists: gc_cycle_frees answers no */
+    /* An object outside the cycles whose last holder was a member, the weak resets, and at the end the realms:
+       this can run host code. */
     free_zero_refcount(rt);
+    c->in_free_step = false;
+    return done;
 }
 
 void JS_SetGCDriven(JSRuntime *rt, bool driven)
@@ -11451,38 +11533,45 @@ static uint64_t gc_step_max_note(JSRuntime *rt, bool rests, uint64_t *max, uint6
 }
 
 /* One step of the collection. `rests` says a scheduler asked for it with a budget and rests after it; JS_RunGC's
-   calls drive a collection to its end with none, so they are in no step count and no step maximum. */
+   calls drive a collection to its end with none, so they are in no step count and no step maximum. The scan's
+   last step leaves the verdict standing, and the steps after it free. */
 static bool gc_step(JSRuntime *rt, uint64_t budget, bool rests)
 {
-    uint64_t work0 = rt->gc_cycle.work;
+    JSGCCycle *c = &rt->gc_cycle;
+    uint64_t work0 = c->work;
 
-    DCHECKF(rt->gc_cycle.step == JS_GC_CYCLE_DECREF || rt->gc_cycle.step == JS_GC_CYCLE_SCAN,
-            "a collector step was asked for with the collection at step %d — a step advances a trial, which "
-            "JS_GCBegin starts and the freeing ends inside the scan's last step", (int)rt->gc_cycle.step);
-    if (gc_mut_reading(rt) != rt->gc_cycle.mut_epoch0)
+    DCHECK(c->step != JS_GC_CYCLE_IDLE, "a collector step was asked for with no collection standing — JS_GCBegin "
+                                        "starts one");
+    c->steps += rests;
+    if (c->step == JS_GC_CYCLE_FREE) {
+        bool done = gc_free_step(rt, budget);
+
+        gc_step_max_note(rt, rests, &c->free_step_max, work0);
+        if (!done)
+            return false;
+        if (c->scoped) {
+            /* The allocation threshold is a whole-heap trial's to move: this one surveyed one neighbourhood. */
+            c->scoped_done++;
+            c->scoped_work += c->work - c->work_begin;
+        } else {
+            gc_cycle_finished(rt);
+        }
+        return true;
+    }
+    if (gc_mut_reading(rt) != c->mut_epoch0)
         gc_trial_restart(rt);
-    rt->gc_cycle.steps += rests;
-    if (rt->gc_cycle.step == JS_GC_CYCLE_DECREF) {
+    if (c->step == JS_GC_CYCLE_DECREF) {
         gc_decref_step(rt, budget);
-        gc_step_max_note(rt, rests, &rt->gc_cycle.decref_step_max, work0);
+        gc_step_max_note(rt, rests, &c->decref_step_max, work0);
         return false;
     }
-    if (!gc_scan_step(rt, budget)) {
-        gc_step_max_note(rt, rests, &rt->gc_cycle.scan_step_max, work0);
-        return false;
+    if (gc_scan_step(rt, budget)) {
+        DCHECK(c->seed == c->seed_end, "the verdict was reached with a noted release not subtracted");
+        /* The verdict's own reading, which the freeing checks its first part against (gc_scope_ref_back). */
+        c->mut_epoch0 = gc_mut_reading(rt);
     }
-    work0 = gc_step_max_note(rt, rests, &rt->gc_cycle.scan_step_max, work0);
-    gc_trial_scopes_spent(rt);
-    gc_free_cycles(rt);
-    gc_step_max_note(rt, rests, &rt->gc_cycle.free_step_max, work0);
-    if (rt->gc_cycle.scoped) {
-        /* The allocation threshold is a whole-heap trial's to move: this one surveyed one neighbourhood. */
-        rt->gc_cycle.scoped_done++;
-        rt->gc_cycle.scoped_work += rt->gc_cycle.work - rt->gc_cycle.work_begin;
-    } else {
-        gc_cycle_finished(rt);
-    }
-    return true;
+    gc_step_max_note(rt, rests, &c->scan_step_max, work0);
+    return false;
 }
 
 bool JS_GCStep(JSRuntime *rt, uint64_t budget)
@@ -11512,18 +11601,30 @@ void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out)
     out->scoped_work = rt->gc_cycle.scoped_work;
 }
 
-/* The collection driven to its end in one call, for a host with no scheduler and for teardown. A trial already
-   standing is finished rather than begun again. */
+/* The collection driven to its end in one call, for a host with no scheduler and for teardown. A scoped trial
+   standing, or a freeing whose verdict predates what the mutator has done since, is finished first; a
+   whole-heap trial standing short of its verdict is finished rather than begun again. */
 void JS_RunGC(JSRuntime *rt)
 {
-    /* A scoped trial standing is finished first; the whole-heap one then takes every scope still closed. */
-    if (rt->gc_cycle.step != JS_GC_CYCLE_IDLE && rt->gc_cycle.scoped)
+    if (rt->gc_cycle.step != JS_GC_CYCLE_IDLE && (rt->gc_cycle.scoped || rt->gc_cycle.step == JS_GC_CYCLE_FREE))
         while (!gc_step(rt, UINT64_MAX, false))
             ;
     if (rt->gc_cycle.step == JS_GC_CYCLE_IDLE)
         gc_trial_begin(rt, true);
     while (!gc_step(rt, UINT64_MAX, false))
         ;
+}
+
+/* Whether a standing collection's verdict frees `val`: true from the verdict until the collection is idle. A
+   table that names objects without counting them asks before each read; such an entry is as good as removed. */
+bool JS_GCCondemned(JSRuntime *rt, JSValueConst val)
+{
+    return JS_VALUE_GET_TAG(val) == JS_TAG_OBJECT && gc_cycle_frees(rt, &JS_VALUE_GET_OBJ(val)->header);
+}
+
+bool JS_GCCondemnedRealm(JSContext *ctx)
+{
+    return gc_cycle_frees(ctx->rt, &ctx->header);
 }
 
 /* Return false if not an object or if the object has already been
@@ -11620,16 +11721,20 @@ void JS_GetLiveCounts(JSRuntime *rt, JSLiveCounts *out)
 
 int JS_LiveCountsAgree(JSRuntime *rt, const JSMemoryUsage *walk)
 {
+    struct list_head *heads[5] = { &rt->gc_zero_ref_count_list, &rt->gc_cycle.pending, &rt->gc_cycle.decref_done,
+                                   &rt->gc_cycle.scan_done, &rt->tmp_obj_list };
     struct list_head *el;
-    int64_t dying = 0;
+    int64_t unwalked = 0;
 
-    /* A JS object a collection has queued with no references is still counted live until free_object takes it,
-       and the walk reads gc_obj_list only, so the queued ones are added back. */
-    list_for_each(el, &rt->gc_zero_ref_count_list) {
-        JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
-        if (JS_GC_TYPE(gp) == JS_GC_OBJ_TYPE_JS_OBJECT) dying++;
-    }
-    return rt->gc_phase == JS_GC_PHASE_NONE && walk->obj_count + dying == rt->js_obj_live;
+    /* A JS object is counted live until free_object takes it, and the walk reads gc_obj_list only: the ones
+       queued with no references, and the ones a standing collection holds on its own lists between two steps
+       (a trial's cursor, a verdict's members not yet torn down), are added back. */
+    for (int h = 0; h < 5; h++)
+        list_for_each(el, heads[h]) {
+            JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
+            if (JS_GC_TYPE(gp) == JS_GC_OBJ_TYPE_JS_OBJECT) unwalked++;
+        }
+    return rt->gc_phase == JS_GC_PHASE_NONE && walk->obj_count + unwalked == rt->js_obj_live;
 }
 
 void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
@@ -48900,17 +49005,10 @@ static void js_async_function_terminate(JSRuntime *rt, JSAsyncFunctionData *s)
     }
 }
 
-/* THE COLLECTOR'S OWN TEARDOWN OF AN ASYNC ACTIVATION, split by phase exactly as free_object is and for the
-   identical reason (see the realm teardown's comment): a teardown running under JS_GC_PHASE_REMOVE_CYCLES may
-   RELEASE references — that is what the phase absorbs — but must not free memory the collector's walk still
-   owns, because other members of the cycle still hold counted references and will decrement them.
-   IT IS REACHED FROM THE COLLECTOR NOW, WHICH IT WAS NOT BEFORE. An async activation and a cell that aliases
-   its frame reference each other: the frame holds the cell, the cell roots the activation. Both are GC objects
-   and NEITHER is a JSObject, so the collector's "free the JS objects and the rest follow from their teardown"
-   assumption — true while an activation was reachable only through its resolving functions — no longer holds
-   for this pair, and gc_free_cycles now starts the teardown here instead of moving an activation to the
-   zero-refcount list for a holder that does not exist. The XXX above JSAsyncFunctionData names the same oddity
-   from the other end. */
+/* An async activation's teardown, split by phase as free_object's is: under JS_GC_PHASE_REMOVE_CYCLES it
+   releases references but leaves its memory to the collection while another member still counts it. The
+   freeing calls it directly (gc_free_step), because an activation and a cell aliasing its frame can be a cycle
+   with no JSObject in it: the frame holds the cell and the cell roots the activation. */
 static void js_async_function_free0(JSRuntime *rt, JSAsyncFunctionData *s)
 {
     js_async_function_terminate(rt, s);
@@ -48920,8 +49018,8 @@ static void js_async_function_free0(JSRuntime *rt, JSAsyncFunctionData *s)
     s->resolving_funcs[1] = JS_UNDEFINED;
     remove_gc_object(rt, &s->header);
     if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && JS_REF_COUNT(s) != 0) {
-        /* still named by a cycle member the walk has not reached; it will decrement this header, so the memory
-           outlives the phase and the sweep at the end of gc_free_cycles releases it */
+        /* Still counted by a member the freeing has not reached, which will decrement this header: the
+           memory is the collection's to release (gc_free_step's last part). */
         list_add_tail(&s->header.link, &rt->gc_cycle.zombies);
     } else {
         js_free_rt(rt, s);
@@ -89825,6 +89923,11 @@ static JSValue js_weakref_deref(JSContext *ctx, JSValueConst this_val, int argc,
     if (!wrd)
         return JS_EXCEPTION;
     if (wrd == &js_weakref_sentinel)
+        return JS_UNDEFINED;
+    /* ECMA-262 §9.9.3 Execution: a set that is not live is emptied atomically, and a collection's verdict is
+       that instant for its members, so a target the verdict frees is already gone to every WeakRef. */
+    if (JS_VALUE_GET_TAG(wrd->target) == JS_TAG_OBJECT &&
+        gc_cycle_frees(ctx->rt, &JS_VALUE_GET_OBJ(wrd->target)->header))
         return JS_UNDEFINED;
     /* The one way a reference to an unreachable object is taken: a standing trial may already count the target
        as garbage. */

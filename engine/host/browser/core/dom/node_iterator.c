@@ -54,7 +54,9 @@ static const uint16_t ITER_VALS[] = { TRAVERSER_VALS(IterData), (uint16_t)offset
                                       (uint16_t)offsetof(IterData, cand_node) };
 static const CowRecord ITER_REC = { sizeof(IterData), ITER_VALS, 4 };
 
-/* THE AGENT'S LIVE ITERATORS — see the file header. Entries are BORROWED: the finalizer removes its own. */
+/* The agent's live iterators (see the file header). Entries are borrowed: the finalizer removes its own, and
+   the walk passes over a row a standing collection's verdict frees (JS_GCCondemned), whose record may name
+   objects already torn down. */
 static JSValueConst *g_live;
 static int g_live_n, g_live_cap, g_live_closed;
 
@@ -287,6 +289,7 @@ void node_iterator_pre_remove(JSContext *ctx, lxb_dom_node_t *to_be_removed)
 
     if (!g_live_n || !to_be_removed) return;
     for (i = 0; i < g_live_n; i++) {
+        if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
         /* iter_of, not JS_GetOpaque: reaching the record is what puts it in the running flow's delta, which is
            what makes one flow's adjustment invisible to a sibling. */
         IterData *it = iter_of(g_live[i]);

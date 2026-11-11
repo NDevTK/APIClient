@@ -444,7 +444,7 @@ static void rl_record_row(JSValueConst obj, uint32_t doc)
            "document's own realm answers `location` (core/frame/location.h), so a row for one is a second "
            "answer to a question that already has one");
     for (i = 0; i < g_rows_n; i++)
-        DCHECK(g_rows[i].doc != doc,
+        DCHECK(g_rows[i].doc != doc || JS_GCCondemned(g_rl_rt, g_rows[i].obj),
                "a SECOND cross-origin Location row was recorded for one Document — the table is a map from a "
                "peer's document to the one object that answers for it, so two rows make "
                "`otherW.location === otherW.location` decide by which row the scan reached first");
@@ -476,8 +476,11 @@ JSValue remote_location_of_document(JSContext *ctx, uint32_t doc)
            "the cross-origin Location of a Document THIS AGENT HOLDS was asked for — §7.2.1.3.3 answers TRUE "
            "for it, so §7.2.4 wants that realm's own Location (core/frame/location.h's location_object) and a "
            "filtered object here would refuse a read the origins permit");
+    /* A row whose object a standing collection's verdict frees is as good as removed (rl_finalizer is about to
+       take it out): handing it back would take a reference on an object being freed. */
     for (i = 0; i < g_rows_n; i++)
-        if (g_rows[i].doc == doc) return JS_DupValue(ctx, g_rows[i].obj);
+        if (g_rows[i].doc == doc && !JS_GCCondemned(g_rl_rt, g_rows[i].obj))
+            return JS_DupValue(ctx, g_rows[i].obj);
 
     obj = JS_NewObjectClass(ctx, g_rl_class);
     if (JS_IsException(obj)) return obj;

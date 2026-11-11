@@ -140,10 +140,16 @@ bool realm_holders_census(RealmHolders *out) {
     if (w.refused) goto out;
     for (int i = 0; i < w.n; i++) {
         JSContext *realm = navigable_realm_at(i);
-        JSValue g = JS_GetGlobalObject(realm);
-        JSValueConst proxy = document_window_proxy(realm);
-        JSValue objproto = JS_GetClassProto(realm, JS_CLASS_OBJECT);
-        JSValueConst handles[4] = { g, proxy, document_object(realm), objproto };
+        JSValue g, objproto;
+        JSValueConst proxy, handles[4];
+
+        /* A realm a standing collection's verdict frees is listed until its teardown runs. No delta names it,
+           so it counts as unheld, and its handles may be torn down already: none is read. */
+        if (JS_GCCondemnedRealm(realm)) continue;
+        g = JS_GetGlobalObject(realm);
+        proxy = document_window_proxy(realm);
+        objproto = JS_GetClassProto(realm, JS_CLASS_OBJECT);
+        handles[0] = g; handles[1] = proxy; handles[2] = document_object(realm); handles[3] = objproto;
         for (int h = 0; h < 4; h++) {
             if (!JS_IsObject(handles[h])) continue;   /* a realm with no browsing context has no proxy */
             /* A destroyed navigable's proxy names its realm no longer (window_proxy_set_destroyed releases both
@@ -210,7 +216,7 @@ bool realm_holders_census(RealmHolders *out) {
        cannot free it, is a holder to name. */
     if (!w.refused && none > 0 && !g_root_path_dumped)
         for (int r = 0; r < w.n; r++)
-            if (holders[r] == 0) {
+            if (holders[r] == 0 && !JS_GCCondemnedRealm(navigable_realm_at(r))) {
                 g_root_path_dumped = JS_GCDumpRootPath(JS_GetRuntime(navigable_realm_at(r)), navigable_realm_at(r));
                 break;
             }

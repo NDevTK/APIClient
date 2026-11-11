@@ -450,7 +450,9 @@ static int        g_remote_navs_n, g_remote_navs_cap;
    whichever delta is applied, and the answer is the asking timeline's. Two timelines each holding a realm for one
    name is then a question with two answers rather than a collision.
    Borrowed, like the remote rows above: proxy_finalizer takes a row out, so this is exactly the set of live
-   proxies and names keep nothing alive. */
+   proxies and names keep nothing alive. A scan of either table passes over a row a standing collection's
+   verdict frees (nav_row_gone): the finalizer is about to take it out, and handing the proxy back would take
+   a reference on an object being freed. */
 static JSValueConst *g_live_navs;
 static int           g_live_navs_n, g_live_navs_cap;
 
@@ -458,6 +460,11 @@ static int           g_live_navs_n, g_live_navs_cap;
    live_nav_of_document cannot see, and its two readers would report a document this agent holds as
    unmaterialized, which is right for a navigable nothing has read through and wrong for one that was never
    recorded. One function, so a third mint cannot answer differently by forgetting. */
+static bool nav_row_gone(JSValueConst proxy)
+{
+    return JS_GCCondemned(g_wp_rt, proxy);
+}
+
 /* Is this navigable one the asking timeline can see? The test core/realm.c's environment walk asks of a realm. */
 static bool proxy_of_this_timeline(const ProxyData *p)
 {
@@ -498,8 +505,10 @@ static JSValueConst live_nav_of_document(uint32_t doc)
     DCHECK(doc != 0, "the navigable of document zero was asked for — zero is the world registry's NONE, so the "
                      "caller is holding a handle it never resolved rather than a document");
     for (i = 0; i < g_live_navs_n; i++) {
-        ProxyData *p = JS_GetOpaque(g_live_navs[i], g_proxy_class);
+        ProxyData *p;
 
+        if (nav_row_gone(g_live_navs[i])) continue;
+        p = JS_GetOpaque(g_live_navs[i], g_proxy_class);
         DCHECK(p != NULL, "a row of the live-navigable table names an object with no §7.2.3 record — both mints "
                           "attach one before the object is recorded, so this row names something that is not a "
                           "WindowProxy at all");
@@ -527,10 +536,12 @@ static JSValueConst live_nav_of_global(JSValueConst global)
     int i;
 
     for (i = 0; i < g_live_navs_n; i++) {
-        ProxyData *p = JS_GetOpaque(g_live_navs[i], g_proxy_class);
+        ProxyData *p;
         JSValue g;
         bool same;
 
+        if (nav_row_gone(g_live_navs[i])) continue;
+        p = JS_GetOpaque(g_live_navs[i], g_proxy_class);
         DCHECK(p != NULL, "a row of the live-navigable table names an object with no §7.2.3 record — both mints "
                           "attach one before the object is recorded");
         if (p == NULL || p->realm == NULL || !proxy_of_this_timeline(p)) continue;
@@ -1179,7 +1190,7 @@ static void remote_nav_record(JSValueConst proxy, uint32_t doc)
            "window_proxy_of_document answers a peer's identity from, and a hosted document is answered by its "
            "own realm instead, so a row for one is a second answer to a question that already has one");
     for (i = 0; i < g_remote_navs_n; i++)
-        DCHECK(g_remote_navs[i].doc != doc ||
+        DCHECK(g_remote_navs[i].doc != doc || nav_row_gone(g_remote_navs[i].proxy) ||
                !proxy_of_this_timeline(JS_GetOpaque(g_remote_navs[i].proxy, g_proxy_class)),
                "a SECOND remote-navigable row was recorded for one document in one timeline — the table maps a "
                "peer's document to the one proxy that resolves it in each timeline, so two rows make `w[0] === "
@@ -1315,7 +1326,7 @@ JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc)
         return JS_DupValue(ctx, held);
     }
     for (i = 0; i < g_remote_navs_n; i++)
-        if (g_remote_navs[i].doc == doc &&
+        if (g_remote_navs[i].doc == doc && !nav_row_gone(g_remote_navs[i].proxy) &&
             proxy_of_this_timeline(JS_GetOpaque(g_remote_navs[i].proxy, g_proxy_class)))
             return JS_DupValue(ctx, g_remote_navs[i].proxy);
     return JS_UNDEFINED;

@@ -106,10 +106,10 @@ typedef enum {
        the drive's next pick. Cost: one unit, by definition; bound (2) is asserted by the
        REST_UNIT_LAYOUT_DESCENDANTS bracket. */
     REST_UNIT_LAYOUT_WORK,
-    /* One unit of the cycle collector's work (quickjs.h's JS_GCStep: an object or an edge visited, or an object
-       freed) in one collector step. The slice the collector holds (solver/engine.c's engine_collect_slice) asks
-       for the quantum and the host's claim after each step. Cost: a few loads and a compare per unit; the
-       freeing still runs whole inside the scan's last step, which JSGCCycle's residual names. */
+    /* One unit of the cycle collector's work (quickjs.h's JS_GCStep: an object or an edge visited, or a slot a
+       teardown releases) in one collector step, of the trial or of the freeing. The slice the collector holds
+       (solver/engine.c's engine_collect_slice) asks for the quantum and the host's claim after each step.
+       Cost: a few loads and a compare per unit. */
     REST_UNIT_GC_WORK,
     /* One offer of CSS 2.1 §E.2 "Painting order" painted by update the rendering step 22 (core/paint/
        document_paint.h): one (step, box) pair of core/paint/paint_order.h's cursor and the marks

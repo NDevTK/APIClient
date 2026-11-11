@@ -4053,6 +4053,128 @@ TF_UNIT void gc_cycle_step_selftest(void)
     JS_FreeRuntime(rt);
 }
 
+/* @GCFREE: the freeing as budgeted steps under a verdict that spans them, on a runtime of its own.
+   Part one, a whole-heap trial over N garbage pairs whose two shapes no live object has. At the verdict
+   JS_GCCondemned answers for a member and not for a live object; after one freeing step a mutator builds objects
+   with the garbage's property names, which must not take a share of a shape the verdict frees (the collection's
+   last part asserts every listed member is unreferenced and of a kind that leaves it its memory); and no
+   freeing step passes its budget by more than one object.
+   Part two, a scoped trial: X and M are a cycle born above the scope's floor, and X alone holds N, born below
+   it. N is outside the trial's set, so it loses its last holder to X's teardown and must be released by the
+   release loop that same step ends with, before M's step. Each probe's finalizer records the step it ran in. */
+static JSClassID g_gcfree_class;
+static int g_gcfree_step, g_gcfree_final[3];
+
+static void gcfree_probe_finalizer(JSRuntime *rt, JSValue val)
+{
+    int *slot = JS_GetOpaque(val, g_gcfree_class);
+    (void)rt;
+    CHECK(slot != NULL && *slot == 0, "a freeing probe was finalized twice, or carries no slot");
+    *slot = g_gcfree_step;
+}
+
+TF_UNIT void gc_free_step_selftest(void)
+{
+    enum { N = 2000, BUDGET = 64 };
+    JSClassDef def = { "GcFreeProbe", .finalizer = gcfree_probe_finalizer };
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx;
+    JSGCCycleStats st0, st;
+    JSValue global, live, fresh[2], x, m, n, v;
+    JSValueConst member = JS_UNDEFINED;
+    uint64_t free_steps = 0;
+    bool done = false;
+    int32_t got = 0;
+
+    CHECK(rt != NULL, "the freeing's witness could not make a runtime");
+    JS_SetGCThreshold(rt, (size_t)-1);   /* no collection but the ones this test steps */
+    ctx = JS_NewContext(rt);
+    CHECK(ctx != NULL, "the freeing's witness could not make a context");
+    global = JS_GetGlobalObject(ctx);
+    for (int i = 0; i < N; i++) {
+        JSValue a = JS_NewObject(ctx), b = JS_NewObject(ctx);
+        CHECK(JS_SetPropertyStr(ctx, b, "gcfreeA", JS_DupValue(ctx, a)) >= 0 &&
+              JS_SetPropertyStr(ctx, a, "gcfreeB", b) >= 0, "the freeing's witness could not build a garbage pair");
+        member = a;   /* borrowed: the last pair's first object, whose memory the collection holds to its end */
+        JS_FreeValue(ctx, a);
+    }
+    live = JS_NewObject(ctx);
+    CHECK(JS_SetPropertyStr(ctx, global, "gcfreeLive", JS_DupValue(ctx, live)) >= 0,
+          "the freeing's witness could not root its live object");
+
+    JS_GCCycleStats(rt, &st0);
+    JS_GCBegin(rt);
+    while (!JS_GCCondemned(rt, member)) {
+        done = JS_GCStep(rt, BUDGET);
+        CHECK(!done, "the collection finished before its verdict stood between two steps");
+    }
+    CHECK(!JS_GCCondemned(rt, live), "the verdict frees an object the global names");
+    done = JS_GCStep(rt, BUDGET);
+    free_steps++;
+    CHECK(!done, "the freeing of thousands of objects finished inside one 64-unit step");
+    CHECK(JS_GCCondemned(rt, member), "a member stopped answering as condemned while the freeing stood");
+    fresh[0] = JS_NewObject(ctx);
+    fresh[1] = JS_NewObject(ctx);
+    CHECK(JS_SetPropertyStr(ctx, fresh[0], "gcfreeB", JS_NewInt32(ctx, 41)) >= 0 &&
+          JS_SetPropertyStr(ctx, fresh[1], "gcfreeA", JS_NewInt32(ctx, 1)) >= 0,
+          "the freeing's witness could not build objects with the garbage's shapes");
+    while (!done) {
+        done = JS_GCStep(rt, BUDGET);
+        free_steps++;
+    }
+    JS_GCCycleStats(rt, &st);
+    v = JS_GetPropertyStr(ctx, fresh[0], "gcfreeB");
+    CHECK(JS_ToInt32(ctx, &got, v) == 0 && got == 41, "an object built between two freeing steps lost its property");
+    JS_FreeValue(ctx, v);
+    v = JS_GetPropertyStr(ctx, fresh[1], "gcfreeA");
+    CHECK(JS_ToInt32(ctx, &got, v) == 0 && got == 1, "an object built between two freeing steps lost its property");
+    JS_FreeValue(ctx, v);
+    CHECK(st.freed - st0.freed >= 2 * N, "the collection freed fewer GC objects than the garbage pairs hold");
+    CHECK(st.free_step_max < BUDGET + st.object_work_max,
+          "a freeing step passed its budget by more than the largest object");
+    JS_FreeValue(ctx, fresh[0]);
+    JS_FreeValue(ctx, fresh[1]);
+    JS_FreeValue(ctx, live);
+
+    JS_NewClassID(rt, &g_gcfree_class);
+    CHECK(JS_NewClass(rt, g_gcfree_class, &def) == 0, "the freeing's witness could not register its probe class");
+    memset(g_gcfree_final, 0, sizeof g_gcfree_final);
+    JS_SetFlowGen(0);
+    n = JS_NewObjectClass(ctx, g_gcfree_class);
+    JS_SetFlowGen(7);
+    x = JS_NewObjectClass(ctx, g_gcfree_class);
+    m = JS_NewObjectClass(ctx, g_gcfree_class);
+    CHECK(JS_IsObject(n) && JS_IsObject(x) && JS_IsObject(m), "the freeing's witness could not make its probes");
+    JS_SetOpaque(x, &g_gcfree_final[0]);
+    JS_SetOpaque(m, &g_gcfree_final[1]);
+    JS_SetOpaque(n, &g_gcfree_final[2]);
+    CHECK(JS_SetPropertyStr(ctx, x, "n", n) >= 0 && JS_SetPropertyStr(ctx, m, "x", JS_DupValue(ctx, x)) >= 0 &&
+          JS_SetPropertyStr(ctx, x, "m", m) >= 0, "the freeing's witness could not link its probes");
+    JS_GCReleaseScopeBegin(rt, 3);
+    JS_FreeValue(ctx, x);
+    JS_GCReleaseScopeEnd(rt);
+    JS_SetFlowGen(0);
+    CHECK(JS_GCOwed(rt), "a release scope that noted a release owes no collection");
+    JS_GCBegin(rt);
+    g_gcfree_step = 0;
+    do {
+        g_gcfree_step++;
+        done = JS_GCStep(rt, 1);
+    } while (!done);
+    printf("@GCFREE {\"freeSteps\":%llu,\"freeStepMax\":%llu,\"objectWorkMax\":%llu,\"xStep\":%d,\"mStep\":%d,"
+           "\"nStep\":%d}\n", (unsigned long long)free_steps, (unsigned long long)st.free_step_max,
+           (unsigned long long)st.object_work_max, g_gcfree_final[0], g_gcfree_final[1], g_gcfree_final[2]);
+    CHECK(g_gcfree_final[0] > 0 && g_gcfree_final[1] > g_gcfree_final[0],
+          "the scoped collection did not tear its two members down in two steps of one unit");
+    CHECK(g_gcfree_final[2] == g_gcfree_final[0],
+          "an object outside the cycles that lost its last holder to a member's teardown was not released by "
+          "the step that tore the member down");
+    JS_FreeValue(ctx, global);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+    g_gcfree_class = 0;
+}
+
 /* FIPS PUB 180-4, CHECKED AGAINST PUBLISHED KNOWN ANSWERS — because a cryptographic primitive that agrees with
  * itself proves nothing at all. Every expected value below is transcribed from RFC 6234 §8.5's test driver,
  * which is the IETF's restatement of this standard and ships the vectors with it; the empty-message row is the
@@ -46014,6 +46136,7 @@ int main(int argc, char **argv) {
     secure_hash_selftest();
     hmac_selftest();
     gc_cycle_step_selftest();
+    gc_free_step_selftest();
     flow_graph_selftest();
     flow_graph_closure_selftest();
     flow_graph_callsite_selftest();

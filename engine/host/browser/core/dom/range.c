@@ -52,7 +52,9 @@
 
 static JSClassID g_range_class;
 
-/* THE AGENT'S LIVE RANGES — borrowed, each removed by its own finalizer. */
+/* The agent's live ranges: borrowed, each removed by its own finalizer. A walker passes over a row a standing
+   collection's verdict frees (JS_GCCondemned): its finalizer is about to take the row out, and until then its
+   record may name objects already torn down. */
 static JSValueConst *g_live;
 static int g_live_n, g_live_cap, g_live_closed;
 
@@ -227,6 +229,7 @@ void range_pre_remove(JSContext *ctx, lxb_dom_node_t *node)
     index = node_index(node);
     pw = node_wrap(ctx, parent);
     for (i = 0; i < g_live_n; i++) {
+        if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
         /* abstract_range_of, not JS_GetOpaque: reaching the record is what puts it in the running flow's
            delta, which is what makes one flow's adjustment invisible to a sibling. */
         RangeBounds *b = abstract_range_of(g_live[i]);
@@ -262,6 +265,7 @@ void range_did_insert(JSContext *ctx, lxb_dom_node_t *node)
     if (!parent) return;
     index = node_index(node);
     for (i = 0; i < g_live_n; i++) {
+        if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
         RangeBounds *b = abstract_range_of(g_live[i]);
         DCHECK(b != NULL, "the live-range list holds something that is not a range");
         /* §4.2.3 insert step 5, stated against the REFERENCE child's index — which, once the node is in, is the
@@ -283,6 +287,7 @@ void range_insert_steps(JSContext *ctx, lxb_dom_node_t *parent, lxb_dom_node_t *
     if (!g_live_n) return;
     index = node_index(child);
     for (i = 0; i < g_live_n; i++) {
+        if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
         RangeBounds *b = abstract_range_of(g_live[i]);
 
         DCHECK(b != NULL, "the live-range list holds something that is not a range");
@@ -305,6 +310,7 @@ void range_replace_data_steps(JSContext *ctx, lxb_dom_node_t *node, uint32_t off
     (void)ctx;
     DCHECK(node != NULL, "§4.10's live-range steps ran for no node");
     for (i = 0; i < g_live_n; i++) {
+        if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
         /* abstract_range_of, not JS_GetOpaque: reaching the record is what puts it in the running flow's
            delta, which is what makes one flow's adjustment invisible to a sibling. */
         RangeBounds *b = abstract_range_of(g_live[i]);
@@ -341,6 +347,7 @@ void range_split_text_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t
     idx = node_index(node);
     nw = node_wrap(ctx, new_node);
     for (i = 0; i < g_live_n; i++) {
+        if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
         RangeBounds *b = abstract_range_of(g_live[i]);
 
         DCHECK(b != NULL, "the live-range list holds something that is not a range");
@@ -378,6 +385,7 @@ void range_normalize_absorb_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_
     idx = node_index(sib);
     nw = node_wrap(ctx, node);
     for (i = 0; i < g_live_n; i++) {
+        if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
         RangeBounds *b = abstract_range_of(g_live[i]);
 
         DCHECK(b != NULL, "the live-range list holds something that is not a range");

@@ -670,12 +670,14 @@ typedef void JS_MarkFunc(JSRuntime *rt, JSGCObjectHeader *gp);
 JS_EXTERN void JS_MarkValue(JSRuntime *rt, JSValueConst val,
                             JS_MarkFunc *mark_func);
 JS_EXTERN void JS_RunGC(JSRuntime *rt);
-/* The cycle collection as steps. JS_GCBegin starts one; JS_GCStep advances its trial (the decref phase, then the
-   scan) by at most `budget` units of collector work (objects and edges visited, the object a step ends on visited
-   whole) and returns true when the trial has finished and its cycles are freed, which the scan's last step
-   does. A step restarts a trial that any store into the graph, GC object birth or death, or WeakRef deref has
+/* The cycle collection as steps. JS_GCBegin starts one; JS_GCStep advances it by at most `budget` units of
+   collector work (objects and edges visited, slots released, the object a step ends on handled whole) and
+   returns true when its cycles are freed and it is idle. The trial comes first (the decref phase, then the
+   scan): a step restarts a trial that any store into the graph, GC object birth or death, or WeakRef deref has
    followed since it began; JS_MutatorEnter announces a store the engine cannot see (an embedder record its mark
-   function walks).
+   function walks). The scan's last step leaves a verdict, and the steps after it free what the verdict names.
+   Between those steps the mutator may run: a member not yet freed is whole but may hold members already torn
+   down, so a table that names objects without counting them asks JS_GCCondemned before reading an entry.
    JS_SetGCDriven(rt, true) makes the allocation threshold owe a collection (JS_GCOwed) instead of running one,
    for an embedder whose scheduler drives the steps; JS_RunGC drives one to its end. */
 JS_EXTERN void JS_SetGCDriven(JSRuntime *rt, bool driven);
@@ -702,12 +704,16 @@ typedef struct JSGCCycleStats {
     uint64_t collections;  /* lifetime: collections finished */
     uint64_t freed;        /* lifetime: GC objects freed as cycles */
     uint64_t decref_step_max, scan_step_max;   /* lifetime: the most work one step of each trial phase did */
-    uint64_t free_step_max;                    /* lifetime: the most work one collection's freeing did */
+    uint64_t free_step_max;                    /* lifetime: the most work one step of a freeing did */
     uint64_t object_work_max;                  /* lifetime: the most work one object's visit did */
     uint64_t scoped, scoped_work;              /* lifetime: scoped collections finished, and their work */
 } JSGCCycleStats;
 JS_EXTERN void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out);
 JS_EXTERN bool JS_IsLiveObject(JSRuntime *rt, JSValueConst obj);
+/* Whether a standing collection's verdict frees `val` (an object) or `ctx`: true from the verdict until the
+   collection is idle, so for a member torn down and for one still whole. */
+JS_EXTERN bool JS_GCCondemned(JSRuntime *rt, JSValueConst val);
+JS_EXTERN bool JS_GCCondemnedRealm(JSContext *ctx);
 
 JS_EXTERN JSContext *JS_NewContext(JSRuntime *rt);
 JS_EXTERN void JS_FreeContext(JSContext *s);
