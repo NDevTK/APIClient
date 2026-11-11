@@ -254,7 +254,7 @@ uint64_t event_loop_work_banked_life(void);
  * HTML §8.1.7.3 Processing model step 2.1 leaves the choice between task queues to the user agent ("chosen in an
  * implementation-defined manner"), and §8.7 Timers's run steps after a timeout lets the wait run long ("Optionally,
  * wait a further implementation-defined length of time"), so both orders are browsers' orders. The rendering
- * source's frame still declines here. */
+ * source's frame, a deadline of the same kind, asks the same predicate (core/rendering/rendering.c). */
 int event_loop_may_advance(void);
 
 /* DOES THE DEADLINE `when`, AHEAD OF THE CLOCK, COME BEFORE THE REPLIES THIS FLOW IS OWED? 1 when nothing is owed

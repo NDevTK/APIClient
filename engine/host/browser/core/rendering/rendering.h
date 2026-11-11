@@ -69,7 +69,7 @@ typedef enum {
     RENDERING_DECLINE_NO_OPPORTUNITY,   /* in-parallel step 1: no navigable might have a rendering opportunity */
     RENDERING_DECLINE_FRAME_AHEAD,      /* a spin's ask whose frame is still ahead of the clock */
     RENDERING_DECLINE_TIMER_FIRST,      /* a timer expires before the frame */
-    RENDERING_DECLINE_REPLY_OWED,       /* the frame is ahead and the clock may not jump past an owed reply */
+    RENDERING_DECLINE_REPLY_OWED,       /* the frame is ahead and, in this timeline, an owed reply arrives first */
     RENDERING_DECLINE_N
 } RenderingDecline;
 
