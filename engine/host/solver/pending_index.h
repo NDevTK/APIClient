@@ -107,7 +107,9 @@ void pending_index_declined(JSValueConst rec, int rule);
 /* The rule a refusal's reason names, one census row each: X(id, is_signal, token, metric). The trusted zone
    composes a reason from closed sets (extension/lib/safe-fetch.js): `blocked-signal:<signal>=<value>` for a
    gating signal of its egress table, where the token here is the signal's own name, or a rule family's token
-   followed by `:` and its word. A hop's refusal spells `-redirect` before the colon and is the same rule. */
+   followed by `:` and its word. A hop's refusal spells `-redirect` before the colon and is the same rule. The
+   last row is the engine's own refusal of a keyed request whose address holds no bytes (engine.h's
+   PENDING_DECLINED_UNADDRESSED). */
 #define PEND_DECLINE_RULES(X) \
     X(DESTINATION, 1, "destination", reply_declined_destination) \
     X(ACTOR, 1, "actor", reply_declined_actor) \
@@ -123,7 +125,8 @@ void pending_index_declined(JSValueConst rec, int rule);
     X(DESTRUCTIVE, 0, "blocked-destructive", reply_declined_destructive) \
     X(STREAM_BODY, 0, "blocked-stream-body-gated", reply_declined_stream_body) \
     X(WIRE_IDLE, 0, "wire-idle", reply_declined_wire_idle) \
-    X(ASKER, 0, "blocked-asker", reply_declined_asker)
+    X(ASKER, 0, "blocked-asker", reply_declined_asker) \
+    X(UNADDRESSED, 0, "unaddressed", reply_declined_unaddressed)
 #define PEND_DECLINE_ENUM_(id, is_signal, token, metric) PEND_DECLINE_##id,
 enum { PEND_DECLINE_RULES(PEND_DECLINE_ENUM_) PEND_DECLINE_RULE_N };
 /* The rule `reason` names, or -1 for a reason of no rule above. Reads only the reason's bytes. */

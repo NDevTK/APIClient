@@ -915,7 +915,7 @@ static void pend_index_sync(JSValueConst e, int field)
                census. */
             CHECKF(rule >= 0,
                     "a request was refused for `%s`, which names no rule of pending_index.h's PEND_DECLINE_RULES: "
-                    "the zone added a signal or a decline family, and the census owes it a row", reason);
+                    "a refusing party added a signal or a decline family, and the census owes it a row", reason);
             JS_FreeCString(pending_ctx(), reason);
             JS_FreeValue(pending_ctx(), why);
             pending_index_declined(e, rule);

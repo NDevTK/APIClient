@@ -198,8 +198,9 @@ METRIC(reply_declined, "replyDeclined", LIFETIME, "record", PROCESS, "solver/pen
 /* `replyDeclined` by the rule the zone's reason names, each record counted once (solver/pending_index.h's
    PEND_DECLINE_RULES): the ten gating signals of the egress table under their own names (`doc-reach` is
    `DocReach`), then the decline families that are no signal's value: the method, the destructive-path floor, a
-   gated streaming body, a wire that went silent, and an asker the zone's record refuses. They sum to
-   `replyDeclined`, which solver/result.c asserts. */
+   gated streaming body, a wire that went silent, and an asker the zone's record refuses; the last is the
+   engine's own refusal of a keyed request with no address bytes, the part of `replyUnaddressed` that stood in
+   the pair index. They sum to `replyDeclined`, which solver/result.c asserts. */
 METRIC(reply_declined_destination, "replyDeclinedDestination", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_declined_actor, "replyDeclinedActor", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_declined_provenance, "replyDeclinedProvenance", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
@@ -215,6 +216,7 @@ METRIC(reply_declined_destructive, "replyDeclinedDestructive", LIFETIME, "record
 METRIC(reply_declined_stream_body, "replyDeclinedStreamBody", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_declined_wire_idle, "replyDeclinedWireIdle", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_declined_asker, "replyDeclinedAsker", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
+METRIC(reply_declined_unaddressed, "replyDeclinedUnaddressed", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 /* …and the requests the engine itself declined for an address with no bytes (solver/engine.h's
    PENDING_DECLINED_UNADDRESSED), on the pending lines and the synchronous rendezvous alike. */
 METRIC(reply_unaddressed, "replyUnaddressed", LIFETIME, "record", PROCESS, "solver/engine.c", INT)
