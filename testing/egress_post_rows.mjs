@@ -104,6 +104,10 @@ for (const [label, notes] of ROWS) {
               notes.map(([what, have, want]) => `${what}: ${have} (want ${want})`).join('; '));
 }
 console.log(`  the zone's process ended: ${ending}; ${egress.length} @EGRESS line(s); ${arrived.length} request(s) arrived`);
+/* A zone that did not end cleanly says why on its last stderr lines (an engine abort's `@WHY` among them). */
+if (ending !== 'exit 0')
+  for (const l of err.split('\n').filter((x) => x !== '' && x.indexOf('@EGRESS') < 0).slice(-4))
+    console.log('  the zone said: ' + l.slice(0, 500));
 if (got('GET', '/').length < 1) { console.log('  CONTROL FAILED: the seed load never reached the server'); process.exit(2); }
 console.log(bad === 0 ? '  every row agreed' : `  ${bad} ROW(S) DISAGREED`);
 process.exit(bad === 0 ? 0 : 1);
