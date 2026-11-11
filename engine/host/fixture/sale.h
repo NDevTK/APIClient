@@ -139,11 +139,12 @@ static const char HTML_SALECATCH[] =
 /* `sale`'s shape where the busy arm's loop runs in a promise executor reached through two Reflect.construct calls,
    the spelling of a transpiled class extending Promise (Babel's _wrapNativeSuper wrapper). The member sold beside
    the owing one stands in the executor's frame (CONT_PROMISE_EXEC, requested by the inner Reflect.construct
-   machine) above the wrapper's body (CONT_CONSTRUCT, requested by the outer one). */
+   machine) above the wrapper's body (CONT_CONSTRUCT, requested by the outer one). The wrapper builds its list
+   rather than passing `arguments`, whose class has no writer and is not in grafana's shape. */
 static const char HTML_SALEPEXEC[] =
     "<!doctype html><html><body>"
     "<script>"
-    "function SlWrap() { return Reflect.construct(Promise, arguments, new.target); }"
+    "function SlWrap(ex) { return Reflect.construct(Promise, [ex], new.target); }"
     "SlWrap.prototype = Object.create(Promise.prototype);"
     "var slPexecOwe = location.hash === '#owe';"
     "if (slPexecOwe) {"
