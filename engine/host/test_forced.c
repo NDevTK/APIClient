@@ -1530,9 +1530,17 @@ static void tf_floor_lift(void) {
 #endif
 }
 
+/* The members a sale could still take: resident and not held. */
+static int tf_sellable(void) {
+    int n = 0;
+    for (int i = 0; flow_at(i); i++) n += !flow_cold(flow_at(i)) && !flow_held(flow_at(i));
+    return n;
+}
+
 /* At the payment whose bill first lists a sale document's owed request, sells every member but the one switched
    in through the allocator's refusal edge (engine_reclaim_at_rest), before anything is paid, and answers the
-   bill as it stands after. */
+   bill as it stands after. It stops when no member but that one is resident, so the edge's next exit, which
+   gives a written stub's bytes back at the floor, is not asked. A held member is never sold. */
 static const char *tf_sale_act(const char *urls) {
     static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed", "/api/sl-floor-owed",
                                         "/api/sl-async-owed" };
@@ -1543,7 +1551,7 @@ static const char *tf_sale_act(const char *urls) {
         if (!strstr(urls, owed[i])) continue;
         g_tf_sale.listed = 1;
         if (at_floor) g_tf_sale.floor = tf_floor_place();
-        while (engine_reclaim_at_rest() > 0) g_tf_sale.gave++;
+        while (tf_sellable() > (flow_running() != NULL) && engine_reclaim_at_rest() > 0) g_tf_sale.gave++;
         if (at_floor) tf_floor_lift();
         urls = engine_pending_fetches();
         g_tf_sale.relisted = strstr(urls, owed[i]) != NULL;
