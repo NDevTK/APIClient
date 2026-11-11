@@ -620,7 +620,7 @@ void event_loop_advance_to(JSContext *ctx, JSValueConst when, JSValueConst due)
        take, and an assertion that forks manufactures the world in which it holds. -1 is "never asked", which
        is a caller that did not go through the ordering at all and is caught by the monotonicity read above. */
     DCHECK(event_loop_before_decided(ctx, now, when) != 1 || el_num_get(ctx, g_atom_licence) == 1 ||
-           event_loop_may_advance(),
+           (flow_running() != NULL && !pending_arrival_outstanding(flow_running()->pending)),
            "the event loop's clock was jumped FORWARD to a moment it has not reached while the host still "
            "owes this flow a reply — HTML has no step that moves a clock (every read of the unsafe shared "
            "current time in §8.1.7.3 Processing model is a read, and both task sources become due by a WAIT), "
