@@ -119,6 +119,7 @@ static size_t     g_alive;
 static LayoutJob *g_alive_head;
 static long       g_sheds;
 static int64_t    g_shed_bytes;
+static int64_t    g_shed_placement_bytes;   /* what the kept placement records asked for, summed over the sheds */
 
 /* Every layout read happens inside an entered job: a step machine owning a driven job enters it before laying
    out, so a read with none is an entry that does not, and the job is dereferenced on every path. */
@@ -395,6 +396,7 @@ void layout_job_held(LayoutJobHeld *out)
             "freed past layout_job_new or layout_job_free", out->jobs, g_alive);
     out->sheds = g_sheds;
     out->shed_bytes = g_shed_bytes;
+    out->shed_placement_bytes = g_shed_placement_bytes;
 }
 
 LayoutJobResting *layout_job_resting(size_t *n)
@@ -441,6 +443,8 @@ size_t layout_job_shed(LayoutJob *job)
         intrinsic_size_record_shed(&job->ctxs[i]->intrinsic);
     }
     freed = live - c_alloc_live();
+    g_shed_placement_bytes += (int64_t)flow_placement_record_bytes(&job->placement);
+    for (i = 0; i < job->nctx; i++) g_shed_placement_bytes += (int64_t)flow_placement_record_bytes(&job->ctxs[i]->placement);
     job->shed_at = job->held;
     job->held -= (int64_t)freed;
     g_sheds++;

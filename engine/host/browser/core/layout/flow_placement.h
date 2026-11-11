@@ -38,6 +38,8 @@ typedef struct {
     size_t          cap, used;
 } FlowPlacementRecord;
 void flow_placement_record_release(FlowPlacementRecord *r);
+/* The bytes the record's allocations asked for: its table, its entries and their anonymous box and float lists. */
+size_t flow_placement_record_bytes(const FlowPlacementRecord *r);
 
 /* Whether the current job holds a record. Read by assertions and by nothing that decides what to compute. */
 bool flow_placement_is_held(void);

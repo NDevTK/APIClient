@@ -325,6 +325,8 @@ METRIC(layout_job_kib, "layoutJobKiB", GAUGE, "KiB", AGENT, "core/layout/layout_
    bytes their release gave back, measured around it: read beside the `layoutJobKiB` they came out of. */
 METRIC(layout_sheds, "layoutSheds", LIFETIME, "job", PROCESS, "core/layout/layout_job.c", INT)
 METRIC(layout_shed_kib, "layoutShedKiB", LIFETIME, "KiB", PROCESS, "core/layout/layout_job.c", INT)
+/* …and the bytes the placement records those sheds kept asked for (flow_placement_record_bytes), summed over them. */
+METRIC(layout_shed_placement_kib, "layoutShedPlacementKiB", LIFETIME, "KiB", PROCESS, "core/layout/layout_job.c", INT)
 METRIC(per_flow_kib, "perFlowKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
 METRIC(seg_kib, "segKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
 METRIC(dom_seg_kib, "domSegKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)

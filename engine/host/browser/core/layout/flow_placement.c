@@ -215,6 +215,18 @@ void flow_placement_record_release(FlowPlacementRecord *r)
     r->used = 0;
 }
 
+size_t flow_placement_record_bytes(const FlowPlacementRecord *r)
+{
+    size_t i, bytes = r->cap * sizeof *r->tab;
+
+    for (i = 0; i < r->cap; i++) {
+        if (r->tab[i].el == NULL) continue;
+        bytes += sizeof *r->tab[i].e + r->tab[i].e->anon_cap * sizeof *r->tab[i].e->anon +
+                 r->tab[i].e->floats_cap * sizeof *r->tab[i].e->floats;
+    }
+    return bytes;
+}
+
 bool flow_placement_is_held(void) { return layout_job_placement() != NULL; }
 
 void flow_placement_record(const lxb_dom_element_t *el, CssPx top)

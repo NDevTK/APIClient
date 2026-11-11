@@ -1766,6 +1766,7 @@ char *result_cold_json(void) {
         METRIC_SET(layout_job_kib, (long)(lj.bytes / 1024));
         METRIC_SET(layout_sheds, lj.sheds);
         METRIC_SET(layout_shed_kib, (long)(lj.shed_bytes / 1024));
+        METRIC_SET(layout_shed_placement_kib, (long)(lj.shed_placement_bytes / 1024));
         METRIC_SET(per_flow_kib, (c.dec_bytes + c.head_bytes + c.dom_head_bytes + c.pend_bytes + c.misc_bytes +
                                   (long)lj.bytes) / 1024);
     }

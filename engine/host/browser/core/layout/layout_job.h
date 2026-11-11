@@ -144,6 +144,7 @@ typedef struct {
     int64_t bytes;
     long    sheds;        /* lifetime: the jobs layout_job_shed emptied */
     int64_t shed_bytes;   /* lifetime: the bytes those sheds gave back, measured */
+    int64_t shed_placement_bytes;   /* lifetime: the bytes the placement records held at those sheds, asked */
 } LayoutJobHeld;
 void layout_job_held(LayoutJobHeld *out);
 
