@@ -1249,8 +1249,12 @@ void decide_history_name(uint64_t *identity, int *ordinal) {
                        "minted");
 }
 
-/* Whether the point at which the running flow's record took the arrival slot `asked` is ahead of its cursor. */
-static int dec_arrival_ahead(uint32_t asked) {
+static char *decide_key(JSValueConst cond);   /* the predicate's identity (below) */
+
+/* Whether the point at which the running flow's record took the arrival slot `asked` is ahead of its cursor.
+   `lead` is the question the arrival's own step asks before its slot (0 for none): recorded as the first
+   question at the cursor, it is that step's, so it does not stand between. */
+static int dec_arrival_ahead(uint32_t asked, uint32_t lead) {
     uint32_t k, r;
     int i, between = 0;
 
@@ -1264,17 +1268,31 @@ static int dec_arrival_ahead(uint32_t asked) {
     for (i = g_c; i < dec_total(); i++) {
         (void)dec_at(i, &k, &r);
         if (k == asked) return between > 0;
-        if (concolic_root_sig_delivered(r) != CONCOLIC_ROOT_SIG_DELIVERED) between++;
+        if (concolic_root_sig_delivered(r) == CONCOLIC_ROOT_SIG_DELIVERED) continue;
+        if (between == 0 && k == lead) { lead = 0; continue; }
+        between++;
     }
     return between > 0;
 }
 
 /* See decide.h. */
-int decide_completion_ahead(const char *why) { return dec_arrival_ahead(dec_arrival_hash(why, NULL, 0)); }
+int decide_completion_ahead(const char *why, JSValueConst lead) {
+    uint32_t lk = 0;
+
+    if (concolic_is(lead) && decide_value_arm(lead) < 0) {
+        char *key = decide_key(lead);
+
+        DCHECK(key != NULL, "an arrival's leading question has no identity — decide_arm would key its slot by the "
+                            "asking code site, which this read cannot spell, so the hold would count the arrival's "
+                            "own question as one standing before it");
+        if (key) { lk = dec_key_hash(key); free(key); }
+    }
+    return dec_arrival_ahead(dec_arrival_hash(why, NULL, 0), lk);
+}
 
 /* See decide.h. */
 int decide_arrival_ahead(const char *why, uint64_t what) {
-    return dec_arrival_ahead(dec_arrival_hash(why, &what, sizeof what));
+    return dec_arrival_ahead(dec_arrival_hash(why, &what, sizeof what), 0);
 }
 
 void decide_live_stats(long *entries, long *bytes) {

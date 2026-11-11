@@ -6394,14 +6394,28 @@ static int flow_decline_owed_at(JSContext *ctx, const Flow *f) {
     return -1;
 }
 
+/* Whether a replay holds the refusal at register entry `i` (flow_decline_fork_at, below). The fork asks an
+   unknown address's same-origin test before its completion (flow_unaddressed_same_origin), so that question is
+   the arrival's own. A read. */
+static int flow_decline_held(JSContext *ctx, const Flow *f, int i) {
+    JSValue e = pending_entry(f->pending, i), lead = pending_get(e, PEND_SAME_ORIGIN);
+    int held = decide_completion_ahead(DECLINE_WAITS, lead);
+
+    JS_FreeValue(ctx, lead);
+    JS_FreeValue(ctx, e);
+    return held;
+}
+
 /* A refusal is due once the flow can fork, and a replay takes it where its record took it: a refusal that
    reaches a replaying flow before that point (the trusted zone answered sooner than in the recording session,
    or the recording parked before it was taken) is held, since taking it early leaves the recorded path at the
    cursor and re-explores what it recorded. flow_step's resting arm ends a hold nothing can reach the end of. */
 static int flow_decline_fork_at(JSContext *ctx, const Flow *f) {
+    int i;
+
     if (!flow_fork_homes_open(ctx, f, 0)) return -1;
-    if (decide_completion_ahead(DECLINE_WAITS)) return -1;
-    return flow_decline_owed_at(ctx, f);
+    i = flow_decline_owed_at(ctx, f);
+    return i >= 0 && flow_decline_held(ctx, f, i) ? -1 : i;
 }
 
 static void flow_decline_fork(JSContext *ctx, Flow *f, int i) {
@@ -10742,12 +10756,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                path and leaves it here, as the held delivery below does. A reply so released arrives now. */
             else if (!pending_host_outstanding(f->pending) &&
                      (flow_decline_owed_at(ctx, f) >= 0 || flow_pending_ready(f))) {
-                int declined = flow_decline_owed_at(ctx, f) >= 0, ready = flow_pending_ready(f);
+                int di = flow_decline_owed_at(ctx, f), ready = flow_pending_ready(f);
 
                 DCHECK(flow_fork_homes_open(ctx, f, 0),
                        "a flow rests with an arrival held and a suspension that cannot be cloned — the resting "
                        "arm is reached with no frame, no parked continuation and no compile in flight");
-                if ((declined && decide_completion_ahead(DECLINE_WAITS)) || (ready && flow_reply_held(f)))
+                if ((di >= 0 && flow_decline_held(ctx, f, di)) || (ready && flow_reply_held(f)))
                     decide_leave_path();
                 if (ready) pending_restamp_answered(f->pending, flow_work_seq_next);
                 g_step_unit = STEP_UNIT_HELD_ARRIVAL;

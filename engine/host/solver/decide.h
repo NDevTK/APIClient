@@ -529,8 +529,10 @@ void  decide_history_name(uint64_t *identity, int *ordinal);
    ahead of its cursor: the record takes it at a slot past the cursor, or holds no slot for it and has not been
    replayed to its end (its recording parked before the arrival, so the arrival belongs past the record). One
    owed behind the cursor (passed over for a later question) is due, not ahead, and so is one with only slots
-   over a source the running candidate delivers between the cursor and that point, which no question reaches. */
-int   decide_completion_ahead(const char *why);
+   over a source the running candidate delivers between the cursor and that point, which no question reaches.
+   `lead` is the predicate the arrival's own step asks before its completion (JS_UNDEFINED for none): its slot,
+   recorded first at the cursor, belongs to the arrival and does not stand before it. */
+int   decide_completion_ahead(const char *why, JSValueConst lead);
 /* The same question of an arrival this flow can name (`why` and `what`, decide_arrival_landed's key). */
 int   decide_arrival_ahead(const char *why, uint64_t what);
 void *decide_suspend(void);
