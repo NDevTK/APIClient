@@ -133,9 +133,12 @@ async function drive(gluePath, html, steps) {
      request — a geometry dump is about what the engine computed by ITSELF, and paying a reply would let a
      server's values into it — and a session ended with replies still owed drops every flow parked on one
      together with its continuation, which `qjs_teardown` asserts against by name. Of the three exits that
-     assert names, the park is the one that matches what this driver is. The step after it performs it. */
-  M.ccall('qjs_request_park', 'void', [], []);
-  await M.ccall('qjs_step', 'number', [], [], { async: true });
+     assert names, the park is the one that matches what this driver is. The step after it performs it. A
+     session that answered DONE has no frontier to park, and engine_request_park refuses one by name. */
+  if (code !== 0) {
+    M.ccall('qjs_request_park', 'void', [], []);
+    await M.ccall('qjs_step', 'number', [], [], { async: true });
+  }
   M.ccall('qjs_teardown', 'void', [], []);
   return { code, records, result: res };
 }
