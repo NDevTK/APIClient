@@ -231,8 +231,8 @@ typedef struct JSGCCycle {
     uint64_t mut_epoch0;
     /* Lifetime counts, read by JS_GCCycleStats: the work done in every phase (objects and edges visited, objects
        freed), the unit a step is budgeted in; decref steps taken; trials restarted; collections finished; GC
-       objects freed as cycles. */
-    uint64_t work, steps, restarts, collections, freed;
+       objects freed as cycles; the most work one JS_GCStep call did. */
+    uint64_t work, steps, restarts, collections, freed, step_work_max;
 } JSGCCycle;
 
 typedef struct JSMallocState {
@@ -11165,13 +11165,27 @@ void JS_GCBegin(JSRuntime *rt)
     gc_decref_begin(rt);
 }
 
+/* The work one JS_GCStep call did, folded into the lifetime maximum. */
+static void gc_step_work_note(JSRuntime *rt, uint64_t work0)
+{
+    uint64_t did = rt->gc_cycle.work - work0;
+
+    if (did > rt->gc_cycle.step_work_max)
+        rt->gc_cycle.step_work_max = did;
+}
+
 bool JS_GCStep(JSRuntime *rt, uint64_t budget)
 {
-    if (!gc_decref_step(rt, budget))
+    uint64_t work0 = rt->gc_cycle.work;
+
+    if (!gc_decref_step(rt, budget)) {
+        gc_step_work_note(rt, work0);
         return false;
+    }
     gc_scan(rt);
     gc_free_cycles(rt);
     gc_cycle_finished(rt);
+    gc_step_work_note(rt, work0);
     return true;
 }
 
@@ -11189,6 +11203,7 @@ void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out)
     out->restarts = rt->gc_cycle.restarts;
     out->collections = rt->gc_cycle.collections;
     out->freed = rt->gc_cycle.freed;
+    out->step_work_max = rt->gc_cycle.step_work_max;
 }
 
 /* The collection driven to its end in one call, for a host with no scheduler and for teardown. A trial already

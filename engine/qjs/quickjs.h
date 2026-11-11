@@ -692,6 +692,7 @@ typedef struct JSGCCycleStats {
     uint64_t restarts;     /* lifetime: trials restarted */
     uint64_t collections;  /* lifetime: collections finished */
     uint64_t freed;        /* lifetime: GC objects freed as cycles */
+    uint64_t step_work_max; /* lifetime: the most work one JS_GCStep call did */
 } JSGCCycleStats;
 JS_EXTERN void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out);
 JS_EXTERN bool JS_IsLiveObject(JSRuntime *rt, JSValueConst obj);

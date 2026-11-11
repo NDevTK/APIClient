@@ -1340,6 +1340,9 @@ void engine_note_net_prog_xhr_queued(void);
    engine_collect_slice). */
 long long engine_gc_slices(void);
 long long engine_gc_us(void);
+/* The most engine work one collector slice banked, host turns inside it included (lifetime). A slice ends at the
+   first step boundary at or past the quantum, so this exceeds ENGINE_QUANTUM_WORK by at most one step's work. */
+long long engine_gc_slice_work_max(void);
 /* The host turns this instance answered (ENGINE_STEP_HOST), lifetime. A function of elapsed time, so no census
    carries it: a census row is a function of the paths. */
 long long engine_host_turns(void);

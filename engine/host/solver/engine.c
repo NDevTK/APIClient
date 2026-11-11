@@ -14135,7 +14135,9 @@ void engine_sched_end(void) {
    Lifetime counts, read by result.c's @HEAP. */
 static long long g_gc_slices;
 static int64_t   g_gc_us;
+static int64_t   g_gc_slice_work_max;
 long long engine_gc_slices(void) { return g_gc_slices; }
+long long engine_gc_slice_work_max(void) { return (long long)g_gc_slice_work_max; }
 static long long g_host_turns;
 long long engine_host_turns(void) { return g_host_turns; }
 long long engine_gc_us(void) { return (long long)g_gc_us; }
@@ -14180,6 +14182,7 @@ static int engine_collect_slice(JSRuntime *rt, int resume) {
         }
     } while (!done && engine_slice_work() < ENGINE_QUANTUM_WORK);
     g_gc_us += quantum_thread_us() - t0;
+    if (engine_slice_work() > g_gc_slice_work_max) g_gc_slice_work_max = engine_slice_work();
     return ENGINE_STEP_YIELD;
 }
 

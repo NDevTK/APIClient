@@ -66,6 +66,7 @@
 #include "solver/reply_body.h"
 #include "solver/engine.h"
 #include "solver/quantum.h"   /* quantum_set_host_turn_us: `--host-turn-us` */
+#include "solver/rest_unit.h" /* the collector step's budget, which the `gccycle` row is stated against */
 #include "solver/ram_limit.h"   /* the tightest memory cgroup limit, which native_ceiling_arm takes as a ceiling */
 #include "solver/cow.h"
 #include "core/loader/cookie_jar.h"   /* the root document's own Set-Cookie, received at the baseline */
@@ -1658,6 +1659,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/contchain.h"
 #include "fixture/weakchain.h"
 #include "fixture/gcchurn.h"
+#include "fixture/gccycle.h"
 #include "fixture/forkkey.h"
 #include "fixture/qnamefork.h"
 #include "fixture/rafcancel.h"
@@ -2460,6 +2462,7 @@ TF_DOCS[] = {
     { "contchain", HTML_CONTCHAIN },
     { "weakchain", HTML_WEAKCHAIN },
     { "gcchurn", HTML_GCCHURN },
+    { "gccycle", HTML_GCCYCLE },
     { "forkkey", HTML_FORKKEY },
     { "qnamefork", HTML_QNAMEFORK },
     { "rafcancel", HTML_RAFCANCEL },
@@ -27041,6 +27044,32 @@ static long tf_census_row(const char *js, const char *census, const char *key) {
     return p != NULL ? strtol(p + strlen(k), NULL, 10) : -2;
 }
 
+/* The rows of the `gccycle` document (fixture/gccycle.h). */
+TF_UNIT void probes_gccycle(const char *js, Probe *tab, int *n) {
+    /* The ring is collected, and no collector step or slice ran a phase whole. A step is its budget plus the
+       edges of the object it ends on, which in this document are fewer than a budget; a slice ends at the first
+       step boundary at or past the quantum. */
+    const long budget = (long)rest_unit_items(REST_UNIT_GC_WORK);
+    const long step_units = (2 * budget * THREAD_WORK_UNITS_PER_KI_GC + 1023) / 1024;
+    const char *gy_why = NULL; int gy_tt = 1;
+    fold_row(&gy_tt, &gy_why, param_value_is(js, "/api/gccycle", "kept", "300000"),
+             "NOT REACHED: there is no /api/gccycle record with the document's 300000 kept objects, so no "
+             "collection freed the ring while the page kept running");
+    fold_row(&gy_tt, &gy_why, tf_census_row(js, "_heap", "gcFreed") >= 300000,
+             "NOT REACHED: `_heap.gcFreed` is under the ring's 300000 nodes, so the census this row reads was "
+             "composed before the ring's collection finished");
+    fold_row(&gy_tt, &gy_why, tf_census_row(js, "_heap", "gcStepWorkMax") <= 2 * budget,
+             "`_heap.gcStepWorkMax` is over two step budgets: one JS_GCStep call ran a phase of the collection "
+             "to its end, so its work is the heap's size and not the step's");
+    fold_row(&gy_tt, &gy_why, tf_census_row(js, "_heap", "gcSliceWorkMax") <= ENGINE_QUANTUM_WORK + step_units,
+             "`_heap.gcSliceWorkMax` is more than one step past the quantum: a collector slice held the thread "
+             "for a phase that does not rest");
+    const Probe rows[] = {
+        { "cycle-collection-rests-in-every-phase", gy_tt, "/api/gccycle", SESS_EXPLORE, gy_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `realmsell` document. */
 TF_UNIT void probes_realmsell(const char *js, Probe *tab, int *n) {
     /* RAM pressure sells a parked arm that alone names a child realm, and the collection pressure owes after the
@@ -31271,6 +31300,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_contchain(js, probes, &np);
     probes_weakchain(js, probes, &np);
     probes_gcchurn(js, probes, &np);
+    probes_gccycle(js, probes, &np);
     probes_forkkey(js, probes, &np);
     probes_qnamefork(js, probes, &np);
     probes_rafcancel(js, probes, &np);
