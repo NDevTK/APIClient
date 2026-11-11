@@ -27906,7 +27906,8 @@ TF_UNIT void probes_requestunk(const char *js, Probe *tab, int *n) {
 
 /* The rows of the `reqmethod` document (fixture/reqmethod.h): Fetch §5.4 step 25 over a method the page
    computed forks into the arm that returned and the arm that threw, steps 32.1 and 35 fork over the method the
-   first arm carries, and the request records the method's shape. */
+   first arm carries, and the request records the method's shape. A fetch() of a Request is recorded at the
+   Request's parsed URL, which is absolute; a fetch() of a string at the string. */
 TF_UNIT void probes_reqmethod(const char *js, Probe *tab, int *n) {
 #define RQM_ROW(tt, why, cond, text) const char *why = NULL; int tt = 1; fold_row(&tt, &why, (cond), text)
     RQM_ROW(eb_tt, eb_why, !!strstr(js, "\"/api/rqm-ex-built\""),
@@ -27915,7 +27916,7 @@ TF_UNIT void probes_reqmethod(const char *js, Probe *tab, int *n) {
     RQM_ROW(et_tt, et_why, !!strstr(js, "\"/api/rqm-ex-threw\""),
             "no /api/rqm-ex-threw record, so §5.4 step 25's TypeError arm over a method with an example was "
             "not explored: the example's verdict decided the predicate for every world");
-    RQM_ROW(em_tt, em_why, emitted_record_method_has(js, "/api/rqm-exreq", "navigator.language"),
+    RQM_ROW(em_tt, em_why, emitted_record_method_has(js, "https://x.test/api/rqm-exreq", "navigator.language"),
             "the request built with a method from navigator.language has no record whose method names that "
             "source, so the endpoint was not identified by the method's shape");
     RQM_ROW(er_tt, er_why, !!strstr(js, "\"/api/rqm-ex-replied\""),
@@ -27927,14 +27928,14 @@ TF_UNIT void probes_reqmethod(const char *js, Probe *tab, int *n) {
     RQM_ROW(ut_tt, ut_why, !!strstr(js, "\"/api/rqm-un-threw\""),
             "no /api/rqm-un-threw record, so §5.4 step 25's TypeError arm over a method with no example was "
             "not explored");
-    RQM_ROW(um_tt, um_why, emitted_record_method_has(js, "/api/rqm-unreq", "location.hash"),
+    RQM_ROW(um_tt, um_why, emitted_record_method_has(js, "https://x.test/api/rqm-unreq", "location.hash"),
             "the request built with a method from location.hash has no record whose method names that source");
     RQM_ROW(ft_tt, ft_why, !!strstr(js, "\"/api/rqm-forbid-threw\""),
             "NOT REACHED: no /api/rqm-forbid-threw record, so new Request() given the forbidden method TRACE did "
             "not throw §5.4 step 25's TypeError");
     RQM_ROW(fb_tt, fb_why, !strstr(js, "\"/api/rqm-forbid-built\""),
             "a /api/rqm-forbid-built record exists, so a Request was built with the forbidden method TRACE");
-    RQM_ROW(pp_tt, pp_why, emitted_record_method(js, "/api/rqm-post", "POST"),
+    RQM_ROW(pp_tt, pp_why, emitted_record_method(js, "https://x.test/api/rqm-post", "POST"),
             "the request given the method `post` was not recorded as POST: §2.2.1's normalize a method "
             "byte-uppercases the six names");
     RQM_ROW(fm_tt, fm_why, emitted_record_method_has(js, "/api/rqm-fetchreq", "location.hash"),
