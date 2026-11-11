@@ -311,8 +311,11 @@ static lxb_dom_element_t *bf_context_root(lxb_dom_element_t *el)
 static lxb_dom_node_t *bf_scan_next(lxb_dom_node_t *n, bool descend, lxb_dom_node_t *root)
 {
     if (descend && flat_tree_first_child(n) != NULL) return flat_tree_first_child(n);
-    for (; n != root; n = flat_tree_parent(n))
+    for (; n != root; n = flat_tree_parent(n)) {
+        CHECK(n != NULL, "a pre-order walk over a flat subtree climbed out of the flat tree without reaching "
+                         "its root, so it began at a node outside that subtree");
         if (flat_tree_next_sibling(n) != NULL) return flat_tree_next_sibling(n);
+    }
     return NULL;
 }
 
@@ -367,7 +370,7 @@ bool block_flow_context_floats_ask(lxb_dom_element_t *el, lxb_dom_element_t ***v
     root = bf_context_root(el);
     rn = lxb_dom_interface_node(root);
     if (!flow_placement_floats_peek(root, &held, &held_n)) {
-        if (!recorded || !flow_placement_float_scan_peek(root, &nd)) nd = rn->first_child;
+        if (!recorded || !flow_placement_float_scan_peek(root, &nd)) nd = flat_tree_first_child(rn);
         while (nd != NULL) {
             bool descend = true;
 
@@ -3302,25 +3305,44 @@ static CssPx bf_hypothetical_margin_top(lxb_dom_element_t *el, lxb_dom_element_t
     return css_px(0.0);
 }
 
+/* The position in `cb`'s content (CSS 2.2 §9.2.1.1) that holds `target`: `target` itself when every inline box
+   between them breaks, else the outermost one that does not, whose whole content is in one run because the
+   content order steps over it. NULL when a box other than an in-flow inline box stands between them (a flex or
+   grid container), whose own layout places what is in it. */
+static lxb_dom_node_t *bf_content_position_of(lxb_dom_element_t *cb, lxb_dom_node_t *target)
+{
+    lxb_dom_node_t *x, *at = target;
+
+    for (x = target;;) {
+        lxb_dom_element_t *p = box_tree_parent(box_tree_child_of_node(x));
+
+        if (p == NULL) return NULL;
+        if (p == cb) return at;
+        if (!bf_generates_inline_box(p)) return NULL;
+        x = lxb_dom_interface_node(p);
+        if (!bf_inline_box_breaks(p)) at = x;
+    }
+}
+
 /* THE BLOCK-LEVEL BOX THE HYPOTHETICAL BOX'S RUN FOLLOWS, and whether the container's content order reaches
-   the element at all. §9.2.1.1's runs partition the container's CONTENT, so a content position is named by
-   the box list entry before it; NULL is the run before the first block-level box, which is also the whole
-   content of a container that has none.
+   the element, or the inline box holding it, at all. §9.2.1.1's runs partition the container's CONTENT, so a
+   content position is named by the box list entry before it; NULL is the run before the first block-level
+   box, which is also the whole content of a container that has none.
    IT WALKS THE CONTENT AND NOT THE CHILD LIST, for `bf_block_box_at`'s reason: §9.2.1.1 breaks an inline box
    around an in-flow block-level box inside it and makes that box "a sibling of those anonymous boxes", so a
-   position inside a BREAKING inline box is a position in this container's own content. A position inside an
-   inline box that does NOT break is not reached, and that is the honest answer rather than an omission — see
-   the crash at the caller. */
+   position inside a BREAKING inline box is a position in this container's own content, and one inside an
+   inline box that does not break is in that inline box's run. */
 static lxb_dom_node_t *bf_static_run_after(lxb_dom_element_t *cb, lxb_dom_node_t *target, bool *reached)
 {
     BoxTreeChild n;
-    lxb_dom_node_t *last = NULL;
+    lxb_dom_node_t *last = NULL, *at = bf_content_position_of(cb, target);
 
     *reached = false;
+    if (at == NULL) return NULL;
     for (n = box_tree_first_child(cb); box_tree_child_exists(n); n = bf_content_next(cb, n)) {
         lxb_dom_element_t *box;
 
-        if (box_tree_child_is_node(n, target)) { *reached = true; return last; }
+        if (box_tree_child_is_node(n, at)) { *reached = true; return last; }
         box = box_tree_parent(n);
         DCHECK(box != NULL,
                "CSS 2.2 §9.2.1.1's content order reached a node with no BOX parent, so §9.2's box generation "
@@ -3369,7 +3391,7 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
     lxb_dom_element_t *cb;
     lxb_dom_node_t *n, *after;
     BlockFlowRun before;
-    FlowRunStart start;
+    FlowRunStart start = { css_px(0.0), css_px(0.0), css_px(0.0), false };
     BfRun run;
     bool reached = false, held;
     char nbuf[160], cbuf[160];
@@ -3386,17 +3408,15 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
        Named residual: that line's own alignment (css-text-4 §7.1 `text-align`) is not applied, which the next
        diff builds from the fill over the hypothetical run; its absence shows as an absolutely positioned box
        with `auto` insets, alone in a centered container's run, placed at the run's start edge. */
+    /* Each DFAIL's release arm below reads the start of the run `after` names, the container's first where
+       nothing was reached, so a gap places the box at a run start the walk records. */
     after = bf_static_run_after(cb, n, &reached);
     if (!reached)
-        DFAILF("%s, whose static-position containing block is %s: CSS 2.2 §9.2.1.1's CONTENT ORDER for that "
-               "container never reached this element, so there is no run for §10.3.7's hypothetical box to "
-               "sit in. The order steps over a child's subtree except through an inline box the section "
-               "BREAKS, so what reaches here is an element inside an inline box that breaks nowhere TODAY and "
-               "would break around this very box in the hypothetical document — §9.2.1.1: \"when an inline box "
-               "contains an in-flow block-level box, the inline box … is broken around the block-level box\". "
-               "A `display: contents` ancestor is the other producer and `bf_element_child` names it. BUILD "
-               "the box list over the HYPOTHETICAL document that §10.3.7 describes, in which this element's "
-               "`position` is `static` — the same enumeration, asked of a child list one member longer",
+        DFAILF("%s, whose static-position containing block is %s: CSS 2.2 §9.2.1.1's content order for that "
+               "container reaches neither this element nor an in-flow inline box holding it, so a box of another "
+               "kind (a flex or grid container) stands between them. BUILD the static position that box's own "
+               "module states for an absolutely positioned child (css-flexbox-1 §4.1 \"Absolutely-Positioned "
+               "Flex Children\", css-grid-1 §9.2 \"With a Grid Container as Parent\")",
                box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
     DCHECKF(flt || !block_flow_static_box_on_line(el),
             "%s, in %s: CSS 2 §9.4.1's stack was asked the static top of a hypothetical box that is inline-level "
@@ -3416,7 +3436,7 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
     DCHECKF(!flt || !block_flow_float_on_line(el),
             "%s, in %s: the stack's starting top was asked of a float the line box fill places",
             box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
-    if (!flt && block_flow_run_generates_box(cb, before))
+    if (reached && !flt && block_flow_run_generates_box(cb, before))
         DFAILF("%s, whose static-position containing block is %s: CSS 2.2 §9.2.1.1 would break the anonymous "
                "block box this element sits in — \"if a block container box … has a block-level box inside it "
                "…, then we force it to have only block-level boxes inside it\" — because §10.3.7's "
@@ -3441,6 +3461,7 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
         }
     }
     if (!held)
+        /* Its release arm reads `start`'s zeros: the container's top content edge. */
         DFAILF("%s, whose static-position containing block is %s: CSS 2 §9.4.1's walk over that container "
                "visited every one of CSS 2.2 §9.2.1.1's runs and none of them was the one this element sits "
                "in. The run is named by the block-level box it FOLLOWS and the enumeration visits each run "
