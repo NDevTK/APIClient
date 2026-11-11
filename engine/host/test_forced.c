@@ -19478,13 +19478,9 @@ static long tf_hist_above(const char *js, const char *key, int from) {
    storage it funded, and the bill after the sale still lists the request the sold member owes.
    sale-async-returns: as sale-forced-returns, for a member whose delta holds a pre-fork promise's settlement,
    and its report reads the value the restored settlement carries.
-   sale-keep-same-record: as sale-forced-returns, for a member whose owed record a holder outside it names at the
-   act (g_tf_keep); the sale read the held record back as itself (`soldNamed`), the reply reached it, and the
-   restored register names it rather than a copy.
-   sale-ctor-busy-returns: the member sold while its loop ran in a constructor's body was written (no sale
-   waited on `frame call` or `cont CONSTRUCT`), restored, and reported the count its constructor computed.
-   sale-catch-busy-returns: the member sold while its loop ran inside a `try` was written (no sale waited on
-   `tag 5`, a catch offset among a frame's values), restored, and reported its count. */
+   sale-keep-same-record: a member whose owed record a holder outside it names (g_tf_keep) gets that record back
+   (`soldNamed`), answered. sale-ctor-busy-returns and sale-catch-busy-returns: a member sold in a constructor's
+   body, or inside a `try`, waits on no gap of that kind, returns and reports its count. */
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
     const char *cat = strstr(js, "\"saleCensus\":{\"n\":");

@@ -8,8 +8,8 @@
    `salefloor`: `sale`'s shape, sold with the allocator placed at its floor (tf_floor_place), so the sale's own
    allocations are refused unless the sale funds them. `saleasync`: `sale`'s shape where the owing arm first
    settles a promise made before the fork, so its delta holds that promise's settlement and its resolving
-   function's latch when it is sold, and its report reads the settled value. `salekeep`, `salector`, `salecatch`: below.
-   Eight of test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c
+   function's latch when it is sold, and its report reads the settled value. `salekeep`, `salector` and
+   `salecatch` are described at their constants. Eight of test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c
    defines before including this file. */
 #ifndef ENGINE_HOST_FIXTURE_SALE_H
 #define ENGINE_HOST_FIXTURE_SALE_H
