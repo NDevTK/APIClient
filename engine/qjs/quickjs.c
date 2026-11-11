@@ -57233,8 +57233,8 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                 f->state = PDS_ASGN_ASYNC_SKIP;
                 goto dispatch;
             }
-            if (atok < 0)
-                PD_RET(-1);   /* the restore's re-scan threw */
+            if (atok == -1)
+                PD_RET(-1);   /* the restore's re-scan threw; tokens are negative, but none is -1 */
             if (atok != TOK_ARROW)
                 goto assign_next;
             /* past `async` to the parameters' `(` */
