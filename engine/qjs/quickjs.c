@@ -30312,6 +30312,11 @@ void JS_FlowRetireWork(uint64_t units) { g_flow_work_retired += units; }
    `counted_ptr` is added. */
 static uint64_t g_flow_parse_bytes;
 uint64_t JS_FlowParseBytesLife(void) { return g_flow_parse_bytes; }
+/* The retired work that is a compile's, over the process: what the script tokenizer charges for its bytes and
+   the codegen passes for their input (js_codegen_charge). A report the host reads to bank a compile apart from
+   the service of running code; JSON text and regexp patterns are not in it. */
+static uint64_t g_flow_compile_work;
+uint64_t JS_FlowCompileWorkLife(void) { return g_flow_compile_work; }
 /* Pattern bytes regexp compiles have consumed, and the rests a compile inside a machine took, over the process:
    a report for the same census (lre_compile_poll, step_regexp_compile_run). */
 static uint64_t g_regexp_compile_bytes, g_regexp_compile_rests;
@@ -56453,15 +56458,19 @@ static JSAtom parse_ident(JSParseState *s, const uint8_t **pp,
    Deleting the guard is what makes that claim falsifiable rather than decorative: if some path still reaches
    here through C recursion, it now overflows the stack and CRASHES LOUD at the point that recursed, instead of
    being laundered into a RangeError the caller reports as if the source were at fault. */
-static void js_parse_count_bytes(JSParseState *s)
+static uint64_t js_parse_count_bytes(JSParseState *s)
 {
+    uint64_t units = 0;
+
     if (s->buf_ptr > s->counted_ptr) {
         uint64_t n = (uint64_t)(s->buf_ptr - s->counted_ptr);
 
+        units = n * g_flow_control.parse_units_per_byte;
         g_flow_parse_bytes += n;
-        g_flow_work_retired += n * g_flow_control.parse_units_per_byte;
+        g_flow_work_retired += units;
         s->counted_ptr = s->buf_ptr;
     }
+    return units;
 }
 
 static __exception int next_token(JSParseState *s)
@@ -56471,7 +56480,7 @@ static __exception int next_token(JSParseState *s)
     bool ident_has_escape;
     JSAtom atom;
 
-    js_parse_count_bytes(s);
+    g_flow_compile_work += js_parse_count_bytes(s);
     free_token(s, &s->token);
 
     p = s->last_ptr = s->buf_ptr;
@@ -57127,7 +57136,7 @@ static __exception int json_next_token(JSParseState *s)
     int c;
     JSAtom atom;
 
-    js_parse_count_bytes(s);
+    (void)js_parse_count_bytes(s);
     json_free_token(s, &s->token);
 
     p = s->last_ptr = s->buf_ptr;
@@ -68403,6 +68412,7 @@ uint64_t JS_FlowCodegenRestsLife(void) { return g_codegen_rests; }
 static inline void js_codegen_charge(uint64_t units)
 {
     g_codegen_input += units;
+    g_flow_compile_work += units;
     g_flow_work_retired += units;
 }
 

@@ -723,6 +723,8 @@ char *result_wfq_json(void) {
     METRIC_SET(br_empty_work_life, w.br_empty_work);
     METRIC_SET(br_retired_work_life, w.br_retired_work);
     METRIC_SET(charged_work_life, w.charged_work);
+    METRIC_SET(compile_work_life, w.compile_work);
+    METRIC_SET(site_work_life, w.site_work);
     METRIC_SET(br_depth_max, w.br_depth_max);
     METRIC_SET(br_fan_max, w.br_fan_max);
     METRIC_SET(br_fan_sum, w.br_fan_sum);

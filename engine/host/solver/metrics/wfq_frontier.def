@@ -115,6 +115,10 @@ METRIC(br_held_work_life, "brHeldWorkLife", GAUGE, "unit", AGENT, "solver/flow.c
 METRIC(br_empty_work_life, "brEmptyWorkLife", GAUGE, "unit", AGENT, "solver/flow.c", INT)
 METRIC(br_retired_work_life, "brRetiredWorkLife", LIFETIME, "unit", PROCESS, "solver/flow.c", INT)
 METRIC(charged_work_life, "chargedWorkLife", LIFETIME, "unit", PROCESS, "solver/flow.c", INT)
+/* …and the part of it that was a compile's (the script tokenizer's bytes and the codegen passes' input), and the
+   work charged to code sites, the optimism term's service. */
+METRIC(compile_work_life, "compileWorkLife", LIFETIME, "unit", PROCESS, "solver/flow.c", INT)
+METRIC(site_work_life, "siteWorkLife", LIFETIME, "unit", PROCESS, "solver/flow.c", INT)
 METRIC(br_depth_max, "brDepthMax", GAUGE, "level", AGENT, "solver/flow.c", INT)
 /* …and which fork inside a bucket did the minting. A fan is the live members forked directly
    off one non-root node (solver/flow.h); `brFanDepth` 1 is the top-level arm minting the

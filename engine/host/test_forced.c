@@ -1780,6 +1780,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rxtest.h"
 #include "fixture/uriclass.h"
 #include "fixture/candslot.h"
+#include "fixture/modshare.h"
 #include "fixture/slicelen.h"
 #include "fixture/strsearch.h"
 #include "fixture/rxsearch.h"
@@ -2580,6 +2581,7 @@ TF_DOCS[] = {
     { "rxtest", HTML_RXTEST },
     { "uriclass", HTML_URICLASS },
     { "candslot", HTML_CANDSLOT },
+    { "modshare", HTML_MODSHARE },
     { "candcontra", HTML_CANDCONTRA },
     { "candweak", HTML_CANDWEAK },
     { "candarrive", HTML_CANDARRIVE },
@@ -21461,6 +21463,30 @@ TF_UNIT void probes_candslot(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `modshare` document (fixture/modshare.h): both worlds run the module, and no code site's
+   service holds a compile's work, so the work charged to sites and the compile work charged partition within
+   all the work charged. */
+TF_UNIT void probes_modshare(const char *js, Probe *tab, int *n) {
+    const char *r_why = NULL, *c_why = NULL;
+    int r_tt = 1, c_tt = 1;
+    static char c_buf[256];
+    int64_t site = flow_site_work_lifetime(), compile = flow_compile_work_lifetime();
+    int64_t charged = flow_charged_work_lifetime();
+
+    fold_row(&r_tt, &r_why,
+             param_value_is(js, "/api/ms-mod", "w", "A") && param_value_is(js, "/api/ms-mod", "w", "P"),
+             "no /api/ms-mod record for one of the two arms, so a world did not run the module");
+    snprintf(c_buf, sizeof c_buf, "the sites were charged %lld and compiles %lld of %lld charged in all: a code "
+             "site's service holds compile work, or no compile was charged", (long long)site, (long long)compile,
+             (long long)charged);
+    fold_row(&c_tt, &c_why, compile > 0 && site + compile <= charged, c_buf);
+    const Probe rows[] = {
+        { "ms-ran", r_tt, "/api/ms-mod", SESS_EXPLORE, r_why },
+        { "ms-site-excludes-compile", c_tt, "/api/ms-mod", SESS_EXPLORE, c_why, .gate = "ms-ran" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `rxtest` document (fixture/rxtest.h): `test` over an unknown subject is a predicate of the
    match, decided where the page's units decide the match and forked where the subject's domain allows both. */
 TF_UNIT void probes_rxtest(const char *js, Probe *tab, int *n) {
@@ -30952,6 +30978,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rxtest(js, probes, &np);
     probes_uriclass(js, probes, &np);
     probes_candslot(js, probes, &np);
+    probes_modshare(js, probes, &np);
     probes_slicelen(js, probes, &np);
     probes_strsearch(js, probes, &np);
     probes_rxsearch(js, probes, &np);

@@ -13231,6 +13231,7 @@ static int engine_sched_slice(int resume) {
             /* The step's opening on the work counter: the switch-in discarded what stood in the interpreter, so
                everything banked from here to the step's close is this flow's. */
             const int64_t step_work0 = g_service_work;
+            const int64_t step_compile0 = (int64_t)JS_FlowCompileWorkLife();
             g_step_open_work = step_work0;
             /* The same bracket in the other currency, opened on the clock's line so the two readings are of one
                span: the overrun test below compares `now - t_slice0`, and this counts the suspend points offered
@@ -13517,7 +13518,7 @@ static int engine_sched_slice(int resume) {
                    "or `step_us` was narrowed");
             g_step_us += now - t0;
             g_step_work += step_work;
-            flow_age_running(step_work);
+            flow_age_running(step_work, (int64_t)JS_FlowCompileWorkLife() - step_compile0);
             /* The service just charged was the site the flow stood at while it ran. A member about to begin a unit
                stands at that unit's entry (flow_next_unit: the program or task the ladder starts next, the head of a
                checkpoint); one in the middle of a unit keeps its last decision or that unit's entry. */

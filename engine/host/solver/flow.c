@@ -366,6 +366,12 @@ static long g_acct_live;
    folding every bucket, before a second registry comes up. Microseconds received, never reset, unlike the members'
    turns. */
 static int64_t g_charged_work = 0;
+/* The part of that total that was a compile's, and the work charged to code sites (flow_code_charge): lifetime. */
+static int64_t g_compile_work = 0;
+static int64_t g_site_work = 0;
+int64_t flow_site_work_lifetime(void) { return g_site_work; }
+int64_t flow_compile_work_lifetime(void) { return g_compile_work; }
+int64_t flow_charged_work_lifetime(void) { return g_charged_work; }
 static int64_t g_branch_retired_work = 0;
 
 /* The price of one priced decision (flow_priced: an assumption, or an arm against an environment unknown's
@@ -1666,6 +1672,7 @@ static void flow_site_move(Flow *f, FlowSite *to) {
 static void flow_code_charge(FlowCodeSite *c, int64_t us) {
     if (c->served == 0 && us > 0) pick_ledger_site_served(c->kind, c->key);
     c->served += us;
+    g_site_work += us;
     for (FlowSite *st = c->classes; st; st = st->cnext) flow_ix_site_sync(st);
     frontier_rank_changed();
 }
@@ -2153,9 +2160,12 @@ int flow_path_peer_pinned(const Flow *f) {
    No `if (g_running)` guard: the one caller charges between a switch-in and a finish, so a charge with nothing
    running means the scheduler lost track of which flow burned the time, and discarding it would stop a monopolizer
    aging. */
-void flow_age_running(int64_t us) {
+void flow_age_running(int64_t us, int64_t compile) {
     DCHECK(g_running != NULL,
            "work was charged with no flow running — the scheduler charges the flow it just stepped");
+    DCHECK(compile >= 0 && compile <= us,
+           "a step's compile work is negative or exceeds the step's work — both are differences of counters the "
+           "one step bracket reads");
     /* The scheduler's clock is monotonic, asserted where its reading arrives. A negative charge raises the flow's
        weight, so a flow burning the thread would climb to the top and stay; only a non-monotonic or wrapping clock
        at the call site produces one. */
@@ -2212,6 +2222,7 @@ void flow_age_running(int64_t us) {
            "time that can be attributed to no side of any branch");
     g_running->acct->branch->sub_work += us;
     g_charged_work += us;
+    g_compile_work += compile;
     /* And the site the member stands at: Level 2's UCB count is the service its code site has received, in pulls of
        one quantum (Level 1's unit, a real number). Any charge reprices the site, which re-ranks every member
        standing there at once, so the site is re-filed and the order told. */
@@ -5986,6 +5997,8 @@ void flow_wfq_census(WfqCensus *out) {
        identity asserted at the end of this function, published so it is checkable from outside the process. */
     out->br_retired_work = g_branch_retired_work;
     out->charged_work = g_charged_work;
+    out->compile_work = g_compile_work;
+    out->site_work = g_site_work;
     /* A fresh mark for this scan, past zero, so a node minted since the last census (calloc'd to 0) reads as
        unmarked. The bucket walk shares this generation value with a mark of its own (`branch_gen`), because a root
        is both a family and a branch and one field cannot record being counted once as each. */
