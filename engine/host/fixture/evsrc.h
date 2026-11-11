@@ -1,4 +1,4 @@
-/* THE EVENTSOURCE DOCUMENT: HTML §9.2.2 "The EventSource interface" and HTML §9.2.3 "Processing model".
+/* The EventSource document: HTML §9.2.2 "The EventSource interface" and HTML §9.2.3 "Processing model".
    The first shape is a recording snippet's: `class X extends EventSource` evaluated at boot, which throws a
    ReferenceError where the interface is absent and takes the whole snippet down with it. The second is a stream
    over a `data:` URL, which Fetch §4.3 Scheme fetch answers in the agent: the connection is announced (`open`
