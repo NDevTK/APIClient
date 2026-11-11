@@ -3871,7 +3871,7 @@ JS_EXTERN void JS_FlowGenCensus(JSRuntime *rt, long *gen0_objs, long *gen0_bytes
 JS_EXTERN uint64_t JS_BaselineSeal(JSRuntime *rt);
 /* `v`'s baseline name, 0 when it has none (not an object, cell, body or realm, born after the seal, or dead). */
 JS_EXTERN uint32_t JS_BaselineName(JSRuntime *rt, JSValueConst v);
-/* A PARKED FLOW'S PRIVATE GRAPH AS BYTES:the objects reachable from `roots` that were born after `floor`, written
+/* A PARKED FLOW'S PRIVATE GRAPH AS BYTES: the objects reachable from `roots` that were born after `floor`, written
    by content, with every object born at or before it held as a counted anchor the graph keeps (in a session, the
    live shared state is its own name). JS_FlowGraphRead rebuilds the roots into `roots` (n of them, as written)
    over fresh objects that resolve each anchor to the object it names, so writing the rebuilt roots again gives

@@ -887,7 +887,7 @@ const char *cold_park_json(void);
    were built on a start this build cannot replay. An admitted one hands its start back before any flow runs. */
 int cold_resume(JSContext *ctx, const char *recipes);
 
-/* THE BUILD THIS SESSION IS, as the pair CLAUDE.md's time-travel resume names: the host's digest of the engine
+/* The build this session is, as the pair CLAUDE.md's time-travel resume names: the host's digest of the engine
    binary it runs, and the pre-boot baseline's digest (engine_sched_begin, from JS_BaselineSeal and the root
    document's tree), each stated once before the frontier is seeded. The park document's generation record
    carries both, and cold_resume compares them with this session's (ColdResumed's build rows).
@@ -898,7 +898,7 @@ int cold_resume(JSContext *ctx, const char *recipes);
 void cold_set_binary_digest(uint64_t digest);
 void cold_set_baseline_digest(uint64_t digest);
 
-/* WHICH PARKED MEMBERS A SAME-BUILD RESUME COULD RESTORE WITHOUT REPLAY, counted by cold_park_flow over every
+/* Which parked members a same-build resume could restore without replay, counted by cold_park_flow over every
    member it writes: `unstarted` (a member that never ran, whose recipe is empty) and `replays` (the rest, each
    replaying its recipe since no member is written in the cross-session form yet), which sum to the parked flows
    and candidates. `gaps` tallies each replaying member once per kind of part with no cross-session
