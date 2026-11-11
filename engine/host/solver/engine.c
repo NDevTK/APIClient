@@ -12556,10 +12556,12 @@ char *engine_sale_census_json(void) {
    graph, which only its walk counts. So the block is sized after the fact, at twice the most a sale's
    allocations have asked for (the allocator's span across the sale), and SALE_RESERVE_FIRST, which stands until
    a sale is measured, is a placeholder no run chose.
-   Named residual. Not covered: a sale that asks for more than the block given back. Next diff builds: the
-   survey's buffers laid in the block itself, whose end is a refusal the sale counts. Absence shows as: the
-   assert at the sale's exit naming the ask and the block, and where the allocator had nothing beyond the block,
-   the refused allocation's own CHECK inside the sale. */
+   Named residual. Not covered: a sale that asks for more than the block given back; and a sale after which the
+   allocator refuses the block again, what the sale freed having gone to the heap's free lists and not back to
+   the address space, so the next sale is unfunded. Next diff builds: the survey's buffers laid in the block
+   itself and never given to the allocator, the block's end a refusal the sale counts. Absence shows as: the
+   assert at the sale's exit naming the ask and the block, or the refused allocation's own CHECK inside the
+   sale; and `saleUnfunded` climbing with `sold`. */
 #define SALE_RESERVE_FIRST ((size_t)4 << 20)
 static void *g_sale_reserve;
 static size_t g_sale_reserve_bytes = SALE_RESERVE_FIRST, g_sale_need_max;
