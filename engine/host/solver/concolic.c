@@ -1082,16 +1082,13 @@ static int g_ex_contra_any;
    under a clear latch cannot exist. */
 static int g_pin_any;
 
-/* Above zero while an assert reads the store: a read made only to check an invariant prices nothing, so a dev
-   build retires the same work as a release one. */
-static int g_cons_unpriced;
 /* FNV-1a over a constraint key, priced by its bytes: the probe is the store's one primitive and its cost is the
    key's length, which grows with the path that spelled it. */
 static uint32_t cons_hash(const char *k) {
     const char *p = k;
     uint32_t h = 2166136261u;
     while (*p) { h ^= (unsigned char)*p++; h *= 16777619u; }
-    if (!g_cons_unpriced) thread_work_charge(THREAD_WORK_CONSTRAINT, (uint64_t)(p - k));
+    thread_work_charge(THREAD_WORK_CONSTRAINT, (uint64_t)(p - k));
     return h;
 }
 /* The one probe, over the head's index or a segment's (a segment's index is the head's, handed over unchanged
@@ -1105,6 +1102,15 @@ static int cons_index_find(const Cons *e, const int *hash, int cap, const char *
         h = (h + 1) & m;
     }
     return -1;
+}
+/* The same probe asked by an assert, which prices nothing (thread_work.h's unpriced pair). */
+static int cons_index_find_unpriced(const Cons *e, const int *hash, int cap, const char *key) {
+    int r;
+
+    thread_work_unpriced_begin();
+    r = cons_index_find(e, hash, cap, key);
+    thread_work_unpriced_end();
+    return r;
 }
 static void cons_hash_put(int idx) {   /* insert head entry idx; caller guarantees room */
     uint32_t m = (uint32_t)g_pins_hash_cap - 1, h = cons_hash(g_pins[idx].key) & m;
@@ -2408,13 +2414,13 @@ int concolic_src_pinned(const char *src) {
     e = cons_lookup(src);
     return (e && e->val) ? 1 : 0;
 }
-/* The same question asked by an assert, which prices nothing (g_cons_unpriced). */
+/* The same question asked by an assert, which prices nothing (thread_work.h's unpriced pair). */
 static int src_pinned_unpriced(const char *src) {
     int r;
 
-    g_cons_unpriced++;
+    thread_work_unpriced_begin();
     r = concolic_src_pinned(src);
-    g_cons_unpriced--;
+    thread_work_unpriced_end();
     return r;
 }
 
@@ -2428,7 +2434,7 @@ static void cons_each_entry(const Cons *seg, int i, const int *hash, int cap, Co
     const Cons *seen;
 
     DCHECK(e->key != NULL, "a constraint entry holds no key — cons_entry writes the key before anything else");
-    DCHECKF(cons_index_find(seg, hash, cap, e->key) == i,
+    DCHECKF(cons_index_find_unpriced(seg, hash, cap, e->key) == i,
             "the constraint key `%s` is not the entry its own segment's index answers — a key held twice in one "
             "segment is two facts about one value, and a lookup answers whichever the probe reaches first",
             e->key);

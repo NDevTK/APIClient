@@ -31,6 +31,7 @@
 #include "core/layout/scroll_container.h"
 #include "core/layout/text_run.h"
 #include "core/layout/used_value.h"
+#include "core/timing/thread_work.h"   /* the unpriced pair a dev build's second derivation runs under */
 #include "solver/metrics.h"   /* `_layoutFillRests` */
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 #include "solver/reclaim.h"
@@ -1317,8 +1318,9 @@ static bool lb_same_px(CssPx a, CssPx b)
     return a.px == b.px || (a.px != a.px && b.px != b.px);
 }
 
-/* A held fill against its second derivation from the same key, which a dev build takes through the same steps
-   and rests: a key that omits an operand of the fill answers a second asker with the first asker's lines. */
+/* A held fill against its second derivation from the same key, which a dev build takes unpriced and without
+   resting, so it retires the work a release build does: a key that omits an operand of the fill answers a second
+   asker with the first asker's lines. */
 static void lb_fill_compare_lines(const LbFill *held, const LbFill *fresh)
 {
     char sbuf[160];
@@ -1656,13 +1658,17 @@ static bool lb_fill_lines_pull(LbFill *f)
     }
 #if APICLIENT_DEV
     if (f->phase == LB_FILL_CHECK) {
-        if (f->check == NULL) {
-            if (!lb_left()) return false;
-            f->check = lexbor_malloc(sizeof *f->check);
-            CHECK(f->check != NULL, "out of memory re-deriving one inline formatting context's line boxes");
-            lb_fill_init(f->check, f->style, f->run, f->avail, false);
-        }
-        if (!lb_fill_lines_pull(f->check)) return false;
+        bool done;
+
+        DCHECK(f->check == NULL, "a fill reached its second derivation holding one");
+        f->check = lexbor_malloc(sizeof *f->check);
+        CHECK(f->check != NULL, "out of memory re-deriving one inline formatting context's line boxes");
+        lb_fill_init(f->check, f->style, f->run, f->avail, false);
+        thread_work_unpriced_begin();
+        done = lb_fill_lines_pull(f->check);
+        thread_work_unpriced_end();
+        DCHECK(done, "a fill's second derivation deferred a question its first derivation, over the same key in "
+                      "the same job, had answered; a rest here is one a release build does not take");
         lb_fill_compare_lines(f, f->check);
         f->phase = LB_FILL_LINES;
     }
@@ -1708,7 +1714,13 @@ static bool lb_fill_extents_pull(LbFill *f)
     }
 #if APICLIENT_DEV
     if (f->check != NULL) {
-        if (!lb_fill_extents_pull(f->check)) return false;
+        bool done;
+
+        thread_work_unpriced_begin();
+        done = lb_fill_extents_pull(f->check);
+        thread_work_unpriced_end();
+        DCHECK(done, "a fill's second derivation of its extents deferred a question the first had answered; a "
+                      "rest here is one a release build does not take");
         lb_fill_compare_facts(f, f->check);
         lb_fill_release(f->check);
         free(f->check);

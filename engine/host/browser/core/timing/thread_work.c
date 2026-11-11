@@ -87,6 +87,25 @@ void thread_work_end(ThreadWorkSpan *s, ThreadWorkKind kind, uint64_t bytes)
     g_cpu_us[kind] += took - g_inner[g_depth];
 }
 
+/* The open unpriced pairs (thread_work.h). */
+static int g_unpriced;
+
+void thread_work_unpriced_begin(void)
+{
+    g_unpriced++;
+}
+
+void thread_work_unpriced_end(void)
+{
+    DCHECK(g_unpriced > 0, "an unpriced span was ended with none open");
+    g_unpriced--;
+}
+
+bool thread_work_unpriced(void)
+{
+    return g_unpriced != 0;
+}
+
 void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
 {
     static const uint64_t PER_KIB[THREAD_WORK_N] = {
@@ -111,6 +130,7 @@ void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
     /* Rounded up per call: a step over a non-empty input costs at least the one unit an opcode does, and a
        remainder carried between calls would make one flow's charge depend on the flow that ran before it. Rounding
        down would make every constraint probe under 171 bytes free, and a lookup is one probe per frozen segment. */
+    if (g_unpriced != 0) return;
     units = (bytes * PER_KIB[kind] + 1023) / 1024;
     g_charged += units;
     g_charged_input[kind] += bytes;
