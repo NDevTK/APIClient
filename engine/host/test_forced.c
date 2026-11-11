@@ -1515,6 +1515,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/declines.h"
 #include "fixture/absentarm.h"
 #include "fixture/envarm.h"
+#include "fixture/envtypes.h"
 #include "fixture/storearm.h"
 #include "fixture/pagewrite.h"
 #include "fixture/keydomain.h"
@@ -2298,6 +2299,7 @@ TF_DOCS[] = {
     { "declines", HTML_DECLINES },
     { "absentarm", HTML_ABSENTARM },
     { "envarm", HTML_ENVARM },
+    { "envtypes", HTML_ENVTYPES },
     { "storearm", HTML_STOREARM },
     { "pagewrite", HTML_PAGEWRITE },
     { "keydomain", HTML_KEYDOMAIN },
@@ -18614,6 +18616,71 @@ TF_UNIT void probes_envarm(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The forks the result document's `_forkAt` census counts under predicate rows whose key holds `a` and, where
+   `b` is not NULL, `b`; -1 when the document carries no census. A key is the predicate's identity. */
+static long tf_fork_rows(const char *js, const char *a, const char *b) {
+    const char *p = strstr(js, "\"_forkAt\":{");
+    long sum = 0;
+
+    if (p == NULL) return -1;
+    p += strlen("\"_forkAt\":{");
+    while (*p == '"') {
+        const char *k = ++p, *e;
+        size_t kn;
+        int hit;
+
+        while (*p != '"') p += *p == '\\' ? 2 : 1;
+        kn = (size_t)(p - k);
+        hit = kn >= strlen(a) && memmem(k, kn, a, strlen(a)) != NULL &&
+              (b == NULL || memmem(k, kn, b, strlen(b)) != NULL);
+        DCHECK(p[1] == ':', "a `_forkAt` member is not a key and a count");
+        e = p + 2;
+        if (hit) sum += strtol(e, NULL, 10);
+        p = e + strspn(e, "-0123456789");
+        if (*p == ',') p++;
+    }
+    return sum;
+}
+
+/* The rows of the `envtypes` document (fixture/envtypes.h). The equality and typeof tests name a type the
+   environment value's declaration excludes, so each has one arm; the ordering and the search keep both. */
+TF_UNIT void probes_envtypes(const char *js, Probe *tab, int *n) {
+    const char *eq_why = NULL; int eq_tt = 1;
+    const char *open_why = NULL; int open_tt = 1;
+
+    fold_row(&eq_tt, &eq_why, emitted_record_has(js, "/api/envtype", "etUaString"),
+             "NOT REACHED: /api/envtype has no record carrying the user agent test's String arm");
+    fold_row(&eq_tt, &eq_why, !emitted_record_has(js, "/api/envtype", "etUaAbsent"),
+             "`navigator.userAgent == undefined` ran its holding arm: Navigator's userAgent is a DOMString, so "
+             "Web IDL §3.2.10 DOMString leaves that equality one answer");
+    fold_row(&eq_tt, &eq_why, !emitted_record_has(js, "/api/envtype", "etSwNull"),
+             "`screen.width == null` ran its holding arm: Screen's width is a long, a Number in every world");
+    fold_row(&eq_tt, &eq_why, !emitted_record_has(js, "/api/envtype", "etLangAbsent"),
+             "`typeof navigator.language === \"undefined\"` ran its holding arm: the member is a DOMString, so "
+             "ECMAScript §13.5.3.1's row is \"string\"");
+    fold_row(&eq_tt, &eq_why, !emitted_record_has(js, "/api/envtype", "etMaxAbsent"),
+             "`Math.max(…) == undefined` ran its holding arm: ECMAScript §21.3.2.25 Math.max ( ...args ) returns a "
+             "Number");
+    fold_row(&eq_tt, &eq_why, tf_fork_rows(js, "u9:undefined", NULL) == 0 && tf_fork_rows(js, "z4:null", NULL) == 0,
+             "the fork census holds a row comparing against undefined or null, so one of the four tests forked "
+             "and its second arm reached no fetch");
+    fold_row(&eq_tt, &eq_why, tf_fork_rows(js, "typeof", NULL) == 0,
+             "the fork census holds a typeof row: `typeof navigator.language` was minted as an unknown");
+    fold_row(&open_tt, &open_why,
+             emitted_record_graded_has(js, "/api/envtypewide", "derived", "etWide") &&
+                 emitted_record_graded_has(js, "/api/envtypewide", "forced", "etNarrow"),
+             "/api/envtypewide does not stand at both arms of `screen.width > 1000`: a Number admits both");
+    fold_row(&open_tt, &open_why,
+             emitted_record_graded_has(js, "/api/envtypemob", "derived", "etDesktop") &&
+                 emitted_record_graded_has(js, "/api/envtypemob", "forced", "etMobile"),
+             "/api/envtypemob does not stand at both arms of the user agent search: a String admits both");
+    const Probe rows[] = {
+        { "env-type-equality-decided", eq_tt, "/api/envtype?", SESS_EXPLORE, eq_why },
+        { "env-type-open-arms-fork", open_tt, "/api/envtypewide", SESS_EXPLORE, open_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `storearm` document. A key this run wrote reads back the value it stored (the page's own
    requests grade `derived` at best: engine_prov_of_running_path never answers `observed`). The
    branches over a localStorage key the area lacks and over the cookies the jar lacks keep the example's arm on the
@@ -30802,6 +30869,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);
     probes_envarm(js, probes, &np);
+    probes_envtypes(js, probes, &np);
     probes_storearm(js, probes, &np);
     probes_pagewrite(js, probes, &np);
     probes_keydomain(js, probes, &np);
