@@ -2257,6 +2257,17 @@ async function main() {
                   `owed=${e.owed.size} pollWaits=${d.pollWaits} ` +
                   `pollWaitMs=${d.pollWaitMs.toFixed(1)} inbox=${e.inbox.length} ` +
                   `latencyWork=${ZONE.REPLY_LATENCY_WORK}`);
+    /* Each answer still owed, earliest due first: its due point on the clock (`now`), the record now owed of the
+       answer's records once the wire has settled it, and its key, so a reader sees what a parked page waits on
+       and how much more of the instance's work its last record needs. */
+    if (e.clock.work === null) return;
+    const now = ZONE.replyClockNow(e.clock);
+    for (const x of [...e.owed.values()].sort((a, b) => (a.due ?? Infinity) - (b.due ?? Infinity) || a.ordinal - b.ordinal)) {
+      const n = x.settled && (x.events === undefined || x.events === null) ? Math.max(1, Math.ceil(x.bytes / ZONE.REPLY_RECORD_BYTES)) : '?';
+      const last = typeof n === 'number' && x.due !== null ? x.due + (n - x.record) * ZONE.REPLY_LATENCY_WORK : '?';
+      console.error(`[trusted] [${e.tag}] owed answer at now=${now}: due=${x.due ?? 'unstamped'} record=${x.record}/${n} ` +
+                    `lastDue=${last} bytes=${x.bytes} ${x.key.replace(/\t/g, ' ').slice(0, 160)}`);
+    }
   };
   async function onLine(e, line) {
     if (line.startsWith('@RESULT ')) {
