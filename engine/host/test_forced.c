@@ -19609,21 +19609,31 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
 }
 
 /* The rows of the layout shed document (fixture/layoutshed.h). layout-shed-armed: the forced act shed a resting
-   job (`layoutSheds`), or, in the no-pressure twin, none was shed. layout-shed-reports: both arms reported the last
+   job (`layoutSheds`), or, in the no-pressure twin, none was shed. layout-shed-records: the act's sheds released
+   line box fills and intrinsic size answers that an ask then re-derived (`_layoutFillsRederived`,
+   `_layoutAnswersRederived`), or the twin re-derived none. layout-shed-reports: both arms reported the last
    block's top, so a layout read returned after its job was shed; the twin's schedule and work are compared by
    engine/build.mjs's pressure parity stage. */
 TF_UNIT void probes_layoutshed(const char *js, Probe *tab, int *n) {
-    const char *awhy = NULL, *rwhy = NULL, *at = strstr(js, "\"layoutSheds\":");
+    const char *awhy = NULL, *rwhy = NULL, *cwhy = NULL, *at = strstr(js, "\"layoutSheds\":");
+    const char *fa = strstr(js, "\"_layoutFillsRederived\":"), *aa = strstr(js, "\"_layoutAnswersRederived\":");
     long sheds = at ? strtol(at + strlen("\"layoutSheds\":"), NULL, 10) : -1;
-    int a = 1, r = 1;
+    long fills = fa ? strtol(fa + strlen("\"_layoutFillsRederived\":"), NULL, 10) : -1;
+    long answers = aa ? strtol(aa + strlen("\"_layoutAnswersRederived\":"), NULL, 10) : -1;
+    int a = 1, r = 1, c = 1;
 
     fold_row(&a, &awhy, g_tf_pressure_none ? sheds == 0 : sheds > 0,
              g_tf_pressure_none ? "the no-pressure twin shed a layout job: a shed here is pressure from outside the row"
                                 : "NOT ARMED: the forced act shed no resting layout job (`layoutSheds` 0 or absent)");
+    fold_row(&c, &cwhy, g_tf_pressure_none ? fills == 0 && answers == 0 : fills > 0 && answers > 0,
+             g_tf_pressure_none ? "the no-pressure twin re-derived a shed record entry"
+                                : "NOT ARMED: no line box fill or no intrinsic size answer was re-derived after a shed "
+                                  "(`_layoutFillsRederived`, `_layoutAnswersRederived` 0 or absent)");
     fold_row(&r, &rwhy, param_value_is(js, "/api/ls-top", "arm", "a") && param_value_is(js, "/api/ls-top", "arm", "b"),
              "NOT REACHED: no /api/ls-top record for one arm, so a layout read did not return");
     const Probe rows[] = {
         { "layout-shed-armed", a, "lsLast", SESS_EXPLORE, awhy },
+        { "layout-shed-records", c, "lsLast", SESS_EXPLORE, cwhy },
         { "layout-shed-reports", r, "lsLast", SESS_EXPLORE, rwhy },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));

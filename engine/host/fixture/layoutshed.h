@@ -10,8 +10,11 @@
 #error "a fixture document is included before TF_CANVAS_INK, the page ink every document ends with"
 #endif
 
-/* Sixty-four rows of eight blocks with a line of text each, laid out before the last block's top is known. */
-#define TF_LS_8 "<div>ls</div><div>ls</div><div>ls</div><div>ls</div><div>ls</div><div>ls</div><div>ls</div><div>ls</div>"
+/* Sixty-four rows of eight blocks with a line of text each, laid out before the last block's top is known. One
+   block of each row holds an inline-block, whose shrink-to-fit width (CSS 2.2 §10.3.9) reads css-sizing-3 §5.1's
+   measurement of its run, so a shed job holds intrinsic size answers as well as line box fills. */
+#define TF_LS_8 "<div>ls</div><div>ls</div><div>ls</div><div><span style=\"display:inline-block\">ls</span></div>" \
+                "<div>ls</div><div>ls</div><div>ls</div><div>ls</div>"
 #define TF_LS_64 TF_LS_8 TF_LS_8 TF_LS_8 TF_LS_8 TF_LS_8 TF_LS_8 TF_LS_8 TF_LS_8
 #define TF_LS_512 TF_LS_64 TF_LS_64 TF_LS_64 TF_LS_64 TF_LS_64 TF_LS_64 TF_LS_64 TF_LS_64
 
