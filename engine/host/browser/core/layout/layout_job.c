@@ -10,6 +10,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
+#include "core/layout/block_flow.h"   /* the drive loop a residency span computes paid questions on */
 #include "core/layout/layout_job.h"
 #include "core/layout/layout_question.h"
 #include "core/timing/thread_work.h"
@@ -37,7 +38,8 @@ typedef struct {
 /* One memo slot, live when `gen` equals its job's. `rest` is the job's rest count when the answer was
    recorded, which is how a hit after a later rest is told apart. The answer is held out of line, in the job's
    answer chunks: it carries concolic lengths with their facts inline, so a slot holding it would make every
-   probe and every growth of the table move kilobytes per question. */
+   probe and every growth of the table move kilobytes per question. A live slot with no answer is a paid key: the
+   job answered it on its path and a shed released the answer (layout_job_shed). */
 typedef struct {
     const lxb_dom_element_t *el;
     LayoutQuestionKind       kind;
@@ -334,6 +336,8 @@ void layout_job_leave(LayoutJob *job)
             job->n, job->drives);
     DCHECKF(job->ctx == 0, "a layout job was left inside grid row context %u; a row sizing ends in the frame "
             "that began it", job->ctx);
+    DCHECK(!thread_work_residency_open(), "a layout job was left inside a residency span; a paid key's "
+                                          "re-derivation ends at the ask that opened it");
     g_entered = NULL;
     job->held += (int64_t)c_alloc_live() - (int64_t)job->live_at_enter;
 }
@@ -417,7 +421,7 @@ LayoutJobResting *layout_job_resting(size_t *n)
 
 size_t layout_job_shed(LayoutJob *job)
 {
-    size_t live = c_alloc_live(), freed;
+    size_t live = c_alloc_live(), freed, i;
 
     DCHECK(job != NULL && job != g_entered, "a layout job was shed that is not a resting driven job");
     DCHECKF(job->drives == 0 && job->ctx == 0 && !job->resting && lj_all_suspended(job),
@@ -425,26 +429,12 @@ size_t layout_job_shed(LayoutJob *job)
             "driver left it", job->drives, job->ctx);
     DCHECK(!job->decline.undetermined,
            "a layout job was shed holding an unanswered decline, whose fork has not been taken");
-    lj_contexts_release(job);
-    free(job->ctxs);
-    job->ctxs = NULL;
-    job->ctx_cap = 0;
-    flow_placement_record_release(&job->placement);
-    css_cascade_record_release(&job->cascade);
-    line_box_record_release(&job->line_boxes);
-    intrinsic_size_record_release(&job->intrinsic);
-    intrinsic_size_record_release(&job->shared);
-    free(job->stack);
-    job->stack = NULL;
-    job->n = job->cap = job->base = 0;
-    free(job->memo);
-    job->memo = NULL;
-    job->memo_cap = job->memo_used = 0;
-    job->gen++;
+    for (i = 0; i < job->memo_cap; i++)
+        if (job->memo[i].gen == job->gen) job->memo[i].a = NULL;
     lj_answers_free(job);
     freed = live - c_alloc_live();
     job->shed_at = job->held;
-    job->held = job->own;
+    job->held -= (int64_t)freed;
     g_sheds++;
     g_shed_bytes += (int64_t)freed;
     return freed;
@@ -509,7 +499,7 @@ void layout_job_context_taint(void)
 {
     LayoutJob *job = lj_held();
 
-    if (job == NULL || APICLIENT_UNPRICED_OPEN()) return;
+    if (job == NULL || APICLIENT_UNPRICED_OPEN() || thread_work_residency_open()) return;
     job->taints++;
 }
 
@@ -850,7 +840,7 @@ bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at)
             e->state == LJ_COMPUTING ? "computing" : "suspended", (int)e->q.kind);
     DCHECK(!layout_job_drive_spent(d),
            "a resting drive was continued after it spent its boxes; its driver rests instead");
-    if (job->resting && job->drives > 1) {
+    if (job->resting && job->drives > 1 && !thread_work_residency_open()) {
         char ask[LAYOUT_QUESTION_ASK_CAP], chain[LAYOUT_QUESTION_CHAIN_CAP];
         bool cut = false;
 
@@ -892,6 +882,24 @@ void layout_job_drive_end(LayoutJobDrive *d)
 
 /* ---- the stacked questions ------------------------------------------------------------------------------ */
 
+/* Re-derives paid question `q`, whose answer a shed released, inside a residency span: a drive nested at the ask
+   computes `q` and every question its body defers, takes no allowance (only the job's outermost drive spends) and
+   retires nothing on the flow's clock, so the asker goes on as its no-pressure twin did.
+   Named residual. Not covered: the span rests only where its drive ends, since a host turn inside a step is not
+   built (solver/engine.c's turn residual); next, the span parks its drive for the host's turn there. Absence shows
+   as: a renderer frame held for a shed job's whole re-derivation. */
+static void lj_rederive(LayoutJob *job, LayoutQuestion q)
+{
+    LayoutJobDrive d;
+
+    thread_work_residency_begin();
+    layout_job_drive_begin(&d);
+    (void)lj_push(job, q, LJ_SUSPENDED);
+    (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
+    thread_work_residency_end();
+}
+
 bool layout_job_ask(LayoutQuestion q, LayoutAnswer *out)
 {
     LayoutJob *job = lj_current();
@@ -906,19 +914,28 @@ bool layout_job_ask(LayoutQuestion q, LayoutAnswer *out)
     METRIC_ADD(stacked_asks, 1);
     if (bf) METRIC_ADD(bf_asks, 1);
     layout_job_context_taint();
-    if (job->memo_cap != 0) {
-        s = lj_probe(job->memo, job->memo_cap, job->gen, q, job->ctx);
-        if (s->gen == job->gen) {
-            METRIC_ADD(stacked_served, 1);
-            if (bf) METRIC_ADD(bf_served, 1);
-            if (s->rest < job->rests) METRIC_ADD(served_across_rest, 1);
-            *out = *s->a;
-            return true;
-        }
+    s = job->memo_cap != 0 ? lj_probe(job->memo, job->memo_cap, job->gen, q, job->ctx) : NULL;
+    if (s != NULL && s->gen == job->gen && s->a != NULL) {
+        METRIC_ADD(stacked_served, 1);
+        if (bf) METRIC_ADD(bf_served, 1);
+        if (s->rest < job->rests) METRIC_ADD(served_across_rest, 1);
+        *out = *s->a;
+        return true;
     }
     DCHECK_PRICED("a stacked layout question was deferred inside an assert's condition or a dev build's second "
                   "derivation — the entry it leaves on the job is one a release build does not have. Read what "
                   "the job already holds (a peek), or ask under the drive before the check");
+    if (s != NULL && s->gen == job->gen && !thread_work_residency_open()) {
+        lj_rederive(job, q);
+        s = lj_probe(job->memo, job->memo_cap, job->gen, q, job->ctx);
+        DCHECK(s->gen == job->gen && s->a != NULL,
+               "a paid layout question was re-derived in a residency span and its ask still misses; the asker "
+               "would see a miss its no-pressure twin did not");
+        METRIC_ADD(stacked_served, 1);
+        if (bf) METRIC_ADD(bf_served, 1);
+        *out = *s->a;
+        return true;
+    }
     (void)lj_push(job, q, LJ_SUSPENDED);
     METRIC_ADD(stacked_deferred, 1);
     if (bf) METRIC_ADD(bf_deferred, 1);
@@ -964,18 +981,25 @@ void layout_job_answer(size_t at, const LayoutAnswer *answer)
             "body began ends before the body answers", job->ctx, e->ctx);
     if (job->memo_used * 2 >= job->memo_cap) lj_memo_grow(job);
     s = lj_probe(job->memo, job->memo_cap, job->gen, e->q, e->ctx);
-    DCHECK(s->gen != job->gen,
-           "a stacked layout question was computed while the memo already held it — the ask consults the memo "
-           "before it pushes, so a second body for one question is a probe that missed its own key");
-    s->el = e->q.element;
-    s->kind = e->q.kind;
-    s->code = e->q.code;
-    s->ctx = e->ctx;
-    s->gen = job->gen;
+    if (s->gen == job->gen) {
+        DCHECK(s->a == NULL && thread_work_residency_open(),
+               "a stacked layout question was computed while the memo already held it, or a paid one outside a "
+               "residency span — the ask consults the memo before it pushes and re-derives a paid key in a span");
+    } else {
+        DCHECK(!thread_work_residency_open(),
+               "a residency span answered a layout question the job's path never paid for, so the re-derivation "
+               "computed work its no-pressure twin charged elsewhere: a paid answer's body asked what it did not "
+               "ask when it was paid for");
+        s->el = e->q.element;
+        s->kind = e->q.kind;
+        s->code = e->q.code;
+        s->ctx = e->ctx;
+        s->gen = job->gen;
+        job->memo_used++;
+    }
     s->rest = job->rests;
     s->a = lj_answer_alloc(job);
     *s->a = *answer;
-    job->memo_used++;
     job->n--;
     job->nest--;
     job->ctx = e->outer;

@@ -14792,12 +14792,13 @@ long long engine_gc_us(void) { return (long long)g_gc_us; }
 
 /* The collector work residency caused, in the instance's unit: the scoped collections a sale owes and the
    whole-heap ones only RAM pressure owed (JS_GCOwe). It is the residency system's, never a flow's or the
-   instance's service, so a run that relocated nothing banks none of it and the same schedule otherwise. Lifetime. */
+   instance's service, so a run that relocated nothing banks none of it and the same schedule otherwise. Lifetime.
+   engine_residency_work adds the host work residency spans re-derived (thread_work_residency_units). */
 static int64_t g_residency_work;
 /* The collector work this collector slice did, in the instance's unit and whoever's it is, kept across a host turn
    that interrupted the slice, which ends at the quantum on it. */
 static int64_t g_collect_slice_units;
-int64_t engine_residency_work(void) { return g_residency_work; }
+int64_t engine_residency_work(void) { return g_residency_work + (int64_t)thread_work_residency_units(); }
 
 /* A slice the collector holds: it begins an owed collection, then takes steps of rest_unit_items(REST_UNIT_GC_WORK)
    units until nothing is owed or the slice's collector work reaches the quantum, going on from one finished

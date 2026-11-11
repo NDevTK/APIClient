@@ -120,6 +120,16 @@ void thread_work_end(ThreadWorkSpan *s, ThreadWorkKind kind, uint64_t bytes);
    build does. */
 void thread_work_charge(ThreadWorkKind kind, uint64_t bytes);
 
+/* A residency span: work that re-derives what the running flow's path already paid for, after RAM pressure shed
+   the record that held it (core/layout/layout_job.h's paid keys). While one is open a charge retires nothing on
+   the flow's clock and counts in no census row of this file; its units are banked as residency work
+   (`residency_units`, lifetime, read into solver/engine.h's engine_residency_work), so a run that shed nothing
+   and a run that shed retire the same work. Spans nest; `end` asserts one is open. */
+void thread_work_residency_begin(void);
+void thread_work_residency_end(void);
+bool thread_work_residency_open(void);
+uint64_t thread_work_residency_units(void);
+
 /* Retired work the scheduler discarded where it switched a flow in (solver/engine.c's flow_switch_in). */
 void thread_work_note_discarded(uint64_t units);
 

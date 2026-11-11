@@ -16,6 +16,9 @@ static int64_t  g_cpu_us[THREAD_WORK_N];
 static uint64_t g_discarded;
 static uint64_t g_charged;
 static uint64_t g_charged_input[THREAD_WORK_N];
+/* The open residency spans, and the units charged inside them (thread_work_residency_begin). */
+static int      g_residency_depth;
+static uint64_t g_residency_units;
 /* The open spans' inner time: `g_inner[d]` is the thread CPU the spans nested directly inside the open span at
    depth `d` took, which that span subtracts from its own. */
 static int64_t *g_inner;
@@ -82,10 +85,23 @@ void thread_work_end(ThreadWorkSpan *s, ThreadWorkKind kind, uint64_t bytes)
     }
     if (g_depth > 0) g_inner_input[g_depth - 1] |= g_inner_input[g_depth];
 #endif
+    if (g_residency_depth != 0) return;
     g_spans[kind]++;
     g_bytes[kind] += bytes;
     g_cpu_us[kind] += took - g_inner[g_depth];
 }
+
+void thread_work_residency_begin(void) { g_residency_depth++; }
+
+void thread_work_residency_end(void)
+{
+    DCHECK(g_residency_depth > 0, "a residency span ended with none open");
+    g_residency_depth--;
+}
+
+bool thread_work_residency_open(void) { return g_residency_depth != 0; }
+
+uint64_t thread_work_residency_units(void) { return g_residency_units; }
 
 void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
 {
@@ -113,6 +129,10 @@ void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
        down would make every constraint probe under 171 bytes free, and a lookup is one probe per frozen segment. */
     if (APICLIENT_UNPRICED_OPEN()) return;
     units = (bytes * PER_KIB[kind] + 1023) / 1024;
+    if (g_residency_depth != 0) {
+        g_residency_units += units;
+        return;
+    }
     g_charged += units;
     g_charged_input[kind] += bytes;
     if (units != 0) JS_FlowRetireWork(units);

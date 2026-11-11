@@ -568,8 +568,8 @@ int engine_runnable(void);
 /* The engine work this instance's flows have retired over every slice: the service Level 1 divides a
    document's novel value by. A lifetime counter, never reset at a session boundary. */
 int64_t engine_service_work(void);
-/* The collector work residency caused, banked apart from engine_service_work (solver/engine.c's
-   engine_collect_slice), lifetime. */
+/* The work residency caused, banked apart from engine_service_work: the collector's (solver/engine.c's
+   engine_collect_slice) and the host work of residency spans (core/timing/thread_work.h), lifetime. */
 int64_t engine_residency_work(void);
 /* Lifetime: root module rows whose parse finished, the source bytes of those bodies, and root modules evaluated
    from a record another flow's parse produced. */
