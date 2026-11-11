@@ -310,6 +310,10 @@ static inline int apiclient_assert_fmt_check(const char *fmt, ...) { (void) fmt;
 #define DCHECKF(cond, ...) do { if (!(cond)) { APICLIENT_ASSERT_EMITF("@WHY", #cond, __VA_ARGS__); abort(); } } while (0)
 #define DFAILF(...)        do { APICLIENT_ASSERT_EMITF("@WHY", "unreachable", __VA_ARGS__); abort(); } while (0)
 #else
+/* Named residual. Not covered: a release DFAIL records nothing, so a result cannot list the engine gaps its page
+   crossed. The next diff has DFAIL and DFAILF count their site, by file and message, and the result document
+   carry the list to the popup. Its absence shows as a release result with no gap list for a page whose dev run
+   aborts. */
 #define DCHECK(cond, msg) ((void)sizeof(cond))   /* type-checked, never evaluated */
 #define DFAIL(msg)        ((void)0)
 #define DCHECKF(cond, ...) do { (void)sizeof(cond); APICLIENT_FMT_UNUSED(__VA_ARGS__); } while (0)

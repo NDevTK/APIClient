@@ -152,8 +152,10 @@ DIR="$ROOT/snap-$LANE-$(echo "$SHA" | cut -c1-8)"
 # `git clone`s destroyed each other's pack files and left a tree PRESENT ENOUGH TO BUILD FROM with its `.git`
 # absent. One question, asked at every site that deletes, is the fix; a second correct answer written beside
 # the first is how two sites drift.
+# The running executable is asked too: a fixture run that execs the snapshot's binary by absolute path, with its
+# cwd elsewhere, stands in the snapshot as much as one that cd'd into it.
 snapshot_is_live() {
-  { ls -l /proc/*/cwd 2>/dev/null; ls -l /proc/*/fd/* 2>/dev/null; } \
+  { ls -l /proc/*/cwd 2>/dev/null; ls -l /proc/*/exe 2>/dev/null; ls -l /proc/*/fd/* 2>/dev/null; } \
     | sed 's/.*-> //' | grep -qF "$1"
 }
 

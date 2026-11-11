@@ -16,7 +16,7 @@ Every change must satisfy two viewpoints at once:
 
 ## Disposition
 
-- Best long-term design over speed, safety, passing tests and existing code. Never paper over a problem. Land at least one concrete diff per turn; a probe that localises a trap, or a verified narrowing, counts. Context length is not a stop signal.
+- Best long-term design over speed, safety, passing tests and existing code. Never paper over a problem. Land at least one concrete diff per turn; a probe that localises a trap, or a verified narrowing, counts. Context length never stops the work: a lane whose context is long hands back at a clean commit with a handoff file, and a fresh lane continues from the file and the tree.
 - Biggest mechanism change first. A task's size is never a reason to defer. The bigger the goal, the smaller the first concrete diff — decompose and land the first member this turn. The biggest change names the goal; subproblem order names the diff.
 - Capability work is ordered by a census of what real target pages reach: the crash table and gap counts of a real-site sweep at the tip, the way a writer queue follows its gap census. A capability no swept page reaches waits behind one a page does, and adjacency to the last diff is no reason.
 - Regressions are acceptable and expected when replacing the wrong system. Never revert a correct fix to dodge one. No bulk sweeps.
@@ -42,6 +42,7 @@ Several agents share one working tree, one index and one machine. These rules ar
 - Never rewrite pushed history to fix attribution; state a mis-attribution in the next commit message and in the report. A swept-in diff that is coherent is pushed as it stands.
 - Before believing any file, diff or count, establish the checkout's relationship to `origin/main` (`git rev-list --left-right --count origin/main...HEAD`); behind and ahead take opposite bases. Read tree claims at `origin/main` (`git show origin/main:<path>`).
 - When the stop hook reports uncommitted changes, attribute them by content to the agents that own them. Commit only your own; report the rest. Never commit a live lane's in-flight work.
+- A lane's branch and worktree end when its commits are on `origin/main`: `engine/branchgc.mjs` lists the branches whose every commit is there by patch identity and deletes those no worktree holds; the coordinator removes a finished lane's worktree.
 - Name every scratch file and snapshot after the lane and revision, never after its role. Verify a commit from git, not from a scratch file.
 - An untracked `.c` under `engine/host/` is compiled. Put scratch copies in the scratchpad.
 - Address processes by PID, never by `pkill -f`/`pgrep -f` pattern. Attribute a process by its parent chain. Gate any destructive step on a check's exit status (`if check; then destroy; fi`), never `check; destroy`. Probe liveness by PID, not by output side effects.
@@ -88,7 +89,7 @@ A comment is read by every agent that opens the file, so its cost is paid on eve
 ## Offensive programming — `engine/host/check.h` (JS mirror: `extension/check.js`)
 
 - Every dev-build crash is correct. It is either an unexpected state, to be made impossible at the root, or a missing feature, to be built. Never caught, swallowed, clamped or defaulted past. A page's own uncaught throw aborting boot is intentional.
-- `DCHECK(cond,msg)`/`DFAIL(msg)`: dev-only invariants about this codebase's own logic; side-effect-free; compiled out in release. `CHECK`/`CHECK_FAIL`: always fatal, for OOM, physical floors, security boundaries and data integrity. When a diff makes a DCHECKed pointer load-bearing in release, promote the guard.
+- `DCHECK(cond,msg)`/`DFAIL(msg)`: dev-only invariants about this codebase's own logic; side-effect-free; a DCHECK is compiled out in release, and a DFAIL in release records its site as reached and continues on its release arm. `CHECK`/`CHECK_FAIL`: always fatal, for OOM, physical floors, security boundaries and data integrity. When a diff makes a DCHECKed pointer load-bearing in release, promote the guard.
 - Assert every invariant eagerly at its origin. Too few asserts is the failure.
 - Assert only on values this codebase computed. Bytes a page, server or attacker supplied are input: refuse them with the spec's error, never assert on them. In the @S half the analysed page's own output is input.
 - An assert must be able to fail: name both operands, and place it where both are in scope. A message conceding the state is legitimate is evidence the assert is wrong. Two seams over one primitive that disagree about an assert: the silent one is usually right.
@@ -98,6 +99,7 @@ A comment is read by every agent that opens the file, so its cost is paid on eve
 - A `default:` arm over a value this codebase enumerates is a guard, not work.
 - An invariant over a gated operation counts the ask, not the outcome.
 - Asserts must not rely on a structural property both populations share; record the act instead.
+- A result states the engine gaps its page reached: every DFAIL site a release run crossed, by the construct's file and message, beside the surface and the findings, so an analysis that crossed unbuilt code is never read as complete. The count is a debt shown to the reader, never a reason to leave a gap unbuilt.
 - The release arm beneath a DFAIL is a shipped path: design release arms of one algorithm together, and have the downstream half guard its own precondition.
 
 ## Architecture — the C engine is the browser
@@ -215,6 +217,7 @@ A comment is read by every agent that opens the file, so its cost is paid on eve
 ## Build and testing
 
 - `node engine/build.mjs` is a compile: it resolves the revision, compiles, links, stamps and installs. A compile/link red blocks; nothing else does. A publish needs clean dev and release compiles of the exact SHA it pushes.
+- A batch is published on clean dev and release compiles of its SHA and the fixture rows its own commits name. The full fixture set and the corpora (test262, WPT) run after the publish, at the published SHA, and their reds are the work queue; a batch is kept small enough that a red is bisected within it. A lane's commits are integrated when it reports, never held for a slow run.
 - The gate suite (`node engine/build.mjs gates`) is a separate, slow ask. A red gate blocks nothing: it is an accepted risk carried as a work queue with a target of zero. Never wait on a test; ask for it, keep working, and read the result when it arrives. A gate run does not hold the builder slot.
 - The main agent owns publishing and every build in the shared checkout; a newer build supersedes an older one (stop the old one by PID). A lane may build its own commit in a lane-named frozen snapshot (`engine/frozen_snapshot.sh <sha> <lane> node engine/build.mjs`) and drive the native fixture or another built artifact against it with a bounded command; it never builds in the shared checkout and never runs the gate suite. A lane reports the snapshot revision every reading came from.
 - A snapshot run holds a build slot: `engine/frozen_snapshot.sh` grants lanes one fewer than the cores and keeps one for the coordinator, so builds queue instead of contending. A lane never works around the queue, and the coordinator starts no more lanes than make progress through it.
