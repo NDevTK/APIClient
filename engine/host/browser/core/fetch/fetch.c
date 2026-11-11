@@ -2213,7 +2213,10 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
            already ToString for every one of them. */
         if (JS_IsObject(s->url) && !concolic_is(s->url)) {
             JSValue str;
-            r = step_tostring_run(ctx, hdr, s->url, cb_result, &str, out_cb, out_argc);
+            /* An object may answer unknown input (a URL whose record is unknown serializes to one): that
+               unknown is the string member, carried as an unknown input is, so the request is classed and
+               recorded by it. */
+            r = step_tostring_carry_run(ctx, hdr, s->url, cb_result, &str, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return -1;
             JS_FreeValue(ctx, s->url);

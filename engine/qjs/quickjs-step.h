@@ -1537,5 +1537,10 @@ JS_EXTERN int step_tobool_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, cons
    JS_STEP_UNKNOWN. */
 JS_EXTERN int step_tostring_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, JSValue *pout,
                                 JSValue **out_cb, int *out_argc);
+/* step_tostring_run for a caller that carries unknown input as itself (a URL the request is recorded and
+   classed by): where `v`, or the primitive its conversion answers, is unknown, *pout is that unknown (owned)
+   and the return is 0; no example is converted and the machine is not ended. Otherwise step_tostring_run. */
+JS_EXTERN int step_tostring_carry_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, JSValue *pout,
+                                      JSValue **out_cb, int *out_argc);
 
 #endif

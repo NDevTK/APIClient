@@ -141,6 +141,26 @@ int step_tostring_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, 
     return JS_IsException(*pout) ? -1 : 0;
 }
 
+int step_tostring_carry_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, JSValue *pout,
+                            JSValue **out_cb, int *out_argc)
+{
+    if (h->str_phase == STR_PH_START) {
+        if (unlikely(g_concolic.is(v))) {
+            JS_FreeValue(ctx, in);
+            *pout = js_dup(v);
+            return 0;
+        }
+    } else if (unlikely(g_concolic.is(in))) {
+        /* The conversion answered unknown input: this coercion is over, and its answer is the result. */
+        JS_FreeValue(ctx, h->coerce);
+        h->coerce = JS_UNDEFINED;
+        h->str_phase = STR_PH_START;
+        *pout = in;
+        return 0;
+    }
+    return step_tostring_run(ctx, h, v, in, pout, out_cb, out_argc);
+}
+
 /* THE COMPLETION OF A MACHINE THAT MET UNKNOWN INPUT: derived from `v` (consumed), the operand the driver took
  * off the machine's header, and named by the ALGORITHM of `def` and the SPEC STEP `stage` it was coercing at.
  * `real` (consumed) is the machine's own completion over the operand's example, which becomes the derivation's
