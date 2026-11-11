@@ -208,6 +208,9 @@ const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeig
               /* …and the order's index's own work, the queue entries its runnable asks took, beside the
                  weighings above that are those asks' members (solver/metrics/wfq_frontier.def). */
               "scanIndexEntries",
+              /* …and how many runnable asks took those entries, so two samples read the entries one ask cost
+                 as a difference over a difference. A lifetime count, like every row here. */
+              "scanIndexAsks",
               "preemptAsksLifetime",
               /* …AND WHICH HALF OF THE HOOK'S KEY MOVED WHEN IT MISSED. `scanRivalRuns` is close to half of
                  all the frontier weighing this engine does and is keyed on a DISJUNCTION — the frontier
