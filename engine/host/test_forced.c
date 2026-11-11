@@ -19638,7 +19638,7 @@ static long tf_hist_above(const char *js, const char *key, int from) {
    member sold in a constructor's body, inside a `try`, in a promise executor two Reflect.construct calls reached,
    or in an async body before its first await, waits on no gap of the kinds each row names, returns and reports.
    sale-root-surveyed: a member resting in a machine a promise reaction called was sold and its census's survey of
-   its parked ring named the machine. */
+   its parked ring named the machine. sale-anchor-written: in `sale`, no sale waited on a keyed read's anchor. */
 static long tf_census_row(const char *js, const char *census, const char *key);
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
@@ -19654,8 +19654,8 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     int ft = 1, ot = 1, ct = 1, lt = 1, yt = 1, kt = 1, rt = 1, ht = 1, pr = 1, pm = 1, pl = 1, pt = 1;
     const char *awhy = NULL, *kwhy = NULL, *rwhy = NULL, *hwhy = NULL, *gk = strstr(js, "\"waitsGapKinds\":{");
     const char *prwhy = NULL, *pmwhy = NULL, *plwhy = NULL, *ptwhy = NULL, *awwhy = NULL, *arwhy = NULL;
-    int aw = 1, ar = 1, rs = 1;
-    const char *rswhy = NULL;
+    int aw = 1, ar = 1, rs = 1, an = 1;
+    const char *rswhy = NULL, *anwhy = NULL;
     const char *gk_end = gk ? strchr(gk, '}') : NULL;
 
     fold_row(&lt, &lwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
@@ -19787,6 +19787,11 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
                  "no sale's census named JSON.parse's machine in `graphGapSales`, so no member was sold resting in "
                  "the machine the reaction called, or its parked ring was not surveyed");
     }
+    fold_row(&an, &anwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0, "NOT ARMED: the act sold nothing");
+    fold_row(&an, &anwhy, gk_end && !tf_span_has(gk, gk_end, "\"frame anchor\"")
+                              && !tf_span_has(gk, gk_end, "\"cont GETPROP_YIELD\""),
+             "a sale waited on `frame anchor` or `cont GETPROP_YIELD`, or the result carries no `waitsGapKinds`: "
+             "the keyed read's anchor at the top of the sold member's chain was not written");
     fold_row(&ot, &owhy, param_value_is(js, "/api/sl-own-done", "b", "22"),
              "NOT REACHED: no /api/sl-own-done?b=22 record, so the page's own run, sold while it owed "
              "/api/sl-own-owed, did not return within the session");
@@ -19854,6 +19859,7 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
         { "sale-asyncfn-written", aw, "slAfOwe", SESS_EXPLORE, awwhy },
         { "sale-asyncfn-returns", ar, "slAfOwe", SESS_EXPLORE, arwhy },
         { "sale-root-surveyed", rs, "slRtOwe", SESS_EXPLORE, rswhy },
+        { "sale-anchor-written", an, "slForced", SESS_EXPLORE, anwhy },
         { "sale-control-reaches", ct, "slCtl", SESS_EXPLORE, cwhy },
         { "sale-forced-stays-listed", lt, "slForced", SESS_EXPLORE, lwhy },
         { "sale-own-stays-listed", lt, "slOwn", SESS_EXPLORE, lwhy },
