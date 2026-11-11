@@ -84968,6 +84968,18 @@ static void fg_frame_machine(FGWriter *w, JSStepHdr *h)
     }
 }
 
+/* Whether the continuation `st` of `kind` waiting on a frame is one the call writer writes with the frame: none,
+   a kind whose frame's own operands are the whole of it, or a bytecode constructor's body (CONT_CONSTRUCT) an
+   opcode asked for, whose record is its created object, its super reference and its entry shape.
+   Named residual. Not covered: a construct a machine requested (`outer` set: Reflect.construct, a species
+   construct), whose requester link names a step machine. Next diff builds: that link with the machine's
+   writer. Absence shows as: `cont CONSTRUCT` in the sale census's `waitsGapKinds`. */
+static bool fg_cont_written(uint8_t kind, const void *st)
+{
+    return kind == CONT_NONE || cont_kind_recordless(kind)
+           || (kind == CONT_CONSTRUCT && ((const JSConstruct *)st)->outer == NULL);
+}
+
 /* The chain of records and machines waiting from `st` outward, each by its identity. The next link is the one
    the collector's walk goes on to (tramp_cont_mark_one), asked here with its marks reported to nothing: the
    values were surveyed by the frame's own mark. */
@@ -85036,18 +85048,6 @@ static void fg_base_bytecode(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s)
     fg_u32(out, live);
     for (uint32_t i = 0; i < live; i++) fg_value(w, out, sf->arg_buf[i]);
     for (int i = 0; i < sf->var_ref_count; i++) fg_cell(w, out, sf->var_refs[i]);
-}
-
-/* Whether the continuation `st` of `kind` waiting on a frame is one the call writer writes with the frame: none,
-   a kind whose frame's own operands are the whole of it, or a bytecode constructor's body (CONT_CONSTRUCT) an
-   opcode asked for, whose record is its created object, its super reference and its entry shape.
-   Named residual. Not covered: a construct a machine requested (`outer` set: Reflect.construct, a species
-   construct), whose requester link names a step machine. Next diff builds: that link with the machine's
-   writer. Absence shows as: `cont CONSTRUCT` in the sale census's `waitsGapKinds`. */
-static bool fg_cont_written(uint8_t kind, const void *st)
-{
-    return kind == CONT_NONE || cont_kind_recordless(kind)
-           || (kind == CONT_CONSTRUCT && ((const JSConstruct *)st)->outer == NULL);
 }
 
 /* Whether a heap frame is an ordinary bytecode activation the call writer writes: its own buffer, no coroutine
