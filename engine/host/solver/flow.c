@@ -5540,6 +5540,19 @@ static int flow_register_holds(const Flow *f, const JSValue *recs, int n) {
     return hit;
 }
 
+/* Does `f`'s written bytes read one of `recs` back as itself? A record something outside the stub names (a
+   streamed body's waiting park, which its source lists) is one its sale's settle kept (JS_FlowGraphSettle), and
+   no stand-in copies it, so it is asked of the bytes. */
+static int flow_sold_names(const Flow *f, const JSValue *recs, int n) {
+    for (int k = 0; k < n; k++) {
+        if (!JS_FlowGraphNames(f->sold->g, recs[k])) continue;
+        DCHECK(pending_get_int(recs[k], PEND_HAVE_VALUE) || pending_entry_declined(recs[k]),
+               "a written stub was woken by a record its bytes name that carries neither an answer nor a refusal");
+        return 1;
+    }
+    return 0;
+}
+
 void flow_wake_owed_holding(const JSValue *recs, int n) {
     Flow *m = g_owed_head, *next;
     int woke = 0;
@@ -5554,7 +5567,8 @@ void flow_wake_owed_holding(const JSValue *recs, int n) {
         woke++;
     }
     /* And the written stubs that kept their mark: a stub's register is its stand-ins (pending_stand_ins), keyed
-       under their pairs, so a fill or a refusal writes them as it writes every resident record. A woken stub
+       under their pairs, so a fill or a refusal writes them as it writes every resident record; a record named
+       outside the stub is its bytes' own (flow_sold_names), which the write answers in place. A woken stub
        stays on the written list, which the pick weighs once it is not owed; its restore moves each stand-in's
        answer onto the register it reads back (pending_restore). */
     for (m = g_rest_head; m; m = m->rest_next) {
@@ -5562,7 +5576,7 @@ void flow_wake_owed_holding(const JSValue *recs, int n) {
                    g_owed_head != m,
                "a member on the written list is not a written stub, or stands in the order's index or on the "
                "host-owed list");
-        if (!m->owed || !flow_register_holds(m, recs, n)) continue;
+        if (!m->owed || !(flow_register_holds(m, recs, n) || flow_sold_names(m, recs, n))) continue;
         m->owed = 0;
         woke++;
     }
