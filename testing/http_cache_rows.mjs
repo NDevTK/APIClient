@@ -68,7 +68,7 @@ async function pageRead(page, url, headers, zone = ZONE, docKey = `engine:${new 
   const space = origin === 'null' ? 'loopback' : zone.safeFetchDocumentAddressSpace(page, null);
   const r = await zone.safeFetch(url, {
     pageOrigin: origin, destination: '', mode: 'cors', provenance: 'observed', pinned: 'unpinned',
-    driven: 'undriven', address: 'concrete', actor: 'page', credentialed: false, credentials: 'same-origin', useCorsPreflight: false,
+    driven: 'undriven', address: 'concrete', method: 'GET', body: null, actor: 'page', credentialed: false, credentials: 'same-origin', useCorsPreflight: false,
     headers, doc: zone.docRecord('observed', 'undriven', 'unpinned', NAVIGABLE_NOTICE.sandbox.none, space),
     identity: await zone.pageRequestIdentity(origin, page, docKey, url, 'same-origin', 'cors',
                                              'strict-origin-when-cross-origin', page) });

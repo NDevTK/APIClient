@@ -122,6 +122,7 @@ void pending_index_declined(JSValueConst rec, int rule);
     X(URL_AUTHORITY, 1, "url-authority", reply_declined_url_authority) \
     X(LINEAGE, 1, "lineage", reply_declined_lineage) \
     X(REACHES, 1, "reaches", reply_declined_reaches) \
+    X(METHOD_SIGNAL, 1, "method", reply_declined_method_signal) \
     X(METHOD, 0, "blocked-method", reply_declined_method) \
     X(DESTRUCTIVE, 0, "blocked-destructive", reply_declined_destructive) \
     X(STREAM_BODY, 0, "blocked-stream-body-gated", reply_declined_stream_body) \

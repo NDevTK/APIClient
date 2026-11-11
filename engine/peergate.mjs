@@ -373,7 +373,7 @@ async function main() {
      The reach grade is `observed`: the document the address is composed from is the seed, which this harness
      named on its command line. */
   const probe = await ZONE.safeFetch(`${peerOrigin}/pna-probe`,
-                                     { destination: 'document', mode: 'navigate',
+                                     { method: 'GET', body: null, destination: 'document', mode: 'navigate',
                                        provenance: 'derived', pinned: 'unpinned',
                                        /* This gate composed the address, so the act is this tool's
                                           (safe-fetch.js's `_actorOf`). */

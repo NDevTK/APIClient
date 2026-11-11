@@ -593,7 +593,7 @@ async function main() {
   /* The act is this zone's and no page's: a person named this address on a command line, and no analysed
      document exists yet when a seed is fetched. `actor: 'tool'` with `observed` for the request and for the
      document is what safe-fetch.js's seed arm admits; the page rule requires `page`. */
-  const seed = await ZONE.safeFetch(target, { destination: 'document', mode: 'navigate',
+  const seed = await ZONE.safeFetch(target, { method: 'GET', body: null, destination: 'document', mode: 'navigate',
                                               provenance: 'observed', pinned: 'unpinned',
                                               actor: 'tool', driven: 'unstated', address: 'concrete',
                                               doc: observedDoc(target), credentialed: false });
@@ -1230,7 +1230,7 @@ async function main() {
        fewer facts than the real request states is a question about a different request. */
     const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination: 'document', provenance,
                                                   pinned, doc: fromDoc, actor: 'page', address: 'unstated',
-                                                  driven, credentialed: false, headers: null });
+                                                  method: 'GET', driven, credentialed: false, headers: null });
     if (refusal)
       return { declined: `${what} ${abs} — a DOCUMENT LOAD this origin's egress policy refuses on ` +
                          `\`${refusal}\`, which names the SIGNAL and the VALUE that held it rather than a ` +
@@ -1251,7 +1251,7 @@ async function main() {
        document that initiated it. The join names the document this load will PRODUCE, which is a different
        document and is stated where that one is provisioned. Stating the join here would answer a permission
        question about a document that does not exist yet. */
-    const raw = await ZONE.safeFetch(abs, { destination: 'document', mode: 'navigate',
+    const raw = await ZONE.safeFetch(abs, { method: 'GET', body: null, destination: 'document', mode: 'navigate',
                                             provenance, pinned, doc: fromDoc, actor: 'page', driven,
                                             address: 'unstated', credentialed: false, onBodyRead });
     sayEgress(what, 'GET', raw);
@@ -1301,7 +1301,7 @@ async function main() {
     /* A send the engine withdrew mid-body throws out of safeFetch's body read; nobody is owed that answer. */
     let raw;
     try {
-      raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, destination: '',
+      raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, method: q.method, body: null, destination: '',
                                         mode: q.mode, provenance: q.provenance, pinned: q.pinned, driven: q.driven,
                                         address: q.address, actor: 'page', doc, credentialed: false, signal: send.controller.signal,
                                         onBodyRead: bodyRead(e, send.entry),
@@ -1444,7 +1444,7 @@ async function main() {
     /* A send the engine cancelled mid-body throws out of safeFetch's body read; nobody is owed that answer. */
     let raw;
     try {
-      raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, destination, mode,
+      raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, method, body: null, destination, mode,
                                         provenance, pinned, driven, address, credentials, useCorsPreflight: false,
                                         actor: 'page', signal: send.controller.signal,
                                         onBodyRead: streamed ? undefined : bodyRead(e, entry),

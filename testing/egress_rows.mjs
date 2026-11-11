@@ -3,16 +3,14 @@
 // what reached it. A row reads the reply record's `egress` list (one entry per send the request asked for: the
 // signal vector judged, what admitted it, whether the wire was reached) beside the server's count. The control
 // runs first: an unforced page request reaches the server, so a later zero is the policy.
-//
 // Second group, the default: a request leaves an unwidened origin only as the page's own act on its unforced run
 // (provenance and the asking document's reach not forced, witness unpinned, actor page), whatever its
 // destination; the seed is the one load this zone composes that leaves; a refusal names the fact that decided.
-// Third group: a refused request byte-identical to a send the same document's unforced run made is answered
-// from that send's record, and the server's count does not move.
-// Fourth group, the address class: the engine's word for whether the address is bytes the page computed or its
-// unknown's example is shown on the vector and decides nothing by default; an address with no bytes never leaves.
-// Fifth group, the method: the page's own non-GET request on its unforced run is sent with the method, header
-// list and body the page composed; no widening sends one, and a redirect rewrites it as Fetch §4.5 says.
+// Third: a refused request byte-identical to a send the same document's unforced run made is answered from that
+// send's record, and the server's count does not move. Fourth, the address class: the engine's word for whether
+// the address is bytes the page computed or its unknown's example is shown and decides nothing by default; an
+// address with no bytes never leaves. Fifth, the method: the page's own non-GET on its unforced run is sent with
+// the method, header list and body the page composed; no widening sends one; a redirect rewrites it (Fetch §4.5).
 //
 //   node testing/egress_rows.mjs
 "use strict";
@@ -73,11 +71,11 @@ const docOf = (page, reach, driven = 'undriven', pinned = 'unpinned') =>
 /* A page request as engine/trusted.mjs's workFetch states it, from the document `docKey` at `page`. */
 async function ask(page, url, docKey, { destination = '', mode = 'cors', provenance = 'derived', pinned = 'unpinned',
                                         driven = 'undriven', reach = 'observed', headers,
-                                        address = 'concrete', method, body } = {}) {
+                                        address = 'concrete', method = 'GET', body = null } = {}) {
   const origin = new URL(page).origin;
   return ZONE.safeFetch(url, {
     pageOrigin: origin, destination, mode, provenance, pinned, driven, address,
-    ...(method === undefined ? {} : { method, body }),
+    method, body,
     actor: 'page', credentialed: false, credentials: 'same-origin', useCorsPreflight: false, headers,
     doc: docOf(page, reach),
     identity: await ZONE.pageRequestIdentity(origin, page, docKey, url, 'same-origin', mode,
@@ -86,21 +84,21 @@ async function ask(page, url, docKey, { destination = '', mode = 'cors', provena
 /* A navigation as engine/trusted.mjs's navigate states it, started by the document at `page`. */
 const navigate = (page, url, { provenance = 'derived', pinned = 'unpinned', driven = 'undriven', reach = 'observed' } = {}) =>
   ZONE.safeFetch(url, { destination: 'document', mode: 'navigate', provenance, pinned, driven, actor: 'page',
-                        address: 'unstated', doc: docOf(page, reach), credentialed: false });
+                        method: 'GET', body: null, address: 'unstated', doc: docOf(page, reach), credentialed: false });
 /* A load this zone composes: the seed as engine/trusted.mjs states it, or (derived) a probe as
    lib/discovery-probe.js states one. */
 const toolAsk = (page, url, provenance) =>
   ZONE.safeFetch(url, { pageOrigin: new URL(page).origin, destination: provenance === 'observed' ? 'document' : '',
                         mode: provenance === 'observed' ? 'navigate' : 'cors', provenance,
                         pinned: provenance === 'observed' ? 'unpinned' : 'unstated', actor: 'tool', driven: 'unstated',
-                        address: 'concrete',
+                        address: 'concrete', method: 'GET', body: null,
                         doc: docOf(page, 'observed'), credentialed: false, credentials: 'omit', useCorsPreflight: false });
 const text = (r) => new TextDecoder().decode(r.body);
 const refusalOf = (r) => r.refusal ? r.refusal.reason : 'sent';
 /* The firing question alone, for an act that sends nothing here. */
 const firing = (url, facts) => ZONE.safeFetchFiringRefusal(Object.assign(
   { url, destination: '', provenance: 'derived', pinned: 'unpinned', actor: 'page', driven: 'undriven',
-    address: 'concrete', doc: docOf(PAGE_A, 'observed'), credentialed: false, headers: null }, facts));
+    address: 'concrete', method: 'GET', doc: docOf(PAGE_A, 'observed'), credentialed: false, headers: null }, facts));
 const SIGNAL_NAMES = ZONE.safeFetchSignals().map((s) => s.name).sort().join(',');
 /* The one entry of a reply record's `egress` list, or a word saying why there is not exactly one. */
 const only = (r) => !Array.isArray(r.egress) ? 'no-egress-list' : r.egress.length !== 1 ? `entries=${r.egress.length}` : r.egress[0];
@@ -225,7 +223,7 @@ const ROWS = [
       const wide = await refused(PAGE_W, `${W}/no-bytes`);
       const exampleWide = ZONE.safeFetchFiringRefusal({
         url: `${W}/x`, destination: '', provenance: 'forced', pinned: 'unpinned', actor: 'page', driven: 'undriven',
-        doc: docOf(PAGE_W, 'observed'), credentialed: false, headers: null, address: 'example' });
+        doc: docOf(PAGE_W, 'observed'), credentialed: false, headers: null, address: 'example', method: 'GET' });
       ZONE.safeFetchUnwiden(W);
       return [['GET /no-bytes', count('GET', '/no-bytes'), 0], ['unwidened', own, 'blocked-signal:address=unknown'],
               ['widened', wide, 'blocked-signal:address=unknown'],
@@ -234,7 +232,7 @@ const ROWS = [
   { label: 'a request that states no address class is refused at the entry', run: async () => {
       const r = await ZONE.safeFetch(`${A}/unclassed`, {
         pageOrigin: A, destination: '', mode: 'cors', provenance: 'derived', pinned: 'unpinned', driven: 'undriven',
-        actor: 'page', credentialed: false, credentials: 'same-origin', useCorsPreflight: false,
+        method: 'GET', body: null, actor: 'page', credentialed: false, credentials: 'same-origin', useCorsPreflight: false,
         doc: docOf(PAGE_A, 'observed'),
         identity: await ZONE.pageRequestIdentity(A, PAGE_A, 'engine:addr', `${A}/unclassed`, 'same-origin', 'cors',
                                                  'strict-origin-when-cross-origin', PAGE_A) })

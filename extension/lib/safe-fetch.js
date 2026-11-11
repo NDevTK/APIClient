@@ -3,7 +3,8 @@
    goes through `safeFetch`, so its security invariants live in one auditable place:
      • cookies omitted by default; in credentialed mode the reply passes this file's own SOP/CORS, because a
        host-permission fetch bypasses the browser's;
-     • GET only, by a literal, with a caller-stated verb refused (`_refuseUnreadOptions`);
+     • a non-GET only as the page's own act on its unforced run, never credentialed, never by a grant
+       (the `method` row);
      • a destructive-path deny list on credentialed requests not graded `observed` (`_destructiveToken`);
      • http(s) only and no userinfo, so a crafted URL cannot read local or extension resources;
      • origin-relative SSRF on the initial and the landed URL: a public page may not reach the person's private
@@ -284,11 +285,13 @@ function _refused(kind, reason, urlList, headers) {
   return { ok: false, status: 0, statusText: reason, headers: headers, body: _NO_BYTES(),
            urlList: urlList, computedType: "", refusal: { kind: kind, reason: reason } };
 }
-/* The method half of the firing question, for a host whose request never reaches the fetch. This file
-   enforces RFC 9110 §9.2.1 "Safe Methods" structurally (it can only send GET), so nothing downstream can
-   observe the answer, and each host would otherwise re-derive it with its own grade. It is a decline: no
-   browser refuses a POST, the address is derived in full and reported, and the flow parks. It answers the
-   refusal value rather than a boolean, so a host can say why. */
+/* The method question for a host that holds no byte-exact body of the request it relays: it declines a
+   non-GET before the fetch, since sending the verb without the page's body would change the request.
+   Named residual. Not covered: the page's own non-GET on its unforced run, which `safeFetch` sends when it is
+   handed the method and body, never reaches it from a host: the fetch pending line carries no body and the
+   XHR record's body is text. Next diff: the line and the record carry the body's bytes, both hosts pass
+   `method` and `body`, and this function is deleted. Its absence shows as every unforced non-GET declined
+   `blocked-method:`. */
 function safeFetchMethodRefusal(method) {
   CHECK(typeof method === "string" && method !== "",
         "safeFetchMethodRefusal was asked about " + JSON.stringify(method) + ", which is not a Fetch §2.2.1 " +
@@ -647,6 +650,25 @@ function _drivenOf(opts) {
         "act the request is");
   return opts.driven;
 }
+/* The request's method (Fetch §2.2.1 "Methods"), normalized by the algorithm that created the request, and
+   its body: null, text, or bytes. Every caller states both. Fetch §5.4 "Request class" refuses a GET or HEAD
+   request a body, so one here is a caller's error. The verbs the `method` row names; any other token reads
+   `other`. */
+var _METHOD_VERBS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+function _methodOf(opts) {
+  CHECK(typeof opts.method === "string" && _HTTP_TOKEN.test(opts.method),
+        "safeFetch was called with a method that is no Fetch §2.2.1 token: " + JSON.stringify(opts.method) +
+        " — every caller states the verb its request carries, and an absent one would be sent as a GET");
+  return opts.method;
+}
+function _bodyOf(opts) {
+  CHECK(opts.body === null || typeof opts.body === "string" || opts.body instanceof Uint8Array,
+        "safeFetch was called with a body that is neither null, text nor bytes — every caller states the " +
+        "request's body, and null is how one with none says so");
+  CHECK(opts.body === null || (opts.method !== "GET" && opts.method !== "HEAD"),
+        "safeFetch was handed a body on a " + opts.method + " request, which Fetch §5.4 refuses to create");
+  return opts.body;
+}
 /* The address class the engine states beside the witness mark (core/fetch/fetch.h's fetch_address_token, on
    the pending line and the XHR record): `concrete` when the page's code computed the bytes, `example` when the
    address holds an unknown and the bytes are what the page computes from that unknown's example. `unknown` is an
@@ -665,15 +687,11 @@ function _addressOf(opts) {
         "`unstated` for a record that carries none, or `concrete` for an address this zone composed");
   return opts.address;
 }
-/* What this function does not read: a field outside this set is refused rather than dropped in silence and
-   read by its caller as carried. The option that matters is `method`: `init` hardcodes `method: "GET"` and
-   nothing reads `opts.method` or `opts.body`, so a caller stating a verb would otherwise get the reply to a
-   GET attributed to its own request, a wrong answer worse than an absent one. That makes the `method` signal
-   a fact about the transport with one value, which deleting the whole widening table would not change. The
-   rule also refuses `as`, since the CORB class is the request's destination. A closed set restates what the
-   body reads, and the drift direction is safe: an option added to the body and not here aborts on its
-   author's first call. */
-var _SAFEFETCH_OPTIONS = ["pageOrigin", "destination", "mode", "provenance", "pinned", "driven", "address",
+/* What this function reads. A field outside this set is refused rather than dropped in silence and read by
+   its caller as carried; `as` is refused by it, since the CORB class is the request's destination. A closed
+   set restates what the body reads, and an option added to the body and not here aborts on its author's
+   first call. */
+var _SAFEFETCH_OPTIONS = ["method", "body", "pageOrigin", "destination", "mode", "provenance", "pinned", "driven", "address",
                           "doc", "actor", "credentialed", "credentials", "headers", "useCorsPreflight",
                           "identity", "signal", "onChunk", "onBodyRead", "onHead"];
 /* Fetch §2.2.5 "Requests"' credentials mode — "which is `omit`, `same-origin`, or `include`" — the same three
@@ -689,24 +707,17 @@ function _refuseUnreadOptions(opts) {
   for (var k in opts) {
     if (!Object.prototype.hasOwnProperty.call(opts, k)) continue;
     DCHECK(_SAFEFETCH_OPTIONS.indexOf(k) >= 0,
-           "safeFetch was passed the option `" + k + "`, which it does not read — so it would be DROPPED IN " +
-           "SILENCE and the request would not carry what its caller said about it. `method` and `body` are " +
-           "the ones that matter: this file hardcodes `method:\"GET\"`, which is RFC 9110 §9.2.1 \"Safe " +
-           "Methods\"' safe set enforced structurally — this transport performs ONE verb, which is what " +
-           "the `method` signal of the egress policy states — so a caller that states a verb gets the reply to a GET " +
-           "attributed to its own, which is the substitution this project already paid for once on the XHR " +
-           "path. `as` is refused by this same rule and no longer by one of its own: the CORB class is the " +
-           "request's DESTINATION now (Fetch §2.2.5 \"Requests\"). State only what this file reads (" +
-           _SAFEFETCH_OPTIONS.join(", ") + "); if the verb is not GET the request is refused AT THE CALL " +
-           "SITE, and `safeFetchMethodRefusal` is that answer in this file's own refusal vocabulary");
+           "safeFetch was passed the option `" + k + "`, which it does not read — it would be dropped in " +
+           "silence and the request would not carry what its caller said about it. State only what this " +
+           "file reads (" + _SAFEFETCH_OPTIONS.join(", ") + ")");
   }
 }
 /* Whether the person's session pays for this request, and the one option that may not ride along with it.
    `credentialed` is this zone's own literal; nothing on the wire states it. It scopes the deny list and the
    credentialed SOP. `opts.headers` is the one option whose values come from the untrusted zone: the bundle's
    own list on the XHR path, which on an uncredentialed GET confers nothing the page lacks.
-   Together they are a different question. RFC 9110 §9.2.1 "Safe Methods" is enforced here by making the verb
-   a literal, and a header list is another route to a verb: with `X-Http-Method-Override` (a convention
+   Together they are a different question. A credentialed request is a GET (`_safeFetchJudged` CHECKs it),
+   and a header list is another route to a verb: with `X-Http-Method-Override` (a convention
    `lib/discovery.js` uses) a server reads this GET as the header's verb. So a credentialed request may not
    state a header list, a CHECK because with it compiled out that request goes out with cookies and untrusted
    header values. It may assert because the decision to ask for cookies is a trusted-zone literal at every
@@ -736,8 +747,8 @@ function _credentialedOf(opts) {
         "populations arriving through one parameter and only one of them has been decided. The header list " +
         "on the XHR path is the analysed BUNDLE's own, which is within the model while the request is " +
         "uncredentialed (a header on a request the page can already make itself confers nothing) and is a " +
-        "different question the moment the person's cookies pay for it: this file enforces RFC 9110 §9.2.1 " +
-        "\"Safe Methods\" by making the verb a literal, and a header list is the other route to a verb — " +
+        "different question the moment the person's cookies pay for it: a credentialed request is a GET " +
+        "here, and a header list is the other route to a verb — " +
         "`X-Http-Method-Override` is a convention this project's own code sends, and a server honouring it " +
         "reads this GET as whatever the header names, which puts a state-mutating verb back on a " +
         "cookie-bearing request past the place this file closed it. State " +
@@ -923,18 +934,16 @@ var _SIGNALS = [
      the address and compares it with its own record of the person's setting. */
   { name: "reaches", gates: true, certainty: "certain", values: ["attacker-site", "another-party"],
     of: function (f) { return attackerSiteReaches(f.url); } },
-  /* The method, a fact about this transport and not a control: `init` hardcodes `method:"GET"` and
-     `_refuseUnreadOptions` refuses a caller that states one, so the value space has one member. It is shown
-     because a person deciding is entitled to know this transport sends one verb; the day it can send another,
-     `_signalRegistryCheck` forces the row to gate. */
-  { name: "method", gates: false, certainty: "certain", values: ["GET"],
-    of: function () { return "GET"; } },
-  /* Intended invalidity: an intent the engine holds and cannot verify, with no population at this chokepoint.
-     A probe built to fail validation is a POST with a body, and the closed option set has neither, so no
-     caller can state such an intent; `unstated` is a structural fact, not a default. The population lives on
-     `safeFetchOperator`, whose verb is stated at its own call site and which has no firing decision. The
-     row starts gating the day a verb and a body exist in `_SAFEFETCH_OPTIONS`; until then `_signalRegistryCheck` asserts it has
-     one value. */
+  /* The request's method (see `_methodOf`). No default arm reads it: the page's own unforced run sends the
+     verbs a browser loading the page sends. `defaultOnly` lists the values only a default arm admits: no
+     grant can name them, so this tool never sends a non-GET of its own, a forced one at a widened origin
+     included (RFC 9110 §9.2.1 "Safe Methods": only a safe method is sent to learn). */
+  { name: "method", gates: true, certainty: "stated", values: _METHOD_VERBS.concat(["other"]),
+    defaultOnly: _METHOD_VERBS.slice(1).concat(["other"]),
+    of: function (f) { return _METHOD_VERBS.indexOf(f.method) >= 0 ? f.method : "other"; } },
+  /* Intended invalidity: an intent the engine holds and cannot verify. No caller can state one (the option
+     set has no such field), so `unstated` is a structural fact, not a default; the population lives on
+     `safeFetchOperator`. `_signalRegistryCheck` asserts the row has one value while it does not gate. */
   { name: "invalidity", gates: false, certainty: "intent", values: ["unstated"],
     of: function () { return "unstated"; } }
 ];
@@ -969,6 +978,11 @@ function _signalRegistryCheck() {
             return s.values.indexOf(n) >= 0; }) && s.never.length < s.values.length),
           "the egress signal `" + s.name + "` lists a never-permitted value outside its value space, or does " +
           "not gate, or permits no value at all");
+    CHECK(s.defaultOnly === undefined || (Array.isArray(s.defaultOnly) && s.gates &&
+            s.defaultOnly.every(function (n) { return s.values.indexOf(n) >= 0; }) &&
+            s.defaultOnly.length < s.values.length),
+          "the egress signal `" + s.name + "` lists a default-only value outside its value space, or does " +
+          "not gate, or leaves no value a grant may name");
     CHECK(s.gates || s.values.length === 1,
           "the egress signal `" + s.name + "` does not gate and has more than one possible value — a signal " +
           "whose value VARIES and which no permission can express is a control that was silently dropped: " +
@@ -1021,6 +1035,7 @@ function _requireFacts(facts) {
         docRecordIs(facts.doc) &&
         _PINNED_MARKS.indexOf(facts.pinned) >= 0 && _ACTOR_WORDS.indexOf(facts.actor) >= 0 &&
         _DRIVEN_MARKS.indexOf(facts.driven) >= 0 && _ADDRESS_CLASSES.indexOf(facts.address) >= 0 &&
+        typeof facts.method === "string" && facts.method !== "" &&
         typeof facts.credentialed === "boolean" &&
         facts.url !== null && typeof facts.url === "object" && typeof facts.url.origin === "string",
         "a signal vector was asked for without the facts that decide it — Fetch §2.2.5 \"Requests\"' " +
@@ -1144,6 +1159,10 @@ function safeFetchWidenable(origin) {
 function _signalNever(s, value) {
   return Array.isArray(s.never) && s.never.indexOf(value) >= 0;
 }
+/* Whether `value` is one of the signal's values only a default arm admits (its `defaultOnly` list). */
+function _signalDefaultOnly(s, value) {
+  return Array.isArray(s.defaultOnly) && s.defaultOnly.indexOf(value) >= 0;
+}
 /* Whether a signal name and value are ones this file knows and a grant may name, as a reason or null, split
    for the same two callers as `safeFetchWidenable`. */
 function safeFetchSignalUsable(signal, value) {
@@ -1152,7 +1171,8 @@ function safeFetchSignalUsable(signal, value) {
     if (_SIGNALS[i].name !== signal) continue;
     if (!_SIGNALS[i].gates) return "does-not-gate";
     if (_SIGNALS[i].values.indexOf(value) < 0) return "not-a-value";
-    return _signalNever(_SIGNALS[i], value) ? "never-permitted" : null;
+    if (_signalNever(_SIGNALS[i], value)) return "never-permitted";
+    return _signalDefaultOnly(_SIGNALS[i], value) ? "default-only" : null;
   }
   return "not-a-signal";
 }
@@ -1170,7 +1190,8 @@ function _isSiteSetting(name) {
 function safeFetchSignals() {
   return _SIGNALS.map(function (s) {
     return { name: s.name, gates: s.gates, certainty: s.certainty, values: s.values.slice(),
-             never: Array.isArray(s.never) ? s.never.slice() : [] };
+             never: Array.isArray(s.never) ? s.never.slice() : [],
+             defaultOnly: Array.isArray(s.defaultOnly) ? s.defaultOnly.slice() : [] };
   });
 }
 /* A host's promise that it will state the table (see `_EXPLORED_STATING`), registered once at the host's
@@ -1297,7 +1318,7 @@ function safeFetchWiden(origin) {
   for (i = 0; i < _SIGNALS.length; i++) {
     if (!_SIGNALS[i].gates) continue;
     for (j = 0; j < _SIGNALS[i].values.length; j++)
-      if (!_signalNever(_SIGNALS[i], _SIGNALS[i].values[j]))
+      if (safeFetchSignalUsable(_SIGNALS[i].name, _SIGNALS[i].values[j]) === null)
         safeFetchPermit(origin, _SIGNALS[i].name, _SIGNALS[i].values[j], true);
   }
 }
@@ -1494,7 +1515,7 @@ function safeFetchFiringRefusal(facts) {
   return _firingRefusal({ url: new URL(String(facts.url)), destination: facts.destination,
                           provenance: facts.provenance, pinned: facts.pinned, doc: facts.doc,
                           actor: facts.actor, driven: facts.driven, address: facts.address,
-                          credentialed: facts.credentialed, headers: facts.headers });
+                          method: facts.method, credentialed: facts.credentialed, headers: facts.headers });
 }
 /* A cross-document act reaches another document's state, so it is judged by `_firingRefusal` over the facts a
    fetch states, with no arm of its own: a message routed to another instance (HTML §9.3.3 "Posting messages")
@@ -1504,7 +1525,8 @@ function safeFetchFiringRefusal(facts) {
    It carries no address, so its URL is the receiving document's origin, which this zone composed (`address`
    reads `concrete`), and `url-authority` reads `unknown`.
    An opaque origin is one no widening can name, so it is asked as `about:blank`'s, whose origin is opaque too.
-   Its destination is the empty string, a value like a page `fetch()`. It is the page's act. Its provenance,
+   Its destination is the empty string, a value like a page `fetch()`, and it is judged as a GET: a
+   delivery or a read sends no verb. It is the page's act. Its provenance,
    drive and witness are the sending timeline's marks (the record's `<derived|forced>,<driven|undriven>,
    <pinned|unpinned>` word, solver/engine.c's engine_record_head). `doc` is the sending document's record. It
    pays no cookie jar and carries no header list. Answers `_firingRefusal`'s "signal=value", or null to
@@ -1522,7 +1544,8 @@ function safeFetchCrossDocumentRefusal(act) {
         "engine_record_head writes — the engine that routed it refuses any other (peer_marks_word_ok)");
   return _firingRefusal({ url: new URL(_isRealOrigin(act.targetOrigin) ? act.targetOrigin + "/" : "about:blank"),
                           destination: "", provenance: m[0], pinned: m[2], doc: act.doc, actor: "page",
-                          driven: m[1], address: "concrete", credentialed: false, headers: null });
+                          driven: m[1], address: "concrete", method: "GET", credentialed: false,
+                          headers: null });
 }
 /* The vector for a hypothetical request, for a surface that shows a person what they are deciding about. It
    is the same derivation the firing walk reads, so the rows a person ticks are about the request the policy
@@ -1536,7 +1559,7 @@ function safeFetchSignalVector(facts) {
   return _signalVector({ url: new URL(String(facts.url)), destination: facts.destination,
                          provenance: facts.provenance, pinned: facts.pinned, doc: facts.doc,
                          actor: facts.actor, driven: facts.driven, address: facts.address,
-                         credentialed: facts.credentialed, headers: facts.headers });
+                         method: facts.method, credentialed: facts.credentialed, headers: facts.headers });
 }
 /* Fetch §4.10 "CORS check", over the reply's own headers: "Let origin be the result of getting
    `Access-Control-Allow-Origin` from response's header list. If origin is null, then return failure. Null is not
@@ -2077,7 +2100,7 @@ async function _readBody(resp, sink, gated, onRead) {
   return out;
 }
 /* @security-contract  ENFORCEMENT POINT (the single network chokepoint)
-   Guarantees: GET only; http(s) only; no userinfo; cookies omitted unless `opts.credentialed`, and then the
+   Guarantees: a non-GET only where a default arm admitted it, and never credentialed; http(s) only; no userinfo; cookies omitted unless `opts.credentialed`, and then the
    reply passes SOP/CORS (same-origin with `opts.pageOrigin`, else exact-origin ACAO and ACAC `true`); the
    origin-relative SSRF rule; the destructive-path deny list on credentialed non-`observed` requests; the
    egress policy's firing walk; CORB for script-like destinations; for a page's request, Fetch §4.1 "Main
@@ -2126,9 +2149,16 @@ async function _safeFetchJudged(url, opts, egress) {
   var actor = _actorOf(opts);
   var driven = _drivenOf(opts);
   var address = _addressOf(opts);
+  /* Fetch §2.2.5 "Requests"' method and body, as §4.5 "HTTP-redirect fetch" changes them. */
+  var _method = _methodOf(opts), _body = _bodyOf(opts);
   /* Derived once, above every gate it scopes; `_credentialedOf` also refuses a header list on a
      cookie-bearing request. */
   var credentialed = _credentialedOf(opts);
+  /* RFC 9110 §9.2.1 "Safe Methods": the person's session is spent only on a safe request. The page's own
+     non-GET leaves uncredentialed. */
+  CHECK(!credentialed || _method === "GET",
+        "safeFetch was asked for a credentialed " + _method + " — a request carrying the person's cookies is " +
+        "a GET, and a caller composing another verb states `credentialed: false`");
   /* A credentialed request speaks as a document: `_speakAs` sets that document's Cookie and the zone's fetch
      omits credentials. One with no identity would go out with this extension's own jar, whose partition is
      the extension's, and its reply's Set-Cookie would be stored there and in the person's jar. */
@@ -2200,8 +2230,6 @@ async function _safeFetchJudged(url, opts, egress) {
      covers every door this zone has. Once the table is stated the test is false and costs no microtask, and
      `_EXPLORED_STATED` never returns to false. */
   if (!_EXPLORED_STATED && _EXPLORED_STATING !== null) await _EXPLORED_STATING;
-  /* The one verb this transport sends; the preflight below and the request are built from it. */
-  var _method = "GET";
   /* Two records: `opts.identity` is who the request speaks as (its client, Fetch §2.2.5 "Requests"), and
      `pageOrigin` the document that reads the reply. They are one document for every request but a
      navigation's, whose client is the document that started it while its reader is the one it creates. */
@@ -2305,7 +2333,7 @@ async function _safeFetchJudged(url, opts, egress) {
          own address. */
       var _signalFacts = { url: _current, destination: destination, provenance: provenance,
                            pinned: pinnedMark, doc: doc, actor: actor, driven: driven, address: address,
-                           credentialed: credentialed, headers: _headerList };
+                           method: _method, credentialed: credentialed, headers: _headerList };
       var _decision = _firingDecision(_signalFacts);
       var _entry = { url: _current.href, vector: _decision.vector, admittedBy: _decision.admittedBy,
                      how: "not-sent", refusal: _decision.refusal };
@@ -2350,6 +2378,7 @@ async function _safeFetchJudged(url, opts, egress) {
         }
       }
       var init = { method: _method, credentials: "omit", redirect: "manual" };
+      if (_body !== null) init.body = _body;
       /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the
          model for the request this file issues (an uncredentialed GET whose forbidden header names the
          browser strips) and is refused on a cookie-bearing one by `_credentialedOf`. This file never adds
@@ -2425,12 +2454,12 @@ async function _safeFetchJudged(url, opts, egress) {
       if (_rcors)
         return _refused("network", "blocked-cors:" + _rcors + ":" + _current.origin, [parsed.href], {});
     }
-    var _next = _followRedirect(_redirect, { url: _current, urlList: _urlList, method: _method, body: null,
+    var _next = _followRedirect(_redirect, { url: _current, urlList: _urlList, method: _method, body: _body,
                                              headerList: _headerList, mode: mode, tainting: _tainting,
                                              origin: _pageOrigin });
     if (_next.refusal) return _next.refusal;
-    DCHECK(_next.method === "GET" && _next.body === null,
-           "a GET was rewritten to " + _next.method + " by a redirect — Fetch §4.5 rewrites only POST and non-GET");
+    _method = _next.method;
+    _body = _next.body;
     _urlList.push(_next.url.href);
     _current = _next.url;
     _headerList = _next.headerList;

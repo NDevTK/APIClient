@@ -2295,7 +2295,7 @@ async function _frontierRederive(e, held) {
     /* `actor: "tool"`: no page asked for this load; the frontier did. safe-fetch.js's seed arm admits it only
        where the entry's own words are `observed` for the request and for its document. */
     /* `mode: "navigate"`: the navigate algorithm's own request (Fetch §2.2.5 Requests). */
-    try { r = await self.safeFetch(e.sourceUrl, { pageOrigin: e.origin,
+    try { r = await self.safeFetch(e.sourceUrl, { pageOrigin: e.origin, method: "GET", body: null,
                                                   destination: "document", mode: "navigate",
                                                   provenance: frontierProvenance(e),
                                                   doc: docRecordOfArrival(frontierArrival(e), frontierSandbox(e),
@@ -3126,7 +3126,8 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc,
        observed one. */
     /* `mode: "navigate"`: HTML §7.4.5's fetch is the navigate algorithm's, whose reader is the instance the
        document becomes, not the page that named it. */
-    const r = await self.safeFetch(abs, { pageOrigin: principalOrigin,
+    /* A navigation this zone loads is a GET (HTML §7.4.2.2's documentResource is null here). */
+    const r = await self.safeFetch(abs, { pageOrigin: principalOrigin, method: "GET", body: null,
                                           destination: request.destination, mode: "navigate",
                                           provenance: provenance,
                                           doc: fromDoc, actor: actor, driven: driven,
@@ -3907,7 +3908,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       /* `driven` is the engine's drive mark off the same line (solver/engine.h's PENDING_DRIVEN_*), relayed:
          the chokepoint's `actor` row reads it. */
       /* `address` is the line's address class (core/fetch/fetch.h), relayed for the `address` row. */
-      const opts = { pageOrigin: eng.origin, destination, mode, provenance, pinned,
+      /* `method` passed safeFetchMethodRefusal above, so it is GET and the request has no body. */
+      const opts = { pageOrigin: eng.origin, method, body: null, destination, mode, provenance, pinned,
                      driven, address, credentials, actor: "page", useCorsPreflight: false,
                      doc, credentialed: false, signal, onBodyRead, onHead, onChunk,
                      identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, "engine:" + eng.docId, abs, credentials, mode,
@@ -4498,7 +4500,7 @@ async function engineFetchXhr(eng, rec, doc, signal, onBodyRead) {
        permitted for that row, and one whose path pinned a witness is refused, as such a `fetch()` is. */
     /* The drive mark is relayed off the record (`xhr_request_op` writes it beside the grade); the chokepoint
        CHECKs that a `page` request states one. */
-    const r = await self.safeFetch(abs, { pageOrigin: eng.origin, destination: "",
+    const r = await self.safeFetch(abs, { pageOrigin: eng.origin, method: q.method, body: null, destination: "",
                                           mode: q.mode, provenance: q.provenance, pinned: _xhrPinned,
                                           driven: q.driven, address: q.address,
                                           doc, actor: "page",
@@ -5681,7 +5683,7 @@ async function hostNotice(eng, line) {
     /* `actor: "tool"`: the load this asks about is this zone's act, as the load states (the seed arm says why). */
     const _seedRefusal = self.safeFetchFiringRefusal({
       url: f[1], destination: "document", provenance: f[2], pinned: f[4],
-      doc: _seedFrom.issuerDoc, actor: "tool", driven: f[3], address: "unstated",
+      doc: _seedFrom.issuerDoc, actor: "tool", driven: f[3], address: "unstated", method: "GET",
       credentialed: navigationCarriesSession(f[1], eng.origin), headers: null });
     if (_seedRefusal) {
       console.warn("[bridge] a route declaration for `" + f[1] + "` is refused by this origin's egress " +
@@ -7838,7 +7840,7 @@ self.astDispatch = async function astDispatch(msg) {
                        /* `public`: no document makes it, so its container would be a new one. */
                        doc: docRecord(PROVENANCE_FORCED, DRIVEN_NO, "unpinned", NAVIGABLE_NOTICE.sandbox.none,
                                       "public"),
-                       actor: "tool", driven: "unstated", address: "concrete",
+                       actor: "tool", driven: "unstated", address: "concrete", method: "GET",
                        credentialed: false, headers: null };
       return { success: true, result: {
         origins: self.safeFetchWidenedOrigins(),

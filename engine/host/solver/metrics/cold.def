@@ -214,6 +214,7 @@ METRIC(reply_declined_address, "replyDeclinedAddress", LIFETIME, "record", PROCE
 METRIC(reply_declined_url_authority, "replyDeclinedUrlAuthority", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_declined_lineage, "replyDeclinedLineage", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_declined_reaches, "replyDeclinedReaches", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
+METRIC(reply_declined_method_signal, "replyDeclinedMethodSignal", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_declined_method, "replyDeclinedMethod", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_declined_destructive, "replyDeclinedDestructive", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_declined_stream_body, "replyDeclinedStreamBody", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)

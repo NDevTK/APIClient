@@ -90,7 +90,7 @@ async function navOpts(Z, principal, url, over) {
                          destination: 'document', mode: 'navigate', provenance: 'derived',
                          doc: Z.docRecord('observed', 'undriven', 'unpinned', 'none',
                                           Z.safeFetchDocumentAddressSpace(principal, null)),
-                         actor: 'page', driven: 'undriven', pinned: 'unpinned', address: 'unstated',
+                         actor: 'page', driven: 'undriven', pinned: 'unpinned', address: 'unstated', method: 'GET', body: null,
                          credentials: 'include',
                          credentialed: true, identity }, over || {});
 }
