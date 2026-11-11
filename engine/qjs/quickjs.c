@@ -74821,10 +74821,12 @@ static const char *const js_str_replace_steps[];
 static const char *const js_str_replaceAll_steps[];
 static const JSTrampStepDef js_str_replace_def         = { sizeof(JSStrReplace), js_str_replace_vstep, js_str_replace_fini, 0, .visit = js_str_replace_visit,
                                                      .algorithm = "22.1.3.19 String.prototype.replace",
-                                                     .steps = js_str_replace_steps };
+                                                     .steps = js_str_replace_steps,
+                                                     .result_types_primitive_arg0 = JS_LANG_TYPE_STRING };
 static const JSTrampStepDef js_str_replaceAll_def      = { sizeof(JSStrReplace), js_str_replace_vstep, js_str_replace_fini, 1, .visit = js_str_replace_visit,
                                                      .algorithm = "22.1.3.20 String.prototype.replaceAll",
-                                                     .steps = js_str_replaceAll_steps };
+                                                     .steps = js_str_replaceAll_steps,
+                                                     .result_types_primitive_arg0 = JS_LANG_TYPE_STRING };
 static const JSTrampStepDef js_array_every_def     = { sizeof(JSArrayEvery), js_array_every_vstep, js_array_every_vfini, special_every, .visit = js_array_every_visit,
                                                      .algorithm = "23.1.3.6 Array.prototype.every",
                                                      .steps = js_array_every_steps, .forwards_unknown_receiver = 1, .result_types = JS_LANG_TYPE_BOOLEAN };
@@ -75851,7 +75853,8 @@ static const char *const js_str_split_steps[];
 static const JSTrampStepDef js_str_split_def      = { sizeof(JSStrSplit), js_str_split_step, js_str_split_fini, 0, .visit = js_str_split_visit,
                                                      .string_split = 1,
                                                      .algorithm = "22.1.3.23 String.prototype.split",
-                                                     .steps = js_str_split_steps };
+                                                     .steps = js_str_split_steps,
+                                                     .result_types_primitive_arg0 = JS_LANG_TYPE_OBJECT };
 static const char *const js_array_join_steps[];
 static const char *const js_array_tolocale_steps[];
 static const char *const js_ta_join_steps[];
@@ -79234,16 +79237,18 @@ static const JSTrampStepDef *tramp_step_def_of(JSValueConst func)
     }
 }
 
-unsigned JS_FunctionResultTypes(JSValueConst f)
+unsigned JS_FunctionResultTypes(JSValueConst f, int argc, JSValueConst *argv)
 {
     JSObject *fp;
+    const JSTrampStepDef *def;
 
     if (JS_VALUE_GET_TAG(f) != JS_TAG_OBJECT) return 0;
     fp = JS_VALUE_GET_OBJ(f);
     if (fp->class_id != JS_CLASS_C_FUNCTION ||
         (fp->u.cfunc.cproto != JS_CFUNC_step && fp->u.cfunc.cproto != JS_CFUNC_step_ctor))
         return 0;
-    return tramp_step_def_of(f)->result_types;
+    def = tramp_step_def_of(f);
+    return def->result_types | (argc < 1 || !JS_IsObject(argv[0]) ? def->result_types_primitive_arg0 : 0);
 }
 
 int JS_FunctionSearchResult(JSValueConst f)

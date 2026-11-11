@@ -371,6 +371,10 @@ typedef struct JSTrampStepDef {
        the standard fixes it (String.prototype.slice's every return step returns a String). 0 = not declared: a
        call's result over unknown input then carries no type. Read through JS_FunctionResultTypes. */
     unsigned result_types;
+    /* The set it takes where argument 0 is not an Object, beside result_types: §22.1.3.19, .20 and .23's step 3
+       dispatches to the argument's own method only when it is one (String.prototype.replace then returns a
+       String). 0 = not declared. Read through JS_FunctionResultTypes. */
+    unsigned result_types_primitive_arg0;
     /* Whether this machine answers a coercion over unknown external input at its own site: its sub-sequence
        reports JS_STEP_UNKNOWN with the operand parked on the header, and the machine takes it (a sort's order
        question). 0 for every other machine, whose coercions run over the operand's example and whose
@@ -397,9 +401,11 @@ typedef struct JSTrampStepDef {
 
 enum { JS_SEARCH_RESULT_NONE = 0, JS_SEARCH_RESULT_FIRST = 1, JS_SEARCH_RESULT_LAST = 2 };
 
-/* The result_types a built-in function object's definition declares, or 0 for any other value (a page
-   function, a bound function, a function whose definition declares none). Reads no property. */
-JS_EXTERN unsigned JS_FunctionResultTypes(JSValueConst f);
+/* The JS_LANG_TYPE_* set a call of `f` with these arguments completes with, as a built-in function object's
+   definition declares it (result_types, and result_types_primitive_arg0 where argument 0 is not an Object), or
+   0 for any other value (a page function, a bound function, a function whose definition declares none). An
+   unknown argument rides an Object, so it states no primitive. Reads no property. */
+JS_EXTERN unsigned JS_FunctionResultTypes(JSValueConst f, int argc, JSValueConst *argv);
 /* The search_result a built-in function object's definition declares, JS_SEARCH_RESULT_NONE for any other
    value. Reads no property. */
 JS_EXTERN int JS_FunctionSearchResult(JSValueConst f);

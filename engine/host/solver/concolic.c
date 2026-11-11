@@ -260,6 +260,11 @@ typedef struct {
        read the own members cannot answer is a read of an intrinsic chain (json_chain_member). Written by
        concolic_mark_json_value at a reply's mint and by concolic_exotic_get on a member; 0 says nothing. */
     uint8_t json_value;
+    /* Whether this value is an Array exotic object (ECMAScript §10.4.2) in every world, made by ArrayCreate with
+       this realm's %Array.prototype% and holding no own property but its indices and `length`: §22.1.3.23
+       String.prototype.split's CreateArrayFromList, written by concolic_call_hook where step 3 dispatches to no
+       method of the separator. `ty` is CTY_OBJECT wherever it is set; 0 says nothing. */
+    uint8_t is_array;
 } Concolic;
 
 /* The record's layout (quickjs.h's JSRecordLayout): the runtime releases and marks a Concolic by it, so a field
@@ -321,6 +326,9 @@ enum {
     CTY_SYMBOL = 1u << 4, CTY_NUMBER = 1u << 5, CTY_BIGINT = 1u << 6, CTY_OBJECT = 1u << 7,
     CTY_NUMERIC = CTY_NUMBER | CTY_BIGINT,
 };
+/* A mint's statement of its result's type set, defined below. */
+static void concolic_type_state_at(JSValueConst r, unsigned ty, const char *file, int line);
+#define concolic_type_state(r, ty) concolic_type_state_at((r), (ty), __FILE__, __LINE__)
 
 /* One disposer for an owned list of spelled strings, shared by every record that holds one (a call predicate's
    arguments on the value and on ConcolicPred, a conjunction's conjuncts). These are C strings outside the GC
@@ -4790,6 +4798,47 @@ static void split_record(JSContext *ctx, JSValueConst r, JSValueConst s, uint32_
     JS_FreeValue(ctx, sx);
 }
 
+/* Whether `atom` may name an own property of an Array exotic object holding only its indices and `length`. */
+static int array_own_key(JSContext *ctx, JSAtom atom)
+{
+    JSAtom length = JS_NewAtom(ctx, "length");
+    uint32_t idx;
+    int own;
+
+    CHECK(length != JS_ATOM_NULL, "concolic: OOM naming `length`");
+    own = atom == length || JS_AtomIsIndex(ctx, &idx, atom);
+    JS_FreeAtom(ctx, length);
+    return own;
+}
+
+/* The member `atom` of the unknown `v` with no example, where its type set in this flow is one primitive type:
+   §6.2.5.5 GetValue ( refRecord ) step 3.a's ToObject wraps it in an object whose own keys are a String's
+   indices and `length` (§10.4.3.5 StringGetOwnProperty) or none, so any other key is read off the realm's
+   %T.prototype% chain in every world. 1 with `*out` owned where that read holds a value (example_member), 0
+   otherwise. */
+static int primitive_chain_member(JSContext *ctx, JSValueConst v, JSAtom atom, JSValue *out)
+{
+    static const struct { unsigned ty; JSClassID id; } ROW[] = {
+        { CTY_STRING, JS_CLASS_STRING }, { CTY_NUMBER, JS_CLASS_NUMBER }, { CTY_BOOLEAN, JS_CLASS_BOOLEAN },
+        { CTY_SYMBOL, JS_CLASS_SYMBOL }, { CTY_BIGINT, JS_CLASS_BIG_INT },
+    };
+    unsigned ty = cty_of_operand(v);
+
+    *out = JS_UNDEFINED;
+    if (ty == CTY_STRING && array_own_key(ctx, atom))
+        return 0;
+    for (size_t i = 0; i < sizeof ROW / sizeof ROW[0]; i++) {
+        if (ROW[i].ty == ty) {
+            JSValue proto = JS_GetClassProto(ctx, ROW[i].id);
+            int held = example_member(ctx, proto, atom, out);
+
+            JS_FreeValue(ctx, proto);
+            return held;
+        }
+    }
+    return 0;
+}
+
 static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
     (void)receiver;
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
@@ -4820,6 +4869,19 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     if (!JS_IsUninitialized(r)) {
         free(shape); free(ident);
         return r;
+    }
+    /* An Array exotic object in every world owns only its indices and `length`, so any other key is read off
+       %Array.prototype%'s chain (§10.1.8.1 OrdinaryGet step 2), which is concrete. An accessor or Proxy there
+       answers by the page's code, which this read has no flow to run, and leaves the unknown member below. */
+    if (c->is_array && !array_own_key(ctx, atom)) {
+        JSValue proto = JS_GetClassProto(ctx, JS_CLASS_ARRAY);
+        int held = example_member(ctx, proto, atom, &r);
+
+        JS_FreeValue(ctx, proto);
+        if (held) {
+            free(shape); free(ident);
+            return r;
+        }
     }
     /* Ties the arm above to the predicate, while both spellings of one question are in hand: `pin_of` and
        `concolic_src_pinned` each test the same chain, and a divergence would be silent in both directions.
@@ -4852,7 +4914,8 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
        as the object's bytes, and a report must say so. */
     {
         JSValue pex, mex = JS_UNDEFINED;
-        int held = record_example(ctx, c, &pex) && example_member(ctx, pex, atom, &mex);
+        int held = record_example(ctx, c, &pex) ? example_member(ctx, pex, atom, &mex)
+                                                : primitive_chain_member(ctx, obj, atom, &mex);
         int nrow = c->root ? root_named_access_row(c->root) : -1;
         char *nsrc = NULL;
 
@@ -4951,6 +5014,16 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
         const char *name = JS_AtomToCString(ctx, atom);
 
         if (name && !strcmp(name, "length")) string_length_attach(r, obj);
+        if (name) JS_FreeCString(ctx, name);
+    }
+    /* §10.4.2's own `length` of an Array exotic object is a Number in every world.
+       Named residual. Not covered: an element of a split, a String in every world (§22.1.3.23 appends
+       substrings), states no type. Next diff builds: the elements' type on the record, written beside is_array.
+       Absence shows as: a String method called on a split's element with no example derives an untyped value. */
+    if (c->is_array && concolic_is(r)) {
+        const char *name = JS_AtomToCString(ctx, atom);
+
+        if (name && !strcmp(name, "length")) concolic_type_state(r, CTY_NUMBER);
         if (name) JS_FreeCString(ctx, name);
     }
     free(shape);
@@ -5056,6 +5129,13 @@ static unsigned cty_of_operand(JSValueConst v)
     return out ? cty_of_tyf(tyf_of_cty(c->ty) & ~out) : c->ty;
 }
 
+/* The facet bits a record's mint states: its type set, less [[Call]] for an Array exotic object (§10.4.2 defines
+   none), which §13.5.3.1 typeof tells apart. */
+static unsigned tyf_stated(const Concolic *c)
+{
+    return c->is_array ? CONCOLIC_TYF_OBJECT : tyf_of_cty(c->ty);
+}
+
 /* §13.5.3.1 typeof's answer where the operand's remaining types fall in one row of its table: its type set and
    its type facet in the running flow. NULL when more than one row remains. */
 static const char *tyf_typeof_fixed(JSValueConst v)
@@ -5063,7 +5143,7 @@ static const char *tyf_typeof_fixed(JSValueConst v)
     static const char *const NAME[] = { "undefined", "object", "boolean", "string", "symbol", "number", "bigint",
                                         "function" };
     const Concolic *c = concolic_is(v) ? JS_GetOpaque(v, g_concolic_class) : NULL;
-    unsigned tyf = c ? tyf_of_cty(c->ty) & ~tyf_out_of(c) : tyf_of_cty(cty_of_concrete(v));
+    unsigned tyf = c ? tyf_stated(c) & ~tyf_out_of(c) : tyf_of_cty(cty_of_concrete(v));
 
     for (size_t i = 0; i < sizeof NAME / sizeof NAME[0]; i++) {
         unsigned row = tyf_of_typeof(NAME[i]);
@@ -5344,7 +5424,6 @@ unsigned concolic_types(const char *src)
 /* State a fresh mint's type set: what its algorithm fixes the result's type to. Once per value, and the
    example the mint attached (if any) is one of those types. A candidate re-fire's mint answers the attacker's
    bytes, a real value with no record, and states nothing. `file`/`line` are the mint's. */
-#define concolic_type_state(r, ty) concolic_type_state_at((r), (ty), __FILE__, __LINE__)
 static void concolic_type_state_at(JSValueConst r, unsigned ty, const char *file, int line)
 {
     Concolic *c;
@@ -6480,20 +6559,29 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
         }
     }
     if (split_rec && concolic_is(r) && concolic_example_present(r)) split_record(ctx, r, this_val, split_sep);
-    /* The result's type set where the callee's algorithm fixes it (JSTrampStepDef.result_types: §22.1.3.22
-       String.prototype.slice returns a String). The callee's example is the callee in every world only where
-       the receiver is one primitive type, since §7.3.3 GetV reads the member off that type's prototype; a
-       receiver admitting Objects may hold its own member, so its call's result stays untyped. */
+    /* The result's type set where the callee's algorithm fixes it for these arguments (JSTrampStepDef's
+       result_types and result_types_primitive_arg0: §22.1.3.22 String.prototype.slice returns a String). The
+       callee's example is the callee in every world only where the receiver is one primitive type, since §7.3.3
+       GetV reads the member off that type's prototype (primitive_chain_member states it where the receiver has no
+       example); a receiver admitting Objects may hold its own member, so its call's result stays untyped. */
     if (concolic_is(r) && concolic_is(this_val)) {
         unsigned recv = cty_of_operand(this_val);
 
         if (recv == CTY_STRING || recv == CTY_NUMBER || recv == CTY_BOOLEAN || recv == CTY_SYMBOL ||
             recv == CTY_BIGINT) {
             JSValue fex = concolic_example(ctx, func_obj);
-            unsigned rt = JS_FunctionResultTypes(fex);
+            unsigned rt = JS_FunctionResultTypes(fex, argc, argv);
+            /* §22.1.3.23's every return past step 3 is CreateArrayFromList, an Array exotic object. */
+            int arr = (rt & JS_LANG_TYPE_OBJECT) && JS_FunctionIsStringSplit(fex);
 
             JS_FreeValue(ctx, fex);
             if (rt) concolic_type_state(r, cty_of_tyf(rt));
+            if (arr) {
+                Concolic *rc = JS_GetOpaque(r, g_concolic_class);
+
+                DCHECK(!rc->ex_has || JS_IsArray(rc->example), "a split's result holds a non-Array example");
+                rc->is_array = 1;
+            }
         }
     }
     /* The call completed, so the member read under it found a callable (§13.3.6.2 EvaluateCall steps 4-5),
@@ -8214,7 +8302,7 @@ JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
         Concolic *rc = concolic_is(r) ? JS_GetOpaque(r, g_concolic_class) : NULL;
 
         if (rc) rc->is_typeof = 1;
-        if (rc) rc->typeof_types = (unsigned short)tyf_of_cty(oc->ty);
+        if (rc) rc->typeof_types = (unsigned short)tyf_stated(oc);
         if (rc && oc->src_own == 1 && oc->src) {
             rc->typeof_of = reclaim_strdup(oc->src);
             CHECK(rc->typeof_of, "concolic: OOM naming a typeof result's operand");
@@ -8250,6 +8338,19 @@ JSValue concolic_isarray_hook(JSContext *ctx, JSValueConst v) {
         }
 #endif
         return JS_FALSE;
+    }
+    /* An Array exotic object in every world answers step 2 true in every world. */
+    if (((const Concolic *)JS_GetOpaque(v, g_concolic_class))->is_array) {
+#if APICLIENT_DEV
+        APICLIENT_UNPRICED_BLOCK
+        if (concolic_example_present(v)) {
+            JSValue ex = concolic_example(ctx, v);
+
+            DCHECK(JS_IsArray(ex), "an unknown stated to be an Array in every world holds a non-Array example");
+            JS_FreeValue(ctx, ex);
+        }
+#endif
+        return JS_TRUE;
     }
     st = concolic_example_state(v);
     if (st == CONCOLIC_EX_HELD || st == CONCOLIC_EX_DETERMINED) {
@@ -8830,6 +8931,9 @@ static JSValue concolic_exotic_get_prototype(JSContext *ctx, JSValueConst obj) {
         if (!JS_IsNull(slot))
             return slot;
     }
+    /* ArrayCreate's step 2 default, the link of an Array exotic object in every world. */
+    if (c->is_array)
+        return JS_GetClassProto(ctx, JS_CLASS_ARRAY);
     /* Derived once and held. The operand is the receiver, so the answer's identity is composed from this
        value's own, and two asks about one record are one question here and at the link walk's seam. */
     if (JS_IsUninitialized(c->proto))
