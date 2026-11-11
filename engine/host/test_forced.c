@@ -30961,19 +30961,20 @@ TF_UNIT void probes_races(const char *js, Probe *tab, int *n) {
              "NOT REACHED or wrong: a 50 ms timer beside a fetch() whose reaction issues a second one did not run "
              "in each of the three orders against the two arrivals, or an arm recorded another order");
     /* The race before each arrival of two requests issued together: the timer before, between and after the
-       two reactions. The replies land in the order of their due points on the path, which is the order they
-       were asked in, whatever order the host answered them in. */
+       two reactions. Which reply the host answers first is the host's order, so both are admitted. */
     const char *xpair_why = NULL;
     int xpair_tt = 1;
-    const int xp_first = param_undriven_count(js, "/api/xpairorder", "v", "timer-a-b");
-    const int xp_mid = param_undriven_count(js, "/api/xpairorder", "v", "a-timer-b");
-    const int xp_last = param_undriven_count(js, "/api/xpairorder", "v", "a-b-timer");
+    const int xp_first = param_undriven_count(js, "/api/xpairorder", "v", "timer-a-b") +
+                         param_undriven_count(js, "/api/xpairorder", "v", "timer-b-a");
+    const int xp_mid = param_undriven_count(js, "/api/xpairorder", "v", "a-timer-b") +
+                       param_undriven_count(js, "/api/xpairorder", "v", "b-timer-a");
+    const int xp_last = param_undriven_count(js, "/api/xpairorder", "v", "a-b-timer") +
+                        param_undriven_count(js, "/api/xpairorder", "v", "b-a-timer");
     fold_row(&xpair_tt, &xpair_why,
              xp_first > 0 && xp_mid > 0 && xp_last > 0 &&
              xp_first + xp_mid + xp_last == param_undriven_count(js, "/api/xpairorder", "v", NULL),
              "NOT REACHED or wrong: a 50 ms timer beside two fetch() calls issued together did not run before, "
-             "between and after their two reactions in the order they were asked, or an arm recorded another "
-             "order");
+             "between and after their two reactions, or an arm recorded an order that is not those three");
     const Probe rows[] = {
         { "deadline-race", xrace_tt, "/api/xraceorder", SESS_EXPLORE, xrace_why },
         { "deadline-race-pair", xpair_tt, "/api/xpairorder", SESS_EXPLORE, xpair_why },

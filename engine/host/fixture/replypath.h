@@ -5,7 +5,7 @@
    before the reply's reaction), and `busy` burns work and then asks for /api/rpathbusy. test_forced.c's provider
    answers the `fast` request at once and holds the `late` one until /api/rpathbusy is answered, so the two
    measurements differ only in their sibling and their payment. Tags are one length, so the two paths retire
-   the same work. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
+   the same work, and each chain stops at 400 tasks, so a driven handler ends too. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_REPLYPATH_H
 #define ENGINE_HOST_FIXTURE_REPLYPATH_H
 #ifndef TF_CANVAS_INK
@@ -19,7 +19,7 @@ static const char HTML_REPLYPATH[] =
     "function rpBurn(k) { for (var i = 0; i < 20000; i++) k += i; return k; }"
     "function rpMeasure(tag) {"
     " var n = 0, got = false, mc = new MessageChannel();"
-    " mc.port1.onmessage = function () { if (got) return; n++; rpBurn(0); mc.port2.postMessage(0); };"
+    " mc.port1.onmessage = function () { if (got || n === 400) return; n++; rpBurn(0); mc.port2.postMessage(0); };"
     " fetch('/api/rpath' + tag).then(function () { got = true;"
     "  fetch((tag === 'fast' ? '/api/rpathnfast' : '/api/rpathnlate') + '?n=' + n); });"
     " mc.port2.postMessage(0);"
