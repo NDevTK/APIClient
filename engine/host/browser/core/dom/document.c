@@ -2374,10 +2374,14 @@ const char *document_address_example(JSContext *ctx, JSValueConst address)
 static void doc_addr_assert_agrees(JSContext *ctx, const Document *d)
 {
 #if APICLIENT_DEV
-    const char *ex = document_address_example(ctx, d->addr.value);
-    int same = strcmp(ex, d->addr.bytes) == 0;
+    int same = 0;
 
-    JS_FreeCString(ctx, ex);
+    APICLIENT_UNPRICED_BLOCK {
+        const char *ex = document_address_example(ctx, d->addr.value);
+
+        same = strcmp(ex, d->addr.bytes) == 0;
+        JS_FreeCString(ctx, ex);
+    }
     DCHECK(same,
            "a Document's ADDRESS and the VALUE it was computed out of disagree — the bytes are what "
            "solver/route_seed.h declares and what every base-URL resolution in the page resolves against, and "

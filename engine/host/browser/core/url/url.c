@@ -1981,6 +1981,7 @@ JSValue url_member_unknown(JSContext *ctx, JSValueConst unknown, int member)
 
         url_record_free(&page);
 #if APICLIENT_DEV
+        APICLIENT_UNPRICED_BLOCK {
         er = url_unknown_example(ctx, unknown, &hold);
         if (er) {
             char *em = url_member_get(er, member);
@@ -1991,6 +1992,7 @@ JSValue url_member_unknown(JSContext *ctx, JSValueConst unknown, int member)
             free(em);
         }
         JS_FreeValue(ctx, hold);
+        }
 #endif
         v = JS_NewString(ctx, m);
         free(m);

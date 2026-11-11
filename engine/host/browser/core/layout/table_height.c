@@ -478,6 +478,7 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
        spacing at a group boundary, otherwise indistinguishable from a taller table. Skipped for no rows (no
        cell borders, no runs). The whole block is dev-only because the comparison sum exists only for it. */
 #if APICLIENT_DEV
+    APICLIENT_UNPRICED_BLOCK
     if (nrows != 0) {
         CssPx run_bottom = css_px(0.0), run_top, run_expect, run_slack;
 

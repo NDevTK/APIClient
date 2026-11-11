@@ -2196,6 +2196,7 @@ int concolic_string_length_reached(JSContext *ctx, JSValueConst v, JSValueConst 
     r = term && !strcmp(term, o.form->term[0]);
     free(term);
 #if APICLIENT_DEV
+    APICLIENT_UNPRICED_BLOCK
     if (r && concolic_example_present(s) && concolic_example_present(v)) {
         JSValue se = concolic_example(ctx, s), ve = concolic_example(ctx, v);
         double d = -1.0;
@@ -6528,6 +6529,7 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
             int holds = rel == REL_LT ? konst < 0.0 : rel == REL_LE ? konst <= 0.0
                       : rel == REL_GT ? konst > 0.0 : konst >= 0.0;
 #if APICLIENT_DEV
+            APICLIENT_UNPRICED_BLOCK {
             JSValue exa = concolic_example(ctx, a), exb = concolic_example(ctx, b);
             double da = 0.0, db = 0.0;
 
@@ -6538,6 +6540,7 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
                         "%.17g — one operand's form is not the function its example was computed by", konst,
                         da, db);
             JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
+            }
 #endif
             JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
             sp[-2] = JS_NewBool(ctx, holds);
@@ -8026,6 +8029,7 @@ void concolic_key_domain_missed(JSContext *ctx, JSValueConst key)
     const Concolic *kc = key_domain_of(key);
 
     DCHECK(kc != NULL, "a read decided a miss over a key whose facets state no domain");
+    APICLIENT_UNPRICED_BLOCK
     if (concolic_example_state(key) == CONCOLIC_EX_HELD) {
         JSValue ex = concolic_example(ctx, key);
         size_t n = 0, plen = (size_t)kc->hole_span[0];
@@ -8170,6 +8174,7 @@ JSValue concolic_isarray_hook(JSContext *ctx, JSValueConst v) {
     ty = cty_of_operand(v);
     if (ty && !(ty & CTY_OBJECT)) {
 #if APICLIENT_DEV
+        APICLIENT_UNPRICED_BLOCK
         if (concolic_example_present(v)) {
             JSValue ex = concolic_example(ctx, v);
 
@@ -9646,6 +9651,7 @@ static void len_lo_concat(JSContext *ctx, JSValueConst r, JSValueConst a, JSValu
     lo = (uint64_t)len_lo_operand(ctx, a) + len_lo_operand(ctx, b);
     c->len_lo = lo > UINT32_MAX ? UINT32_MAX : (uint32_t)lo;
 #if APICLIENT_DEV
+    APICLIENT_UNPRICED_BLOCK
     if (concolic_example_present(r)) {
         JSValue ex = concolic_example(ctx, r);
 
@@ -9810,6 +9816,7 @@ static void slice_class_state(JSContext *ctx, JSValueConst r, JSValueConst u)
     CHECK(c->hole_class, "concolic: OOM recording a slice's code-unit class");
     c->hole_class[0] = k;
 #if APICLIENT_DEV
+    APICLIENT_UNPRICED_BLOCK
     if (concolic_example_present(r)) {
         JSValue ex = concolic_example(ctx, r);
         size_t n = 0;
@@ -10008,6 +10015,7 @@ void concolic_string_unit_map(JSContext *ctx, JSValueConst r, JSValueConst recv,
     if (!c->ty) concolic_type_state(r, CTY_STRING);
     DCHECKF(c->ty == CTY_STRING, "a replace's result over a String receiver was typed %u", (unsigned)c->ty);
 #if APICLIENT_DEV
+    APICLIENT_UNPRICED_BLOCK
     if (concolic_example_present(r)) {
         JSValue ex = concolic_example(ctx, r);
         const char *e = JS_IsString(ex) ? JS_ToCStringLen(ctx, &tn, ex) : NULL;
@@ -10080,6 +10088,7 @@ void concolic_string_class(JSContext *ctx, JSValueConst r, const uint32_t *pairs
     if (!c->ty) concolic_type_state(r, CTY_STRING);
     DCHECKF(c->ty == CTY_STRING, "a String class was stated of a value typed %u", (unsigned)c->ty);
 #if APICLIENT_DEV
+    APICLIENT_UNPRICED_BLOCK
     if (concolic_example_present(r) && c->hole_class[0]) {
         JSValue ex = concolic_example(ctx, r);
         size_t tn = 0;

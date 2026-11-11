@@ -1374,7 +1374,7 @@ static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
 #if APICLIENT_DEV
     /* THE READ IS INSIDE THE DEV GUARD BECAUSE concolic_example DUPS, and a DCHECK's condition must be
        side-effect-free: the allocation happens here, the assert reads two locals, and release does neither. */
-    {
+    APICLIENT_UNPRICED_BLOCK {
         JSValue ex = concolic_example(ctx, flag);
         DCHECK(JS_IsBool(ex) && !JS_ToBool(ctx, ex),
                "§3.2's timeout signal was minted with an `aborted` example that is not FALSE — abort.h's "

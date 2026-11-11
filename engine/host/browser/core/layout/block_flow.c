@@ -1105,6 +1105,7 @@ bool block_flow_establishes_inline_context(lxb_dom_element_t *el)
     bool establishes = false;
 
 #if APICLIENT_DEV
+    APICLIENT_UNPRICED_BLOCK
     if (layout_job_rests_innermost()) {
         /* The peek answers into its own scratch: the value returned is the one the ask below writes. */
         bool peeked = false;

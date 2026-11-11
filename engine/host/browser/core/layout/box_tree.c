@@ -199,6 +199,7 @@ static void bt_require_in_sequence(lxb_dom_element_t *box, BoxTreeChild child)
 {
 #if APICLIENT_DEV
     char nbuf[200], bbuf[160];
+    bool member = false;
 
     if (box_tree_child_is_generated(child)) {
         DCHECKF(child.node == lxb_dom_interface_node(box) &&
@@ -211,7 +212,8 @@ static void bt_require_in_sequence(lxb_dom_element_t *box, BoxTreeChild child)
                 bt_subject(child, nbuf, sizeof nbuf), box_subject(box, bbuf, sizeof bbuf));
         return;
     }
-    if (bt_in_sequence(box, child)) return;
+    APICLIENT_UNPRICED_BLOCK { member = bt_in_sequence(box, child); }
+    if (member) return;
     DFAILF("%s, stepped as a child of %s: css-display-3 §2.5 \"Box Generation: the none and contents "
            "keywords\"' spliced child sequence was stepped from a node that is not IN it. Between that node and "
            "this box stands an element that GENERATES A BOX, so the node is a child of THAT box's sequence and "
@@ -231,8 +233,10 @@ static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, BoxTreeChil
 {
 #if APICLIENT_DEV
     char nbuf[200], bbuf[160];
+    bool member = !box_tree_child_exists(answer);
 
-    if (!box_tree_child_exists(answer) || bt_in_sequence(box, answer)) return;
+    if (!member) APICLIENT_UNPRICED_BLOCK { member = bt_in_sequence(box, answer); }
+    if (member) return;
     DFAILF("%s, answered as the first child of %s: css-display-3 §2.5 \"Box Generation: the none and contents "
            "keywords\"' spliced child sequence ANSWERED a member that is not in it — every member it yields "
            "stands under `box` through nothing but elements §2.5 replaced by their contents, so "

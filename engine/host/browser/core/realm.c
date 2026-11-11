@@ -683,7 +683,7 @@ void realm_install_intrinsics(JSContext *ctx, JSAgentRecord *agent, const char *
                "a realm was built with a time origin that is neither a moment of the monotonic clock nor a "
                "derivation of one — its creator states the moment the environment was created");
 #if APICLIENT_DEV
-        {
+        APICLIENT_UNPRICED_BLOCK {
             JSValue now = event_loop_now(ctx);
 
             DCHECK(event_loop_before_decided(ctx, now, time_origin) != 1,

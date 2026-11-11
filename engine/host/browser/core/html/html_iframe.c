@@ -286,6 +286,7 @@ static char *iframe_src_destination(JSContext *ctx, JSValueConst wrap, const cha
                               "algorithm reading it — the two entries are two different steps of two different "
                               "sections and the assert below is the only place that difference is visible");
 #if APICLIENT_DEV
+    APICLIENT_UNPRICED_BLOCK
     if (concolic_is(v)) {
         const char *sh = concolic_shape_c(v);
         JSValue ex = concolic_example(ctx, v);

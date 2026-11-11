@@ -428,6 +428,7 @@ static JSValue loc_href(JSContext *ctx, UrlRecord *rec)
                !concolic_src_delivering(LOCATION_SEARCH_SRC) && !concolic_src_delivering(LOCATION_HASH_SRC);
     v = concolic_string_concat(ctx, concolic_string_concat(ctx, loc_string(ctx, prefix), q), h);
 #if APICLIENT_DEV
+    APICLIENT_UNPRICED_BLOCK
     if (observed) {
         char *want = url_serialize(rec, /*exclude_fragment*/ false);
         JSValue ex = concolic_is(v) ? concolic_example_string(ctx, v) : JS_DupValue(ctx, v);

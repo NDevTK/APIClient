@@ -352,7 +352,7 @@ JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment)
        stays silent on uncertainty. The clock READ is inside the guard because it is the assertion's operand
        and nothing else's — DCHECKs are free in release, and one that left a property read behind would not be. */
 #if APICLIENT_DEV
-    {
+    APICLIENT_UNPRICED_BLOCK {
         JSValue now = hr_time_unsafe_shared_current(ctx);
 
         DCHECK(event_loop_before_decided(ctx, now, unsafe_moment) != 1,
