@@ -23,12 +23,13 @@
     X(P##_TAKE,        W " → DOM §4.2.3 insert steps 1-4 (a DocumentFragment's children into nodes, one per " \
                          "step, each removed with suppressObservers; the fragment's record)") \
     NODE_REMOVE_ALGO_STAGES(X, P##_RM, W " → DOM §4.2.3 insert step 4.1, or step 7.1 → DOM §4.5 adopt step 2") \
-    X(P##_RANGES,      W " → DOM §4.2.3 insert steps 5-6 (the live-range steps for child; previousSibling)") \
+    X(P##_RANGES,      W " → DOM §4.2.3 insert step 5 (the live-range steps for child)") \
     X(P##_NODE,        W " → DOM §4.2.3 insert step 7 (the next node of nodes; step 7.1's adopt step 2)") \
     X(P##_ADOPT,       W " → DOM §4.2.3 insert step 7.1 (DOM §4.5 adopt step 1 and step 3's condition)") \
     X(P##_ADOPT_WALK,  W " → DOM §4.2.3 insert step 7.1 (DOM §4.5 adopt step 3, one shadow-including inclusive " \
                          "descendant per step)") \
-    X(P##_LINK,        W " → DOM §4.2.3 insert steps 7.2-7.3 (node into parent's children)") \
+    X(P##_LINK,        W " → DOM §4.2.3 insert steps 6 and 7.2-7.3 (previousSibling; node into parent's " \
+                         "children)") \
     X(P##_INDEX,       W " → DOM §4.2.3 insert steps 7.2-7.3 (the name index's upkeep, one node of node's " \
                          "subtree per step)") \
     X(P##_ASSIGNED,    W " → DOM §4.2.3 insert steps 7.4-7.5 (assign a slot for node; parent's slot change)") \

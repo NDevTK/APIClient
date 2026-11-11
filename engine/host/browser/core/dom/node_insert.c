@@ -158,11 +158,6 @@ int node_insert_run(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, int base
 
     case NODE_INSERT_PHASE_RANGES:
         if (s->child) range_insert_steps(ctx, s->parent, s->child, s->count);  /* STEP 5 */
-        /* Step 6 binds previousSibling before step 7.1's adopt removes node, so when node is child's previous
-           sibling (parent's last child for a null child) step 8's record names node itself. Chrome 153 names
-           the sibling left after the removal, the order the standard had while pre-insert adopted before
-           insert; whatwg/dom#1488 restored that order for replace only (whatwg/dom#814). */
-        s->prev = s->child ? s->child->prev : s->parent->last_child;           /* STEP 6 */
         s->at = 0;
         hdr->stage = base + NODE_INSERT_PHASE_NODE;
         return JS_STEP_YIELD;
@@ -191,6 +186,11 @@ int node_insert_run(JSContext *ctx, JSStepHdr *hdr, NodeInsertState *s, int base
         return JS_STEP_YIELD;
 
     case NODE_INSERT_PHASE_LINK:
+        /* Step 6's previousSibling, read after step 7.1's adopt has removed the first node. DOM §4.2.3 insert
+           step 6 binds it before step 7, which names node itself when node is child's previous sibling (parent's
+           last child for a null child); Chrome 153.0.8010.12 names the sibling left after the removal, and where
+           the two differ in what a page observes the engine follows Chrome (fixture/insertrecord.h's al, ib). */
+        if (s->at == 0) s->prev = s->child ? s->child->prev : s->parent->last_child;   /* STEP 6 */
         dom_cow_insert_link(s->parent, s->node, s->child);                     /* STEPS 7.2-7.3 */
         s->index_doc = document_name_index_tree_document(s->node);
         s->cursor = s->index_doc ? s->node : NULL;
