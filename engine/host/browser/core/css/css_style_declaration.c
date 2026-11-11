@@ -2133,10 +2133,15 @@ bool cssom_rules_run_emit_next(CssomRulesRun *run, CssomRuleFn cb, void *ud)
                    serialized this way anywhere else is a body nothing ever reads. Asking the enclosing rule
                    here is not possible in any case; this walk reports a rule before its children and holds no
                    rule objects. */
+                /* An `@font-face` body holds css-fonts-4 §4's descriptors, whose grammars read the page's own
+                   spelling: this pass holds the text those offsets index, and a property-grammar pass would
+                   re-spell `U+0-7F` from its tokens as `U0-7F` before the descriptor's parse saw it. */
                 block = cssd_serialize_at_block(kids, text, len,
                                                 css_font_feature_value_at_rule(out.at_name)
                                                     ? CSSOM_BLOCK_FEATURE_VALUES
-                                                    : CSSOM_BLOCK_UNRESTRICTED);
+                                                    : strcmp(out.at_name, "font-face") == 0
+                                                        ? CSSOM_BLOCK_FONT_FACE
+                                                        : CSSOM_BLOCK_UNRESTRICTED);
                 out.block = block ? block : "";
             }
             break;

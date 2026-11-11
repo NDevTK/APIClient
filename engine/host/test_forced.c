@@ -17811,18 +17811,23 @@ TF_UNIT void probes_linkimage(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* Whether the fixture was shown a pending line for the font at `path` under any provenance. */
-static int fontload_asked(const char *path) {
+/* Whether the fixture was shown a pending line for the font at `path`: under any provenance, or with
+   `unforced` only on the page's own run (unpinned, and observed or derived), where the load is the page's act.
+   A forced world that lays the text out asks again on its own register, and that line is graded forced. */
+static int fontload_asked(const char *path, int unforced) {
     char url[96];
     int k = snprintf(url, sizeof url, "https://x.test/fonts/%s", path);
 
     CHECK(k > 0 && (size_t)k < sizeof url, "a font row's address did not fit its buffer");
+    if (unforced)
+        return tf_seen_line(url, PENDING_PINNED_NO, PENDING_PROVENANCE_OBSERVED) ||
+               tf_seen_line(url, PENDING_PINNED_NO, PENDING_PROVENANCE_DERIVED);
     return tf_seen_line(url, PENDING_PINNED_NO, NULL) || tf_seen_line(url, PENDING_PINNED_YES, NULL);
 }
 
 /* The rows of the `fontload` document (fixture/fontload.h): which `@font-face` resources text layout
    requests, each against Chrome 153's requests for the same markup. A request is read off the pending lines
-   the fixture's zone was shown; `used` is read in the observed world, where the load is the page's own act. */
+   the fixture's zone was shown: a load row on the page's unforced run, a never row under every provenance. */
 TF_UNIT void probes_fontload(const char *js, Probe *tab, int *n) {
     static const struct { const char *row, *path, *why; } LOADS[] = {
         { "font-load-composite", "fl-comp-latin.woff2",
@@ -17857,19 +17862,18 @@ TF_UNIT void probes_fontload(const char *js, Probe *tab, int *n) {
     const char *why[1 + NL + NN] = { NULL };
     int tt[1 + NL + NN], reached = !!strstr(js, "\"/api/fontload\""), i;
 
-    /* The used face: requested in the observed world, and the script that measured its text ran on. */
+    /* The used face: requested on the unforced run, and the script that measured its text ran on. */
     tt[0] = 1;
     fold_row(&tt[0], &why[0], reached,
              "NOT REACHED: there is no /api/fontload record, so the document aborted before its fetch");
-    fold_row(&tt[0], &why[0],
-             tf_seen_line("https://x.test/fonts/fl-used.woff2", PENDING_PINNED_NO, PENDING_PROVENANCE_OBSERVED),
-             "css-fonts-4 §5.2: the face visible text uses was not requested in the observed world");
+    fold_row(&tt[0], &why[0], fontload_asked("fl-used.woff2", 1),
+             "css-fonts-4 §5.2: the face visible text uses was not requested on the page's unforced run");
     rows[0] = (Probe){ "font-load-used", tt[0], "/api/fontload", SESS_EXPLORE, why[0] };
     for (i = 0; i < NL; i++) {
         tt[1 + i] = 1;
         fold_row(&tt[1 + i], &why[1 + i], reached,
                  "NOT REACHED: there is no /api/fontload record, so the document aborted before its fetch");
-        fold_row(&tt[1 + i], &why[1 + i], fontload_asked(LOADS[i].path), LOADS[i].why);
+        fold_row(&tt[1 + i], &why[1 + i], fontload_asked(LOADS[i].path, 1), LOADS[i].why);
         rows[1 + i] = (Probe){ LOADS[i].row, tt[1 + i], "/api/fontload", SESS_EXPLORE, why[1 + i] };
     }
     /* A never row holds only once the used face was requested: with no load at all it would be vacuous. */
@@ -17877,9 +17881,9 @@ TF_UNIT void probes_fontload(const char *js, Probe *tab, int *n) {
         int k = 1 + NL + i;
 
         tt[k] = 1;
-        fold_row(&tt[k], &why[k], reached && fontload_asked("fl-used.woff2"),
+        fold_row(&tt[k], &why[k], reached && fontload_asked("fl-used.woff2", 1),
                  "NOT REACHED: the used face was never requested, so nothing shows this document's fonts load");
-        fold_row(&tt[k], &why[k], !fontload_asked(NEVER[i].path), NEVER[i].why);
+        fold_row(&tt[k], &why[k], !fontload_asked(NEVER[i].path, 0), NEVER[i].why);
         rows[k] = (Probe){ NEVER[i].row, tt[k], "/api/fontload", SESS_EXPLORE, why[k] };
     }
     probes_append(tab, n, rows, 1 + NL + NN);
