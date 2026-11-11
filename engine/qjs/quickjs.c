@@ -48419,7 +48419,7 @@ static void fg_rchain_calls(FGReader *r, JSAsyncFunctionState *s, JSFunctionByte
         live = fg_r32(r);
         CHECK(JS_IsObject(sf->cur_func) && JS_VALUE_GET_OBJ(sf->cur_func)->u.func.function_bytecode == b
                   && al <= UINT16_MAX && pc < (uint32_t)b->byte_code_len
-                  && (t->cont_kind == CONT_NONE || cont_kind_recordless(t->cont_kind))
+                  && (t->cont_kind == CONT_NONE || t->cont_kind == CONT_CONSTRUCT || cont_kind_recordless(t->cont_kind))
                   && (amode == 'o' ? al != 0 : al == 0 && (amode == 'n' || amode == 'b'))
                   && (amode != 'b' || cbuf + aoff + sf->arg_count <= cend),
               "flow graph: a heap frame's function, counts, continuation or arguments are not what an ordinary "
@@ -48447,6 +48447,18 @@ static void fg_rchain_calls(FGReader *r, JSAsyncFunctionState *s, JSFunctionByte
         sf->prev_frame = csf;
         t->seq_req = NULL; t->seq_req_kind = CONT_NONE;
         t->async_data = NULL; t->async_promise = JS_UNDEFINED; t->gen_data = NULL; t->cont_state = NULL;
+        if (t->cont_kind == CONT_CONSTRUCT) {
+            JSConstruct *cs = js_mallocz(ctx, sizeof *cs);
+
+            CHECK(cs != NULL, "flow graph: OOM rebuilding a constructor body's record");
+            js_construct_init(cs);
+            CONT_OWN_MOVE(&cs->created_obj, fg_rvalue(r));
+            CONT_OWN_MOVE(&cs->super_ref, fg_rvalue(r));
+            cs->from_super = fg_r8(r);
+            CHECK(JS_VALUE_GET_PTR(t->this_val) == JS_VALUE_GET_PTR(cs->created_obj),
+                  "flow graph: a rebuilt constructor body's receiver is not the object its record holds");
+            t->cont_state = cs;
+        }
         t->up = below;
         t->caller_sf = csf; t->caller_b = cb; t->caller_ctx = realm;
         t->caller_local_buf = cbuf; t->caller_var_buf = csf->var_buf; t->caller_arg_buf = csf->arg_buf;
@@ -84967,7 +84979,7 @@ static void fg_frame_links(FGWriter *w, JSContext *ctx, void *st, uint8_t kind)
     while (next.st != NULL && next.kind != CONT_NONE) {
         w->g->frames.links++;
         if (next.kind == CONT_STEP || next.kind == CONT_STEP_YIELD) fg_frame_machine(w, next.st);
-        else fg_frame_gap(w, FG_GAP_CONT, next.kind, NULL);
+        else if (!fg_cont_written(next.kind, next.st)) fg_frame_gap(w, FG_GAP_CONT, next.kind, NULL);
         tramp_cont_mark_one(ctx, next.st, next.kind, &next);
     }
     g_tramp_mark_rt = saved_rt;
@@ -85023,13 +85035,24 @@ static void fg_base_bytecode(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s)
     for (int i = 0; i < sf->var_ref_count; i++) fg_cell(w, out, sf->var_refs[i]);
 }
 
+/* Whether the continuation `st` of `kind` waiting on a frame is one the call writer writes with the frame: none,
+   a kind whose frame's own operands are the whole of it, or a bytecode constructor's body (CONT_CONSTRUCT) an
+   opcode asked for, whose record is its created object, its super reference and its entry shape.
+   Named residual. Not covered: a construct a machine requested (`outer` set: Reflect.construct, a species
+   construct), whose requester link names a step machine. Next diff builds: that link with the machine's
+   writer. Absence shows as: `cont CONSTRUCT` in the sale census's `waitsGapKinds`. */
+static bool fg_cont_written(uint8_t kind, const void *st)
+{
+    return kind == CONT_NONE || cont_kind_recordless(kind)
+           || (kind == CONT_CONSTRUCT && ((const JSConstruct *)st)->outer == NULL);
+}
+
 /* Whether a heap frame is an ordinary bytecode activation the call writer writes: its own buffer, no coroutine
-   record, no direct eval standing in it, and a continuation that holds no record (none, or a kind whose frame's
-   own operands are the whole of it). What waits on a recorded kind is that record's writer's. */
+   record, no direct eval standing in it, and a continuation fg_cont_written writes. */
 static bool fg_frame_call_written(const TrampFrame *t)
 {
     return !t->async_data && !t->gen_data && !tramp_agen_data(t) && t->local_buf && !t->sf.eval_hold
-           && (t->cont_kind == CONT_NONE || cont_kind_recordless(t->cont_kind));
+           && fg_cont_written(t->cont_kind, t->cont_state);
 }
 
 /* A bytecode base's chain of heap frames, after the base's record: the count, then each frame from the bottom
@@ -85115,6 +85138,16 @@ static void fg_chain_calls(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s, uin
         fg_u32(out, live);
         for (uint32_t k = 0; k < live; k++) fg_value(w, out, t->local_buf[k]);
         for (int k = 0; k < sf->var_ref_count; k++) fg_cell(w, out, sf->var_refs[k]);
+        if (t->cont_kind == CONT_CONSTRUCT) {   /* the record do_return applies the constructor rule from */
+            const JSConstruct *cs = t->cont_state;
+
+            DCHECK(cs->outer == NULL && JS_VALUE_GET_PTR(t->this_val) == JS_VALUE_GET_PTR(cs->created_obj),
+                   "flow graph: a written constructor body's record has a requester, or its frame's receiver is not "
+                   "the object the record holds");
+            fg_value(w, out, cs->created_obj);
+            fg_value(w, out, cs->super_ref);
+            fg_u8(out, cs->from_super);
+        }
         csf = sf; cb = b; cbuf = t->local_buf; cend = end;
     }
     (free)(ts);
