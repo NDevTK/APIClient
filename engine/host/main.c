@@ -16,6 +16,9 @@
 #include <lexbor/html/html.h>
 
 #include "check.h"
+#if defined(__EMSCRIPTEN__)
+#include <emscripten.h>   /* EM_ASYNC_JS: the renderer's in-step host turn */
+#endif
 #include "quickjs.h"
 #include "browser/core/fetch/fetch.h"
 #include "browser/core/fetch/headers.h"
@@ -2023,17 +2026,31 @@ QJS_EXPORT const char *qjs_level1_account(void)
     return buf;
 }
 
-/* The host's turn: wall milliseconds a slice may hold this thread before qjs_step answers ENGINE_STEP_HOST between
-   two steps, 0 for never (solver/quantum.h). The renderer frame states it once at boot, because its event loop runs
-   only between two qjs_step calls; the trusted zone never sees the code, since the frame re-enters on its own.
-   Named residual. Not covered: the renderer states no in-step entry (quantum_set_step_turn), so its turn waits for
-   the running step to end. Next diff builds: the entry as an import wrapped in WebAssembly.Suspending (JSPI) over
-   the renderer's hostTurn, qjs_step exported as promising, the renderer holding every other ABI call while a step is
-   suspended, and ENGINE_STEP_HOST deleted with the between-step turn. Absence shows as: the renderer's event loop
-   held for a residency span's or a whole step's wall time. */
+#if defined(__EMSCRIPTEN__)
+/* The renderer's turn inside a step: an EM_ASYNC_JS import, which the JSPI link wraps in WebAssembly.Suspending,
+   so qjs_step's stack (a promising export) waits where the turn was offered while the renderer's event loop runs
+   one turn (its Module.hostTurn, a promise), and the step goes on from the same statement. The renderer's ABI
+   queue holds every other entry until the step settles. */
+EM_ASYNC_JS(void, qjs_host_turn_wait, (void), { await Module.hostTurn(); });
+EM_JS(int, qjs_host_turn_stated, (void), { return typeof Module.hostTurn === "function"; });
+static void qjs_host_turn_take(void) { qjs_host_turn_wait(); }
+#endif
+
+/* The host's turn: wall milliseconds a slice may hold this thread before the host takes a turn inside the step
+   (solver/quantum.h's quantum_step_turn_point), 0 for never. The renderer frame states it once at boot, with the
+   module's `hostTurn` supplied at instantiation; the trusted zone never sees the code. Only a WASM host takes
+   its turn through this entry: the native driver states its own (test_forced.c's --host-turn-us). */
 QJS_EXPORT void qjs_set_host_turn(unsigned ms)
 {
     quantum_set_host_turn_us((int64_t)ms * 1000);
+#if defined(__EMSCRIPTEN__)
+    DCHECK(ms == 0 || qjs_host_turn_stated(),
+           "a host turn was stated by a host that supplied no Module.hostTurn to take it through");
+    if (ms > 0) quantum_set_step_turn(qjs_host_turn_take);
+#else
+    DFAIL("a native host stated its turn through the WASM renderer's entry — the native driver states its own "
+          "in-step entry (quantum_set_step_turn)");
+#endif
 }
 
 /* RAM pressure, from the one zone that can see it: the host holds every live engine and the summed working set,

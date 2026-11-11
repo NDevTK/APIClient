@@ -428,6 +428,9 @@
        and a fetch this document cannot make; `instantiateWasm` is read off Module and short-circuits BEFORE
        any URL is computed, so no address is ever derived from this frame's blob: base. */
     M = await mod.default({
+      /* The in-step turn (main.c's qjs_set_host_turn): the Suspending import a step waits on while this frame's
+         event loop runs one turn. */
+      hostTurn: hostTurn,
       print: function (s) { out.push([1, String(s)]); },
       printErr: function (s) { out.push([2, String(s)]); },
       noInitialRun: true,
