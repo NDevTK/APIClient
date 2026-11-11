@@ -86,6 +86,7 @@ typedef struct {
     FlowUnitAt unit;
     int next_arm, next_sited;   /* Flow.next_arm1 - 1 (-1: never stood by a step end) and Flow.next_sited */
     int64_t site_served_elsewhere;  /* the same code site's service in every other family's ledger; no term reads it */
+    int site_kind;                  /* the kind of that code site (FLOW_SITE_*, 0 keyless); no term reads it */
 } FlowWeightOperands;
 
 /* A node of one of the order's leftist max-heaps (flow.c's flow_ix_* banner), embedded in the record it orders so
@@ -1608,12 +1609,14 @@ typedef struct {
     long observed_env_members;
     /* The oldest observed-class member by birth sequence, indexed or not: the program row its cursor names, the
        work its agents retired, the arm its last step returned through, where it rests (FLOW_UNIT_*), and whether
-       it is host-owed and indexed. `present` is 0 where no observed-class member stands. */
+       it is host-owed and indexed; and its weight's operands, `ops.present` 0 where it is held or cold. `present`
+       is 0 where no observed-class member stands. */
     struct {
         int present, cursor, host_owed, indexed, unit;
         uint64_t seq;
         int64_t own_work, picks;
         StepUnit step_unit;
+        FlowWeightOperands ops;
     } observed_oldest;
     /* Lifetime: dispatches of a priced member made while an indexed observed-class member of its family weighed
        strictly less. */

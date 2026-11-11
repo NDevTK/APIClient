@@ -4598,6 +4598,7 @@ static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
             : flow_job_microtask(f) ? FLOW_UNIT_CHECKPOINT : FLOW_UNIT_BETWEEN;
     o->next_arm = f->next_arm1 - 1;
     o->next_sited = f->next_sited;
+    o->site_kind = f->at->code->kind;
     DCHECKF(flow_weight_recompose(o) == o->w,
             "a member's weight does not recompose from the operands the census publishes (weight %.17g, recomposed "
             "%.17g) — flow_order_key gained or reordered a term that flow_weight_operands does not read",
@@ -6332,6 +6333,7 @@ void flow_wfq_census(WfqCensus *out) {
     /* The best-weighted member of the observed world (flow.h's `observed_ops`), recorded by the walk. */
     double observed_w = 0.0;
     const Flow *observed_holder = NULL;
+    const Flow *oldest_holder = NULL;   /* the oldest observed-class member (flow.h's `observed_oldest`) */
     /* And of the assumed worlds (flow.h's `assumed_ops`). */
     double assumed_w = 0.0;
     const Flow *assumed_holder = NULL;
@@ -6549,6 +6551,7 @@ void flow_wfq_census(WfqCensus *out) {
                 int64_t own = 0;
 
                 for (int a = 0; a < f->n_agents; a++) own += (int64_t)f->agents[a].work;
+                oldest_holder = f;
                 out->observed_oldest.present = 1;
                 out->observed_oldest.seq = f->ix_t.seq;
                 out->observed_oldest.cursor = f->script_i;
@@ -6945,6 +6948,9 @@ void flow_wfq_census(WfqCensus *out) {
                "front and the best never-dispatched member are the two the walk recorded");
     }
 
+    /* And the oldest observed-class member's operands, so a reader names the term that ranks the front over it. */
+    if (oldest_holder && !oldest_holder->held && !oldest_holder->cold)
+        flow_weight_operands(oldest_holder, &out->observed_oldest.ops);
     /* And how far the front stands ahead of the observed world's best member (flow.h's `observed_ops`). */
     if (observed_holder && top) {
         out->observed_w_gap = out->w_top - observed_w;

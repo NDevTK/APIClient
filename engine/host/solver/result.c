@@ -552,12 +552,12 @@ static char *weight_operands_json(const FlowWeightOperands *o) {
                     "\"pullWork\":%lld,\"visits\":%lld,\"orphanSeen\":%lld,\"replay\":%.17g,"
                     "\"surv\":%.17g,\"rung\":%d,\"assumed\":%lld,\"againstEnv\":%lld,\"picks\":%lld,"
                     "\"hostOwed\":%d,\"running\":%d,"
-                    "\"unit\":%d,\"nextArm\":%d,\"nextSited\":%d,\"siteServedElsewhere\":%lld}",
+                    "\"unit\":%d,\"nextArm\":%d,\"nextSited\":%d,\"siteServedElsewhere\":%lld,\"siteKind\":%d}",
                     o->w, o->reward, (long long)o->coord_notch, (long long)o->own_notch, (long long)o->site_served,
                     (long long)o->pull_work, (long long)o->visits, (long long)o->orphan_seen, o->replay,
                     o->surv, o->rung, (long long)o->assumed, (long long)o->against_env,
                     (long long)o->picks, o->host_owed, o->running, (int)o->unit, o->next_arm, o->next_sited,
-                    (long long)o->site_served_elsewhere);
+                    (long long)o->site_served_elsewhere, o->site_kind);
 }
 
 char *result_wfq_json(void) {
@@ -831,12 +831,18 @@ char *result_wfq_json(void) {
     METRIC_SET(observed_reads, flow_observed_reads());
     METRIC_SET(observed_ask_members_max, flow_observed_ask_members_max());
     if (w.observed_oldest.present) {
+        char *ops = w.observed_oldest.ops.present ? weight_operands_json(&w.observed_oldest.ops) : NULL;
+
+        CHECK(!w.observed_oldest.ops.present || ops, "result: OOM composing the oldest observed member's operands");
+        /* The operands are absent, not null, for a held or cold member: a census object carries numbers only. */
         observed_oldest = composef("{\"seq\":%llu,\"cursor\":%d,\"ownWork\":%lld,\"picks\":%lld,"
-                                   "\"stepUnit\":%d,\"unit\":%d,\"hostOwed\":%d,\"indexed\":%d}",
+                                   "\"stepUnit\":%d,\"unit\":%d,\"hostOwed\":%d,\"indexed\":%d%s%s}",
                                    (unsigned long long)w.observed_oldest.seq, w.observed_oldest.cursor,
                                    (long long)w.observed_oldest.own_work, (long long)w.observed_oldest.picks,
                                    (int)w.observed_oldest.step_unit, w.observed_oldest.unit,
-                                   w.observed_oldest.host_owed, w.observed_oldest.indexed);
+                                   w.observed_oldest.host_owed, w.observed_oldest.indexed,
+                                   ops ? ",\"terms\":" : "", ops ? ops : "");
+        free(ops);
         CHECK(observed_oldest, "result: OOM composing the oldest observed-class member");
         METRIC_SET_OBJECT(observed_oldest, observed_oldest);   /* borrowed until the rows are rendered below */
     } else {
