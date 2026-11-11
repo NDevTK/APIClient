@@ -1375,6 +1375,108 @@ void cold_park_preview(ColdPreview *out)
 }
 
 /* PARK ONE FLOW — the primitive, and the whole-frontier park below is the loop over it. See cold.h. */
+/* The cross-session census (cold.h's ColdParkCross): its counts and its tally of gap kinds, each name owned. */
+static ColdParkCross g_cross;
+typedef struct { char *name; long n; } ParkCrossGap;
+static ParkCrossGap *g_cross_gaps;
+static int g_cross_gaps_n;
+
+/* One member's kinds, each once: `kinds` holds owned names. */
+typedef struct { char *kinds[64]; int n; int more; } ParkCrossKinds;
+static void park_cross_kind(ParkCrossKinds *k, const char *name)
+{
+    for (int i = 0; i < k->n; i++) if (!strcmp(k->kinds[i], name)) return;
+    if (k->n == (int)(sizeof k->kinds / sizeof k->kinds[0])) { k->more = 1; return; }
+    k->kinds[k->n] = strdup(name);
+    CHECK(k->kinds[k->n] != NULL, "cold: OOM naming a parked member's cross-session gap");
+    k->n++;
+}
+static void park_cross_val_none(JSValueConst v, void *arg) { (void)v; (void)arg; }
+
+static void park_cross_census(Flow *f)
+{
+    JSContext *ctx = pending_ctx();
+    ParkCrossKinds k = { .n = 0 };
+
+    if (!f->started) { g_cross.unstarted++; return; }
+    g_cross.replays++;
+    if (f->delta) {
+        CowSerialCensus c;
+        long states = 0;
+
+        cow_delta_serial_census((const CowDelta *)f->delta, park_cross_val_none, NULL, &c);
+        for (int i = 0; i < (int)(sizeof c.states / sizeof c.states[0]); i++) states += c.states[i];
+        if (c.slots) park_cross_kind(&k, "heap slot");
+        if (c.cells) park_cross_kind(&k, "heap cell");
+        if (c.coro) park_cross_kind(&k, "heap coro");
+        if (c.maps) park_cross_kind(&k, "heap map");
+        if (states) park_cross_kind(&k, "heap state");
+    }
+    if (f->dom_n || f->dom_base) park_cross_kind(&k, "dom");
+    if (f->parked) park_cross_kind(&k, "frame");
+    for (int a = 0; a < f->n_agents; a++)
+        if (f->agents[a].frame || f->agents[a].parked) park_cross_kind(&k, "frame");
+    if (f->n_agents != 1) park_cross_kind(&k, "agents");
+    if (!JS_IsUndefined(f->pending) && pending_count(f->pending) > 0) park_cross_kind(&k, "register");
+    if (f->pin_blob) park_cross_kind(&k, "pins");
+    {
+        JSValue vals[3 + 8];
+        int n = 0;
+        JSFlowGraphRoots gr;
+        JSFlowGraph *g;
+        char name[160], kind[176];
+        uint32_t refs, n_gaps;
+
+        vals[n++] = f->fn;
+        vals[n++] = f->pending;
+        vals[n++] = f->orphan_claim_fn;
+        for (int a = 0; a < f->n_agents && n < (int)(sizeof vals / sizeof vals[0]); a++) vals[n++] = f->agents[a].jobs;
+        if (f->n_agents > 8) park_cross_kind(&k, "agents");
+        gr = (JSFlowGraphRoots){ .vals = vals, .n_vals = n, .cross_session = true };
+        g = JS_FlowGraphSurvey(ctx, &gr, f->delta ? cow_delta_fork_gen((const CowDelta *)f->delta) : 0);
+        n_gaps = JS_FlowGraphGap(ctx, g, UINT32_MAX, name, sizeof name, &refs);
+        for (uint32_t i = 0; i < n_gaps; i++) {
+            JS_FlowGraphGap(ctx, g, i, name, sizeof name, &refs);
+            snprintf(kind, sizeof kind, "graph %s", name);
+            park_cross_kind(&k, kind);
+        }
+        JS_FlowGraphFree(ctx, g);
+    }
+    if (k.more) park_cross_kind(&k, "+more");
+    for (int i = 0; i < k.n; i++) {
+        int j;
+        for (j = 0; j < g_cross_gaps_n; j++) if (!strcmp(g_cross_gaps[j].name, k.kinds[i])) break;
+        if (j == g_cross_gaps_n) {
+            ParkCrossGap *grown = realloc(g_cross_gaps, sizeof *grown * (size_t)(j + 1));
+            CHECK(grown != NULL, "cold: OOM growing the cross-session gap tally");
+            g_cross_gaps = grown;
+            g_cross_gaps[j].name = k.kinds[i];
+            g_cross_gaps[j].n = 0;
+            g_cross_gaps_n++;
+        } else {
+            free(k.kinds[i]);
+        }
+        g_cross_gaps[j].n++;
+    }
+}
+
+void cold_park_cross(ColdParkCross *out) { *out = g_cross; }
+
+char *cold_park_cross_gaps_json(void)
+{
+    size_t cap = 3, w;
+    char *b;
+
+    for (int i = 0; i < g_cross_gaps_n; i++) cap += strlen(g_cross_gaps[i].name) + 32;
+    b = malloc(cap);
+    CHECK(b != NULL, "cold: OOM rendering the cross-session gap tally");
+    w = (size_t)snprintf(b, cap, "{");
+    for (int i = 0; i < g_cross_gaps_n; i++)
+        w += (size_t)snprintf(b + w, cap - w, "%s\"%s\":%ld", i ? "," : "", g_cross_gaps[i].name, g_cross_gaps[i].n);
+    snprintf(b + w, cap - w, "}");
+    return b;
+}
+
 void cold_park_flow(Flow *f)
 {
     const void *seg;
@@ -1594,6 +1696,7 @@ void cold_park_flow(Flow *f)
        RAM pressure — never reaches cold_park's ask at all, so without this a per-flow park is checked to its
        penultimate record and no further. */
     park_doc_agrees();
+    park_cross_census(f);
     f->paged = 1;   /* its recipe exists: flow_release may now let its parked continuation go (flow.h) */
 }
 
@@ -2784,6 +2887,9 @@ void cold_free(void)
     g_park_segs = 0;
     g_park_gen_written = 0;   /* …and so does the statement of which namespace it was written under */
     g_build_baseline_stated = 0;   /* …and the seal it was written over */
+    for (int i = 0; i < g_cross_gaps_n; i++) free(g_cross_gaps[i].name);   /* …and its cross-session census */
+    free(g_cross_gaps); g_cross_gaps = NULL; g_cross_gaps_n = 0;
+    memset(&g_cross, 0, sizeof g_cross);
     memset(&g_parked_census, 0, sizeof g_parked_census);   /* the census is OF the document; it dies with it */
     /* …AND SO IS THE ASK CENSUS BESIDE IT: the preview walks THIS document's frontier, so how often a host
        asked about it is a fact about the document and not about the process. The result document is

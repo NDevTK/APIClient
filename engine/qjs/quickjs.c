@@ -47287,7 +47287,12 @@ static const char *js_ab_codec_intern(JSRuntime *rt, const uint8_t *name, uint32
    too; the dev build's DCHECK above each use names what to build. */
 #define FG_NO_WRITER() CHECK_FAIL("flow graph: a parked graph holds a value or object no writer can write")
 enum { FG_GAP_CLASS = 1, FG_GAP_TAG, FG_GAP_SYMBOL_KEY, FG_GAP_PROP_KIND, FG_GAP_WEAK, FG_GAP_OPEN_CELL,
-       FG_GAP_FRAME_BASE, FG_GAP_FRAME, FG_GAP_CONT, FG_GAP_REQUESTER, FG_GAP_STEP, FG_GAP_STEP_FIELD, FG_GAP_PARK };
+       FG_GAP_FRAME_BASE, FG_GAP_FRAME, FG_GAP_CONT, FG_GAP_REQUESTER, FG_GAP_STEP, FG_GAP_STEP_FIELD, FG_GAP_PARK,
+       FG_GAP_PROCESS_LOCAL };
+/* What a cross-session survey (JSFlowGraphRoots.cross_session) found named only within this process: an object
+   anchor born after the seal and shared with a sibling, one born at generation 0 after the seal, a symbol no build
+   predefines, a function body, a realm or a closed cell the seal did not name, and a C function's pointers. */
+enum { FG_PL_SHARED_BORN, FG_PL_UNSEALED, FG_PL_SYMBOL, FG_PL_BODY, FG_PL_REALM, FG_PL_CELL, FG_PL_CFUNC };
 /* An FG_GAP_FRAME_BASE id past the FLOW_BASE_* kinds: a base standing in a direct eval's parse (JSEvalHold). */
 enum { FG_BASE_HOLDS_EVAL = 3 };
 typedef struct { const void *k; uint32_t v; } FGSlot;
@@ -47591,6 +47596,7 @@ typedef struct {
     uint8_t **held;     /* host copies of flattened ropes the string table names, freed with the writer */
     uint32_t n_held;
     bool survey;        /* record a case no writer has (JS_FlowGraphSurvey) rather than stopping on it */
+    bool cross;         /* a survey of the cross-session form (JSFlowGraphRoots.cross_session) */
     JSObject **order;
     uint32_t n_order, cap_order;
     uint32_t n_strs;
@@ -47613,7 +47619,7 @@ static void fg_gap_ref(FGWriter *w, FGBuf *out, int what, int id, const void *re
     uint32_t i;
 
     DCHECK(w->survey, "flow graph: a gap was recorded by a strict write — the strict write stops instead");
-    fg_u8(out, 'X');
+    if (out) fg_u8(out, 'X');   /* NULL: a gap in a part written apart from the bytes (a realm, a C pointer) */
     for (i = 0; i < g->n_gaps; i++)
         if (g->gaps[i].what == what && g->gaps[i].id == id && g->gaps[i].ref == ref) { g->gaps[i].n++; return; }
     g->gaps = fg_grow(g->gaps, sizeof *g->gaps * (g->n_gaps + 1));
@@ -47621,6 +47627,33 @@ static void fg_gap_ref(FGWriter *w, FGBuf *out, int what, int id, const void *re
     g->n_gaps++;
 }
 static void fg_gap(FGWriter *w, FGBuf *out, int what, int id) { fg_gap_ref(w, out, what, id, NULL); }
+
+/* Whether the sealed baseline names `gp` (a realm, a closed cell). */
+static bool fg_sealed(FGWriter *w, const void *gp)
+{
+    DCHECK(w->ctx->rt->baseline != NULL, "a cross-session survey ran before the baseline was sealed");
+    return bl_name(w->ctx->rt->baseline, gp) != 0;
+}
+
+/* Whether a cross-session survey's anchor `v` (an object at or below the floor, a body, a symbol) has a name
+   another process of this build gives the same thing; when not, its gap is recorded in `out`. */
+static bool fg_cross_named(FGWriter *w, FGBuf *out, JSValueConst v)
+{
+    int pl;
+
+    if (!w->cross) return true;
+    if (JS_VALUE_GET_TAG(v) == JS_TAG_SYMBOL) {
+        if (js_get_atom_index(w->ctx->rt, JS_VALUE_GET_PTR(v)) < JS_ATOM_END) return true;
+        pl = FG_PL_SYMBOL;
+    } else if (JS_BaselineName(w->ctx->rt, v)) {
+        return true;
+    } else {
+        pl = JS_VALUE_GET_TAG(v) == JS_TAG_FUNCTION_BYTECODE ? FG_PL_BODY
+           : JS_VALUE_GET_OBJ(v)->flow_gen > 0 ? FG_PL_SHARED_BORN : FG_PL_UNSEALED;
+    }
+    fg_gap(w, out, FG_GAP_PROCESS_LOCAL, pl);
+    return false;
+}
 
 /* A string by content, once per string: 'S' and its units the first time, 's' and its index after. `u` stays
    valid until the write ends: a JSString the graph's values hold, or a rope's host copy in `held`. */
@@ -47680,8 +47713,12 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
     switch (JS_VALUE_GET_TAG(v)) {
     /* A symbol carries no birth generation and its identity is what it means, so it is named by the live symbol
        itself, the anchor's counted reference keeping it. */
-    case JS_TAG_SYMBOL: fg_u8(out, 'A'); fg_u32(out, fg_anchor(w, v)); return;
-    case JS_TAG_FUNCTION_BYTECODE: fg_u8(out, 'A'); fg_u32(out, fg_anchor(w, v)); return;   /* compiled once, shared */
+    case JS_TAG_SYMBOL:
+        if (fg_cross_named(w, out, v)) { fg_u8(out, 'A'); fg_u32(out, fg_anchor(w, v)); }
+        return;
+    case JS_TAG_FUNCTION_BYTECODE:   /* compiled once, shared */
+        if (fg_cross_named(w, out, v)) { fg_u8(out, 'A'); fg_u32(out, fg_anchor(w, v)); }
+        return;
     case JS_TAG_INT: fg_u8(out, 'I'); fg_u32(out, (uint32_t)JS_VALUE_GET_INT(v)); return;
     case JS_TAG_BOOL: fg_u8(out, JS_VALUE_GET_BOOL(v) ? 'T' : 'F'); return;
     case JS_TAG_NULL: fg_u8(out, 'N'); return;
@@ -47704,7 +47741,10 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
     case JS_TAG_OBJECT: {
         JSObject *p = JS_VALUE_GET_OBJ(v);
         uint32_t i;
-        if (p->flow_gen <= w->floor) { fg_u8(out, 'A'); fg_u32(out, fg_anchor(w, v)); return; }
+        if (p->flow_gen <= w->floor) {
+            if (fg_cross_named(w, out, v)) { fg_u8(out, 'A'); fg_u32(out, fg_anchor(w, v)); }
+            return;
+        }
         if (!fg_map_get(&w->objs, p, &i)) {
             uint8_t kind = p->class_id == JS_CLASS_OBJECT ? FG_PLAIN : p->class_id == JS_CLASS_ARRAY ? FG_ARRAY
                          : p->class_id == JS_CLASS_ERROR ? FG_ERROR
@@ -47751,8 +47791,7 @@ static void fg_key(FGWriter *w, FGBuf *out, JSAtom atom)
     if (a->atom_type == JS_ATOM_TYPE_SYMBOL || a->atom_type == JS_ATOM_TYPE_GLOBAL_SYMBOL) {
         JSValue sym = JS_AtomToValue(w->ctx, atom);
         DCHECK(JS_VALUE_GET_TAG(sym) == JS_TAG_SYMBOL, "flow graph: a symbol atom did not answer a symbol");
-        fg_u8(out, 'Y');
-        fg_u32(out, fg_anchor(w, sym));
+        if (fg_cross_named(w, out, sym)) { fg_u8(out, 'Y'); fg_u32(out, fg_anchor(w, sym)); }
         JS_FreeValue(w->ctx, sym);
         return;
     }
@@ -47774,6 +47813,8 @@ static uint32_t fg_realm(FGWriter *w, JSContext *realm)
 
     for (uint32_t i = 0; i < g->n_realms; i++)
         if (g->realms[i] == realm) return i;
+    if (w->cross && !fg_sealed(w, realm))
+        fg_gap(w, NULL, FG_GAP_PROCESS_LOCAL, FG_PL_REALM);
     g->realms = fg_grow(g->realms, sizeof *g->realms * (g->n_realms + 1));
     g->realms[g->n_realms] = JS_DupContext(realm);
     return g->n_realms++;
@@ -47904,6 +47945,10 @@ static void fg_cell(FGWriter *w, FGBuf *out, JSVarRef *vr)
                "cell as its frame's slot so the closure names it");
         FG_NO_WRITER();
     }
+    if (vr->flow_gen <= w->floor && w->cross && !fg_sealed(w, vr)) {
+        fg_gap(w, out, FG_GAP_PROCESS_LOCAL, FG_PL_CELL);
+        return;
+    }
     if (vr->flow_gen <= w->floor) {
         if (!fg_map_get(&w->cell_anch, vr, &i)) {
             i = g->n_cells++;
@@ -47952,6 +47997,7 @@ static void fg_cdata(FGWriter *w, FGBuf *out, JSObject *p)
     JSCFunctionDataRecord *s = p->u.c_function_data_record;
 
     DCHECK(s != NULL && s->realm != NULL, "flow graph: a C function with data holds no record or no realm");
+    if (w->cross) fg_gap(w, NULL, FG_GAP_PROCESS_LOCAL, FG_PL_CFUNC);
     fg_put(out, &s->func, sizeof s->func);
     fg_put(out, &s->step_def, sizeof s->step_def);
     fg_u8(out, s->length);
@@ -48023,7 +48069,10 @@ static JSFlowGraph *fg_write(JSContext *ctx, const JSFlowGraphRoots *r, uint32_t
     JSFlowGraph *g = calloc(1, sizeof *g);
 
     CHECK(g != NULL, "flow graph: OOM allocating a serialized graph");
-    w.ctx = ctx; w.floor = floor; w.g = g; w.survey = survey;
+    DCHECK(!r->cross_session || (survey && r->n_frames == 0 && r->n_parked == 0),
+           "a flow graph was asked for its cross-session form outside a survey of values — the cross-session writer "
+           "and its frames are not built (solver/cold.h's residual)");
+    w.ctx = ctx; w.floor = floor; w.g = g; w.survey = survey; w.cross = r->cross_session;
     for (int i = 0; i < r->n_vals; i++) fg_value(&w, &rbuf, r->vals[i]);
     if (r->n_frames || r->n_parked) fg_frames(&w, r);
     for (uint32_t i = 0; i < w.n_order; i++) fg_body(&w, &bbuf, i);
@@ -48255,6 +48304,7 @@ static void fg_gap_name(JSContext *ctx, const FGGap *gap, char *buf, size_t cap)
                                          "asyncGeneratorDrive", "anchor", "callHoldsEval" };
     static const char *const field[] = { "strbuf", "props", "slots", "buf", "atom", "array", "shared", "maprec",
                                          "reexec", "tree", "cache", "machine", "views", "subSequence" };
+    static const char *const pl[] = { "sharedBorn", "unsealed", "symbol", "body", "realm", "cell", "cFunction" };
     char name[ATOM_GET_STR_BUF_SIZE];
     int id = gap->id;
     size_t n, k;
@@ -48282,6 +48332,10 @@ static void fg_gap_name(JSContext *ctx, const FGGap *gap, char *buf, size_t cap)
     case FG_GAP_STEP:         snprintf(buf, cap, "step %s", ((const JSTrampStepDef *)gap->ref)->algorithm); break;
     case FG_GAP_STEP_FIELD:   snprintf(buf, cap, "stepField %s", field[id]); break;
     case FG_GAP_PARK:         snprintf(buf, cap, "park %s", (const char *)gap->ref); break;
+    case FG_GAP_PROCESS_LOCAL:
+        DCHECKF(id >= 0 && id < (int)countof(pl), "flow graph: a gap names process-local kind %d", id);
+        snprintf(buf, cap, "processLocal %s", pl[id]);
+        break;
     default:
         DCHECKF(false, "flow graph: a gap of kind %d has no name", gap->what);
         snprintf(buf, cap, "?");

@@ -1686,6 +1686,21 @@ char *result_cold_json(void) {
     METRIC_SET(resumed_binary_differs, resumed.binary_differs);
     METRIC_SET(resumed_baseline_differs, resumed.baseline_differs);
     METRIC_SET(resumed_same_build, resumed.same_build);
+    char *park_gaps = cold_park_cross_gaps_json();   /* the row borrows it until the render below */
+    {
+        ColdParkCross cross;
+        ColdParked parked;
+
+        cold_park_cross(&cross);
+        cold_parked(&parked);
+        DCHECKF(cross.unstarted + cross.replays == parked.flows + parked.cands,
+                "the cross-session census counted %ld members against %ld flows and candidates parked — "
+                "cold_park_flow counts each member it writes once", cross.unstarted + cross.replays,
+                parked.flows + parked.cands);
+        METRIC_SET(park_cross_unstarted, cross.unstarted);
+        METRIC_SET(park_cross_replays, cross.replays);
+        METRIC_SET_OBJECT(park_cross_gaps, park_gaps);
+    }
     METRIC_SET(replay_hits, rp_hits);
     METRIC_SET(replay_left, rp_left);
     METRIC_SET(replay_left_arms, rp_left_arms);
@@ -1946,6 +1961,7 @@ char *result_cold_json(void) {
     free(doors);
     free(acls);
     free(witness);
+    free(park_gaps);
     cold_census_release(&c);
     return out;
 }

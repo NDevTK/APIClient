@@ -898,6 +898,21 @@ int cold_resume(JSContext *ctx, const char *recipes);
 void cold_set_binary_digest(uint64_t digest);
 void cold_set_baseline_digest(uint64_t digest);
 
+/* WHICH PARKED MEMBERS A SAME-BUILD RESUME COULD RESTORE WITHOUT REPLAY, counted by cold_park_flow over every
+   member it writes: `unstarted` (a member that never ran, whose recipe is empty) and `replays` (the rest, each
+   replaying its recipe since no member is written in the cross-session form yet), which sum to the parked flows
+   and candidates. `gaps` tallies each replaying member once per kind of part with no cross-session
+   writer: its heap delta by entry kind (`heap slot|cell|coro|map|state`), `dom`, `frame`, `agents`,
+   `register`, `pins`, and the cross-session graph survey of its values (`graph ` and the survey's gap name).
+   The survey reads a shared object as the heap holds it with no member switched in, so it names kinds, not
+   contents. Named residual. Not covered: the rest of a member's record (its timers, program rows, source cuts,
+   user acts) is not asked. Next diff builds: each such part's kind beside the cross-session writer of the
+   parts above. Absence shows as: a member whose gaps are all built still failing its restore. */
+typedef struct { long unstarted, replays; } ColdParkCross;
+void cold_park_cross(ColdParkCross *out);
+/* …its `gaps` as a JSON object, `{}` for none; the caller frees it. */
+char *cold_park_cross_gaps_json(void);
+
 /* Named residual. Not covered: a same-build resume restores no serialized COW delta, so every resume replays
    its recipe, though cold_resume now decides the build (ColdResumed's `same_build`). The next diff has
    cold_park write each flow's delta in the cross-session form (anchors and cells by their baseline names,

@@ -32450,6 +32450,12 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
     int cold_park_wrote = g_sess == SESS_PARK && cold_park_records() > 0;
     int cold_park_deep  = g_sess == SESS_PARK && g_cp.segs > 0;
     int cold_park_cand  = g_sess == SESS_PARK && g_cp.cands > 0;
+    /* The members this park wrote that a same-build resume still replays, each counted with its kinds of
+       unwritten part (solver/cold.h's ColdParkCross): the debt the cross-session writers retire, stated. */
+    ColdParkCross tf_cross;
+    cold_park_cross(&tf_cross);
+    int cold_park_cross_rp = g_sess == SESS_PARK && tf_cross.replays > 0 &&
+                             tf_cross.unstarted + tf_cross.replays == g_cp.flows + g_cp.cands;
     /* AND BENEATH ALL THREE OF THEM, THE PARK'S REACHABILITY LADDER — because every row above is an OUTCOME
        row and `park-wrote=0` is ONE column over a CONJUNCTION. solver/cold.h has already counted what that
        column folds: FOUR conjuncts, hence fifteen non-satisfying states, every one of them reported as the
@@ -33047,6 +33053,7 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
         { "park-wrote", cold_park_wrote, "state.code", SESS_PARK, .gate = "park-moment" },
         { "park-deep", cold_park_deep, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "park-cand", cold_park_cand, "state.code", SESS_PARK, .gate = "park-wrote" },
+        { "park-cross-replays", cold_park_cross_rp, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "resumed", cold_resumed_any, "state.code", SESS_RESUME },
         { "resumed-segs", cold_resumed_segs, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-same-build", cold_resumed_same, "state.code", SESS_RESUME, .gate = "resumed" },

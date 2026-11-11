@@ -3916,6 +3916,10 @@ typedef struct JSFlowGraphRoots {
        it builds until JS_FlowGraphSettle, and the read needs the settle. Unset, the read is a clone beside a
        live original. */
     bool released;
+    /* A survey of the cross-session form, over values only: an anchor or part named only within this process
+       (a sibling's shared object, a body, a symbol no build predefines, a realm or cell the baseline seal did
+       not name, a C function's pointers) is a `processLocal` gap. */
+    bool cross_session;
 } JSFlowGraphRoots;
 /* The same walk where a case has no writer yet is recorded rather than stopped on: a class, a value tag, a symbol
    key, a property kind, a weak key or target, an open cell, and every part of a frame (a base by its kind and its
