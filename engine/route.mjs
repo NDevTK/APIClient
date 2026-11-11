@@ -201,9 +201,11 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arriv
      five-field identity, so a GET and a POST to one address are two questions with two replies. */
   const provide = (method, mode, referrerPolicy, referrer, u, reply, body) => {
     const [p, n] = bs(body);
-    try { M.ccall('qjs_provide', 'void', ['number','number','number','number','number','number','number','number'],
-                  [cs(method), cs(mode), cs(referrerPolicy), cs(referrer), cs(u), cs(JSON.stringify(reply)),
-                   p, n]); }
+    /* This host mints every answer itself, for a document it opened as the session's own. */
+    try { M.ccall('qjs_provide', 'void',
+                  ['number','number','number','number','number','number','number','number','number','number'],
+                  [cs(method), cs(mode), cs(referrerPolicy), cs(referrer), cs(u), cs('answered-locally'),
+                   cs('observed'), cs(JSON.stringify(reply)), p, n]); }
     finally { M._free(p); }
   };
   const answer = (id, meta, body) => {

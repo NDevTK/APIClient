@@ -1739,8 +1739,8 @@ QJS_EXPORT const char *qjs_pending(void)
    One delivery for every parked request: a fetch's reply, the document's external script and a lazy chunk's source
    all settle a park registered before suspending, and one engine_provide fills every entry naming that request. */
 QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *referrer_policy,
-                            const char *referrer, const char *url, const char *reply,
-                            const char *body, unsigned body_len)
+                            const char *referrer, const char *url, const char *how, const char *reach,
+                            const char *reply, const char *body, unsigned body_len)
 {
     DCHECK(g_begun, "a reply was provided to an engine that never ran");
     /* The request this answers is its five-field identity, in the order the join emitted it; a zone calling with
@@ -1779,7 +1779,7 @@ QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *re
                    "error rather than where one is defined)");
         /* A reply for a pair with no outstanding park is asserted by engine_provide: the zone answers only what
            it owes, and a park dropped unanswered was withdrawn with `fetch.cancel`. */
-        (void)engine_provide(g_ctx, method, mode, referrer_policy, referrer, url, v);
+        (void)engine_provide(g_ctx, method, mode, referrer_policy, referrer, url, how, reach, v);
         JS_FreeValue(g_ctx, v);
     }
 }

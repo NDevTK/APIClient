@@ -200,6 +200,11 @@ METRIC(reply_declined, "replyDeclined", LIFETIME, "record", PROCESS, "solver/pen
 METRIC(reply_unaddressed, "replyUnaddressed", LIFETIME, "record", PROCESS, "solver/engine.c", INT)
 METRIC(reply_dropped, "replyDropped", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_outstanding, "replyOutstanding", GAUGE, "record", AGENT, "solver/pending_index.c", INT)
+/* The reply record store (solver/reply_record.h): the answered sends recorded, and the rows flows'
+   trails took of them. A row is one flow taking one record, so arms forked after it share the row
+   and arms forked before it each add one; neither number bounds the other. */
+METRIC(reply_records, "replyRecords", LIFETIME, "record", AGENT, "solver/reply_record.c", INT)
+METRIC(reply_trail_rows, "replyTrailRows", LIFETIME, "row", AGENT, "solver/reply_record.c", INT)
 METRIC(paged_reqs, "pagedReqs", LIFETIME, "request", PROCESS, "solver/engine.c", INT)
 METRIC(paged_asks, "pagedAsks", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
 METRIC(paged_over, "pagedOver", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)

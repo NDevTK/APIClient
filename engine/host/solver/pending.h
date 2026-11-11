@@ -461,7 +461,11 @@ int pending_driven_compose(int kind, int path_driven);
     X(WORK_SEQ,   "workSeq",   PEND_SHARE,  JS_NewInt64(pend_ctx(), (int64_t)work_seq))       \
     /* FLOW_PENDING_BODY's body source and the index of the piece it waits for */      \
     X(SOURCE,     "source",    PEND_SHARE,  JS_NULL)                                   \
-    X(ITEM,       "item",      PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))
+    X(ITEM,       "item",      PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))                \
+    /* an address park's ordinal on its flow's path, from 1, and the reply record that answered it  \
+       (solver/reply_record.h); 0 names neither */                                     \
+    X(SLOT,       "slot",      PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))                \
+    X(REPLY_ID,   "replyId",   PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))
 
 enum {
 #define PEND_ENUM(id, name, copy, dflt) PEND_##id,

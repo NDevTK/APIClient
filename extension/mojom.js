@@ -554,6 +554,12 @@
             why: "the TARGET half of the same request, matched with the method against what a flow parked on " +
                  "— the engine's own qjs_provide DFAILs on a pair nothing is parked on, which is what an " +
                  "invented record produces" },
+          { name: "how", type: "string", retained: false,
+            why: "how this zone produced the answer: `sent`, `answered-locally` or `unknown`. The engine records " +
+                 "the answer under it and refuses any other word" },
+          { name: "reach", type: "string", retained: false,
+            why: "the asking documents' reach, off this zone's record of them: a provenance word. The engine " +
+                 "records the answer under it" },
           { name: "reply", type: "string", retained: false,
             why: "the reply's METADATA as JSON, so it carries its type: a bare string could not say `null` for " +
                  "Fetch §2.2.6 \"Responses\"' network error without it being the four characters \"null\", and could not " +

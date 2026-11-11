@@ -702,7 +702,7 @@ try {
       const method = t[0], mode = t[7], referrerPolicy = t[8], referrer = t[9], u = t[11];
       console.log(`${TAG}   pending: ${method} ${u}`);
       await opener.renderer.provide({
-        method, mode, referrerPolicy, referrer, url: u,
+        method, mode, referrerPolicy, referrer, url: u, how: 'answered-locally', reach: 'observed',
         reply: JSON.stringify({ status: 200, statusText: 'OK', headers: [],
                                 urlList: [new URL(u, OPENER_ADDR).href], computedType: 'application/json',
                                 type: 'basic' }),

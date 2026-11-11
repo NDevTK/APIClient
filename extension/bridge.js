@@ -4286,7 +4286,7 @@ function engineKey(eng, tree) {
 /* Delivered against the request, which is the pair: `qjs_provide` takes the method first, as a request line
    states it (RFC 9112 §3 Request Line), because the engine's pending register is keyed on both, so a GET and a
    POST to one address cannot collect each other's bodies. */
-async function engineProvide(eng, method, mode, referrerPolicy, referrer, url, rep) {
+async function engineProvide(eng, method, mode, referrerPolicy, referrer, url, rep, reach) {
   /* A decline may not arrive here: `provide` settles the park, and `reply: "null"` settles it with a network
      error. A decline is delivered through engineDecline, which keeps the flow parked. */
   DCHECK(!(rep && rep.refusal),
@@ -4298,7 +4298,15 @@ async function engineProvide(eng, method, mode, referrerPolicy, referrer, url, r
   DCHECK(rep === null || (rep && typeof rep === "object" && rep.meta && rep.bytes instanceof Uint8Array),
          "`fetched` answered neither §5.6's network error (null) nor a reply — a reply is its JSON metadata " +
          "and its BYTES together, and a record arriving without one of the two is half a response");
+  DCHECK(typeof reach === "string",
+         "a reply is being provided with no reach for its asking documents — the issue reads it off the record " +
+         "`fetched` judged the request against, and a declined asker never reaches this seam");
+  /* How the answer was produced: a reply record is a send's.
+     Named residual. Not covered: a network error states `unknown`, because `fetched` folds a refusal made before
+     any send with a failure after one. Next diff builds: that fact on safeFetch's `network` refusal, stated here
+     as `sent` or `answered-locally`. Absence shows as: every network error's record stating `unknown`. */
   await eng.r.renderer.provide({ method, mode, referrerPolicy, referrer, url,
+                                 how: rep === null ? "unknown" : "sent", reach,
                                  reply: JSON.stringify(rep === null ? null : rep.meta),
                                  body: rep === null ? null : rep.bytes });
 }
@@ -4517,7 +4525,7 @@ function pendingLineRefusal(f) {
    Two key namespaces, as in wpt_runner.c: a network park is `(method, url)` and a host request is its id,
    kept apart by prefixes, as `cold:` and `seed:` prefix group ids, so an id spelled like a method cannot dedup
    against the wrong request. */
-function engineIssue(eng, key, start, deliver, pair) {
+function engineIssue(eng, key, start, deliver, pair, reach) {
   DCHECK(typeof key === "string" && key !== "",
          "a request was issued with no in-flight key — the key is what refuses to re-issue a park the engine " +
          "re-lists every round, so an unkeyed issue is one request per round at somebody's server");
@@ -4538,7 +4546,8 @@ function engineIssue(eng, key, start, deliver, pair) {
   const rec = replyStreamOpen({ key, value: undefined, error: null, work: null, deliver,
                                 controller: new AbortController(), cancelled: false,
                                 due: replyClockDue(eng._replyClock), ordinal: replyClockOrdinal(eng._replyClock),
-                                stream: pair === null ? null : String(++eng._streams), pair, head: null,
+                                stream: pair === null ? null : String(++eng._streams), pair,
+                                reach: pair === null ? null : reach, head: null,
                                 chunks: [] });
   eng._inflight.set(key, rec);
   /* A read the wire answers after the send was cancelled belongs to no record. The record's key moves once its
@@ -4664,7 +4673,9 @@ async function engineDeliverStreamRecord(eng, rec, last) {
            "a streamed send's head is missing or short of a field — safeFetch's `onHead` states status, status " +
            "message, header map, URL list and a basic or cors type before it reads the body");
     const [method, mode, referrerPolicy, referrer, url] = rec.pair;
-    await eng.r.renderer.provide({ method, mode, referrerPolicy, referrer, url,
+    DCHECK(typeof rec.reach === "string",
+           "a streamed head is being provided with no reach for its asking documents");
+    await eng.r.renderer.provide({ method, mode, referrerPolicy, referrer, url, how: "sent", reach: rec.reach,
                                    reply: JSON.stringify({ status: h.status, statusText: h.statusText,
                                                            headers: Object.entries(h.headers),
                                                            urlList: h.urlList, type: h.type,
@@ -4743,18 +4754,22 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
     /* A `fetch()` (the empty destination; the engine's line states it only when every park on the pair is
        one) is streamed: its engine resolves at the head. Every other destination's algorithm consumes the
        body whole. */
+    /* The asking documents' record, read once at the issue: `fetched` judges the request against it, and its
+       reach is stated on the provide. A refused asker has no record and is declined, never provided. */
+    const asker = askerRecord(eng, askers, "asker");
+    const reach = asker.doc === null ? null : asker.doc.reach;
     engineIssue(eng, key,
       (signal, onBodyRead, onHead, onChunk) => { eng._egress.asked++;
                     return eng.fetched(method, url, destination, provenance, pinned, driven, credentials, mode,
-                                       referrerPolicy, referrer, askerRecord(eng, askers, "asker"), signal,
+                                       referrerPolicy, referrer, asker, signal,
                                        onBodyRead, onHead, onChunk); },
-      (answer) => engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer),
-      destination === "" ? [method, mode, referrerPolicy, referrer, url] : null);
+      (answer) => engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer, reach),
+      destination === "" ? [method, mode, referrerPolicy, referrer, url] : null, reach);
   }
 }
 /* What a landed answer means on the pending seam: the `deliver` half of one issue, closing over the request's
    own pair, so the reply cannot be handed over against a pair it was not fetched under. */
-async function engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer) {
+async function engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer, reach) {
   /* A decline is its own delivery, on its own method. `Decline` carries the same pair `Provide` does with the
      chokepoint's reason: the engine records the refusal, stops listing the request (silence would be
      re-offered and re-refused every round), keeps one arm waiting with no reply invented, and forks the other
@@ -4790,7 +4805,7 @@ async function engineDeliverReply(eng, method, mode, referrerPolicy, referrer, u
     /* `return`: the decline is the whole delivery for this request. */
     return;
   }
-  await engineProvide(eng, method, mode, referrerPolicy, referrer, url, answer);
+  await engineProvide(eng, method, mode, referrerPolicy, referrer, url, answer, reach);
 }
 /* Every owed list crosses the same way, newline-joined records or "" for none, and is split here. The caller
    names the mojom method and mojom declares the reply's type, so a NULL cannot become the text "null" and one

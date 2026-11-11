@@ -17,6 +17,7 @@
 #include "core/loader/script_type.h"   /* ScriptType: which HTML §8.1.4.4 run algorithm runs a row */
 #include "core/timing/task_source.h"   /* TaskSource: the HTML §8.1.7.1 task source, if any, that queued a row */
 #include "solver/step_unit.h"          /* the arms of flow_step; EngineStepUnitRuns counts per arm */
+#include "solver/reply_record.h"       /* the words a provide states its answer in */
 #include "quickjs.h"
 
 /* Declared, not included: solver/flow.h owns the definition, and the entries here that name a flow only pass
@@ -949,9 +950,13 @@ void engine_pending_split(char *line, const char **method, const char **destinat
                           const char **url);
 /* Deliver a body for one request, keyed on the (method, mode, referrer policy, referrer, url) the flow parked
    on. Returns how many entries it filled. A reply for a pair with no outstanding park is the zone writing an
-   answer it does not owe (answered, refused, withdrawn or never shown), asserted here. */
+   answer it does not owe (answered, refused, withdrawn or never shown), asserted here. `how` and `reach` are
+   the zone's two statements about its answer, required on every provide: how it was produced
+   (solver/reply_record.h's REPLY_HOW_TOKEN_ words) and the asking document's reach (a PENDING_PROVENANCE_
+   word). The answer is recorded under them (solver/reply_record.h). */
 int engine_provide(JSContext *ctx, const char *method, const char *mode, const char *referrer_policy,
-                   const char *referrer, const char *url, JSValueConst value);
+                   const char *referrer, const char *url, const char *how, const char *reach,
+                   JSValueConst value);
 
 /* Refuse one request, keyed on the same five fields; returns how many records it newly refused (0 is a zone
  * refusing what it does not owe, asserted as engine_provide asserts a reply). It is not a network error: a refusal a real browser

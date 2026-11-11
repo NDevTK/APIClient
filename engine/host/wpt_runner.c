@@ -1202,7 +1202,9 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
             engine_host_answer(ctx, r->id, NULL, NULL, reply, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
             filled = 1;
         } else {
-            filled = engine_provide(ctx, r->method, r->mode, r->referrer_policy, r->referrer, r->url, reply);
+            /* This host is the server the request reaches, and its one document is the session's own. */
+            filled = engine_provide(ctx, r->method, r->mode, r->referrer_policy, r->referrer, r->url,
+                                    REPLY_HOW_TOKEN_SENT, PENDING_PROVENANCE_OBSERVED, reply);
             /* A reply for a pair no flow is parked on is asserted by engine_provide; a park dropped before its
                reply was withdrawn with `fetch.cancel`, which marks this request cancelled above. */
             /* The request record this answered, released only now: it holds the body and headers of the question,

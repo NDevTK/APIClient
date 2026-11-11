@@ -216,6 +216,17 @@ typedef struct Flow {
        step leaves the flow between units, holding neither a program nor a parked continuation (HTML §8.1.4.4
        "Calling scripts", clean up after running script). Inherited at a fork, zero at an arrival, never reset. */
     int64_t visits;
+    /* The flow's coordinate: the work retired on its path since the baseline. Charged with every step
+       (flow_age_running), and an arm takes its parent's coordinate at the branch, so it is a function of the
+       path and a replay of the path reaches the same number at the same point. Never a weight term. */
+    int64_t path_work;
+    /* How many address parks the path has made: the next park's slot is this plus one (engine.c's
+       pending_park_request). Inherited at a fork. */
+    int64_t park_slots;
+    /* The reply records the path has taken, newest first (solver/reply_record.h), shared with the arms forked
+       after each row. `trail_seen` is the newest record id the trail has been brought up to. */
+    struct ReplyTrailRow *trail;
+    uint64_t trail_seen;
     /* How many times the scheduler has handed this member the thread. A census quantity, never a rank: not read
        by flow_weight, not inherited at a fork (flow_fork_inherit asserts it is zero, which also keeps it out of
        the weight), never reset. It names the starved population, which no weight term can, because an emission

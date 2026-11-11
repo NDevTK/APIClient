@@ -1183,6 +1183,14 @@ static int tf_replytwice_holds(const char *line) {
     return held;
 }
 
+/* What this provider states about each answer (solver/engine.h's engine_provide): it is the server every
+   request reaches, so an answer is a send's.
+   Named residual. Not covered: the provider keeps no record of how a document was reached, so it states the
+   root document's reach for every asker. Next diff builds: the reach of a child document off the notice that
+   created it. Absence shows as: a record of a forced child document's request stating `observed`. */
+#define TF_REPLY_HOW   REPLY_HOW_TOKEN_SENT
+#define TF_REPLY_REACH PENDING_PROVENANCE_OBSERVED
+
 /* Writes the owed answer once it is due, or drops it when a `fetch.cancel` named the pair since. The
    answer is written whether or not the pair is on this payment's bill: a zone writes what it owes. */
 static int tf_replytwice_pay(JSContext *ctx) {
@@ -1201,7 +1209,7 @@ static int tf_replytwice_pay(JSContext *ctx) {
         reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody), list, 1, "application/json", "basic");
         header_list_free(&eh);
         filled = engine_provide(ctx, g_tf_r2.pair[0], g_tf_r2.pair[1], g_tf_r2.pair[2], g_tf_r2.pair[3],
-                                g_tf_r2.pair[4], reply);
+                                g_tf_r2.pair[4], TF_REPLY_HOW, TF_REPLY_REACH, reply);
         JS_FreeValue(ctx, reply);
         g_tf_r2.answered++;
     } else {
@@ -1376,7 +1384,8 @@ static int fixture_provide(JSContext *ctx) {
             reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody),
                                     (const char *const *)&abs, 1, rtype, "basic");
             header_list_free(&eh);
-            filled += engine_provide(ctx, method, mode, referrer_policy, referrer, url, reply);
+            filled += engine_provide(ctx, method, mode, referrer_policy, referrer, url, TF_REPLY_HOW,
+                                     TF_REPLY_REACH, reply);
             JS_FreeValue(ctx, reply);
             if (!strcmp(abs, TF_REPLYTWICE_URL)) g_tf_r2.answered++;
             if (!strncmp(abs, TF_REPLYTWICE_DUE, strlen(TF_REPLYTWICE_DUE))) g_tf_r2.due = g_tf_payments;
@@ -1583,6 +1592,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/htmlclearrest.h"
 #include "fixture/rangerest.h"
 #include "fixture/sale.h"
+#include "fixture/replyrecord.h"
 #include "fixture/rangeinsertrest.h"
 #include "fixture/rangedelrest.h"
 #include "fixture/splitunits.h"
@@ -2373,6 +2383,8 @@ TF_DOCS[] = {
     { "sale", HTML_SALE },
     { "saleown", HTML_SALEOWN },
     { "salectl", HTML_SALECTL },
+    { "replyrec", HTML_REPLYREC },
+    { "replynone", HTML_REPLYNONE },
     { "rangeinsertrest", HTML_RANGEINSERTREST },
     { "rangedelrest", HTML_RANGEDELREST },
     { "splitunits", HTML_SPLITUNITS },
@@ -18305,6 +18317,31 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the two reply-record documents (fixture/replyrecord.h), read off the census's `replyRecords` and
+   `replyTrailRows`. reply-record-trailed: both of the page's requests were recorded and the flow's trail took a
+   row. reply-record-none, the control: a document that asks for nothing records nothing. */
+TF_UNIT void probes_replyrecord(const char *js, Probe *tab, int *n) {
+    const char *twhy = NULL, *nwhy = NULL;
+    const char *ra = strstr(js, "\"replyRecords\":"), *ta = strstr(js, "\"replyTrailRows\":");
+    long recs = ra ? strtol(ra + strlen("\"replyRecords\":"), NULL, 10) : -1;
+    long rows = ta ? strtol(ta + strlen("\"replyTrailRows\":"), NULL, 10) : -1;
+    int tt = 1, nt = 1;
+
+    fold_row(&tt, &twhy, param_value_is(js, "/api/rr-done", "b", "22"),
+             "NOT REACHED: no /api/rr-done?b=22 record, so the page never held the reply the row is about");
+    fold_row(&tt, &twhy, recs >= 2,
+             "the census counts fewer than the two answered sends the page made as reply records");
+    fold_row(&tt, &twhy, rows >= 1,
+             "the census counts no reply trail row, so the flow that took /api/rr-owed's reply did not trail it");
+    fold_row(&nt, &nwhy, recs == 0 && rows == 0,
+             "a document that asks for nothing has a reply record or a trail row");
+    const Probe rows_[] = {
+        { "reply-record-trailed", tt, "rrTrail", SESS_EXPLORE, twhy },
+        { "reply-record-none", nt, "rrNone", SESS_EXPLORE, nwhy },
+    };
+    probes_append(tab, n, rows_, (int)COUNTOF(rows_));
+}
+
 /* The rows of the `rangeinsertrest` document (fixture/rangeinsertrest.h). range-insertnode-rests: the inserting
    arm's insertNode of the box of 100,002 elements at offset 2 of the target's Text node rests inside the call
    (`sliceOverrunGapWork` under one quantum), and the arm then reads the box whole between the two halves of the
@@ -31034,6 +31071,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_htmlclearrest(js, probes, &np);
     probes_rangerest(js, probes, &np);
     probes_sale(js, probes, &np);
+    probes_replyrecord(js, probes, &np);
     probes_rangeinsertrest(js, probes, &np);
     probes_rangedelrest(js, probes, &np);
     probes_splitunits(js, probes, &np);
@@ -43630,6 +43668,8 @@ static int abi_pay(void)
             const char *referrer_policy = abi_take(&p, "request referrer policy");
             const char *referrer = abi_take(&p, "request referrer");
             const char *url = abi_take(&p, "request address");
+            const char *how = abi_take(&p, "answer kind");
+            const char *reach = abi_take(&p, "asking document reach");
 
             reply_b64 = abi_take(&p, "reply record");
             body_f = abi_take(&p, "reply body");
@@ -43649,7 +43689,8 @@ static int abi_pay(void)
                        "a reply body is longer than the ABI's length parameter can name — the truncated value "
                        "would be accepted, so the flow would resume on a PREFIX of the response and every "
                        "value learned from it would be a fact about bytes the server did not send");
-                qjs_provide(method, mode, referrer_policy, referrer, url, reply, body, (unsigned)body_n);
+                qjs_provide(method, mode, referrer_policy, referrer, url, how, reach, reply, body,
+                            (unsigned)body_n);
                 free(reply);
                 free(body);
             }

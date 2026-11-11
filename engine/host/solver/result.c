@@ -22,6 +22,7 @@
 #include "solver/cold.h"    /* …and what it parked, if the host asked this engine to page out */
 /* The reply door's rate, asked of the component that owns both ends of its membership rather than recomputed. */
 #include "solver/pending_index.h"
+#include "solver/reply_record.h"
 #include "solver/dom_cow.h"   /* the DOM half of the swap census — see result_swap_json */
 #include "solver/gap_report.h"   /* `_instanceGaps`: the DFAIL sites this instance crossed */
 #include "solver/decide.h"    /* …and which predicate grew the frontier — see decide_fork_json */
@@ -1670,6 +1671,8 @@ char *result_cold_json(void) {
     METRIC_SET(reply_unaddressed, engine_unaddressed_total());
     METRIC_SET(reply_dropped, pending_index_dropped_total());
     METRIC_SET(reply_outstanding, pending_index_keyed_now());
+    METRIC_SET(reply_records, (long)reply_record_last_id());
+    METRIC_SET(reply_trail_rows, reply_trail_rows_total());
     METRIC_SET(paged_reqs, e.paged_reqs);
     METRIC_SET(paged_asks, e.paged_asks);
     METRIC_SET(paged_unarmed, e.paged_unarmed);

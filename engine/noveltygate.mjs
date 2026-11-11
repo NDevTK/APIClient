@@ -105,7 +105,8 @@ function run(tag, url, html, boot, late) {
                                       urlList: [abs], computedType: 'text/javascript', type: 'basic' })),
                  b64(js)]
               : [b64('null'), '-'];
-            say(['provide', f[0], f[7], f[8], f[9], f[11], ...reply].join('\t'));
+            /* This zone mints every answer itself, for its one document, the session's own. */
+            say(['provide', f[0], f[7], f[8], f[9], f[11], 'answered-locally', 'observed', ...reply].join('\t'));
           }
           say('go');
           continue;

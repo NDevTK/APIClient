@@ -329,10 +329,11 @@ async function serveOne(M, cs, req, docOrigin, log) {
     r = await fetch(req.url, { redirect: 'follow' });
     body = new Uint8Array(await r.arrayBuffer());
   } catch (e) {
+    /* Whether a failed request left is not known here; the page is the session's own document. */
     M.ccall('qjs_provide', 'void', ['number', 'number', 'number', 'number', 'number', 'number', 'number',
-                                    'number'],
-            [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.url), cs('null'), 0,
-             0]);
+                                    'number', 'number', 'number'],
+            [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.url), cs('unknown'),
+             cs('observed'), cs('null'), 0, 0]);
     log.push({ url: req.url, destination: req.destination, action: 'network-error',
                why: (e && e.message) || String(e) });
     return;
@@ -358,9 +359,9 @@ async function serveOne(M, cs, req, docOrigin, log) {
   const bp = heapAlloc(M, body.length + 1, 'the body of ' + req.url);
   M.HEAPU8.set(body, bp); M.HEAPU8[bp + body.length] = 0;
   M.ccall('qjs_provide', 'void', ['number', 'number', 'number', 'number', 'number', 'number', 'number',
-                                  'number'],
-          [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.url), cs(reply), bp,
-           body.length]);
+                                  'number', 'number', 'number'],
+          [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.url), cs('sent'),
+           cs('observed'), cs(reply), bp, body.length]);
   log.push({ url: req.url, destination: req.destination, action: 'provide',
              status: r.status, bytes: body.length });
 }

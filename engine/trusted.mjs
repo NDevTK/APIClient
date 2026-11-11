@@ -1026,7 +1026,8 @@ async function main() {
       const head = { status: x.head.status, statusText: x.head.statusText,
                      headers: Object.entries(x.head.headers), urlList: x.head.urlList, type: x.head.type,
                      stream: x.stream };
-      const lines = [['provide', ...x.pair, b64(JSON.stringify(head)), piece].join('\t')];
+      /* A head is a send's (`how`), and `reach` is the asking documents' record's, kept from the issue. */
+      const lines = [['provide', ...x.pair, 'sent', x.reach, b64(JSON.stringify(head)), piece].join('\t')];
       if (last) lines.push(['body', x.stream, x.end.state, '', endMeta()].join('\t'));
       return lines;
     }
@@ -1433,6 +1434,7 @@ async function main() {
       entry.stream = String(++e.streams);
       entry.chunks = [];
       entry.pair = [method, mode, referrerPolicy, referrer, url];
+      entry.reach = doc.reach;
     }
     const streamed = entry.stream !== null;
     /* A send the engine cancelled mid-body throws out of safeFetch's body read; nobody is owed that answer. */
@@ -1503,7 +1505,13 @@ async function main() {
     const rec = replyRecord(raw, `the ${provenance} ${destination || 'data'} load ${abs}`);
     if (streamed) entry.end = rec ? { state: 'end', computedType: rec.meta.computedType }
                                   : { state: 'network', reason: raw.statusText };
-    settle(['provide', method, mode, referrerPolicy, referrer, url, b64(rec ? JSON.stringify(rec.meta) : 'null'),
+    /* The two statements every provide carries (solver/engine.h's engine_provide): how the answer was produced
+       and the asking documents' reach. A reply record is a send's.
+       Named residual. Not covered: a network error states `unknown`, because safeFetch's `network` refusal does
+       not say whether the request left. Next diff builds: that fact on the refusal, stated here as `sent` or
+       `answered-locally`. Absence shows as: every network error's record stating `unknown`. */
+    settle(['provide', method, mode, referrerPolicy, referrer, url, rec ? 'sent' : 'unknown', doc.reach,
+            b64(rec ? JSON.stringify(rec.meta) : 'null'),
             rec ? b64(rec.bytes) : ABSENT].join('\t'));
   };
 

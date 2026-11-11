@@ -3,6 +3,7 @@
  * remember to sweep the survivors before the registry goes down. */
 #include "solver/flow.h"
 #include "solver/reply_body.h"   /* the open body sources released at teardown */
+#include "solver/reply_record.h" /* a flow's reply trail, and the store released at teardown */
 #include "solver/engine.h"     /* ENGINE_QUANTUM_WORK: the scheduler's slice is this file's service quantum */
 #include "solver/cow.h"        /* a survivor's heap COW delta */
 #include "solver/dom_cow.h"    /* …and its DOM delta head + shared base segment */
@@ -2195,6 +2196,10 @@ void flow_age_running(int64_t us, int64_t compile) {
         g_running->work_gen = g_running->family->emit_gen;
     }
     g_running->work += ran;
+    /* And the flow's coordinate, which no emission restarts (flow.h's `path_work`). It counts what the step
+       ran and no compile: a replay that finds the body's parse held compiles nothing, and its coordinate
+       must still equal the original's. */
+    g_running->path_work += ran;
     /* And the one transition a charge can make: `work` only rises here and the normalise fires only where
        flow_own_silence already answered zero, so base to away is the only direction and a member already away
        stays away. A zero-unit charge against a member at base moves nothing, and the test says so rather
@@ -2469,6 +2474,15 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     /* And the completed units, an observation: an arm has finished every unit its parent finished before the
        branch. */
     sib->visits = parent->visits;
+    /* And the path's coordinate, park count and reply trail, facts about the prefix both arms share. The
+       coordinate is the parent's at its step's entry; the assembly adds what the open step ran before the
+       branch (engine.c). */
+    DCHECK(sib->path_work == 0 && sib->park_slots == 0 && sib->trail == NULL && sib->trail_seen == 0,
+           "a forked sibling ran, parked or took a reply before inheriting its parent's path");
+    sib->path_work = parent->path_work;
+    sib->park_slots = parent->park_slots;
+    sib->trail = reply_trail_share(parent->trail);
+    sib->trail_seen = parent->trail_seen;
     /* And the drive count, part of the class's identity below. An arm of a drive drives the same body, and the count
        is the one its seed read; a non-drive copies zero to zero; a drive's own seed rewrites the copy it was
        assembled with (flow_set_orphan_seen), after this equality, because the seed is an arrival and not a branch. */
@@ -2777,6 +2791,7 @@ void flow_release(JSContext *ctx, Flow *f) {
     /* And the undrained microtasks and tasks, one release for the array and every record; that they are gone is
        asserted at the top of this function. */
     for (int i = 0; i < f->n_agents; i++) { JS_FreeValue(ctx, f->agents[i].jobs); f->agents[i].jobs = JS_UNDEFINED; }
+    reply_trail_release(f->trail); f->trail = NULL;
     /* And its world dies with it, the one state a released flow leaves in another instance's heap. A peer that was
        ever posted to or read by this flow holds a COW segment keyed on its world, materialized on arrival and
        released only when told, so an unannounced departure is a segment that peer carries for the rest of its
@@ -2907,6 +2922,8 @@ void flow_registry_free(JSContext *ctx) {
        down and bring another up per file, so an atom left here is a handle into a freed table the next session's
        first push would write through. The open body sources go first: they hold pending records. */
     reply_body_reset(ctx);
+    /* And the reply records, after the flows whose trails name them. */
+    reply_record_reset(ctx);
     pending_free_ctx(ctx);
 }
 
@@ -2977,6 +2994,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
        naming its window. Zero matches the fresh account minted below, whose `emit_gen` is also zero, so an
        uncharged flow reads a current window holding nothing. */
     f->val = 0.0; f->work = 0; f->work_gen = 0; f->visits = 0; f->orphan_seen = 0;
+    f->path_work = 0; f->park_slots = 0; f->trail = NULL; f->trail_seen = 0;
     /* And the dispatch count, which nothing else writes to zero: a member arrives never-chosen and the number only
        rises. */
     f->picks = 0;
@@ -3131,6 +3149,10 @@ void flow_arrive_on_snapshot(Flow *sib, const Flow *snap, FlowPathMarks at_cut) 
        the units completed, the path's marks, and the priced decisions, under which it stands at the snapshot's
        code site in its own ledger. */
     sib->visits = snap->visits;
+    sib->path_work = snap->path_work;
+    sib->park_slots = snap->park_slots;
+    sib->trail = reply_trail_share(snap->trail);
+    sib->trail_seen = snap->trail_seen;
     flow_reads_inherit(sib, snap);
     for (int i = 0; i < snap->assumed_slots_n; i++)
         flow_assumed_slot_push(sib, snap->assumed_slots[i], snap->assumed_slot_names[i]);

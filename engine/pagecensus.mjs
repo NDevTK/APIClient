@@ -473,18 +473,20 @@ for (;;) {
        page's `catch` arm. */
     if (rep.meta === null) {
       emit({ n, at: "reply", method, url: abs, networkError: rep.note });
+      /* Whether a failed request left is not known here; the page is the session's own document. */
       M.ccall("qjs_provide", "void", ["number", "number", "number", "number", "number", "number", "number",
-                                      "number"],
-              [cs(method), cs(mode), cs(referrerPolicy), cs(referrer), cs(u), cs("null"), 0, 0]);
+                                      "number", "number", "number"],
+              [cs(method), cs(mode), cs(referrerPolicy), cs(referrer), cs(u), cs("unknown"), cs("observed"),
+               cs("null"), 0, 0]);
     } else {
       const b = rep.bytes;
       const p = M._malloc(b.length + 1);
       M.HEAPU8.set(b, p);
       try {
         M.ccall("qjs_provide", "void", ["number", "number", "number", "number", "number", "number", "number",
-                                        "number"],
-                [cs(method), cs(mode), cs(referrerPolicy), cs(referrer), cs(u), cs(JSON.stringify(rep.meta)), p,
-                 b.length]);
+                                        "number", "number", "number"],
+                [cs(method), cs(mode), cs(referrerPolicy), cs(referrer), cs(u), cs("sent"), cs("observed"),
+                 cs(JSON.stringify(rep.meta)), p, b.length]);
       } finally { M._free(p); }
       emit({ n, at: "reply", method, url: abs, status: rep.meta.status,
              type: rep.meta.computedType, bytes: b.length });

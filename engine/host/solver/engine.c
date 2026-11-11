@@ -67,6 +67,7 @@
 #include "solver/reply_decode.h" /* …and what the reply body itself teaches — see engine_provide */
 #include "solver/reply_body.h"   /* a streamed reply's pieces after its head */
 #include "solver/pending_index.h" /* which records a reply answers, without walking the frontier to find out */
+#include "solver/reply_record.h"  /* the answered sends, and the trail of them a flow's path has taken */
 #include "solver/endpoint.h"    /* the @H surface, and one of the three tables no leak walk in this runtime can see */
 #include "solver/novelty.h"     /* the identity set novelty_free gives back beside the @H surface */
 #include "solver/attr_shadow.h" /* …and the taint shadow, whose entries are GC objects and are leaked by two hosts */
@@ -305,7 +306,7 @@ static void pending_mark_unaddressed(JSContext *ctx, JSValueConst e, JSValueCons
     pending_set(e, PEND_ADDRESS_URL, current);
 }
 
-static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *req)
+static void pending_park_request(JSContext *ctx, Flow *f, JSValue e, const FetchRequest *req)
 {
     JSValue reply = JS_UNDEFINED;
     /* §4.1 step 6's answer, the address every later step reads. `up_url` is owned and NULL when step 6 left
@@ -327,6 +328,13 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
     DCHECK(req->address != FETCH_ADDRESS_UNPLACED,
            "a request parked without stating whether its URL is bytes it may be sent to — the producer holds "
            "the address value (core/fetch/fetch.h's FetchAddressClass)");
+    /* The park's ordinal on its flow's path, which names it to a replay of that path: a reply trail row states
+       the slot its record answers (solver/reply_record.h). Every park through this door takes one, whoever
+       answers it, so the count is a function of the path. */
+    DCHECK(f != NULL && pending_get_int(e, PEND_SLOT) == 0,
+           "a request parked for no flow, or parked twice — the slot is counted once, on the flow whose "
+           "register holds the record");
+    pending_set_int(e, PEND_SLOT, ++f->park_slots);
     /* The asking document travels with the address: engine_pending_fetches names it to the trusted zone, which
        judges the request against that document's record. */
     DCHECK(pending_get_int(e, PEND_DOC) != 0,
@@ -560,7 +568,7 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
        here always get NETWORK: `fetch_owe` and `fetch()` run §4.3 with their own `deliver` closure and return
        before touching this register when it answers locally, so a local answer here means one of those seams
        stopped asking. With no address, the caller supplied the value up front and owes the host nothing. */
-    if (url) pending_park_request(ctx, e, req);
+    if (url) pending_park_request(ctx, f, e, req);
     else pending_set(e, PEND_HAVE_VALUE, JS_TRUE);
     JS_FreeValue(ctx, e);
 }
@@ -650,7 +658,7 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
     pending_set_int(e, PEND_DOC, (int)document_environment_doc(ctx));
     /* And §4.3 Scheme fetch with it: `import("data:text/javascript,export default 1")` is answered from the
        specifier's own bytes, settling the promise JS_ModuleLoadPending is about to be handed. */
-    pending_park_request(ctx, e, &req);
+    pending_park_request(ctx, f, e, &req);
     script_csp_meta_free(ctx, &meta);
     free(integrity);
     JS_FreeValue(ctx, e);
@@ -700,7 +708,7 @@ void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const Fet
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, deliver));
     /* Which document asked, as in the parks above. */
     pending_set_int(e, PEND_DOC, (int)document_environment_doc(ctx));
-    pending_park_request(ctx, e, req);
+    pending_park_request(ctx, f, e, req);
     JS_FreeValue(ctx, e);
 }
 
@@ -763,7 +771,7 @@ static void engine_pending_script_url_into(Flow *f, JSContext *ctx, const char *
     /* The address last, through the one door that asks §4.3 Scheme fetch: every field above belongs to the
        element, so an injected `<script src="data:…">` answered on this line lands in a record that already knows
        its type, document and element. */
-    pending_park_request(ctx, e, &req);
+    pending_park_request(ctx, f, e, &req);
     script_csp_meta_free(ctx, &meta);
     JS_FreeValue(ctx, e);
 }
@@ -4090,10 +4098,22 @@ int engine_frontier_settled(void) {
    request and a `no-cors` one to the same address differently, and the referrer pair because two referrers are
    two requests to the server. Returns how many entries it filled. */
 int engine_provide(JSContext *ctx, const char *method, const char *mode, const char *referrer_policy,
-                   const char *referrer, const char *url, JSValueConst value) {
+                   const char *referrer, const char *url, const char *how, const char *reach,
+                   JSValueConst value) {
     PendRequestKey key = { method, mode, referrer_policy, referrer, url };
     PendIndexNode *node;
     int n = 0, i, m;
+    /* The zone's two statements about its answer, through the mappings that own the words; both are fatal on
+       an absent or undefined one. */
+    ReplyHow reply_how = reply_how_of_token(how);
+    int reply_reach = engine_provenance_of_token(reach);
+    /* The record this answer becomes (solver/reply_record.h): its id, stamped on every park it fills, and the
+       parts of its key and its asking documents the fill loop reads off the members. */
+    uint64_t rec_id = 0;
+    ReplyRecordKey rec_key = { method, mode, referrer_policy, referrer, url, NULL, 0, { 0 } };
+    FetchCredentialsMode rec_cred = FETCH_CREDENTIALS_INCLUDE;
+    char *rec_askers = NULL;
+    size_t rec_askers_n = 0, rec_askers_cap = 0;
     /* The reply's own grade, joined from the records it answers (see the fill loop). `-1` is "no record read
        yet", which the tail refuses to hand on. */
     int reply_prov = -1;
@@ -4150,11 +4170,64 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
         }
         JS_FreeValue(ctx, tok);
     }
+    /* Named residual. Not covered: a streamed reply, a rendezvous answer (engine_host_answer) and a decline
+       (engine_decline) leave no record, so a replay of a path that took one would send or ask again. Next diff
+       builds: the streamed record at the body's end (solver/reply_body.c), then the other two. Absence shows
+       as: a returning member whose path took a streamed fetch lists that request to the host again. */
+    if (!reply_body_streamed(ctx, value)) {
+        rec_id = reply_record_last_id() + 1;
+        rec_askers_cap = 64;
+        rec_askers = reclaim_malloc(rec_askers_cap);
+        CHECK(rec_askers != NULL, "engine: OOM joining a reply record's asking documents");
+        rec_askers[0] = 0;
+    }
     /* Bounded by the count above and always taking the head, because each fill removes its own record (the
        `haveValue` write reaches pending.c, which tells the index): one per iteration, so the loop visits each
        member once whatever the writes do. The closing assert checks that assumption. */
     for (i = 0; i < m; i++) {
         JSValue p = pending_index_node_member(node, 0);
+        /* The record's half of the fill: the park is stamped with the record's id, and the send's credentials
+           mode and asking documents are folded as engine_pending_fetches folded them onto the line.
+           Named residual. Not covered: the outstanding set keys on five fields, so parks of one line that
+           differ in credentials mode or body are one send and one record, keyed by the line's folded
+           credentials mode and its first member's body. Next diff builds: the credentials mode and the body
+           digest in PendRequestKey, so each is its own line. Absence shows as: one record where a browser's
+           log shows two sends. */
+        if (rec_id) {
+            JSValue cv = pending_get(p, PEND_CREDENTIALS);
+            size_t cl = 0, al;
+            const char *c = JS_ToCStringLen(ctx, &cl, cv);
+            const char *asker = engine_asker_name(p);
+            FetchCredentialsMode m_cred;
+
+            CHECK(c != NULL, "engine: OOM reading an answered park's credentials mode");
+            m_cred = cred_of_token(c, cl);
+            rec_cred = i == 0 ? m_cred : cred_narrower(rec_cred, m_cred);
+            JS_FreeCString(ctx, c);
+            JS_FreeValue(ctx, cv);
+            al = strlen(asker);
+            if (!asker_set_has(rec_askers, rec_askers_n, asker, al)) {
+                if (rec_askers_n) join_put(&rec_askers, &rec_askers_n, &rec_askers_cap, ",", 1);
+                join_put(&rec_askers, &rec_askers_n, &rec_askers_cap, asker, al);
+            }
+            if (i == 0) {
+                JSValue bv = pending_get(p, PEND_BODY);
+                size_t bn = 0;
+                const uint8_t *bp = JS_IsNull(bv) ? NULL : JS_GetArrayBuffer(ctx, &bn, bv);
+
+                DCHECK(JS_IsNull(bv) || JS_IsObject(bv),
+                       "an answered park's body is neither null nor bytes — pending_set_bytes writes an "
+                       "ArrayBuffer");
+                /* An empty body is a body: its buffer may hold no storage, and the digest reads none. */
+                if (!JS_IsNull(bv) && bp == NULL) bp = (const uint8_t *)"";
+                reply_record_key_body(&rec_key, bp, bn);
+                JS_FreeValue(ctx, bv);
+            }
+            DCHECK(pending_get_int(p, PEND_SLOT) > 0 && pending_get_int(p, PEND_REPLY_ID) == 0,
+                   "a park about to be recorded has no slot, or already names a record — "
+                   "pending_park_request counts the slot, and a park is answered once");
+            pending_set_int(p, PEND_REPLY_ID, (int64_t)rec_id);
+        }
         /* The index's half of its own contract, asked where it is spent: an indexed record has no answer on it,
            so an answered one here means the index kept a member the `haveValue` write should have removed, and
            this reply would overwrite a body a flow already resumed on. */
@@ -4238,6 +4311,18 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
     /* A streamed head is learned from at its body's end, where the whole body exists (reply_body_append). */
     if (n && reply_body_streamed(ctx, value)) reply_body_set_grade(ctx, value, reply_prov, reply_driven);
     else if (n) reply_decode_learn(ctx, method, url, value, reply_prov, reply_driven);
+    /* The answer, recorded once whatever number of parks it filled, with the grade the fold gave it. */
+    if (rec_id && n) {
+        uint64_t got;
+
+        rec_key.credentials = fetch_credentials_token(rec_cred);
+        got = reply_record_add(ctx, &rec_key, rec_askers, reply_reach, reply_prov, reply_driven, reply_how, value);
+        DCHECKF(got == rec_id,
+                "a reply was recorded under the id %llu and its parks were stamped %llu — the store issues ids "
+                "in arrival order and nothing records between the stamp and the add",
+                (unsigned long long)got, (unsigned long long)rec_id);
+    }
+    free(rec_askers);
     return n;
 }
 
@@ -5328,6 +5413,11 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
        the snapshot's, which is the timeline it stands in. */
     if (account == SIB_ARRIVES) flow_arrive_on_snapshot(sib, parent, marks);
     else                        flow_fork_inherit(sib, parent, marks);
+    /* The arm's coordinate is the parent's at the branch: its coordinate at the open step's entry, which the
+       inheritance copied, and what that step retired before the fork. A parent not holding the thread rests
+       at its coordinate. */
+    if (parent == flow_running() && g_in_step > 0)
+        sib->path_work += g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work;
     sib->started = 1;                 /* hot: resume from the blobs (and the cloned frame, when there is one) */
     /* The clone is of the parent's selected agent's base, so the arm selects that agent; every other agent's
        base and parks are the parent's state too, cloned onto the arm. */
@@ -7414,7 +7504,7 @@ static void engine_pending_docscript(Flow *f, int at, int parser_inserted) {
     /* And §4.3 Scheme fetch with the address: a document's own `<script src="data:text/javascript,…">` is
        answered at the park, so the entry may already carry its reply when this returns, and the flow's next step
        delivers it through the networking arm above the sequence, the same door as a host-answered entry. */
-    pending_park_request(ctx, e, &req);
+    pending_park_request(ctx, f, e, &req);
     script_csp_meta_free(ctx, &meta);
     JS_FreeValue(ctx, e);
 }
@@ -8489,6 +8579,39 @@ static void engine_work_bank(JSContext *ctx, uint64_t units) {
     g_service_work += (int64_t)units;
     /* …and the selected agent's charge, which flow_select_agent compares between the flow's agents. */
     flow_agent_running(flow_running())->work += units;
+}
+
+/* Brings `f`'s reply trail up to the newest record: a row for every record that reached its register since it
+   last ran, in arrival order, at the coordinate it rests at (solver/reply_record.h). Called at a step's
+   entry: a host's reply arrives between steps, so the flow has not moved since any of them. */
+static void engine_trail_arrivals(Flow *f) {
+    uint64_t last = reply_record_last_id();
+    struct { uint64_t id; int64_t slot; } *rows = NULL;
+    int n = 0, cap = 0;
+
+    DCHECK(f->trail_seen <= last, "a flow's reply trail is ahead of the store that issues its ids");
+    if (f->trail_seen == last) return;
+    for (int j = 0, m = pending_count(f->pending); j < m; j++) {
+        JSValue e = pending_entry(f->pending, j);
+        uint64_t id = (uint64_t)pending_get_int(e, PEND_REPLY_ID);
+        int at;
+
+        if (id > f->trail_seen) {
+            DCHECK(id <= last, "a park names a reply record the store never issued");
+            if (n == cap) {
+                cap = cap ? cap * 2 : 8;
+                rows = reclaim_realloc(rows, (size_t)cap * sizeof *rows);
+                CHECK(rows != NULL, "engine: OOM ordering a flow's newly answered parks");
+            }
+            for (at = n++; at > 0 && rows[at - 1].id > id; at--) rows[at] = rows[at - 1];
+            rows[at].id = id;
+            rows[at].slot = pending_get_int(e, PEND_SLOT);
+        }
+        JS_FreeValue(pending_ctx(), e);
+    }
+    for (int i = 0; i < n; i++) f->trail = reply_trail_push(f->trail, rows[i].slot, rows[i].id, f->path_work);
+    free(rows);
+    f->trail_seen = last;
 }
 
 /* The work this slice has banked. The scheduler loop asks it between steps, where the running flow's standing
@@ -13299,6 +13422,7 @@ static int engine_sched_slice(int resume) {
                 g_pick_fresh[cls][1]++;
                 if (flow_site_served(cur) == 0) g_pick_fresh[cls][0]++;
             }
+            engine_trail_arrivals(cur);
             int r = flow_step(ctx, cur);
             /* The work retired since the step's last poll is the step's own (core/timing/thread_work.h): banked on
                its clock here, while it is still the running flow, so a task's end moment does not depend on

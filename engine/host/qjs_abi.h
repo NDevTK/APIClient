@@ -83,8 +83,8 @@ QJS_EXPORT void qjs_teardown(void);
 /* WHAT THE TRUSTED ZONE OWES THE FRONTIER, and how it pays. */
 QJS_EXPORT const char *qjs_pending(void);
 QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *referrer_policy,
-                            const char *referrer, const char *url, const char *reply,
-                            const char *body, unsigned body_len);
+                            const char *referrer, const char *url, const char *how, const char *reach,
+                            const char *reply, const char *body, unsigned body_len);
 /* …AND HOW IT REFUSES ONE, WHICH IS THE OTHER HALF OF PAYING AND NOT A KIND OF FAILURE. `qjs_provide` with the
    JSON `null` is Fetch §5.6 "Fetch methods"' NETWORK ERROR, and that is the honest answer wherever a real
    browser performing this same request would also produce one. Where none would — the firing policy declining

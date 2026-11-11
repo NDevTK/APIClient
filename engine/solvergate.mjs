@@ -390,10 +390,12 @@ async function child(docPath, schedName) {
       const b = new TextEncoder().encode(body);
       const p = M._malloc(b.length + 1);
       M.HEAPU8.set(b, p);
+      /* This host mints every answer itself, for its one document, the session's own. */
       try { M.ccall("qjs_provide", "void",
-                    ["number", "number", "number", "number", "number", "number", "number", "number"],
-                    [cs(method), cs(mode), cs(referrerPolicy), cs(referrer), cs(u), cs(JSON.stringify(reply)),
-                     p, b.length]); }
+                    ["number", "number", "number", "number", "number", "number", "number", "number", "number",
+                     "number"],
+                    [cs(method), cs(mode), cs(referrerPolicy), cs(referrer), cs(u), cs("answered-locally"),
+                     cs("observed"), cs(JSON.stringify(reply)), p, b.length]); }
       finally { M._free(p); }
     };
     /* ONE MID-RUN SNAPSHOT, TAKEN AND CONSUMED. `qjs_emit_partial` prints exactly one `@RESULT` line per call
