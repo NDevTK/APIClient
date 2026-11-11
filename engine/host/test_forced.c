@@ -1935,6 +1935,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/shuffle.h"
 #include "fixture/storearm.h"
 #include "fixture/declwake.h"
+#include "fixture/hostarm.h"
 #include "fixture/pagewrite.h"
 #include "fixture/keydomain.h"
 #include "fixture/keydomainwalk.h"
@@ -2754,6 +2755,7 @@ TF_DOCS[] = {
     { "shuffle", HTML_SHUFFLE },
     { "storearm", HTML_STOREARM },
     { "declwake", HTML_DECLWAKE },
+    { "hostarm", HTML_HOSTARM },
     { "pagewrite", HTML_PAGEWRITE },
     { "keydomain", HTML_KEYDOMAIN },
     { "keydomainwalk", HTML_KEYDOMAINWALK },
@@ -10615,6 +10617,10 @@ static TfErrEdges g_tf_err_edges[] = {
     { "saBOOMsaOBS", 0, 0, 0, 0 },
     { "saBOOMsaLS",  0, 0, 0, 0 },
     { "saBOOMsaCK",  0, 0, 0, 0 },
+    /* HTML_HOSTARM's two throws, the example's world after its paint and the priced world at once;
+       `host-example-first` reads their order. */
+    { "haBOOMhaOBS", 0, 0, 0, 0 },
+    { "haBOOMhaLS",  0, 0, 0, 0 },
 };
 /* THIS DOCUMENT'S OWN ADDRESS, TAKEN FROM THE ONE CALL THAT ESTABLISHES IT rather than spelled a sixth time.
    `https://x.test/p` is already a literal at several sites and one of their comments complains about it, so a
@@ -20397,6 +20403,29 @@ TF_UNIT void probes_declwake(const char *js, Probe *tab, int *n) {
     fold_row(&w_tt, &w_why, rests == owed, why);
     const Probe rows[] = {
         { "declined-wake-exact", w_tt, "dwpost", SESS_EXPLORE, w_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `hostarm` document (fixture/hostarm.h). */
+TF_UNIT void probes_hostarm(const char *js, Probe *tab, int *n) {
+    const TfErrEdges *obs = tf_err_edges("haBOOMhaOBS");
+    const TfErrEdges *ls = tf_err_edges("haBOOMhaLS");
+    const char *ord_why = NULL; int ord_tt = 1;
+
+    fold_row(&ord_tt, &ord_why,
+             emitted_record_graded_has(js, "/api/haarm", "derived", "haOBS") &&
+                 emitted_record_graded_has(js, "/api/haarm", "forced", "haLS"),
+             "NOT REACHED: /api/haarm does not stand at the example's arm derived and the arm taking the absent "
+             "key as present forced, so the branch did not run both arms against one example");
+    fold_row(&ord_tt, &ord_why, obs->first > 0 && ls->first > 0,
+             "the stream did not announce both worlds' throws, so their order cannot be read");
+    fold_row(&ord_tt, &ord_why, obs->first < ls->first,
+             "the priced world announced its throw before the example's world — the example's world spent its "
+             "time painting, host work with no page frame standing, which serves no code site, so its optimism "
+             "is unspent and it keeps the thread over a world resting on an assumption");
+    const Probe rows[] = {
+        { "host-example-first", ord_tt, "haBOOM", SESS_EXPLORE, ord_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -33185,6 +33214,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_shuffle(js, probes, &np);
     probes_storearm(js, probes, &np);
     probes_declwake(js, probes, &np);
+    probes_hostarm(js, probes, &np);
     probes_pagewrite(js, probes, &np);
     probes_keydomain(js, probes, &np);
     probes_keydomainwalk(js, probes, &np);
