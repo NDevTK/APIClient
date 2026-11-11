@@ -17,9 +17,12 @@ static const char HTML_DECLINEKEY[] =
     "<!doctype html><html>"
     "<body>"
     "<script>"
-    "var _dkcfg = { first: state.dkfirst, rev: state.dkrev };"
-    "(async function () {"
-    " if (_dkcfg.first) {"
+    /* Members the page writes in one task and reads in a later one: the arm reading each as absent is an
+       assumption, marked forced (solver/absent.c), and the other arm is the page's own run. */
+    "var dkq = {}, dkr = {};"
+    "document.addEventListener('DOMContentLoaded', function () { dkq.b = 1; dkr.b = 1; });"
+    "window.addEventListener('load', async function () {"
+    " if (!dkq.b) {"
     "  try { await fetch('/api/dkey'); fetch('/api/dkey-forced-got'); }"
     "  catch (e) { fetch('/api/dkey-forced-fail'); }"
     " } else {"
@@ -27,9 +30,9 @@ static const char HTML_DECLINEKEY[] =
     "  try { await fetch('/api/dkey'); fetch('/api/dkey-own-got'); }"
     "  catch (e) { fetch('/api/dkey-own-fail'); }"
     " }"
-    "})();"
-    "(async function () {"
-    " if (_dkcfg.rev) {"
+    "});"
+    "window.addEventListener('load', async function () {"
+    " if (!dkr.b) {"
     "  await fetch('/api/dkrev-pre');"
     "  await fetch('/api/dkrev');"
     "  fetch('/api/dkrev-forced-got');"
@@ -37,7 +40,7 @@ static const char HTML_DECLINEKEY[] =
     "  await fetch('/api/dkrev');"
     "  fetch('/api/dkrev-own-got');"
     " }"
-    "})();"
+    "});"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
