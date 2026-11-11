@@ -51355,6 +51355,7 @@ typedef struct {
     uint32_t n_order, cap_order;
     uint32_t n_strs;
     uint8_t *kinds;
+    FGBuf fbuf;         /* the bases, each with its heap frames, in root order */
     FGBuf fvals;        /* a survey's frame values, written to be surveyed and dropped with the writer */
     FGMap frame_sfs;    /* the JSStackFrame of every frame a survey walked: an open cell aliases one */
     FGMap coros;        /* the coroutine records a survey's frame walk has entered */
@@ -51769,8 +51770,10 @@ static JSFlowGraph *fg_write(JSContext *ctx, const JSFlowGraphRoots *r, uint32_t
         if (w.kinds[i] >= FG_RECORD) fg_u32(&g->bytes, w.order[i]->class_id);
     fg_u32(&g->bytes, (uint32_t)r->n_vals);
     if (rbuf.len) fg_put(&g->bytes, rbuf.b, rbuf.len);
+    fg_u32(&g->bytes, g->frames.bases);
+    if (w.fbuf.len) fg_put(&g->bytes, w.fbuf.b, w.fbuf.len);
     if (bbuf.len) fg_put(&g->bytes, bbuf.b, bbuf.len);
-    (free)(rbuf.b); (free)(bbuf.b); (free)(w.order); (free)(w.kinds);
+    (free)(rbuf.b); (free)(bbuf.b); (free)(w.fbuf.b); (free)(w.order); (free)(w.kinds);
     for (uint32_t i = 0; i < w.n_held; i++) (free)(w.held[i]);
     (free)(w.held); (free)(w.objs.s); (free)(w.strs.s); (free)(w.anch.s); (free)(w.cells.s); (free)(w.cell_anch.s);
     (free)(w.shared.s); (free)(w.fvals.b); (free)(w.frame_sfs.s); (free)(w.coros.s);
@@ -51781,6 +51784,11 @@ JSFlowGraph *JS_FlowGraphWrite(JSContext *ctx, const JSValueConst *roots, int n,
 {
     JSFlowGraphRoots r = { .vals = roots, .n_vals = n };
     return fg_write(ctx, &r, floor, false);
+}
+
+JSFlowGraph *JS_FlowGraphWriteFlow(JSContext *ctx, const JSFlowGraphRoots *roots, uint32_t floor)
+{
+    return fg_write(ctx, roots, floor, false);
 }
 
 JSFlowGraph *JS_FlowGraphSurvey(JSContext *ctx, const JSFlowGraphRoots *roots, uint32_t floor)
@@ -52154,7 +52162,7 @@ static void *fg_rrecord(FGReader *r, const JSRecordLayout *l)
     return rec;
 }
 
-int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
+static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue **frames)
 {
     FGReader r = { 0 };
     const uint8_t *kinds;
@@ -52196,6 +52204,10 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
     n = fg_r32(&r);
     CHECK(n == g->n_roots, "flow graph: the serialized root count disagrees with the graph's");
     for (uint32_t i = 0; i < n; i++) roots[i] = fg_rvalue(&r);
+    n = fg_r32(&r);
+    CHECK(n == g->frames.bases, "flow graph: the serialized base count disagrees with the graph's");
+    (void)frames;
+    CHECK(n == 0, "flow graph: a graph holds a flow's base, and no reader rebuilds one");
     for (uint32_t i = 0; i < r.n_objs; i++) {
         JSValue o = r.objs[i], proto = fg_rvalue(&r);
         uint8_t ext = fg_r8(&r);
@@ -52245,6 +52257,12 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
     for (uint32_t i = 0; i < r.n_strs; i++) JS_FreeValue(ctx, r.strs[i]);
     (free)(r.objs); (free)(r.strs); (free)(r.cells); (free)(r.shared);
     return 0;
+}
+
+int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots) { return fg_read(ctx, g, roots, NULL); }
+int JS_FlowGraphReadFlow(JSContext *ctx, const JSFlowGraph *g, JSValue *vals, JSValue **frames)
+{
+    return fg_read(ctx, g, vals, frames);
 }
 
 size_t JS_FlowGraphBytes(const JSFlowGraph *g, const uint8_t **bytes) { *bytes = g->bytes.b; return g->bytes.len; }
@@ -87991,6 +88009,21 @@ enum { FG_FRAME_CALL, FG_FRAME_ASYNC, FG_FRAME_GENERATOR, FG_FRAME_AGEN_CREATE, 
 enum { FG_SF_STRBUF, FG_SF_PROPS, FG_SF_SLOTS, FG_SF_BUF, FG_SF_ATOM, FG_SF_ARRAY, FG_SF_SHARED, FG_SF_MAPREC,
        FG_SF_REEXEC, FG_SF_TREE, FG_SF_CACHE };
 
+/* A part of a frame with no writer: a survey records it, and a strict write stops on it by the survey's name. */
+static void fg_frame_gap(FGWriter *w, int what, int id, const void *ref)
+{
+    if (!w->survey) {
+        FGGap gap = { what, id, ref, 1 };
+        char name[160];
+
+        fg_gap_name(w->ctx, &gap, name, sizeof name);
+        DCHECKF(false, "flow graph: a parked flow's frame holds \"%s\", which has no writer — give it a body in "
+                "fg_frame_base and in JS_FlowGraphReadFlow", name);
+        FG_NO_WRITER();
+    }
+    fg_gap_ref(w, &w->fvals, what, id, ref);
+}
+
 static void fg_frame_sf(FGWriter *w, const JSStackFrame *sf)
 {
     uint32_t seen;
@@ -88021,7 +88054,7 @@ static void fg_mark_nothing(JSRuntime *rt, JSGCObjectHeader *gp) { (void)rt; (vo
 /* A step declaration's fields by kind. A value is a slot the value writer has; a machine is surveyed as one. */
 static void fg_frame_machine(FGWriter *w, JSStepHdr *h);
 static const JSStepVisit fg_step_fields;
-static void fg_sf_note(int kind) { fg_gap(g_fg_frames, &g_fg_frames->fvals, FG_GAP_STEP_FIELD, kind); }
+static void fg_sf_note(int kind) { fg_frame_gap(g_fg_frames, FG_GAP_STEP_FIELD, kind, NULL); }
 static void fg_sf_val(JSContext *ctx, JSValue *slot) { (void)ctx; (void)slot; }
 static void fg_sf_strbuf(JSContext *ctx, StringBuffer *slot) { (void)ctx; (void)slot; fg_sf_note(FG_SF_STRBUF); }
 static void fg_sf_props(JSContext *ctx, JSPropertyEnum **slot, uint32_t n) {
@@ -88063,7 +88096,7 @@ static const JSStepVisit fg_step_fields = {
 static void fg_frame_machine(FGWriter *w, JSStepHdr *h)
 {
     for (; h; h = h->delegate) {
-        fg_gap_ref(w, &w->fvals, FG_GAP_STEP, 0, h->def);
+        fg_frame_gap(w, FG_GAP_STEP, 0, h->def);
         h->def->visit(w->ctx, h, (JSStepVisit *)&fg_step_fields);
     }
 }
@@ -88082,7 +88115,7 @@ static void fg_frame_links(FGWriter *w, JSContext *ctx, void *st, uint8_t kind)
     while (next.st != NULL && next.kind != CONT_NONE) {
         w->g->frames.links++;
         if (next.kind == CONT_STEP || next.kind == CONT_STEP_YIELD) fg_frame_machine(w, next.st);
-        else fg_gap(w, &w->fvals, FG_GAP_CONT, next.kind);
+        else fg_frame_gap(w, FG_GAP_CONT, next.kind, NULL);
         tramp_cont_mark_one(ctx, next.st, next.kind, &next);
     }
     g_tramp_mark_rt = saved_rt;
@@ -88108,23 +88141,23 @@ static void fg_frame_base(FGWriter *w, JSAsyncFunctionState *s)
     uint32_t depth = 0;
 
     fr->bases++;
-    fg_gap(w, &w->fvals, FG_GAP_FRAME_BASE, s->base_kind);
-    if (s->park_fn) fg_gap_ref(w, &w->fvals, FG_GAP_PARK, 0, fg_park_site(s));
+    fg_frame_gap(w, FG_GAP_FRAME_BASE, s->base_kind, NULL);
+    if (s->park_fn) fg_frame_gap(w, FG_GAP_PARK, 0, fg_park_site(s));
     fg_frame_sf(w, &s->frame);
     for (TrampFrame *t = s->tramp_top; t; t = t->up, depth++) {
         JSAsyncGeneratorData *agd = tramp_agen_data(t);
 
-        fg_gap(w, &w->fvals, FG_GAP_FRAME,
-               t->async_data ? FG_FRAME_ASYNC : t->gen_data ? FG_FRAME_GENERATOR
-               : agd ? (t->cont_kind == CONT_AGEN_CREATE ? FG_FRAME_AGEN_CREATE : FG_FRAME_AGEN_DRIVE)
-               : t->local_buf ? FG_FRAME_CALL : FG_FRAME_ANCHOR);
+        fg_frame_gap(w, FG_GAP_FRAME,
+                     t->async_data ? FG_FRAME_ASYNC : t->gen_data ? FG_FRAME_GENERATOR
+                     : agd ? (t->cont_kind == CONT_AGEN_CREATE ? FG_FRAME_AGEN_CREATE : FG_FRAME_AGEN_DRIVE)
+                     : t->local_buf ? FG_FRAME_CALL : FG_FRAME_ANCHOR, NULL);
         fg_frame_sf(w, tramp_live_sf(t));
         /* an async generator's record is its frame's continuation slot, and what waits on a drive is beside it */
         if (!agd) fg_frame_links(w, t->ctx, t->cont_state, t->cont_kind);
         else if (t->cont_kind == CONT_AGEN_DRIVE) fg_frame_links(w, t->ctx, t->agen_cont, t->agen_ck);
         /* only a generator's frame and an async generator's create record who requested them (free_tramp_chain) */
         if ((t->gen_data || (agd && t->cont_kind == CONT_AGEN_CREATE)) && t->seq_req_kind != CONT_NONE)
-            fg_gap(w, &w->fvals, FG_GAP_REQUESTER, t->seq_req_kind);
+            fg_frame_gap(w, FG_GAP_REQUESTER, t->seq_req_kind, NULL);
     }
     fr->heap += depth;
     if (depth > fr->depth) fr->depth = depth;

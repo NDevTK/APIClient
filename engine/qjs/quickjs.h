@@ -3767,6 +3767,13 @@ JS_EXTERN int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *ro
 JS_EXTERN size_t JS_FlowGraphBytes(const JSFlowGraph *g, const uint8_t **bytes);
 JS_EXTERN uint32_t JS_FlowGraphAnchors(const JSFlowGraph *g, const JSValue **anchors);
 JS_EXTERN void JS_FlowGraphFree(JSContext *ctx, JSFlowGraph *g);
+/* The same over a flow's roots (JSFlowGraphRoots, below): its values and its bases, each base written with the
+   heap frames stashed on it. JS_FlowGraphReadFlow rebuilds the values into `vals` and each base into `frames`, in
+   the order written, as a suspended flow the caller owns (JS_FlowResume, JS_FlowFree). A part of a frame the
+   writer has no body for is a DFAIL naming it as the sale census does. */
+struct JSFlowGraphRoots;
+JS_EXTERN JSFlowGraph *JS_FlowGraphWriteFlow(JSContext *ctx, const struct JSFlowGraphRoots *roots, uint32_t floor);
+JS_EXTERN int JS_FlowGraphReadFlow(JSContext *ctx, const JSFlowGraph *g, JSValue *vals, JSValue **frames);
 /* A flow's roots, each list in the caller's order: its values, its bases (JS_FlowNew's and JS_FlowNewCall's
    handles) and its rings of parked bases (JS_TakeParkedFlows' handles, none NULL). All borrowed. */
 typedef struct JSFlowGraphRoots {
