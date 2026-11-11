@@ -8299,7 +8299,7 @@ TF_UNIT void flow_graph_callsite_selftest(void)
     CHECK(JS_SetPropertyStr(ctx, g, "rebuilt", JS_DupValue(ctx, back[0])) >= 0 &&
           JS_SetPropertyStr(ctx, g, "original", JS_DupValue(ctx, err)) >= 0,
           "the call-site graph witness could not name its Errors");
-    v = tf_graph_program(ctx, "rebuilt.stack === original.stack && rebuilt.stack.indexOf('inner') >= 0 ? 1 : 0");
+    v = tf_graph_program(ctx, "rebuilt.stack === original.stack && /\\binner\\b/.test(rebuilt.stack) ? 1 : 0");
     JS_ToInt32(ctx, &got, v);
     JS_FreeValue(ctx, v);
     CHECK(got == 1, "a rebuilt Error renders a different stack than its original, or one that names no frame");
