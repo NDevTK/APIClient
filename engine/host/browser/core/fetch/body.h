@@ -134,6 +134,13 @@ int  body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
 /* Fill from §5.2's string arm where the arm's object is UNKNOWN EXTERNAL INPUT — see `unknown` above. `v` is
    BORROWED. Returns -1 on OOM with an exception live. */
 int  body_state_set_unknown(JSContext *ctx, BodyState *b, JSValueConst v);
+/* §5.2's string arm run over the example of the unknown a BODY_SHAPE body holds: the UTF-8 encoding of Web IDL
+   §3.2.11 USVString's conversion of §7.1.19 ToString of that example, where this flow holds an example
+   (concolic_example_present) that takes the union's string arm. An `undefined` or `null` example answers NULL:
+   it takes §5.2's null arm, a different request. Returns js_malloc'd bytes the caller frees with `*len` set, or
+   NULL with `*len` 0. The body keeps the unknown; this is the bytes a request built from it sends in the world
+   the example came from. Asserts `b` is BODY_SHAPE. */
+char *body_state_example_bytes(JSContext *ctx, const BodyState *b, size_t *len);
 /* A body that IS `stream` (BODY_STREAM): §5.2's ReadableStream arm, and Fetch §4.7's response body before its
    bytes have arrived. Drops any bytes; the stream is duplicated. */
 void body_state_set_stream(JSContext *ctx, BodyState *b, JSValueConst stream);

@@ -188,13 +188,13 @@ typedef enum {
 /* The one spelling of the four words; fatal on a value outside them. */
 const char *fetch_body_class_token(FetchBodyClass c);
 /* What the body §5.2 extracted into `b` is, for every producer that hands one to a host (fetch(), and
-   XMLHttpRequest §3.5.6 step 4's).
-   Named residual. Not covered: a string body whose unknown has an example is `unknown`, because §5.2's string
-   arm keeps the unknown itself (core/fetch/body.h) where §5.4 step 5 grounds an address on its example. Next
-   diff: body_extract grounds the string arm's bytes on the example and states spans for them. Its absence
-   shows as a POST whose body is one computed value of a source with an example listed with the body class
-   `unknown` and never sent. */
-FetchBodyClass fetch_body_class_of(const BodyState *b);
+   XMLHttpRequest §3.5.6 step 4's). `grounded`: the producer sends a BODY_SHAPE body as its unknown's example
+   (body_state_example_bytes), so the class is `example`; the body state itself keeps the unknown.
+   Named residual. Not covered: XMLHttpRequest's send() does not ground (it passes false), so an XHR body that
+   is one computed value of a source with an example is `unknown`. Next diff: the XHR send grounds as fetch()'s
+   park does. Its absence shows as an own-run `xhr.send(JSON.stringify(...))` over unknowns with examples
+   listed with the body class `unknown` and never sent. */
+FetchBodyClass fetch_body_class_of(const BodyState *b, bool grounded);
 
 typedef struct {
     const char   *method;

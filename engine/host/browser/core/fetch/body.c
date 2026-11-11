@@ -404,6 +404,45 @@ int body_state_set_unknown(JSContext *ctx, BodyState *b, JSValueConst v)
     return 0;
 }
 
+/* §5.2's string arm over the held unknown's example — see body.h. */
+char *body_state_example_bytes(JSContext *ctx, const BodyState *b, size_t *len)
+{
+    JSValue ex, str;
+    const char *s;
+    size_t n = 0;
+    char *r;
+
+    DCHECK(b != NULL && b->has && b->bytes == NULL && concolic_is(b->unknown),
+           "a body's example bytes were asked of a body that holds no unknown — only §5.2's string arm over "
+           "unknown input (BODY_SHAPE) has an example to extract");
+    *len = 0;
+    if (!concolic_example_present(b->unknown))
+        return NULL;
+    ex = concolic_example(ctx, b->unknown);
+    /* Web IDL §3.2.25's union over the example: `null` and `undefined` take the nullable arm, so that world's
+       request has a null body rather than the string "undefined". */
+    if (JS_IsUndefined(ex) || JS_IsNull(ex)) {
+        JS_FreeValue(ctx, ex);
+        return NULL;
+    }
+    JS_FreeValue(ctx, ex);
+    str = concolic_example_string(ctx, b->unknown);
+    if (JS_IsUndefined(str))
+        return NULL;
+    str = JS_ToScalarValueString(ctx, str);
+    CHECK(!JS_IsException(str), "body: OOM converting an unknown body's example to a scalar value string");
+    s = JS_ToCStringLen(ctx, &n, str);
+    CHECK(s != NULL, "body: OOM encoding an unknown body's example as UTF-8");
+    r = js_malloc(ctx, n + 1);
+    CHECK(r != NULL, "body: OOM holding an unknown body's example bytes");
+    memcpy(r, s, n);
+    r[n] = '\0';
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, str);
+    *len = n;
+    return r;
+}
+
 /* §2.2.4's "other members are copied from body" for a CONTENT copy — see body.h. */
 int body_state_copy(JSContext *ctx, BodyState *dst, const BodyState *src)
 {

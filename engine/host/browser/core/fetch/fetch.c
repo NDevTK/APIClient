@@ -1691,7 +1691,7 @@ static void fetch_settle_local(JSContext *ctx, JSValue *resolving, JSValue value
 }
 
 
-FetchBodyClass fetch_body_class_of(const BodyState *b)
+FetchBodyClass fetch_body_class_of(const BodyState *b, bool grounded)
 {
     const char *bytes;
     size_t len;
@@ -1700,10 +1700,12 @@ FetchBodyClass fetch_body_class_of(const BodyState *b)
 
     switch (body_state_content(b, &bytes, &len)) {
     case BODY_NONE:   return FETCH_BODY_NONE;
-    case BODY_SHAPE:  return FETCH_BODY_UNKNOWN;
+    case BODY_SHAPE:  return grounded ? FETCH_BODY_EXAMPLE : FETCH_BODY_UNKNOWN;
     case BODY_STREAM: return FETCH_BODY_UNKNOWN;   /* refused before the park (js_fetch's stream DCHECK) */
     case BODY_BYTES:  break;
     }
+    DCHECK(!grounded, "a body holding bytes was said to be grounded on an unknown's example — only BODY_SHAPE "
+                      "holds an unknown for the park to ground");
     span = body_state_spans(b, &nspan);
     for (int i = 0; i < nspan; i++)
         if (span[i].example == NULL) return FETCH_BODY_UNKNOWN;
@@ -2736,9 +2738,8 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                           body_kind == BODY_BYTES ? body_bytes : NULL,
                           body_kind == BODY_BYTES ? body_bytes_len : 0, prov, driven);
     /* Fetch §5.6 "Fetch methods" STEP 12's "fetch given request", and steps 1 and 13's promise: the endpoint the flow parks on. */
-    /* The shape goes to the park too, as fetch_park sends a concolic URL's shape in place of an address it
-       cannot know, with the body's class beside it (fetch_body_class_of): the park lists the request and the
-       trusted zone, which reads the class as its `body` signal, never sends an unknown body. */
+    /* The park takes the body's bytes with their class beside it (fetch_body_class_of): a body with no example
+       goes as its shape, listed and judged, and the trusted zone never sends it. */
     /* §5.4 step 30's requestObject signal: a dependent signal over init["signal"], made in this's relevant
        realm, so the abort steps run after init["signal"]'s own `abort` listeners (DOM §3.2 "signal abort" runs a
        dependent's abort steps after its source's). Its flag test cannot fork here: step 4 above asked this same
@@ -2746,11 +2747,22 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     {
         JSValue isig = idl_dict_get(ctx, init, "signal");
         JSValue rsig = JS_UNDEFINED;
+        /* A body built out of unknown input is sent as its example where the flow holds one: the example is
+           the body the page computes from what this session observed, read at the park, so an arm that
+           contradicted it since the extraction grounds nothing. The surface above keeps the shape.
+           Named residual. Not covered: an example that is `undefined` or `null`, whose world sends §5.2's null
+           body without the string arm's Content-Type. Next diff: the park states that world's request (no body,
+           the header list without the extracted type) as grounded. Absence shows as a POST of a field the page
+           reads as absent listed with the body class `unknown` and never sent. */
+        size_t ground_len = 0;
+        char *ground = body_kind == BODY_SHAPE ? body_state_example_bytes(ctx, &s->body, &ground_len) : NULL;
+        FetchBodyClass cls = fetch_body_class_of(&s->body, ground != NULL);
 
         if (abort_signal_is(ctx, isig)) rsig = abort_signal_dependent_new(rctx, (JSValueConst *)&isig, 1);
         JS_FreeValue(ctx, isig);
-        *presult = fetch_park(rctx, s->url, s->req_url, &s->rec, s->input, &hl, body_bytes, body_bytes_len,
-                              fetch_body_class_of(&s->body), rsig);
+        *presult = fetch_park(rctx, s->url, s->req_url, &s->rec, s->input, &hl,
+                              ground ? ground : body_bytes, ground ? ground_len : body_bytes_len, cls, rsig);
+        js_free(ctx, ground);
         JS_FreeValue(ctx, rsig);
     }
     header_list_free(&hl);

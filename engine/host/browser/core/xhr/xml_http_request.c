@@ -3635,7 +3635,7 @@ static int js_xhr_send_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
                states an unknown length and the upload events carry it. Absence shows as an `xhr.send(unknown)`
                whose progress events carry the byte count of a display shape. */
             d->request_body_is_shape = (body_state_content(&b, &bbytes, &blen) == BODY_SHAPE);
-            d->request_body_class = (uint8_t)fetch_body_class_of(&b);
+            d->request_body_class = (uint8_t)fetch_body_class_of(&b, false);
             xhr_set(ctx, d, &d->request_body,
                     JS_NewArrayBufferCopy(ctx, (const uint8_t *)(bbytes ? bbytes : ""), blen));
             CHECK(!JS_IsException(d->request_body), "XMLHttpRequest: OOM holding a request body's bytes");
