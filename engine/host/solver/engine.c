@@ -5589,10 +5589,13 @@ static int g_in_step;
    banked, before the member moves off it: the compile and the frameless work left out, as the step's closing charge
    reads the same three counters (flow_age_running). The rest of the step is charged at its end to wherever the
    member then stands. */
+static int64_t engine_step_framed(void) {
+    return g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
+           - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile)
+           - ((int64_t)JS_FlowFramelessWorkLife() - g_step_open_frameless);
+}
 static void engine_bank_step_framed(Flow *f) {
-    int64_t framed = g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
-                     - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile)
-                     - ((int64_t)JS_FlowFramelessWorkLife() - g_step_open_frameless);
+    int64_t framed = engine_step_framed();
 
     DCHECKF(f == flow_running() && g_in_step > 0 && framed >= f->site_banked,
             "a member was moved off its site mid-step while not running or outside a step, or the work the step has "
@@ -5609,11 +5612,12 @@ static void engine_stand_running(Flow *f, int kind, uint64_t key) {
     flow_stand_at(f, kind, key);
 }
 
-/* JSFlowControlHooks.stand: the running member's path has run its rest unit since its last rest, so it stands at the
-   code it is executing (JS_RunningSiteHash), and the service since its last move is charged to the site it leaves.
-   The unit is the quantum, counted on the member's own coordinate (Flow's `stand_next`) and never on the slice, so
-   where a rest falls is a function of the path, the same on every host and across a resume; a stretch that crossed
-   several units (one host charge) rests once. Asked from the interpreter's poll, where a page frame stands. */
+/* JSFlowControlHooks.stand: the running member has given a quantum of service since its last rest, so it stands at
+   the code it is executing (JS_RunningSiteHash), and the service since its last move is charged to the site it
+   leaves. The quantum is counted on the member's own coordinate (Flow's `framed_work`, the work its path ran under
+   a page frame) and never on the slice, so where a rest falls is a function of the path, the same on every host and
+   across a resume; frameless work runs no code, so it moves no stand. A stretch that crossed several quanta (one
+   host charge) rests once. Asked from the interpreter's poll, where a page frame stands. */
 static void engine_stand_rest(JSContext *ctx) {
     Flow *f = flow_running();
     int64_t left = JS_FlowStandLeft();
@@ -5737,9 +5741,11 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
        inheritance copied, and what that step ran before the fork, its compile work left out as the step's
        closing charge leaves it out (flow_age_running). A parent not holding the thread rests at its
        coordinate. */
-    if (parent == flow_running() && g_in_step > 0)
+    if (parent == flow_running() && g_in_step > 0) {
         sib->path_work += g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
                           - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile);
+        sib->framed_work += engine_step_framed();
+    }
     sib->started = 1;                 /* hot: resume from the blobs (and the cloned frame, when there is one) */
     /* The clone is of the parent's selected agent's base, so the arm selects that agent; every other agent's
        base and parks are the parent's state too, cloned onto the arm. */
@@ -12157,7 +12163,7 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
        duration into this flow's first `performance.now()`. */
     thread_work_note_discarded(JS_FlowDiscardRetiredWork());
     /* And its stand's next rest, counted from its coordinate (engine_stand_rest). */
-    JS_FlowStandArm(f->stand_next - f->path_work);
+    JS_FlowStandArm(f->stand_next - f->framed_work);
     if (!f->delta) f->delta = cow_delta_new();
     cow_set_current((CowDelta *)f->delta);
     cow_apply(ctx, (CowDelta *)f->delta);
@@ -14175,6 +14181,9 @@ static int engine_sched_slice(int resume) {
             g_step_open_work = step_work0;
             g_step_open_compile = step_compile0;
             g_step_open_frameless = step_frameless0;
+            /* The stand's count from the same opening: the step's charge reads everything banked from here, and
+               what already stands in the interpreter is in it as framed work. */
+            JS_FlowStandArm(cur->stand_next - cur->framed_work - (int64_t)JS_FlowPeekRetiredWork());
             /* The same bracket in the other currency, opened on the clock's line so the two readings are of one
                span: the overrun test below compares `now - t_slice0`, and this counts the suspend points offered
                across that interval. From here rather than the turn's `t0`, because the pick, switch and delta swap
@@ -14471,11 +14480,11 @@ static int engine_sched_slice(int resume) {
                                  frameless > 0 && step_unit_forced_act(g_step_unit));
             }
             /* The stand's count and the coordinate are one quantity read two ways: quickjs counts down what the
-               path retired and the charge above added it, compiles left out of both. */
-            DCHECKF(flow_running() != cur || JS_FlowStandLeft() == cur->stand_next - cur->path_work,
+               path retired under a page frame and the charge above added it. */
+            DCHECKF(flow_running() != cur || JS_FlowStandLeft() == cur->stand_next - cur->framed_work,
                     "the running member's count to its next rest (%lld) is not its rest's coordinate less its own "
                     "(%lld - %lld) — a retire site counts down one and not the other", (long long)JS_FlowStandLeft(),
-                    (long long)cur->stand_next, (long long)cur->path_work);
+                    (long long)cur->stand_next, (long long)cur->framed_work);
             /* The service just charged was the site the flow stood at since its last move. A member about to begin a
                unit stands at that unit's entry (flow_next_unit: the program or task the ladder starts next, the head
                of a checkpoint); one in the middle of a unit keeps its stand until its next rest or decision. */

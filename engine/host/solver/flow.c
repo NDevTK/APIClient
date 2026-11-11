@@ -324,7 +324,7 @@ typedef struct FlowAcct {
    digest, plus the opcode offset; or a program's entry, its row's content digest), FLOW_SITE_DRIVE a driven body
    (its orphan hash), FLOW_SITE_ACT an act the engine forces (its rung's step unit).
    A member stands at its last decision, at the entry of the unit it last began (engine.c's flow_next_unit), or at
-   the code it executed at its last rest (engine.c's engine_stand_rest, each quantum of its own path work, never of
+   the code it executed at its last rest (engine.c's engine_stand_rest, each quantum of service it gives, never of
    the slice), whichever came last, so service is charged to the code whose work it is.
    Named residual. Not covered: the ledger is not parked, so a cold-resumed member stands at its family's keyless
    site at zero service. Next diff builds: the ledger in the cold tier's family record. Absence shows as: a resumed
@@ -2308,6 +2308,7 @@ void flow_age_running(int64_t us, int64_t compile, int64_t frameless, int act) {
        page frame, and for a forced act its frameless rest too (FlowCodeSite says why the page loop's frameless
        work is not); the banks read the same three counters. */
     const int64_t framed = ran - frameless;
+    g_running->framed_work += framed;
     DCHECKF(g_running->site_banked >= 0 && g_running->site_banked <= framed && g_running->act_banked >= 0 &&
                 g_running->act_banked <= frameless,
             "a step banked %lld units to sites it moved off and %lld to act sites, and ended having run %lld under "
@@ -2561,6 +2562,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     DCHECK(sib->path_work == 0 && sib->park_slots == 0 && sib->trail == NULL && sib->trail_seen == 0,
            "a forked sibling ran, parked or took a reply before inheriting its parent's path");
     sib->path_work = parent->path_work;
+    sib->framed_work = parent->framed_work;
     sib->stand_next = parent->stand_next;
     sib->park_slots = parent->park_slots;
     sib->trail = reply_trail_share(parent->trail);
@@ -3243,7 +3245,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
        uncharged flow reads a current window holding nothing. */
     f->val = 0.0; f->work = 0; f->work_gen = 0; f->visits = 0; f->orphan_seen = 0;
     f->path_work = 0; f->park_slots = 0; f->trail = NULL; f->trail_seen = 0;
-    f->stand_next = ENGINE_QUANTUM_WORK;
+    f->framed_work = 0; f->stand_next = ENGINE_QUANTUM_WORK;
     /* And the dispatch count, which nothing else writes to zero: a member arrives never-chosen and the number only
        rises. */
     f->picks = 0;
@@ -3401,6 +3403,7 @@ void flow_arrive_on_snapshot(Flow *sib, const Flow *snap, FlowPathMarks at_cut) 
        code site in its own ledger. */
     sib->visits = snap->visits;
     sib->path_work = snap->path_work;
+    sib->framed_work = snap->framed_work;
     sib->stand_next = snap->stand_next;
     sib->park_slots = snap->park_slots;
     sib->trail = reply_trail_share(snap->trail);

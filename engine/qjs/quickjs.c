@@ -26474,10 +26474,10 @@ void JS_RequestFlowYield(void) { FLOW_YIELD_REQUEST(JS_PREEMPT_HOST); }
  * work or a finished flow's residue, neither of them the incoming flow's. */
 static _Thread_local uint64_t g_flow_work_retired __attribute__((tls_model("local-exec"))) = 0;
 
-/* The running flow's path work left until its next rest of the stand (JSFlowControlHooks.stand): the work above
-   less the compiles, which a replay that finds a body's parse held does not repeat, so it counts down the flow's
-   coordinate. The host arms it (JS_FlowStandArm); at zero the poll's stand bit is raised, and it keeps counting
-   below zero until the hook re-arms it, so the host reads the overshoot. INT64_MAX is the no-policy value. */
+/* The running flow's work left until its next rest of the stand (JSFlowControlHooks.stand), counted in the work
+   above that a page frame stood over: what serves the code the flow stands at, never a compile or frameless work.
+   The host arms it (JS_FlowStandArm); at zero the poll's stand bit is raised, and it keeps counting below zero
+   until the hook re-arms it, so the host reads the overshoot. INT64_MAX is the no-policy value. */
 static _Thread_local int64_t g_flow_stand_left __attribute__((tls_model("local-exec"))) = INT64_MAX;
 static inline void js_flow_stand_retire(uint64_t units)
 {
@@ -26494,7 +26494,10 @@ void JS_FlowStandArm(int64_t left)
     else           g_flow_yield_req &= (uint8_t)~FLOW_STAND_DUE;
 }
 int64_t JS_FlowStandLeft(void) { return g_flow_stand_left; }
-#define FLOW_WORK_RETIRE()  (g_flow_work_retired++, g_js_dispatch_life++, \
+/* One unit of work: FLOW_WORK_COUNT where js_flow_frameless_charge says whose it is, FLOW_WORK_RETIRE where a page
+   frame stands by construction (an opcode dispatch, a regexp back-edge inside a builtin page code called). */
+#define FLOW_WORK_COUNT()   (g_flow_work_retired++, g_js_dispatch_life++)
+#define FLOW_WORK_RETIRE()  (FLOW_WORK_COUNT(), \
                              unlikely(--g_flow_stand_left == 0) ? (void)(g_flow_yield_req |= FLOW_STAND_DUE) : (void)0)
 
 /* The nearest frame running a page's bytecode, walking outward past call roots and frames with no bytecode body,
@@ -26511,13 +26514,15 @@ static JSStackFrame *js_page_frame(JSRuntime *rt)
 
 /* The retired work no page frame stood over, compiles left out, over the thread (JS_FlowFramelessWorkLife):
    raised by every retire site but the opcode dispatch, which runs page bytecode by construction, and the compile
-   charges, which the host banks apart already. `rt` is the runtime the work ran in, NULL for none (no flow base
-   holds the thread, so no page code of any flow can stand). */
+   charges, which the host banks apart already; work a page frame stood over counts down the stand's rest instead.
+   `rt` is the runtime the work ran in, NULL for none (no flow base holds the thread, so no page code can stand). */
 static _Thread_local uint64_t g_flow_frameless_work = 0;
 static inline void js_flow_frameless_charge(JSRuntime *rt, uint64_t units)
 {
     if (rt == NULL || js_page_frame(rt) == NULL)
         g_flow_frameless_work += units;
+    else
+        js_flow_stand_retire(units);
 }
 uint64_t JS_FlowDiscardRetiredWork(void)
 {
@@ -26533,7 +26538,6 @@ void JS_FlowRetireWork(uint64_t units)
 {
     if (APICLIENT_UNPRICED_OPEN()) return;
     g_flow_work_retired += units;
-    js_flow_stand_retire(units);
     js_flow_frameless_charge(g_flow_base_gen != NULL ? g_flow_base_rt : NULL, units);
 }
 
@@ -30938,7 +30942,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     bool abrupt_in = JS_IsException(ret_val);
                     /* A machine step is a dispatch of a built-in and retires one unit, as an opcode does, past
                        the offer above so a step that parks in front of it is counted once, when it runs. */
-                    FLOW_WORK_RETIRE();
+                    FLOW_WORK_COUNT();
                     js_flow_frameless_charge(rt, 1);
                     DCHECK(!g_compile_stint,
                            "a built-in's step machine was invoked inside a compile stint — a compile runs no code "
@@ -53611,12 +53615,7 @@ static __exception int json_next_token(JSParseState *s)
     int c;
     JSAtom atom;
 
-    {
-        uint64_t units = js_parse_count_bytes(s);
-
-        js_flow_stand_retire(units);
-        js_flow_frameless_charge(s->ctx->rt, units);
-    }
+    js_flow_frameless_charge(s->ctx->rt, js_parse_count_bytes(s));
     json_free_token(s, &s->token);
 
     p = s->last_ptr = s->buf_ptr;

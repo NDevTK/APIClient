@@ -237,10 +237,11 @@ typedef struct Flow {
        (flow_age_running), and an arm takes its parent's coordinate at the branch, so it is a function of the
        path and a replay of the path reaches the same number at the same point. Never a weight term. */
     int64_t path_work;
-    /* The coordinate of this member's next rest of its stand: where its path next re-reads the code it is executing
-       (engine.c's engine_stand_rest), every ENGINE_QUANTUM_WORK of `path_work`. Inherited at a fork with the
-       coordinate, so both arms rest at the same points of the prefix they share. */
-    int64_t stand_next;
+    /* The part of `path_work` retired under a page frame (the service the path has given, wherever it stood), and
+       the value of it at which the member next re-reads the code it is executing (engine.c's engine_stand_rest),
+       every ENGINE_QUANTUM_WORK of it. Both inherited at a fork with `path_work`, so both arms rest at the same
+       points of the prefix they share. */
+    int64_t framed_work, stand_next;
     /* How many address parks the path has made: the next park's slot is this plus one (engine.c's
        pending_park_request). Inherited at a fork. */
     int64_t park_slots;
