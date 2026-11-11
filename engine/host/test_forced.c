@@ -19092,10 +19092,22 @@ TF_UNIT void probes_envtypes(const char *js, Probe *tab, int *n) {
              emitted_record_has(js, "/api/envtypeapp", "etAppAbsent") &&
                  emitted_record_has(js, "/api/envtypeapp", "etAppPresent"),
              "`window.etInjected == null` did not run both arms: a name no standard defined is application state");
+    const char *re_why = NULL; int re_tt = 1;
+
+    fold_row(&re_tt, &re_why, emitted_record_has(js, "/api/envtypere", "etReNotIe"),
+             "NOT REACHED: /api/envtypere has no record of the first expression failing on the user agent");
+    fold_row(&re_tt, &re_why, emitted_record_has_both(js, "/api/envtypere", "etReNotIe", "etReMoz"),
+             "no record holds the first expression failing and the second holding, the answers ECMAScript "
+             "§22.2.6.16 RegExp.prototype.test ( S ) gives over the example: the second test was answered by "
+             "the first one's arm, so the two expressions share one predicate identity");
+    fold_row(&re_tt, &re_why, emitted_record_graded_has(js, "/api/envtypere", "derived", "etReMoz"),
+             "the record of both tests' example answers is not derived: the flow on the example's arms was "
+             "marked forced, so the page's own run has no member");
     const Probe rows[] = {
         { "env-type-equality-decided", eq_tt, "/api/envtype?", SESS_EXPLORE, eq_why },
         { "env-type-open-arms-fork", open_tt, "/api/envtypewide", SESS_EXPLORE, open_why },
         { "env-removed-global-decided", gone_tt, "/api/envtypegone", SESS_EXPLORE, gone_why },
+        { "env-regexp-tests-apart", re_tt, "/api/envtypere", SESS_EXPLORE, re_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
