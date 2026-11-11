@@ -19,40 +19,24 @@
 #include "core/paint/display_list_raster.h"
 #include "core/paint/document_paint.h"
 #include <lexbor/core/base.h>   /* lexbor_calloc: the allocator the engine gives its refusal edge */
-#include "core/dom/shadow_root.h"    /* DOM §4.8's shadow-including tree order — the SAME walker CSS 2.1
-                                        §E.2's own walk advances through, which is what makes the element
-                                        count below a reading of the walk's own population */
+#include "core/dom/flat_tree.h"
 #include "quickjs.h"
 
-/* HOW BIG THE TREE IS THAT CSS 2.1 §E.2 "Painting order" IS ABOUT TO BE WALKED OVER — DOM §4.8 "Interface
- * ShadowRoot"'s shadow-including inclusive descendants of `root` that are ELEMENTS, counted here so that the
- * offer count beside it is read against a denominator rather than alone.
- *
- * IT IS THE SAME WALKER AND THE SAME SUBTREE AS THE PAINT, WHICH IS THE WHOLE POINT. core/paint/paint_order.c
- * advances with `shadow_root_next_in_shadow_including` from the context element and says in its own words
- * that a child navigable's Document is reached by NEITHER of that walker's two edges — so this counts exactly
- * the population §E.2's steps could have collected from, and a document whose content sits in shadow trees is
- * counted the same way the painter sees it. A plain child walk here would answer LOWER than the walk it is
- * the denominator of, which is the one direction that turns a comparison into a contradiction.
- *
- * IT IS NOT A CHECK AND NOTHING IS ASSERTED ABOUT THE RATIO — core/paint/document_paint.h's field holds the
- * reason, which is that no sound inequality exists in either direction.
- *
- * THE COST IS ONE TREE WALK PER PAINT and it is paid beside a walk that asks the CASCADE about every element
- * many times over; this reads a node type and a pointer. The alternative — deriving it inside §E.2's own walk
- * — would count only the elements that walk REACHED, which is the number `offers` already is. */
-static unsigned dp_element_count(JSContext *ctx, lxb_dom_element_t *root)
+/* How big the tree is that CSS 2.1 §E.2 "Painting order" is about to be walked over: the elements of `root`'s
+ * flat subtree (css-shadow-1 §4.1), walked by flat_tree_next_in as core/paint/paint_order.c walks it, so the
+ * offer count beside it is read against the population the painter could have collected from. No ratio between
+ * the two is asserted; core/paint/document_paint.h's field states why. One tree walk per paint. */
+static unsigned dp_element_count(lxb_dom_element_t *root)
 {
     lxb_dom_node_t *r = lxb_dom_interface_node(root);
     lxb_dom_node_t *n;
     unsigned count = 0;
 
-    for (n = r; n != NULL; n = shadow_root_next_in_shadow_including(ctx, n, r))
+    for (n = r; n != NULL; n = flat_tree_next_in(n, r, false))
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) count++;
     DCHECK(count >= 1u,
-           "the shadow-including inclusive descendants of a root ELEMENT hold no element at all — the walk "
-           "starts AT that element and DOM §4.8's tree order is INCLUSIVE, so a zero is this count and that "
-           "walker disagreeing about whether a node is one of its own inclusive descendants");
+           "the flat-tree inclusive descendants of a root ELEMENT hold no element at all — the walk starts AT "
+           "that element, so a zero is the walker skipping its own starting node");
     return count;
 }
 
@@ -159,7 +143,7 @@ void document_paint_finish(DocumentPaintFrame *f)
            stays in the list, so the frame is a partial picture rather than none. */
         f->complete = box_paint_end(f->walk);
         f->walk = NULL;
-        f->elements = dp_element_count(f->ctx, f->root);
+        f->elements = dp_element_count(f->root);
     }
     /* A finished frame is immutable and holds nothing borrowed, which is what DOCUMENT_PAINT_FRAME_LAYOUT
        states for a frame an object owns. */

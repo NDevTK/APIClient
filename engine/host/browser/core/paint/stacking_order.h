@@ -206,19 +206,9 @@ StackingLayer stacking_layer_of(lxb_dom_element_t *el);
    `b`'s? Negative when `a` is painted first (further from the user), positive when `b` is, zero only when they
    are the same element. It is a strict weak ordering over the boxes of one document, which is what makes it
    usable as a comparator by whatever sorts, hit-tests or occludes.
-   IT TAKES A `ctx` FOR ONE REASON AND IT IS THE TREE-ORDER TIE-BREAK. CSS 2.1 §9.9.1: "Boxes with the same stack level
-   in a stacking context are stacked back-to-front according to document tree order", and CSS 2.1 §E.1 says
-   which tree that is — "Preorder depth-first traversal of the rendering tree, in logical (not visual) order for
-   bidirectional content, after taking into account properties that move boxes around". The RENDERING tree
-   flattens shadow trees, so the order is DOM §4.8 "Interface ShadowRoot"'s shadow-including tree order — "In
-   shadow-including tree order is shadow-including preorder, depth-first traversal of a node tree" — and
-   core/dom/shadow_root.h's one-step walker for it needs a realm because the element -> shadow root association
-   is a per-flow fact kept on the element's wrapper. THE NUMBER IS §4.8 AND NOT §4.2, which
-   core/dom/shadow_root.h states at three of its own sites and which this file copied before an audit caught
-   it: DOM §4.2 is "Node tree" and defines neither the order nor the traversal, and both definitions sit in
-   §4.8 beside the interface. Recorded rather than repaired there, because a wrong number copied from a
-   neighbouring component is exactly how it arrived here. Every other entry here reads only upward, where the shadow
-   root already names its host, which is why only this one takes a realm.
+   Its tree-order tie-break is CSS 2.1 §9.9.1's "Boxes with the same stack level in a stacking context are
+   stacked back-to-front according to document tree order", over the tree CSS 2.1 §E.1 names — "Preorder
+   depth-first traversal of the rendering tree" — which is css-shadow-1 §4.1's flat tree (core/dom/flat_tree.h).
    BOTH ELEMENTS MUST BE IN ONE DOCUMENT and must each generate a box — `stacking_generates_box` above is how
    a caller asks the second, and it is named here because a precondition with no entry behind it is one a
    caller can only discover by aborting. A caller mixing two documents is asking a question CSS 2.1 does not
@@ -251,7 +241,7 @@ StackingLayer stacking_layer_of(lxb_dom_element_t *el);
    and never of a subtree.
    RETIREMENT: this note goes when a hit test in this tree reads all three operands, because the reader is
    then the code rather than this paragraph. */
-int stacking_order_compare(JSContext *ctx, lxb_dom_element_t *a, lxb_dom_element_t *b);
+int stacking_order_compare(lxb_dom_element_t *a, lxb_dom_element_t *b);
 
 /* NAMED RESIDUAL — WHAT IS NOT COVERED: css-masking-1's `mask-image` and `mask-border-source`, whose
    non-`none` values form a stacking context the way opacity does, and css-position-4 §3.1 "Top Layer Styling"'s

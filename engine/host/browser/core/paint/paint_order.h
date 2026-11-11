@@ -63,10 +63,10 @@
  * and Location objects"' fixed cross-origin member list is exactly the enumeration that forbids it, and
  * engine/host/solver/world.h already keys one WASM instance on `(browsing-context group, origin)`. This walk
  * cannot cross BY CONSTRUCTION rather than by a check somebody remembered: it advances with
- * core/dom/shadow_root.h's shadow-including tree walker, whose only edges are a node's children and an
- * element's shadow root, and a child navigable's Document is reached by NEITHER — it hangs off the `iframe`
- * element's WRAPPER (core/html/html_iframe.h), which is a per-flow fact no tree walk sees. The assert below
- * that both ends of a step stay in one Document is the statement of that, not its enforcement.
+ * core/dom/flat_tree.h's pre-order walker, whose only edges are a node's children, a host's shadow root's
+ * children and a slot's assigned nodes, and a child navigable's Document is reached by none — it hangs off the
+ * `iframe` element's WRAPPER (core/html/html_iframe.h), which is a per-flow fact no tree walk sees. The assert
+ * below that both ends of a step stay in one Document is the statement of that, not its enforcement.
  * AND CSS 2.1 §E.2 ALREADY HAS THE RIGHT SLOT FOR A FOREIGN SUBTREE, so admitting one needs no new step and no new
  * shape. An `iframe` is a REPLACED element in this engine (core/layout/replaced_element.h, off HTML §15.4.1
  * "Embedded content"), and CSS 2.1 §E.2 places a replaced element's content with the words "the replaced content,
@@ -96,8 +96,6 @@
 #include <stdbool.h>
 
 #include <lexbor/dom/dom.h>
-
-#include "quickjs.h"
 
 /* THE CSS 2.1 §E.2 STEP AN OFFER IS BEING MADE UNDER — which of CSS 2.1 §E.2's ten steps put this box's marks here, so a
    visitor can perform that step's own sub-list and cite it.
@@ -167,8 +165,8 @@ typedef enum {
    next one, and everything already offered stays offered — so it keeps its prefix instead of losing the run.
    `el` IS ALWAYS AN ELEMENT OF THE DOCUMENT THE WALK WAS STARTED IN, and the two halves of the walk guarantee
    that DIFFERENTLY, which is why this sentence names both rather than claiming one mechanism. The boxes
-   CSS 2.1 §E.2's own steps collect come from core/dom/shadow_root.h's shadow-including walker, whose only edges
-   are a node's children and an element's shadow root, so they cannot leave the Document BY CONSTRUCTION — the
+   CSS 2.1 §E.2's own steps collect come from core/dom/flat_tree.h's pre-order walker, whose edges all stay
+   in one node tree's shadow-including descendants, so they cannot leave the Document BY CONSTRUCTION — the
    paragraph above on a child navigable is that argument. The boxes of CSS 2.1 §E.2's TABLE arm come from
    core/layout/table_box.h and core/layout/table_column_box.h, which are OTHER components' walks, so that half
    is ASSERTED at each offer instead.
@@ -196,7 +194,7 @@ typedef enum {
    `begin` allocates the cursor; `next` answers true with the next offer, or false once the sequence is complete;
    `free` releases it at any point. */
 typedef struct PaintOrderCursor PaintOrderCursor;
-PaintOrderCursor *paint_order_begin(JSContext *ctx, lxb_dom_element_t *context_el);
+PaintOrderCursor *paint_order_begin(lxb_dom_element_t *context_el);
 bool paint_order_next(PaintOrderCursor *c, PaintStep *step, lxb_dom_element_t **el);
 void paint_order_free(PaintOrderCursor *c);
 

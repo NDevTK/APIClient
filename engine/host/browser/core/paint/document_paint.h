@@ -59,9 +59,8 @@ typedef struct {
     /* AND HOW BIG THE TREE WAS THAT THE WALK RAN OVER, which is the one fact `offers` cannot carry and the
        one a reader needs most.
        AN OFFER COUNT IS A STATEMENT ABOUT THE WALK AND THIS IS A STATEMENT ABOUT THE DOCUMENT, taken at the
-       same instant, by the same walker, over the same subtree — DOM §4.8 "Interface ShadowRoot"'s
-       shadow-including inclusive descendants of the root element, which is the population CSS 2.1 §E.2's own
-       walk advances through. Two readings of one moment: a walk offering seven steps over three elements is
+       same instant, by the same walker, over the same subtree — the root element's flat-tree inclusive
+       descendants (css-shadow-1 §4.1), which is the population CSS 2.1 §E.2's own walk advances through. Two readings of one moment: a walk offering seven steps over three elements is
        a document with nothing in it, and a walk offering seven over nine hundred is a walk that reached
        almost none of a document that HAS something in it, and those take opposite work. Nothing else this
        entry reports separates them, because every number beside it is the walk's own.

@@ -127,3 +127,21 @@ lxb_dom_node_t *flat_tree_prev_sibling(const lxb_dom_node_t *n)
 {
     return ft_sibling(n, -1);
 }
+
+lxb_dom_node_t *flat_tree_next_in(const lxb_dom_node_t *n, const lxb_dom_node_t *root, bool skip_subtree)
+{
+    lxb_dom_node_t *m, *s;
+
+    DCHECK(n != NULL && root != NULL, "a flat-tree pre-order step was asked with no node or no root");
+    if (!skip_subtree) {
+        m = flat_tree_first_child(n);
+        if (m != NULL) return m;
+    }
+    for (m = (lxb_dom_node_t *)n; m != root; m = flat_tree_parent(m)) {
+        DCHECK(m != NULL, "a flat-tree pre-order step climbed out of the flat tree before reaching its root, so "
+                          "the node it was asked from is no flat-tree descendant of that root");
+        s = flat_tree_next_sibling(m);
+        if (s != NULL) return s;
+    }
+    return NULL;
+}

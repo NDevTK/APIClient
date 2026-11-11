@@ -13,7 +13,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_transform.h"
 #include "core/dom/node.h"
-#include "core/dom/shadow_root.h"
+#include "core/dom/flat_tree.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/containment.h"
@@ -410,33 +410,24 @@ StackingLayer stacking_layer_of(lxb_dom_element_t *el)
 
 /* TREE ORDER between two boxes that sit in ONE stacking context — §9.9.1's tie-break, "Boxes with the same
    stack level in a stacking context are stacked back-to-front according to document tree order", over the tree
-   Appendix E §E.1 names: "Preorder depth-first traversal of the rendering tree".
-   IT WALKS THE CANONICAL WALKER RATHER THAN COMPARING DEPTHS AND INDICES. core/dom/shadow_root.h's
-   `shadow_root_next_in_shadow_including` is DOM §4.8 "Interface ShadowRoot"'s shadow-including tree order one
-   step at a time — "In shadow-including tree order is shadow-including preorder, depth-first traversal of a node
-   tree" — and it is the rendering tree's order because the rendering tree is the flattened one; an
-   index-and-depth comparison written here would be a second traversal free to disagree with it at a shadow
-   boundary, which is the one place the two trees differ and the only place either is hard. The cost is one
-   walk of the context's subtree per tie, and it is paid only on a tie. */
-static int so_tree_order(JSContext *ctx, lxb_dom_element_t *context, lxb_dom_element_t *a, lxb_dom_element_t *b)
+   Appendix E §E.1 names: "Preorder depth-first traversal of the rendering tree", which is css-shadow-1 §4.1's
+   flat tree walked by flat_tree_next_in, the walker paint_order.c offers boxes with. The cost is one walk of the
+   context's subtree per tie, and it is paid only on a tie. */
+static int so_tree_order(lxb_dom_element_t *context, lxb_dom_element_t *a, lxb_dom_element_t *b)
 {
     lxb_dom_node_t *root = lxb_dom_interface_node(context);
     lxb_dom_node_t *an = lxb_dom_interface_node(a), *bn = lxb_dom_interface_node(b);
     lxb_dom_node_t *n;
 
-    for (n = root; n != NULL; n = shadow_root_next_in_shadow_including(ctx, n, root)) {
+    for (n = root; n != NULL; n = flat_tree_next_in(n, root, false)) {
         if (n == an) return -1;
         if (n == bn) return 1;
     }
-    DFAIL("CSS 2.1 §9.9.1's tree-order tie-break walked the whole of a stacking context's subtree without "
+    DFAIL("CSS 2.1 §9.9.1's tree-order tie-break walked the whole of a stacking context's flat subtree without "
           "meeting one of the two boxes it was asked to order. Both reached this walk through "
-          "`stacking_context_of`, which climbs CSS Cascade §7.2's flattened element tree from each of them and "
-          "returned this element for both — so each IS a shadow-including descendant of it, and a walk that "
-          "does not find one has a different idea of that tree from the one the climb used. The two are DOM "
-          "§4.8 \"Interface ShadowRoot\"'s shadow-including tree order and CSS Cascade §7.2's flat-tree "
-          "parent chain, and they are inverses only while a shadow root's host and an element's shadow root "
-          "name each other; the fix is at whichever of them has stopped doing so, never an order invented "
-          "here");
+          "`stacking_context_of`, which climbs the flat-tree parent chain from each of them and returned this "
+          "element for both, so the pre-order walk and the parent chain disagree about one tree; the fix is in "
+          "core/dom/flat_tree.c, never an order invented here");
     return 0;
 }
 
@@ -448,7 +439,7 @@ static int so_tree_order(JSContext *ctx, lxb_dom_element_t *context, lxb_dom_ele
    z-indices (excluding 0) in z-index order (most negative first) then tree order" and step 9 is "Stacking
    contexts formed by positioned descendants with z-indices greater than or equal to 1 in z-index order
    (smallest first) then tree order". Most negative first and smallest first are the same direction. */
-static int so_compare_in(JSContext *ctx, lxb_dom_element_t *context, lxb_dom_element_t *a, lxb_dom_element_t *b)
+static int so_compare_in(lxb_dom_element_t *context, lxb_dom_element_t *a, lxb_dom_element_t *b)
 {
     StackingLayer la = stacking_layer_of(a), lb = stacking_layer_of(b);
     int va, vb;
@@ -459,17 +450,14 @@ static int so_compare_in(JSContext *ctx, lxb_dom_element_t *context, lxb_dom_ele
         vb = stacking_level(b);
         if (va != vb) return va < vb ? -1 : 1;
     }
-    return so_tree_order(ctx, context, a, b);
+    return so_tree_order(context, a, b);
 }
 
-int stacking_order_compare(JSContext *ctx, lxb_dom_element_t *a, lxb_dom_element_t *b)
+int stacking_order_compare(lxb_dom_element_t *a, lxb_dom_element_t *b)
 {
     char nbuf[160];
     lxb_dom_element_t *pa, *pb, *prev_a, *prev_b;
 
-    DCHECK(ctx != NULL, "CSS 2.1 §9.9.1's paint order was asked for with no realm — Appendix E §E.1's tree "
-                        "order is DOM §4.8 \"Interface ShadowRoot\"'s shadow-including one, whose walker reads "
-                        "a per-flow association kept on an element's wrapper");
     DCHECK(a != NULL && b != NULL, "CSS 2.1 §9.9.1's paint order was asked about a NULL element");
     /* THE BOX PRECONDITION, ASKED AT THIS ENTRY AND PER OPERAND. stacking_order.h states it for this call
        in its own words — both elements "must each generate a box" — and asserting it only where the
@@ -528,7 +516,7 @@ int stacking_order_compare(JSContext *ctx, lxb_dom_element_t *a, lxb_dom_element
                        "Reaching here means those two walks and this one disagree about the same chain — they "
                        "are the identical `stacking_context_of` climb, so the disagreement is that the chain "
                        "changed under the comparison, which a question about a document may not do");
-                return so_compare_in(ctx, pa, prev_a, prev_b);
+                return so_compare_in(pa, prev_a, prev_b);
             }
     DFAIL("CSS 2.1 §9.9.1's paint order climbed both elements' stacking-context chains to the end without "
           "meeting a common context, and every chain ends at the root element because §9.9.1's first sentence "

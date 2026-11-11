@@ -11,7 +11,7 @@
 
 #include "check.h"
 #include "core/css/css_computed_value.h"
-#include "core/dom/shadow_root.h"
+#include "core/dom/flat_tree.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/table_box.h"
@@ -149,29 +149,14 @@ static void po_list_free(PoList *l)
     l->n = l->cap = 0;
 }
 
-/* ONE STEP OF Appendix E §E.1's TREE ORDER — "Preorder depth-first traversal of the rendering tree, in logical
-   (not visual) order for bidirectional content, after taking into account properties that move boxes around" —
-   with the option to pass over the subtree of the node just visited.
-   IT IS THE CANONICAL WALKER AND NOT AN INDEX COMPARISON, for the argument core/paint/stacking_order.c makes
-   at its own tie-break: `shadow_root_next_in_shadow_including` is DOM §4.8 "Interface ShadowRoot"'s
-   shadow-including tree order one step at a time, the rendering tree is the flattened one, and a second
-   traversal written here would be free to disagree with it at a shadow boundary — the one place the two trees
-   differ. THE SKIP IS SPELLED AS REPEATED STEPS for the same reason: advancing until the walk has left `n`'s
-   shadow-including subtree asks `shadow_root_is_shadow_including_inclusive_ancestor`, which is DOM §4.8's own
-   containment relation, where a next-sibling shortcut would be a third idea of the same tree. The cost is a
-   walk of the skipped subtree, paid once per skipped box.
-   A CHILD NAVIGABLE IS NOT REACHABLE FROM HERE AND THAT IS THE POINT: both edges this walker has are a node's
-   children and an element's shadow root, and an `iframe`'s content Document hangs off the element's WRAPPER
-   (core/html/html_iframe.h) rather than off the node, so CSS 2.1 §E.2's "one document's tree" is a property of the
-   walker rather than a rule this file enforces. */
-static lxb_dom_node_t *po_next(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *root, bool skip_subtree)
+/* One step of Appendix E §E.1's tree order — "Preorder depth-first traversal of the rendering tree" — over
+   css-shadow-1 §4.1's flat tree, the tree boxes are generated from (core/dom/flat_tree.h), with the option to
+   pass over the subtree of the node just visited. A host's light child no slot takes is in no flat tree and is
+   never offered; a slotted one is offered under its slot. A child navigable's Document hangs off the `iframe`'s
+   wrapper (core/html/html_iframe.h) and no flat-tree edge reaches it, so the walk stays in one document. */
+static lxb_dom_node_t *po_next(lxb_dom_node_t *n, lxb_dom_node_t *root, bool skip_subtree)
 {
-    lxb_dom_node_t *m = shadow_root_next_in_shadow_including(ctx, n, root);
-
-    if (!skip_subtree) return m;
-    while (m != NULL && shadow_root_is_shadow_including_inclusive_ancestor(n, m))
-        m = shadow_root_next_in_shadow_including(ctx, m, root);
-    return m;
+    return flat_tree_next_in(n, root, skip_subtree);
 }
 
 /* WHICH OF CSS 2.1 §E.2's THREE DESCENDANT SETS IS BEING COLLECTED. They are three walks and not one filtered walk,
@@ -188,19 +173,19 @@ typedef enum {
     PO_SET_POSITIONED      /* CSS 2.1 §E.2 steps 3, 8 and 9: every positioned descendant, for the caller to split */
 } PoSet;
 
-static void po_collect(JSContext *ctx, lxb_dom_element_t *context_el, PoSet set, PoList *out)
+static void po_collect(lxb_dom_element_t *context_el, PoSet set, PoList *out)
 {
     lxb_dom_node_t *root = lxb_dom_interface_node(context_el);
     lxb_dom_node_t *n;
 
-    for (n = shadow_root_next_in_shadow_including(ctx, root, root); n != NULL; ) {
+    for (n = po_next(root, root, false); n != NULL; ) {
         lxb_dom_element_t *el;
         StackingLayer layer;
         PoBoxGen gen;
         bool forms, positioned, report = false, skip = false;
 
         if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) {
-            n = po_next(ctx, n, root, false);
+            n = po_next(n, root, false);
             continue;
         }
         el = lxb_dom_interface_element(n);
@@ -208,7 +193,7 @@ static void po_collect(JSContext *ctx, lxb_dom_element_t *context_el, PoSet set,
         if (gen != PO_BOX_YES) {
             /* `none` takes its whole subtree with it; `contents` keeps its children's boxes and has none of
                its own, so there is nothing here for any of CSS 2.1 §E.2's steps to place. */
-            n = po_next(ctx, n, root, gen == PO_BOX_NONE);
+            n = po_next(n, root, gen == PO_BOX_NONE);
             continue;
         }
 
@@ -255,7 +240,7 @@ static void po_collect(JSContext *ctx, lxb_dom_element_t *context_el, PoSet set,
             break;
         }
         if (report) po_push(out, el);
-        n = po_next(ctx, n, root, skip);
+        n = po_next(n, root, skip);
     }
 }
 
@@ -393,7 +378,6 @@ typedef struct {
 } PoFrame;
 
 struct PaintOrderCursor {
-    JSContext *ctx;
     PoFrame   *stack;
     size_t     n, cap;
 };
@@ -582,17 +566,13 @@ static void po_frame_release(PoFrame *f)
     po_list_free(&f->members);
 }
 
-PaintOrderCursor *paint_order_begin(JSContext *ctx, lxb_dom_element_t *context_el)
+PaintOrderCursor *paint_order_begin(lxb_dom_element_t *context_el)
 {
     PaintOrderCursor *c;
 
-    DCHECK(ctx != NULL, "CSS 2.1 §E.2's painting order was asked for with no realm — Appendix E §E.1's tree "
-                        "order is DOM §4.8 \"Interface ShadowRoot\"'s shadow-including one, whose walker reads "
-                        "a per-flow association kept on an element's wrapper");
     DCHECK(context_el != NULL, "CSS 2.1 §E.2's painting order was asked about no element");
     c = lexbor_calloc(1, sizeof *c);
     CHECK(c != NULL, "paint: OOM allocating CSS 2.1 §E.2's walk");
-    c->ctx = ctx;
     po_push_context(c, context_el, false);
     return c;
 }
@@ -637,7 +617,7 @@ bool paint_order_next(PaintOrderCursor *c, PaintStep *step, lxb_dom_element_t **
                by level leaves step 8's members (all level 0) in the tree order they were collected in. */
             if (f->pseudo) { f->phase = f->phase == PO_CTX_NEGATIVE ? PO_CTX_BLOCKS : PO_CTX_DONE; break; }
             if (!f->built) {
-                po_collect(c->ctx, ce, PO_SET_POSITIONED, &f->members);
+                po_collect(ce, PO_SET_POSITIONED, &f->members);
                 if (f->phase != PO_CTX_ZERO) po_sort_by_level(&f->members);
                 f->built = true;
                 f->i = 0;
@@ -666,7 +646,7 @@ bool paint_order_next(PaintOrderCursor *c, PaintStep *step, lxb_dom_element_t **
             /* Step 4: "For all its in-flow, non-positioned, block-level descendants in tree order:" their
                background and border. The set is kept for step 7, which walks the same set. */
             if (!f->built) {
-                po_collect(c->ctx, ce, PO_SET_IN_FLOW_BLOCK, &f->blocks);
+                po_collect(ce, PO_SET_IN_FLOW_BLOCK, &f->blocks);
                 f->built = true;
                 f->i = 0;
             }
@@ -687,7 +667,7 @@ bool paint_order_next(PaintOrderCursor *c, PaintStep *step, lxb_dom_element_t **
                which actually create a new stacking context should be considered part of the parent stacking
                context, not this new one." */
             if (!f->built) {
-                po_collect(c->ctx, ce, PO_SET_FLOAT, &f->members);
+                po_collect(ce, PO_SET_FLOAT, &f->members);
                 f->built = true;
                 f->i = 0;
             }

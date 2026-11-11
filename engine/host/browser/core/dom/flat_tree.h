@@ -8,6 +8,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_FLAT_TREE_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_FLAT_TREE_H
 
+#include <stdbool.h>
+
 #include <lexbor/dom/dom.h>
 
 /* `n`'s flat-tree parent: its assigned slot, the host of the shadow root it is a child of, or its DOM parent.
@@ -24,5 +26,11 @@ lxb_dom_node_t *flat_tree_last_child(const lxb_dom_node_t *n);
    tree and is not its root (asserted). */
 lxb_dom_node_t *flat_tree_next_sibling(const lxb_dom_node_t *n);
 lxb_dom_node_t *flat_tree_prev_sibling(const lxb_dom_node_t *n);
+
+/* One step of the flat tree's pre-order within `root`: `n`'s first flat-tree child unless `skip_subtree`, else
+   the next flat-tree sibling of `n` or of its nearest flat-tree ancestor below `root`; NULL once the walk leaves
+   `root`. `n` is `root` or a flat-tree descendant of it (asserted). CSS 2.1 Appendix E §E.1's tree order
+   ("Preorder depth-first traversal of the rendering tree") is this walk. */
+lxb_dom_node_t *flat_tree_next_in(const lxb_dom_node_t *n, const lxb_dom_node_t *root, bool skip_subtree);
 
 #endif

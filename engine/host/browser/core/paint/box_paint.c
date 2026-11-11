@@ -1440,8 +1440,8 @@ BoxPaintWalk *box_paint_begin(JSContext *ctx, lxb_dom_element_t *context_el, Dis
     w->st.why = 0u;
     w->before = out->n;
     w->ok = true;
-    /* `ctx` and `context_el` are asserted by paint_order_begin, which owns both preconditions. */
-    w->order = paint_order_begin(ctx, context_el);
+    /* `context_el` is asserted by paint_order_begin, which owns its precondition. */
+    w->order = paint_order_begin(context_el);
     return w;
 }
 
