@@ -47630,7 +47630,7 @@ static void fg_gap_name(JSContext *ctx, const FGGap *gap, char *buf, size_t cap)
 {
     static const char *const base[] = { "bytecode", "stepRoot", "asyncCall", "holdsEval" };
     static const char *const frame[] = { "call", "async", "generator", "asyncGeneratorCreate",
-                                         "asyncGeneratorDrive", "anchor" };
+                                         "asyncGeneratorDrive", "anchor", "callHoldsEval" };
     static const char *const field[] = { "strbuf", "props", "slots", "buf", "atom", "array", "shared", "maprec",
                                          "reexec", "tree", "cache" };
     char name[ATOM_GET_STR_BUF_SIZE];
@@ -47978,6 +47978,120 @@ static void *fg_rrecord(FGReader *r, const JSRecordLayout *l)
 /* A bytecode base, rebuilt as flow_clone_state_alloc and clone_susp_frame build a sibling's: a host-owned state
    whose buffer the layout law sizes from the argument count written and the body, holding the slots, cells and
    positions written. Its function may be a shell whose body is read after it; fg_read checks the two agree. */
+/* A borrowed slot of a rebuilt frame: the value is read, and the reference the reader hands back is dropped,
+   because a frame borrows what its caller's operands or its own record hold, and those were rebuilt holding it. */
+static JSValueConst fg_rborrow(FGReader *r)
+{
+    JSValue v = fg_rvalue(r);
+
+    JS_FreeValue(r->ctx, v);
+    return v;
+}
+
+/* A base's chain of heap frames (fg_chain_calls), rebuilt bottom-up onto the base `s` whose body is `cb`: each
+   frame as do_tramp_call pushes it, its caller records taken from the frame below it, and the base dormant, its
+   live point being the top frame's. Each frame's caller cells are the caller closure's, which is a shell until
+   the bodies are read; fg_rchain_cells sets them then. */
+static void fg_rchain_calls(FGReader *r, JSAsyncFunctionState *s, JSFunctionBytecode *cb)
+{
+    JSContext *ctx = r->ctx;
+    JSStackFrame *csf = &s->frame;
+    JSValue *cbuf = s->frame.arg_buf, *cend = s->frame.cur_sp;
+    TrampFrame *below = NULL;
+    uint32_t n = fg_r32(r);
+
+    CHECK(n > 0, "flow graph: a base marked as holding heap frames holds none");
+    s->frame.cur_sp = NULL;   /* dormant: the live point is on the chain */
+    for (uint32_t i = 0; i < n; i++) {
+        TrampFrame *t;
+        JSStackFrame *sf;
+        JSValue bv;
+        JSFunctionBytecode *b;
+        uint32_t al, pc, live, aoff = 0;
+        uint8_t flags, amode;
+
+        CHECK(fg_r8(r) == 'c', "flow graph: a heap frame carries a kind this reader does not know");
+        bv = fg_rvalue(r);
+        CHECK(JS_VALUE_GET_TAG(bv) == JS_TAG_FUNCTION_BYTECODE, "flow graph: a heap frame's body is not a body");
+        b = JS_VALUE_GET_PTR(bv);
+        t = tramp_frame_new(ctx->rt);
+        CHECK(t != NULL, "flow graph: OOM rebuilding a heap frame");
+        sf = &t->sf;
+        sf->cur_func = fg_rvalue(r);
+        t->this_val = fg_rborrow(r);
+        t->new_target = fg_rborrow(r);
+        t->caller_this = fg_rborrow(r);
+        t->caller_new_target = fg_rborrow(r);
+        t->call_first = (int)fg_r32(r);
+        t->call_argc = (int)fg_r32(r);
+        t->is_tail = fg_r8(r);
+        t->owns_func = fg_r8(r);
+        t->cont_kind = fg_r8(r);
+        t->forof_off = (int)fg_r32(r);
+        t->arg_allocated = (int)(al = fg_r32(r));
+        t->callee_argc = (int)fg_r32(r);
+        sf->arg_count = (uint16_t)fg_r32(r);
+        t->caller_argc = (int)fg_r32(r);
+        t->caller_arg_allocated_size = (int)fg_r32(r);
+        flags = fg_r8(r);
+        amode = fg_r8(r);
+        if (amode == 'b') aoff = fg_r32(r);
+        pc = fg_r32(r);
+        live = fg_r32(r);
+        CHECK(JS_IsObject(sf->cur_func) && JS_VALUE_GET_OBJ(sf->cur_func)->u.func.function_bytecode == b
+                  && al <= UINT16_MAX && pc < (uint32_t)b->byte_code_len
+                  && (t->cont_kind == CONT_NONE || cont_kind_recordless(t->cont_kind))
+                  && (amode == 'o' ? al != 0 : al == 0 && (amode == 'n' || amode == 'b'))
+                  && (amode != 'b' || cbuf + aoff + sf->arg_count <= cend),
+              "flow graph: a heap frame's function, counts, continuation or arguments are not what an ordinary "
+              "push builds");
+        if (!t->owns_func) JS_FreeValue(ctx, sf->cur_func);   /* borrowed from the caller's operands */
+        t->b = b; t->ctx = b->realm;
+        t->local_slots = TRAMP_FRAME_SLOTS(al, b);
+        CHECK(live <= (uint32_t)t->local_slots, "flow graph: a heap frame's live end is outside its buffer");
+        t->local_buf = js_malloc(ctx, sizeof(JSValue) * (t->local_slots ? t->local_slots : 1)
+                                      + sizeof(JSVarRef *) * (size_t)b->var_ref_count);
+        CHECK(t->local_buf != NULL, "flow graph: OOM rebuilding a heap frame's buffer");
+        sf->arg_buf = amode == 'o' ? t->local_buf : amode == 'b' ? cbuf + aoff : NULL;
+        sf->var_buf = t->local_buf + al;
+        sf->var_refs = TRAMP_VAR_REFS(sf->var_buf + b->var_count, b);
+        sf->var_ref_count = b->var_ref_count;
+        sf->cur_pc = b->byte_code_buf + pc;
+        for (uint32_t k = 0; k < live; k++) t->local_buf[k] = fg_rvalue(r);
+        for (int k = 0; k < b->var_ref_count; k++) sf->var_refs[k] = fg_rcell(r);
+        sf->cur_sp = i + 1 == n ? t->local_buf + live : NULL;
+        sf->is_strict_mode = flags & 1;
+        sf->is_constructor = (flags >> 1) & 1;
+        sf->is_call_root = false;
+        sf->step_func = sf->step_this = JS_UNDEFINED;
+        sf->this_val = t->this_val;
+        sf->prev_frame = csf;
+        t->seq_req = NULL; t->seq_req_kind = CONT_NONE;
+        t->async_data = NULL; t->async_promise = JS_UNDEFINED; t->gen_data = NULL; t->cont_state = NULL;
+        t->up = below;
+        t->caller_sf = csf; t->caller_b = cb; t->caller_ctx = cb->realm;
+        t->caller_local_buf = cbuf; t->caller_var_buf = csf->var_buf; t->caller_arg_buf = csf->arg_buf;
+        t->caller_stack_buf = csf->var_buf + cb->var_count;
+        t->caller_sp = cend;
+        t->caller_argv = (JSValueConst *)csf->arg_buf;
+        t->caller_var_refs = NULL;   /* fg_rchain_cells, once the caller's closure holds its body */
+        JS_FreeValue(ctx, bv);
+        below = t; csf = sf; cb = b; cbuf = t->local_buf; cend = t->local_buf + live;
+    }
+    s->tramp_top = below;
+    tramp_chain_park_ends(below, true);
+}
+
+/* Each rebuilt frame's caller cells: its caller closure's, read once the closure holds its body. */
+static void fg_rchain_cells(JSAsyncFunctionState *s)
+{
+    for (TrampFrame *t = s->tramp_top; t; t = t->up) {
+        JSStackFrame *csf = t->caller_sf;
+
+        t->caller_var_refs = JS_VALUE_GET_OBJ(csf->cur_func)->u.func.var_refs;
+    }
+}
+
 static JSAsyncFunctionState *fg_rbase_bytecode(FGReader *r)
 {
     JSContext *ctx = r->ctx;
@@ -48003,7 +48117,6 @@ static JSAsyncFunctionState *fg_rbase_bytecode(FGReader *r)
     lc = (uint32_t)TRAMP_FRAME_SLOTS(al, b);
     CHECK(live <= lc && pc <= (uint32_t)b->byte_code_len,
           "flow graph: a base's live end or program counter is outside its frame or its body");
-    CHECK(!(flags & 8), "flow graph: a base's live point is on a chain of heap frames, and no reader rebuilds one");
     s->argc = (int)argc;
     s->throw_flag = flags & 1;
     sf->is_strict_mode = (flags >> 1) & 1;
@@ -48019,6 +48132,7 @@ static JSAsyncFunctionState *fg_rbase_bytecode(FGReader *r)
     for (uint32_t i = 0; i < live; i++) sf->arg_buf[i] = fg_rvalue(r);
     sf->cur_sp = sf->arg_buf + live;
     for (int i = 0; i < b->var_ref_count; i++) sf->var_refs[i] = fg_rcell(r);
+    if (flags & 8) fg_rchain_calls(r, s, b);
     JS_FreeValue(ctx, bv);
     return s;
 }
@@ -48125,6 +48239,7 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
 
         CHECK(b != NULL && sf->cur_pc >= b->byte_code_buf && sf->cur_pc <= b->byte_code_buf + b->byte_code_len,
               "flow graph: a rebuilt base's function is not the one its frame was written against");
+        fg_rchain_cells((JSAsyncFunctionState *)frames[i]);
     }
     for (uint32_t i = 0; i < r.n_objs; i++) JS_FreeValue(ctx, r.objs[i]);
     for (uint32_t i = 0; i < r.n_strs; i++) JS_FreeValue(ctx, r.strs[i]);
@@ -83929,7 +84044,8 @@ static void js_reaction_park_free(JSContext *ctx, void *opaque)
    diff builds: that part's writer, which writes each slot and follows each link it owns. Absence shows as:
    `requester` gaps, and a `frame`, `cont` or `step` gap for each unwritten part. */
 static FGWriter *g_fg_frames;
-enum { FG_FRAME_CALL, FG_FRAME_ASYNC, FG_FRAME_GENERATOR, FG_FRAME_AGEN_CREATE, FG_FRAME_AGEN_DRIVE, FG_FRAME_ANCHOR };
+enum { FG_FRAME_CALL, FG_FRAME_ASYNC, FG_FRAME_GENERATOR, FG_FRAME_AGEN_CREATE, FG_FRAME_AGEN_DRIVE, FG_FRAME_ANCHOR,
+       FG_FRAME_CALL_EVAL };
 enum { FG_SF_STRBUF, FG_SF_PROPS, FG_SF_SLOTS, FG_SF_BUF, FG_SF_ATOM, FG_SF_ARRAY, FG_SF_SHARED, FG_SF_MAPREC,
        FG_SF_REEXEC, FG_SF_TREE, FG_SF_CACHE };
 
@@ -84095,6 +84211,99 @@ static void fg_base_bytecode(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s)
     for (int i = 0; i < sf->var_ref_count; i++) fg_cell(w, out, sf->var_refs[i]);
 }
 
+/* Whether a heap frame is an ordinary bytecode activation the call writer writes: its own buffer, no coroutine
+   record, no direct eval standing in it, and a continuation that holds no record (none, or a kind whose frame's
+   own operands are the whole of it). What waits on a recorded kind is that record's writer's. */
+static bool fg_frame_call_written(const TrampFrame *t)
+{
+    return !t->async_data && !t->gen_data && !tramp_agen_data(t) && t->local_buf && !t->sf.eval_hold
+           && (t->cont_kind == CONT_NONE || cont_kind_recordless(t->cont_kind));
+}
+
+/* A bytecode base's chain of heap frames, after the base's record: the count, then each frame from the bottom
+   (the base's callee) to the top (the live point), each 'c' and an ordinary activation as do_tramp_call pushes
+   it, or for a survey 'X' where the frame is another kind. A frame's record is its body (an anchor), its
+   function, its receiver and new.target and its caller's, its call shape (call_first, call_argc, is_tail,
+   owns_func, its continuation kind and for-of offset), its buffer's law (arg_allocated, callee_argc,
+   local_slots, arg_count), the caller's argc and argument allocation, its flags (strict, constructor), where
+   its arguments are (its own buffer, none, or an offset into its caller's), its program counter, its live
+   slots and its cells. The caller's stack position is the caller's live end, which the caller's record states,
+   and every other caller pointer is the caller's own frame, so neither is written; each is asserted here. */
+static void fg_chain_calls(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s, uint32_t n)
+{
+    TrampFrame **ts = fg_grow(NULL, sizeof *ts * n);
+    JSStackFrame *csf = &s->frame;
+    JSFunctionBytecode *cb = JS_VALUE_GET_OBJ(s->frame.cur_func)->u.func.function_bytecode;
+    JSValue *cbuf = s->frame.arg_buf, *cend;
+    uint32_t i = n;
+
+    for (TrampFrame *t = s->tramp_top; t; t = t->up) ts[--i] = t;
+    DCHECK(i == 0, "flow graph: a base's chain is not the length its walk counted");
+    cend = ts[0]->caller_sp;
+    fg_u32(out, n);
+    for (i = 0; i < n; i++) {
+        TrampFrame *t = ts[i];
+        JSStackFrame *sf = &t->sf;
+        JSFunctionBytecode *b = t->b;
+        JSValue *end = i + 1 < n ? ts[i + 1]->caller_sp : sf->cur_sp;
+        uint32_t live;
+
+        if (!fg_frame_call_written(t)) {
+            DCHECK(w->survey, "flow graph: a strict write reached a heap frame no writer has past its gap");
+            fg_u8(out, 'X');
+            break;
+        }
+        DCHECK(t->up == (i ? ts[i - 1] : NULL) && t->caller_sf == csf && sf->prev_frame == csf,
+               "flow graph: a heap frame's caller records do not name the frame below it on its chain");
+        DCHECK(t->caller_b == cb && t->caller_ctx == cb->realm && t->caller_local_buf == cbuf
+                   && t->caller_var_buf == csf->var_buf && t->caller_arg_buf == csf->arg_buf
+                   && t->caller_stack_buf == csf->var_buf + cb->var_count && t->caller_sp == cend,
+               "flow graph: a heap frame's caller record is not its caller's own frame and live end, which its "
+               "reader derives from the caller");
+        DCHECK(JS_VALUE_GET_TAG(sf->cur_func) == JS_TAG_OBJECT && JS_VALUE_GET_OBJ(sf->cur_func)->u.func.function_bytecode == b
+                   && t->ctx == b->realm && t->local_slots == TRAMP_FRAME_SLOTS(t->arg_allocated, b)
+                   && sf->var_buf == t->local_buf + t->arg_allocated && sf->var_ref_count == b->var_ref_count
+                   && sf->cur_gc_obj == NULL && !sf->is_call_root && JS_IsUndefined(t->async_promise),
+               "flow graph: a heap frame's buffer, function or owner is not what its push builds");
+        DCHECK(end != NULL && end >= t->local_buf && end <= t->local_buf + t->local_slots,
+               "flow graph: a heap frame's live end is outside its own buffer");
+        DCHECK(sf->cur_pc >= b->byte_code_buf && sf->cur_pc <= b->byte_code_buf + b->byte_code_len,
+               "flow graph: a heap frame's program counter is outside its body");
+        DCHECK(t->arg_allocated ? sf->arg_buf == t->local_buf
+               : sf->arg_buf == NULL || (sf->arg_buf >= cbuf && sf->arg_buf + sf->arg_count <= cend),
+               "flow graph: a heap frame's arguments are neither its own, absent, nor its caller's operands");
+        live = (uint32_t)(end - t->local_buf);
+        fg_u8(out, 'c');
+        fg_value(w, out, JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, b));
+        fg_value(w, out, sf->cur_func);
+        fg_value(w, out, t->this_val);
+        fg_value(w, out, t->new_target);
+        fg_value(w, out, t->caller_this);
+        fg_value(w, out, t->caller_new_target);
+        fg_u32(out, (uint32_t)t->call_first);
+        fg_u32(out, (uint32_t)t->call_argc);
+        fg_u8(out, t->is_tail);
+        fg_u8(out, t->owns_func);
+        fg_u8(out, t->cont_kind);
+        fg_u32(out, (uint32_t)t->forof_off);
+        fg_u32(out, (uint32_t)t->arg_allocated);
+        fg_u32(out, (uint32_t)t->callee_argc);
+        fg_u32(out, sf->arg_count);
+        fg_u32(out, (uint32_t)t->caller_argc);
+        fg_u32(out, (uint32_t)t->caller_arg_allocated_size);
+        fg_u8(out, (uint8_t)(sf->is_strict_mode | sf->is_constructor << 1));
+        if (t->arg_allocated) fg_u8(out, 'o');
+        else if (!sf->arg_buf) fg_u8(out, 'n');
+        else { fg_u8(out, 'b'); fg_u32(out, (uint32_t)(sf->arg_buf - cbuf)); }
+        fg_u32(out, (uint32_t)(sf->cur_pc - b->byte_code_buf));
+        fg_u32(out, live);
+        for (uint32_t k = 0; k < live; k++) fg_value(w, out, t->local_buf[k]);
+        for (int k = 0; k < sf->var_ref_count; k++) fg_cell(w, out, sf->var_refs[k]);
+        csf = sf; cb = b; cbuf = t->local_buf; cend = end;
+    }
+    (free)(ts);
+}
+
 /* One base: its record by its kind, its park, each heap frame stashed on it with what waits on that frame, and
    for a survey the values the unwritten parts hold. A base's kind names the record it is embedded in. */
 static void fg_frame_base(FGWriter *w, JSAsyncFunctionState *s)
@@ -84111,10 +84320,12 @@ static void fg_frame_base(FGWriter *w, JSAsyncFunctionState *s)
     for (TrampFrame *t = s->tramp_top; t; t = t->up, depth++) {
         JSAsyncGeneratorData *agd = tramp_agen_data(t);
 
-        fg_frame_gap(w, FG_GAP_FRAME,
-                     t->async_data ? FG_FRAME_ASYNC : t->gen_data ? FG_FRAME_GENERATOR
-                     : agd ? (t->cont_kind == CONT_AGEN_CREATE ? FG_FRAME_AGEN_CREATE : FG_FRAME_AGEN_DRIVE)
-                     : t->local_buf ? FG_FRAME_CALL : FG_FRAME_ANCHOR, NULL);
+        if (!fg_frame_call_written(t))
+            fg_frame_gap(w, FG_GAP_FRAME,
+                         t->async_data ? FG_FRAME_ASYNC : t->gen_data ? FG_FRAME_GENERATOR
+                         : agd ? (t->cont_kind == CONT_AGEN_CREATE ? FG_FRAME_AGEN_CREATE : FG_FRAME_AGEN_DRIVE)
+                         : !t->local_buf ? FG_FRAME_ANCHOR : t->sf.eval_hold ? FG_FRAME_CALL_EVAL : FG_FRAME_CALL,
+                         NULL);
         fg_frame_sf(w, tramp_live_sf(t));
         /* an async generator's record is its frame's continuation slot, and what waits on a drive is beside it */
         if (!agd) fg_frame_links(w, t->ctx, t->cont_state, t->cont_kind);
@@ -84123,6 +84334,7 @@ static void fg_frame_base(FGWriter *w, JSAsyncFunctionState *s)
         if ((t->gen_data || (agd && t->cont_kind == CONT_AGEN_CREATE)) && t->seq_req_kind != CONT_NONE)
             fg_frame_gap(w, FG_GAP_REQUESTER, t->seq_req_kind, NULL);
     }
+    if (s->base_kind == FLOW_BASE_BYTECODE && s->tramp_top) fg_chain_calls(w, &w->fbuf, s, depth);
     fr->heap += depth;
     if (depth > fr->depth) fr->depth = depth;
     if (!w->survey) return;
