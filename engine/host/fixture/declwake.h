@@ -3,9 +3,9 @@
    not have, so several members hold that one record when its refusal lands; each forks its failure arm and its
    waiting arm rests on the refusal. The example's world then fetches a chain of twelve GETs the host serves, one
    after another. A reply wakes only the members whose register holds its record, so no waiting arm is stepped
-   again by a link of the chain: a member rests on a refusal at most once per refusal its register took. One of
-   test_forced.c's exploring documents (TF_DOCS); it ends with TF_CANVAS_INK, which test_forced.c defines before
-   including it. */
+   again by a link of the chain: each member rests on the refusal once, after its own chain, and those resting are
+   the session's host-owed survivors. One of test_forced.c's exploring documents (TF_DOCS); it ends with
+   TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_DECLWAKE_H
 #define ENGINE_HOST_FIXTURE_DECLWAKE_H
 #ifndef TF_CANVAS_INK

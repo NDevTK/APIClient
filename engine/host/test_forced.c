@@ -20330,14 +20330,16 @@ TF_UNIT void probes_declwake(const char *js, Probe *tab, int *n) {
     long forks = tf_step_unit_runs(js, "fork-over-a-declined-request");
     long rests = tf_step_unit_runs(js, "await-a-refused-request");
     long replies = tf_step_unit_runs(js, "deliver-one-reply");
+    long owed = abs_census_last(js, "owed");
     const char *w_why = NULL; int w_tt = 1;
 
-    fold_row(&w_tt, &w_why, forks > 0 && replies >= 12,
-             "NOT REACHED: no refusal was forked, or fewer than the chain's twelve replies were delivered, so no "
-             "member rested on a refusal while replies it does not hold arrived");
-    snprintf(why, sizeof why, "members were stepped onto a refusal %ld time(s) for %ld refusal(s) their registers "
-             "took — a reply woke a member whose register does not hold its record", rests, forks);
-    fold_row(&w_tt, &w_why, rests <= forks, why);
+    fold_row(&w_tt, &w_why, forks > 0 && replies >= 12 && owed > 0,
+             "NOT REACHED: no refusal was forked, fewer than the chain's twelve replies were delivered, or no "
+             "survivor rests on the refusal, so no member rested on it while replies it does not hold arrived");
+    snprintf(why, sizeof why, "members were stepped onto a refusal %ld time(s) and %ld survivor(s) rest on it — "
+             "every member here rests on it once, after its chain, so a second rest is a reply waking a member "
+             "whose register does not hold its record", rests, owed);
+    fold_row(&w_tt, &w_why, rests == owed, why);
     const Probe rows[] = {
         { "declined-wake-exact", w_tt, "dwpost", SESS_EXPLORE, w_why },
     };
