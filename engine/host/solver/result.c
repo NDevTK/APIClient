@@ -826,10 +826,10 @@ char *result_wfq_json(void) {
     METRIC_SET(priced_over_observed, w.priced_over_observed);
     if (w.observed_oldest.present) {
         observed_oldest = composef("{\"seq\":%llu,\"cursor\":%d,\"ownWork\":%lld,\"picks\":%lld,"
-                                   "\"stepUnit\":\"%s\",\"unit\":%d,\"hostOwed\":%d,\"indexed\":%d}",
+                                   "\"stepUnit\":%d,\"unit\":%d,\"hostOwed\":%d,\"indexed\":%d}",
                                    (unsigned long long)w.observed_oldest.seq, w.observed_oldest.cursor,
                                    (long long)w.observed_oldest.own_work, (long long)w.observed_oldest.picks,
-                                   step_unit_name(w.observed_oldest.step_unit), w.observed_oldest.unit,
+                                   (int)w.observed_oldest.step_unit, w.observed_oldest.unit,
                                    w.observed_oldest.host_owed, w.observed_oldest.indexed);
         CHECK(observed_oldest, "result: OOM composing the oldest observed-class member");
         METRIC_SET_OBJECT(observed_oldest, observed_oldest);   /* borrowed until the rows are rendered below */
