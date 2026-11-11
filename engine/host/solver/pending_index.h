@@ -125,8 +125,7 @@ void pending_index_declined(JSValueConst rec, int rule);
     X(COOKIES, 1, "cookies", reply_declined_cookies) \
     X(HEADER_AUTHORITY, 1, "header-authority", reply_declined_header_authority) \
     X(WITNESS, 1, "witness", reply_declined_witness) \
-    X(ADDRESS, 1, "address", reply_declined_address) \
-    X(BODY, 1, "body", reply_declined_body) \
+    X(BYTES, 1, "bytes", reply_declined_bytes) \
     X(URL_AUTHORITY, 1, "url-authority", reply_declined_url_authority) \
     X(LINEAGE, 1, "lineage", reply_declined_lineage) \
     X(REACHES, 1, "reaches", reply_declined_reaches) \

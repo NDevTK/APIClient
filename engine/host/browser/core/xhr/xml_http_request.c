@@ -119,8 +119,10 @@ typedef struct {
        input must reach that surface the same way or the endpoint is a hole with no value in it. JS_NULL where
        open() was handed a plain string — a POSITIVE statement (this address is exactly what `url` says). */
     JSValue url_src;
-    /* author request headers — an Array of [name, value] or [name, value, root], `root` the delivery root of the
-       unknown whose shape `value` is (solver/concolic.h's concolic_root_c), the first one a combine kept */
+    /* author request headers — an Array of [name, value, root, example, shape]: core/fetch/headers.h's
+       HeaderEntry as JS values. `shape` is true where `value` is an unknown's display shape; `root` is that
+       unknown's delivery root, the first one a combine kept; `example` is the value on the examples of every
+       unknown combined into it. `root` and `example` are undefined where there is none. */
     JSValue author_headers;
     JSValue request_body;      /* request body — a JS string, or JS_NULL */
     /* the delivery root of the unknown a shape body (`request_body_is_shape`) spells, a JS string, else JS_NULL */
@@ -462,15 +464,44 @@ static int hl_find(JSContext *ctx, JSValueConst arr, const char *name)
     return -1;
 }
 
-static void hl_push(JSContext *ctx, JSValueConst arr, const char *name, const char *value, const char *root)
+static void hl_push(JSContext *ctx, JSValueConst arr, const char *name, const char *value,
+                    const HeaderUnknown *unk)
 {
     JSValue pair = JS_NewArray(ctx);
 
     if (JS_IsException(pair)) return;
     JS_SetPropertyUint32(ctx, pair, 0, JS_NewString(ctx, name));
     JS_SetPropertyUint32(ctx, pair, 1, JS_NewString(ctx, value));
-    if (root) JS_SetPropertyUint32(ctx, pair, 2, JS_NewString(ctx, root));
+    if (unk && unk->root) JS_SetPropertyUint32(ctx, pair, 2, JS_NewString(ctx, unk->root));
+    if (unk && unk->example) JS_SetPropertyUint32(ctx, pair, 3, JS_NewString(ctx, unk->example));
+    JS_SetPropertyUint32(ctx, pair, 4, JS_NewBool(ctx, unk != NULL));
     JS_SetPropertyUint32(ctx, (JSValue)arr, hl_len(ctx, arr), pair);
+}
+
+/* One author header as core/fetch/headers.h's HeaderEntry, its strings borrowed from the tuple until
+   hl_entry_release. */
+static void hl_entry_borrow(JSContext *ctx, JSValueConst pair, HeaderEntry *e)
+{
+    JSValue nv = JS_GetPropertyUint32(ctx, pair, 0), vv = JS_GetPropertyUint32(ctx, pair, 1);
+    JSValue rv = JS_GetPropertyUint32(ctx, pair, 2), xv = JS_GetPropertyUint32(ctx, pair, 3);
+    JSValue sv = JS_GetPropertyUint32(ctx, pair, 4);
+
+    e->name = (char *)JS_ToCString(ctx, nv);
+    e->value = (char *)JS_ToCString(ctx, vv);
+    e->root = JS_IsUndefined(rv) ? NULL : (char *)JS_ToCString(ctx, rv);
+    e->example = JS_IsUndefined(xv) ? NULL : (char *)JS_ToCString(ctx, xv);
+    e->shape = JS_VALUE_GET_TAG(sv) == JS_TAG_BOOL && JS_VALUE_GET_BOOL(sv);
+    CHECK(e->name != NULL && e->value != NULL, "XMLHttpRequest: OOM reading an author request header");
+    JS_FreeValue(ctx, nv); JS_FreeValue(ctx, vv); JS_FreeValue(ctx, rv); JS_FreeValue(ctx, xv);
+    JS_FreeValue(ctx, sv);
+}
+
+static void hl_entry_release(JSContext *ctx, HeaderEntry *e)
+{
+    JS_FreeCString(ctx, e->name);
+    JS_FreeCString(ctx, e->value);
+    if (e->root) JS_FreeCString(ctx, e->root);
+    if (e->example) JS_FreeCString(ctx, e->example);
 }
 
 /* §5.1 "get a header": the entries with this name joined by ", ", or NULL when the list has none.
@@ -505,29 +536,45 @@ static char *hl_get(JSContext *ctx, JSValueConst arr, const char *name)
 /* §5.1 "combine (name, value)": if the list already contains an entry with this name, append `, value` to the
    FIRST one; otherwise append the pair. §3.5.2's example — X-Test: one then two arriving as `one, two` — is
    this operation and nothing else. */
-static void hl_combine(JSContext *ctx, JSValueConst arr, const char *name, const char *value, const char *root)
+static char *hl_join(const char *a, const char *b)
+{
+    char *joined = lexbor_malloc(strlen(a) + strlen(b) + 3);
+
+    CHECK(joined != NULL, "XMLHttpRequest: OOM combining a request header");
+    sprintf(joined, "%s, %s", a, b);
+    return joined;
+}
+
+static void hl_combine(JSContext *ctx, JSValueConst arr, const char *name, const char *value,
+                       const HeaderUnknown *unk)
 {
     int at = hl_find(ctx, arr, name);
-    JSValue pair, vv, rv;
-    const char *old;
+    JSValue pair;
+    HeaderEntry old;
+    /* What each half is on its example: its bytes, or its unknown's example, or nothing. */
+    const char *old_bytes, *new_bytes = unk ? unk->example : value;
     char *joined;
 
-    if (at < 0) { hl_push(ctx, arr, name, value, root); return; }
+    if (at < 0) { hl_push(ctx, arr, name, value, unk); return; }
     pair = JS_GetPropertyUint32(ctx, arr, (uint32_t)at);
-    rv = JS_GetPropertyUint32(ctx, pair, 2);
-    if (root && JS_IsUndefined(rv)) JS_SetPropertyUint32(ctx, pair, 2, JS_NewString(ctx, root));
-    JS_FreeValue(ctx, rv);
-    vv = JS_GetPropertyUint32(ctx, pair, 1);
-    old = JS_ToCString(ctx, vv);
-    if (old) {
-        joined = lexbor_malloc(strlen(old) + strlen(value) + 3);
-        CHECK(joined != NULL, "XMLHttpRequest: OOM combining a request header");
-        sprintf(joined, "%s, %s", old, value);
-        JS_SetPropertyUint32(ctx, pair, 1, JS_NewString(ctx, joined));
-        free(joined);
-        JS_FreeCString(ctx, old);
+    hl_entry_borrow(ctx, pair, &old);
+    old_bytes = old.shape ? old.example : old.value;
+    if (unk && unk->root && !old.root) JS_SetPropertyUint32(ctx, pair, 2, JS_NewString(ctx, unk->root));
+    /* The combined value is a shape when either half is, and has an example only when both halves have bytes. */
+    if (old.shape || unk) {
+        if (old_bytes && new_bytes) {
+            joined = hl_join(old_bytes, new_bytes);
+            JS_SetPropertyUint32(ctx, pair, 3, JS_NewString(ctx, joined));
+            free(joined);
+        } else {
+            JS_SetPropertyUint32(ctx, pair, 3, JS_UNDEFINED);
+        }
+        JS_SetPropertyUint32(ctx, pair, 4, JS_TRUE);
     }
-    JS_FreeValue(ctx, vv);
+    joined = hl_join(old.value, value);
+    JS_SetPropertyUint32(ctx, pair, 1, JS_NewString(ctx, joined));
+    free(joined);
+    hl_entry_release(ctx, &old);
     JS_FreeValue(ctx, pair);
 }
 
@@ -540,7 +587,10 @@ static void hl_set(JSContext *ctx, JSValueConst arr, const char *name, const cha
     if (at < 0) { hl_push(ctx, arr, name, value, NULL); return; }
     pair = JS_GetPropertyUint32(ctx, arr, (uint32_t)at);
     JS_SetPropertyUint32(ctx, pair, 1, JS_NewString(ctx, value));
-    JS_SetPropertyUint32(ctx, pair, 2, JS_UNDEFINED);   /* the value set is bytes this engine wrote: no root */
+    /* The value set is bytes this engine wrote: no root, no example, no shape. */
+    JS_SetPropertyUint32(ctx, pair, 2, JS_UNDEFINED);
+    JS_SetPropertyUint32(ctx, pair, 3, JS_UNDEFINED);
+    JS_SetPropertyUint32(ctx, pair, 4, JS_FALSE);
     JS_FreeValue(ctx, pair);
 }
 
@@ -552,12 +602,13 @@ static void hl_to_header_list(JSContext *ctx, JSValueConst arr, HeaderList *out)
 
     for (i = 0; i < n; i++) {
         JSValue pair = JS_GetPropertyUint32(ctx, arr, i);
-        JSValue nv = JS_GetPropertyUint32(ctx, pair, 0), vv = JS_GetPropertyUint32(ctx, pair, 1);
-        const char *nm = JS_ToCString(ctx, nv), *val = JS_ToCString(ctx, vv);
-        if (nm && val) header_list_append(out, nm, val);
-        if (nm) JS_FreeCString(ctx, nm);
-        if (val) JS_FreeCString(ctx, val);
-        JS_FreeValue(ctx, nv); JS_FreeValue(ctx, vv); JS_FreeValue(ctx, pair);
+        HeaderEntry e;
+        HeaderUnknown unk;
+
+        hl_entry_borrow(ctx, pair, &e);
+        header_list_append_unknown(out, e.name, e.value, header_entry_unknown(&e, &unk));
+        hl_entry_release(ctx, &e);
+        JS_FreeValue(ctx, pair);
     }
 }
 
@@ -1202,9 +1253,14 @@ static JSValue js_xhr_set_request_header(JSContext *ctx, JSValueConst this_val, 
     for (i = 0; i < name_len; i++)
         lower[i] = (name[i] >= 'A' && name[i] <= 'Z') ? (char)(name[i] - 'A' + 'a') : name[i];
     lower[name_len] = 0;
-    if (!header_forbidden_request(lower, norm))
-        hl_combine(ctx, d->author_headers, name, norm,
-                   concolic_is(argv[1]) ? concolic_root_c(argv[1]) : NULL);   /* step 6 */
+    if (!header_forbidden_request(lower, norm)) {
+        HeaderUnknown unk = { NULL, NULL };
+        char *ex = concolic_is(argv[1]) ? header_value_example(ctx, argv[1]) : NULL;
+
+        if (concolic_is(argv[1])) { unk.root = concolic_root_c(argv[1]); unk.example = ex; }
+        hl_combine(ctx, d->author_headers, name, norm, concolic_is(argv[1]) ? &unk : NULL);   /* step 6 */
+        free(ex);
+    }
     free(lower);
     free(norm);
     JS_FreeCString(ctx, name);
@@ -2444,19 +2500,23 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
     json_buf_raw(&b, ","); json_buf_key(&b, "address");
     json_buf_str(&b, fetch_address_token(d->url_address));
     json_buf_raw(&b, ","); json_buf_key(&b, "headers"); json_buf_raw(&b, "[");
+    /* Each header as `[name, value, class]`: the value a host would send and what those bytes are
+       (core/fetch/headers.h), as a fetch()'s content read states them. */
     for (i = 0; i < n; i++) {
         JSValue pair = JS_GetPropertyUint32(ctx, d->author_headers, i);
-        JSValue nv = JS_GetPropertyUint32(ctx, pair, 0), vv = JS_GetPropertyUint32(ctx, pair, 1);
-        const char *nm = JS_ToCString(ctx, nv), *val = JS_ToCString(ctx, vv);
+        HeaderEntry e;
+
+        hl_entry_borrow(ctx, pair, &e);
         if (i) json_buf_raw(&b, ",");
         json_buf_raw(&b, "[");
-        json_buf_str(&b, nm ? nm : "");
+        json_buf_str(&b, e.name);
         json_buf_raw(&b, ",");
-        json_buf_str(&b, val ? val : "");
+        json_buf_str(&b, header_entry_wire_value(&e));
+        json_buf_raw(&b, ",");
+        json_buf_str(&b, header_value_class_token(&e));
         json_buf_raw(&b, "]");
-        if (nm) JS_FreeCString(ctx, nm);
-        if (val) JS_FreeCString(ctx, val);
-        JS_FreeValue(ctx, nv); JS_FreeValue(ctx, vv); JS_FreeValue(ctx, pair);
+        hl_entry_release(ctx, &e);
+        JS_FreeValue(ctx, pair);
     }
     json_buf_raw(&b, "],"); json_buf_key(&b, "body");
     if (JS_IsNull(d->request_body)) {

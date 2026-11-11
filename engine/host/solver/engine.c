@@ -445,8 +445,11 @@ static void pending_park_request(JSContext *ctx, Flow *f, JSValue e, const Fetch
     if (req->headers && req->headers->n > 0) {
         JSValue hl = pending_list_new();
         int hi;
+        /* Each value as a host would send it, with what those bytes are: the example of an unknown that has
+           one, else its display shape, which the zone lists and never sends. */
         for (hi = 0; hi < req->headers->n; hi++)
-            pending_list_add_pair(hl, req->headers->e[hi].name, req->headers->e[hi].value);
+            pending_list_add_header(hl, req->headers->e[hi].name, header_entry_wire_value(&req->headers->e[hi]),
+                                    header_value_class_token(&req->headers->e[hi]));
         pending_set(e, PEND_HEADERS, hl);
     }
     DCHECKF((req->body != NULL) == (req->body_class != FETCH_BODY_NONE),
@@ -4426,19 +4429,24 @@ char *engine_pending_request(JSContext *ctx, const PendRequestKey *key) {
     for (int i = 0; i < n; i++) {
         JSValue pair = JS_GetPropertyUint32(ctx, hl, (uint32_t)i);
         JSValue nv = JS_GetPropertyUint32(ctx, pair, 0), vv = JS_GetPropertyUint32(ctx, pair, 1);
-        const char *nm = JS_ToCString(ctx, nv), *val = JS_ToCString(ctx, vv);
+        JSValue cv = JS_GetPropertyUint32(ctx, pair, 2);
+        const char *nm = JS_ToCString(ctx, nv), *val = JS_ToCString(ctx, vv), *hcls = JS_ToCString(ctx, cv);
 
-        CHECK(nm != NULL && val != NULL, "engine: OOM reading a parked request's header");
+        CHECK(nm != NULL && val != NULL && hcls != NULL, "engine: OOM reading a parked request's header");
         if (i) json_buf_raw(&b, ",");
         json_buf_raw(&b, "[");
         json_buf_str(&b, nm);
         json_buf_raw(&b, ",");
         json_buf_str(&b, val);
+        json_buf_raw(&b, ",");
+        json_buf_str(&b, hcls);
         json_buf_raw(&b, "]");
         JS_FreeCString(ctx, nm);
         JS_FreeCString(ctx, val);
+        JS_FreeCString(ctx, hcls);
         JS_FreeValue(ctx, nv);
         JS_FreeValue(ctx, vv);
+        JS_FreeValue(ctx, cv);
         JS_FreeValue(ctx, pair);
     }
     json_buf_raw(&b, "],");

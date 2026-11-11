@@ -705,6 +705,36 @@ function _addressOf(opts) {
         "`unstated` for a record that carries none, or `concrete` for an address this zone composed");
   return opts.address;
 }
+/* A header value's class, the third member of each entry of a stated header list (`[name, value, class]`): the
+   engine's word for that value's bytes (core/fetch/headers.h's header_value_class_token), `concrete` for a list
+   this zone composed. The class rides the value it is about, so a redirect that drops a header drops its class. */
+var _HEADER_VALUE_CLASSES = ["concrete", "example", "unknown"];
+function _headerListIs(list) {
+  return Array.isArray(list) && list.every(function (h) {
+    return Array.isArray(h) && h.length === 3 && typeof h[0] === "string" && typeof h[1] === "string" &&
+           _HEADER_VALUE_CLASSES.indexOf(h[2]) >= 0;
+  });
+}
+/* The same test for a host, which reads an engine's header list as input and refuses one this file would
+   abort on. */
+function safeFetchHeaderListIs(list) {
+  return _headerListIs(list);
+}
+/* What the request's bytes are: the weakest class over every part the engine composed (the address, each header
+   value, the body). `unknown` is weakest (a part with no bytes), then `unstated` (a part whose record carries
+   no class), then `example`, then `concrete`; a null body and an absent header list are no part. */
+var _BYTES_CLASSES = ["concrete", "example", "unknown", "unstated"];
+function _bytesClassOf(f) {
+  var parts = [f.address].concat((f.headers || []).map(function (h) { return h[2]; }),
+                                 f.bodyClass === "none" ? [] : [f.bodyClass]);
+  return ["unknown", "unstated", "example"].find(function (w) { return parts.indexOf(w) >= 0; }) || "concrete";
+}
+/* The class of each part, for the fired-send entry: the row above says whether the request has bytes, and this
+   says which part held the class it states. A header is named, never quoted. */
+function _bytesParts(f) {
+  return { address: f.address, headers: (f.headers || []).map(function (h) { return [h[0], h[2]]; }),
+           body: f.bodyClass };
+}
 /* What this function reads. A field outside this set is refused rather than dropped in silence and read by
    its caller as carried; `as` is refused by it, since the CORB class is the request's destination. A closed
    set restates what the body reads, and an option added to the body and not here aborts on its author's
@@ -925,15 +955,12 @@ var _SIGNALS = [
      whatever the engine states (`_docOf`). */
   { name: "witness", gates: true, certainty: "stated", values: _PINNED_MARKS,
     of: function (f) { return f.doc.pinned === "pinned" ? "pinned" : f.pinned; } },
-  /* Whether the address is bytes the page computed or its unknown's example (see `_addressOf`). No default arm
-     reads it: a session whose input is the example sends exactly this request. `never` lists the values no
-     setting permits: an address with no bytes names no request, so it is refused before any arm is asked. */
-  { name: "address", gates: true, certainty: "stated", values: _ADDRESS_CLASSES, never: ["unknown"],
-    of: function (f) { return f.address; } },
-  /* Whether the body is bytes the page computed or holds its unknown's example (see `_bodyClassOf`), judged
-     as the address is: no default arm reads it, and a body with no bytes is refused before any arm is asked. */
-  { name: "body", gates: true, certainty: "stated", values: _BODY_CLASSES, never: ["unknown"],
-    of: function (f) { return f.bodyClass; } },
+  /* Whether the request is bytes the page computed, or holds an unknown's example, over every part the engine
+     composed (see `_bytesClassOf`). One row, because it is one question whichever part answers it. No default
+     arm reads it: a session whose input is the example sends exactly this request. `never` lists the values no
+     setting permits: a request with a part that has no bytes is refused before any arm is asked. */
+  { name: "bytes", gates: true, certainty: "stated", values: _BYTES_CLASSES, never: ["unknown"],
+    of: _bytesClassOf },
   /* Authority in the address (see `_urlAuthorityMarker`). `partial`: `present` is a fact, and `unknown` is not
      the statement that there is none. */
   { name: "url-authority", gates: true, certainty: "partial", values: ["present", "unknown"],
@@ -1079,14 +1106,15 @@ function _requireFacts(facts) {
      primitive (`""`, `0`, `false`) would be shown as an established absence. `null` and absent are how a
      caller with no list says so. Shape only, never contents: on the XHR path the names and values are the
      bundle's and are input. */
-  CHECK(facts.headers === null || facts.headers === undefined || typeof facts.headers === "object",
+  CHECK(facts.headers === null || facts.headers === undefined || _headerListIs(facts.headers),
         "a signal vector was asked for with a header list that is not one: " +
         JSON.stringify(facts.headers) + " — the `header-authority` row reads this by TRUTHINESS and grades " +
         "the answer `certain`, so a primitive here is rendered to a person as the established fact that no " +
         "authority rides in a header, on a request whose header list was never stated. `null` is how a " +
         "caller with no list says so and is a fact; anything that is not an object is a call site that " +
         "meant something else. This asserts the SHAPE and never the CONTENTS — the names and values are " +
-        "the analysed bundle's on the XHR path and are input this zone may not assert about");
+        "the analysed bundle's on the XHR path and are input this zone may not assert about. An entry is " +
+        "`[name, value, class]`, the class one of " + _HEADER_VALUE_CLASSES.join(", "));
 }
 /* The vector for one request: every signal's value, computed from the facts required above. The firing walk
    and the surface both read it, so a person is never shown a value the walk did not decide from. */
@@ -2141,7 +2169,8 @@ async function _readBody(resp, sink, gated, onRead) {
    `mode`, `provenance`, `pinned`, `doc`, `actor`, `credentialed` and `credentials`, asserted at the entry. */
 async function safeFetch(url, opts) {
   /* The fired-send record: one entry per URL of this request the zone judged or answered, in order, as
-     {url, vector, admittedBy, how, refusal}. `vector` is every signal's value (`_signalVector`), `admittedBy`
+     {url, vector, parts, admittedBy, how, refusal}. `vector` is every signal's value (`_signalVector`), `parts`
+     the class of each part the `bytes` row folds (`_bytesParts`), `admittedBy`
      the firing decision's, and `how` says whether the wire was reached: `sent` (a send whose reply later failed
      included), `answered-locally` (the document's record of a byte-identical send, or the HTTP cache, whose
      entry has a null vector because a hit is no act to judge), `not-sent`. It rides every reply record,
@@ -2211,11 +2240,11 @@ async function _safeFetchJudged(url, opts, egress) {
         "safeFetch was asked for a `cors` request the analysed page made without its use-CORS-preflight flag " +
         "(Fetch §2.2.5 \"Requests\") — §4.1 \"Main fetch\" preflights a request with the flag set whatever " +
         "its method and headers, so an unstated flag would decide by silence whether the server is asked first");
-  CHECK(opts.headers === undefined || (Array.isArray(opts.headers) && opts.headers.every(function (h) {
-          return Array.isArray(h) && h.length === 2 && typeof h[0] === "string" && typeof h[1] === "string";
-        })),
-        "safeFetch was handed a header list that is not `[name, value]` string pairs — the CORS-unsafe " +
-        "request-header names are computed over it, and a list this zone cannot read would be sent unjudged");
+  CHECK(opts.headers === undefined || _headerListIs(opts.headers),
+        "safeFetch was handed a header list that is not `[name, value, class]` entries — the CORS-unsafe " +
+        "request-header names are computed over it and each value's class is judged, and a list this zone " +
+        "cannot read would be sent unjudged. The class is the engine's word for the value's bytes, or " +
+        "`concrete` for a list this zone composed");
   var _pageOrigin = typeof opts.pageOrigin === "string" ? opts.pageOrigin : "";
   var parsed;
   try { parsed = new URL(String(url)); }
@@ -2271,7 +2300,15 @@ async function _safeFetchJudged(url, opts, egress) {
      §4.5 "HTTP-redirect fetch" changes them. Each pass is one §4.1 "Main fetch": every gate runs on the URL
      before it is sent, a redirect is followed by this zone and never by the platform (`_redirectOf`), and a
      hop is sent as its own request, speaking as the identity under its own rule. */
-  var _urlList = [parsed.href], _current = parsed, _tainting = "basic", _headerList = opts.headers;
+  /* The header list as the wire and the gates below read it, `[name, value]` pairs. Each pair's class is kept
+     by the pair's identity, which a redirect's filter preserves (`_followRedirect`). */
+  var _headerClass = new Map();
+  var _headerList = opts.headers === undefined ? undefined : opts.headers.map(function (h) {
+    var pair = [h[0], h[1]];
+    _headerClass.set(pair, h[2]);
+    return pair;
+  });
+  var _urlList = [parsed.href], _current = parsed, _tainting = "basic";
   var _identity = opts.identity, resp;
   /* Every hop's credentialed Set-Cookie, in order, for the asking flow's jar (`_speakAs`). */
   var _setCookieList = [];
@@ -2349,7 +2386,8 @@ async function _safeFetchJudged(url, opts, egress) {
       /* The record carries no grade: the host attaches the asking flow's provenance where it delivers the
          reply, so a forced arm answered here stays forced and is never merged into observed data. */
       _sent = { resp: httpCacheResponse(_stored), setCookies: [] };
-      egress.push({ url: _current.href, vector: null, admittedBy: null, how: "answered-locally", refusal: null });
+      egress.push({ url: _current.href, vector: null, parts: null, admittedBy: null, how: "answered-locally",
+                    refusal: null });
     } else {
       /* The firing decision, before this URL is requested (see `_firingRefusal`). Decline: no browser
          refuses this; this tool declines to spend the act. The flow parks rather than running its failure
@@ -2359,10 +2397,12 @@ async function _safeFetchJudged(url, opts, egress) {
       var _signalFacts = { url: _current, destination: destination, provenance: provenance,
                            pinned: pinnedMark, doc: doc, actor: actor, driven: driven, address: address,
                            bodyClass: _body === null ? "none" : _bodyClass,
-                           method: _method, credentialed: credentialed, headers: _headerList };
+                           method: _method, credentialed: credentialed,
+                           headers: _headerList && _headerList.map(function (h) {
+                             return [h[0], h[1], _headerClass.get(h)]; }) };
       var _decision = _firingDecision(_signalFacts);
-      var _entry = { url: _current.href, vector: _decision.vector, admittedBy: _decision.admittedBy,
-                     how: "not-sent", refusal: _decision.refusal };
+      var _entry = { url: _current.href, vector: _decision.vector, parts: _bytesParts(_signalFacts),
+                     admittedBy: _decision.admittedBy, how: "not-sent", refusal: _decision.refusal };
       egress.push(_entry);
       var _ptok = _decision.refusal;
       var _declined = _ptok === null ? null
@@ -2910,6 +2950,7 @@ if (typeof self !== "undefined") {
   self.safeFetchStatedShape = safeFetchStatedShape;
   self.fetchForbiddenRequestHeader = fetchForbiddenRequestHeader;
   self.safeFetchMethodRefusal = safeFetchMethodRefusal;
+  self.safeFetchHeaderListIs = safeFetchHeaderListIs;
   self.safeFetchWiden = safeFetchWiden;
   self.safeFetchEgressUnnamed = safeFetchEgressUnnamed;
   self.safeFetchUnwiden = safeFetchUnwiden;

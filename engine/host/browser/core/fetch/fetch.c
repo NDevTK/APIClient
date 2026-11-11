@@ -1718,7 +1718,8 @@ static void fetch_settle_local(JSContext *ctx, JSValue *resolving, JSValue value
    Named residual. Not covered: a string body whose unknown has an example is `unknown`, because §5.2's string
    arm keeps the unknown itself (core/fetch/body.h) where §5.4 step 5 grounds an address on its example. Next
    diff: body_extract grounds the string arm's bytes on the example and states spans for them. Its absence shows
-   as a POST whose body is one computed value of a source with an example read `body=unknown` and never sent. */
+   as a POST whose body is one computed value of a source with an example listed with the body class `unknown`
+   and never sent. */
 static FetchBodyClass fetch_body_class_of(const BodyState *b)
 {
     const char *bytes;

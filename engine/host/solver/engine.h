@@ -953,9 +953,10 @@ void engine_pending_split(char *line, const char **method, const char **destinat
                           const char **referrer_policy, const char **referrer, const char **headers,
                           const char **body, const char **address, const char **askers, const char **url);
 /* The header list and body of the outstanding request `key` names, as the JSON text
-   `{"headers":[[name,value],…],"body":<RFC 4648 §4 base64>|null,"bodyClass":<word>}`, for the host to send
-   what the page composed (Fetch §2.2.5 "Requests"' header list and body). `bodyClass` is fetch_body_class_token
-   of the member the line is judged as. Owned by the caller (free()); NULL for a key with no outstanding park,
+   `{"headers":[[name,value,class],…],"body":<RFC 4648 §4 base64>|null,"bodyClass":<word>}`, for the host to
+   send what the page composed (Fetch §2.2.5 "Requests"' header list and body). A header's `class` is
+   header_value_class_token of its value, which is the example's bytes for `example` and the display shape for
+   `unknown`. `bodyClass` is fetch_body_class_token of the member the line is judged as. Owned by the caller (free()); NULL for a key with no outstanding park,
    which is a host reading a request it was not shown (asserted). */
 char *engine_pending_request(JSContext *ctx, const PendRequestKey *key);
 /* Deliver a body for one request, keyed on the identity the flow parked on (solver/pending_index.h's

@@ -82,9 +82,13 @@ const said = (list) => list.map((e) => e.how + '/' + (e.admittedBy ? e.admittedB
                                        (e.admittedBy && e.admittedBy.refused ? ' ' + e.admittedBy.refused : '') +
                                        (e.refusal ? ' ' + e.refusal : '')).sort().join(' | ');
 
-/* What an entry says each part's bytes are, and the row that folds them. */
-const bytes = (list) => list.map((e) => (e.vector ? e.vector.bytes : 'no-vector') + ' ' +
-                                        (e.parts ? e.parts.headers.map((h) => h.join(':')).join(',') : 'no-parts')).join(' | ');
+/* What the judged entries say each header's bytes are, after the row that folds them: the distinct statements,
+   since a request asked again in several worlds is judged once per ask. */
+const distinct = (words) => [...new Set(words)].sort().join(' | ');
+const bytes = (list) => distinct(list.filter((e) => e.vector !== null).map((e) =>
+  e.vector.bytes + ' ' + (e.parts ? e.parts.headers.map((h) => h.join(':')).join(',') : 'no-parts')));
+/* Every refusal the entries carry, distinct; `none` where no ask was refused. */
+const refusals = (list) => distinct(list.filter((e) => e.refusal).map((e) => e.refusal)) || 'none';
 const echo = got('POST', '/api/echo');
 const ROWS = [
   ['CONTROL: the seed load reached the server', [['GET /', got('GET', '/').length, 1]]],
@@ -119,7 +123,7 @@ const ROWS = [
     ['the header that arrived', got('GET', '/api/xhr-ex').map((a) => a.probe).join('|'), 'en-US'],
     ['what its entry states', bytes(sends('GET', '/api/xhr-ex')), 'example X-Probe:example'],
     ['GET /api/xhr-unk', got('GET', '/api/xhr-unk').length, 0],
-    ['how the zone answered it', said(sends('GET', '/api/xhr-unk')), 'not-sent/none bytes=unknown'],
+    ['what refused it', refusals(sends('GET', '/api/xhr-unk')), 'bytes=unknown'],
     ['what its entry states', bytes(sends('GET', '/api/xhr-unk')), 'unknown X-Probe:unknown']]],
 ];
 let bad = 0;

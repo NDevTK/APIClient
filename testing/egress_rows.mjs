@@ -125,7 +125,7 @@ const bytesOf = (facts) => {
 };
 
 const PAGE_A = `${A}/page`, PAGE_W = `${W}/page`;
-const FORM = [['Content-Type', 'application/x-www-form-urlencoded']];
+const FORM = [['Content-Type', 'application/x-www-form-urlencoded', 'concrete']];
 const ROWS = [
   { label: 'CONTROL: an unforced page request is sent, and its send records the vector and the admitting arm',
     run: async () => {
@@ -213,9 +213,9 @@ const ROWS = [
               ['the bytes are the recorded reply\'s', text(forced), 'GET /served #1']]; } },
   { label: 'a forced request that differs in one header, or is another document\'s, is no such send: declined',
     run: async () => {
-      await ask(PAGE_A, `${A}/served-h`, 'engine:servedh', { headers: [['Accept', 'text/plain']] });
-      const header = await ask(PAGE_A, `${A}/served-h`, 'engine:servedh', { provenance: 'forced', headers: [['Accept', 'text/html']] });
-      const other = await ask(PAGE_A, `${A}/served-h`, 'engine:servedh-2', { provenance: 'forced', headers: [['Accept', 'text/plain']] });
+      await ask(PAGE_A, `${A}/served-h`, 'engine:servedh', { headers: [['Accept', 'text/plain', 'concrete']] });
+      const header = await ask(PAGE_A, `${A}/served-h`, 'engine:servedh', { provenance: 'forced', headers: [['Accept', 'text/html', 'concrete']] });
+      const other = await ask(PAGE_A, `${A}/served-h`, 'engine:servedh-2', { provenance: 'forced', headers: [['Accept', 'text/plain', 'concrete']] });
       return [['GET /served-h', count('GET', '/served-h'), 1], ['another header', refusalOf(header), 'blocked-signal:provenance=forced'],
               ['another document', refusalOf(other), 'blocked-signal:provenance=forced'],
               ['how', only(header).how + ',' + only(other).how, 'not-sent,not-sent']]; } },

@@ -4450,6 +4450,8 @@ function xhrRecordRefusal(q, raw) {
     return f + " states the drive mark " + JSON.stringify(q.driven) + ", neither driven nor undriven";
   if (q.address !== "concrete" && q.address !== "example")
     return f + " states the address class " + JSON.stringify(q.address) + ", neither concrete nor example";
+  if (!self.safeFetchHeaderListIs(q.headers))
+    return f + " carries no header list of [name, value, class] entries";
   return null;
 }
 /* The XMLHttpRequest fetch (XHR §3.5.6 The send() method) of instance `eng` through the chokepoint. `rec` is
@@ -4512,7 +4514,8 @@ async function engineFetchXhr(eng, rec, doc, signal, onBodyRead) {
                                           driven: q.driven, address: q.address,
                                           doc, actor: "page",
                                           credentialed: false, useCorsPreflight: q.useCorsPreflight,
-                                          credentials: q.credentials, headers: q.headers, signal, onBodyRead,
+                                          credentials: q.credentials,
+                                          headers: q.headers.length ? q.headers : undefined, signal, onBodyRead,
                                           identity: await pageRequestIdentity(stampOrigin(eng.origin), eng.msg.sourceUrl, "engine:" + eng.docId, abs,
                                                                         q.credentials, q.mode,
                                                                         q.referrerPolicy, q.referrer) });
@@ -4925,9 +4928,10 @@ async function engineDeliverReply(eng, id, answer, reach) {
   await engineProvide(eng, id, answer, reach);
 }
 /* The header list and body of one pending line, by the line's identity (content.mojom.Renderer.GetRequest):
-   `{headers: [[name, value], …], body: Uint8Array | null, bodyClass}`. A line whose two digest words are "-"
-   has an empty list and a null body, and nothing is read. The record is the instance's statement and so
-   input: answers the content, or the reason it is refused. */
+   `{headers: [[name, value, class], …], body: Uint8Array | null, bodyClass}`, each header value with the
+   engine's word for its bytes. A line whose two digest words are "-" has an empty list and a null body, and
+   nothing is read. The record is the instance's statement and so input: answers the content, or the reason
+   it is refused. */
 const _PENDING_BODY_CLASSES = ["none", "concrete", "example", "unknown"];
 async function pendingRequestContent(eng, id) {
   const [method, mode, referrerPolicy, referrer, headers, requestBody, url] = id;
@@ -4937,9 +4941,8 @@ async function pendingRequestContent(eng, id) {
   let q;
   try { q = JSON.parse(text); } catch (_) { q = undefined; }
   const head = "content.mojom.Renderer.GetRequest answered " + method + " " + url + " with ";
-  if (!q || typeof q !== "object" || !Array.isArray(q.headers) ||
-      !q.headers.every((h) => Array.isArray(h) && h.length === 2 && typeof h[0] === "string" && typeof h[1] === "string"))
-    return head + "no header list of [name, value] pairs";
+  if (!q || typeof q !== "object" || !self.safeFetchHeaderListIs(q.headers))
+    return head + "no header list of [name, value, class] entries";
   if ((q.headers.length === 0) !== (headers === "-")) return head + "a header list its line's digest word contradicts";
   if (_PENDING_BODY_CLASSES.indexOf(q.bodyClass) < 0) return head + "the body class `" + String(q.bodyClass) + "`";
   if ((q.body === null) !== (requestBody === "-") || (q.body === null) !== (q.bodyClass === "none"))

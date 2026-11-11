@@ -869,9 +869,11 @@ int  pending_answer_world_seen(JSValueConst e, const char *world);
    empty list or a null body, else the lowercase hex SHA-256. Each buffer holds PEND_DIGEST_WORD bytes. */
 void    pending_request_digests(JSValueConst e, char headers[65], char body[65]);
 JSValue pending_list_new(void);
-/* How many pairs `list` holds; 0 for the JS_NULL of a park with no header list. */
+/* How many entries `list` holds; 0 for the JS_NULL of a park with no header list. */
 int     pending_list_len(JSValueConst list);
-void    pending_list_add_pair(JSValueConst list, const char *name, const char *value);
+/* Appends the header `[name, value, cls]`: `value` is what a host would send and `cls` the word for what those
+   bytes are (core/fetch/headers.h's header_value_class_token). */
+void    pending_list_add_header(JSValueConst list, const char *name, const char *value, const char *cls);
 
 /* Remove entry `i` (swap-remove: the register is a set of outstanding requests, not an ordered queue). */
 void pending_remove(JSValue *reg, int i);

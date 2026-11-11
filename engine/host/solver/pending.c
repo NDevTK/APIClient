@@ -1118,16 +1118,21 @@ void pending_request_digests(JSValueConst e, char headers[PEND_DIGEST_WORD], cha
     strcpy(headers, "-");
     strcpy(body, "-");
     if (n > 0) {
-        /* Fetch §2.2.2 "Headers": a name is a token and a value holds no newline, so `name:value\n` per header,
-           in list order, spells one list only. */
+        /* Fetch §2.2.2 "Headers": a name is a token and a value holds no newline, so `name:value\nclass\n` per
+           header, in list order, spells one list only. The class is in the key, so lists that differ only in
+           what a value's bytes are are two requests, each judged as itself. */
         secure_hash_init(&h, SECURE_HASH_SHA256);
         for (int i = 0; i < n; i++) {
             JSValue pair = JS_GetPropertyUint32(ctx, hl, (uint32_t)i);
             JSValue nv = JS_GetPropertyUint32(ctx, pair, 0), vv = JS_GetPropertyUint32(ctx, pair, 1);
-            size_t nl = 0, vl = 0;
+            JSValue cv = JS_GetPropertyUint32(ctx, pair, 2);
+            size_t nl = 0, vl = 0, cl = 0;
             const char *nm = JS_ToCStringLen(ctx, &nl, nv), *val = JS_ToCStringLen(ctx, &vl, vv);
+            const char *cls = JS_ToCStringLen(ctx, &cl, cv);
 
-            CHECK(nm != NULL && val != NULL, "engine: OOM reading a parked request's header");
+            CHECK(nm != NULL && val != NULL && cls != NULL, "engine: OOM reading a parked request's header");
+            DCHECK(JS_IsString(cv) && cl > 0, "a parked request's header states no class for its value — "
+                                              "pending_list_add_header writes one per entry");
             DCHECK(!memchr(nm, ':', nl) && !memchr(nm, '\n', nl) && !memchr(val, '\n', vl),
                    "a parked request's header name holds a colon or a newline, or its value a newline — Fetch "
                    "§2.2.2 Headers admits neither, and the key's spelling of the list relies on it");
@@ -1135,10 +1140,14 @@ void pending_request_digests(JSValueConst e, char headers[PEND_DIGEST_WORD], cha
             secure_hash_update(&h, (const uint8_t *)":", 1);
             secure_hash_update(&h, (const uint8_t *)val, vl);
             secure_hash_update(&h, (const uint8_t *)"\n", 1);
+            secure_hash_update(&h, (const uint8_t *)cls, cl);
+            secure_hash_update(&h, (const uint8_t *)"\n", 1);
             JS_FreeCString(ctx, nm);
             JS_FreeCString(ctx, val);
+            JS_FreeCString(ctx, cls);
             JS_FreeValue(ctx, nv);
             JS_FreeValue(ctx, vv);
+            JS_FreeValue(ctx, cv);
             JS_FreeValue(ctx, pair);
         }
         secure_hash_finish(&h, digest, sizeof digest);
@@ -1172,13 +1181,14 @@ JSValue pending_list_new(void)
     return a;
 }
 
-void pending_list_add_pair(JSValueConst list, const char *name, const char *value)
+void pending_list_add_header(JSValueConst list, const char *name, const char *value, const char *cls)
 {
     JSValue pair = JS_NewArray(pend_ctx());
     CHECK(!JS_IsException(pair), "engine: OOM allocating a pending request's header");
     cow_engine_write_begin();
     JS_SetPropertyUint32(pend_ctx(), pair, 0, JS_NewString(pend_ctx(), name));
     JS_SetPropertyUint32(pend_ctx(), pair, 1, JS_NewString(pend_ctx(), value));
+    JS_SetPropertyUint32(pend_ctx(), pair, 2, JS_NewString(pend_ctx(), cls));
     JS_SetPropertyUint32(pend_ctx(), list, (uint32_t)pend_len(list), pair);
     cow_engine_write_end();
 }

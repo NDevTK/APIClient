@@ -82,18 +82,22 @@ void header_list_free(HeaderList *l)
 {
     int i;
     if (!l) return;
-    for (i = 0; i < l->n; i++) { free(l->e[i].name); free(l->e[i].value); free(l->e[i].root); }
+    for (i = 0; i < l->n; i++) {
+        free(l->e[i].name); free(l->e[i].value); free(l->e[i].root); free(l->e[i].example);
+    }
     free(l->e);
     l->e = NULL; l->n = l->cap = 0;
 }
 
 void header_list_append(HeaderList *l, const char *name, const char *value)
 {
-    header_list_append_rooted(l, name, value, NULL);
+    header_list_append_unknown(l, name, value, NULL);
 }
 
-void header_list_append_rooted(HeaderList *l, const char *name, const char *value, const char *root)
+void header_list_append_unknown(HeaderList *l, const char *name, const char *value, const HeaderUnknown *unk)
 {
+    const char *root = unk ? unk->root : NULL;
+
     DCHECK(l != NULL && name != NULL, "a header was appended to no list");
     DCHECK(root == NULL || *root, "a header value's root was stated as the empty name");
     if (l->n >= l->cap) {
@@ -104,7 +108,29 @@ void header_list_append_rooted(HeaderList *l, const char *name, const char *valu
     l->e[l->n].name = header_lower(name);
     l->e[l->n].value = header_dup(value);
     l->e[l->n].root = root ? header_dup(root) : NULL;
+    l->e[l->n].example = unk && unk->example ? header_dup(unk->example) : NULL;
+    l->e[l->n].shape = unk != NULL;
     l->n++;
+}
+
+const HeaderUnknown *header_entry_unknown(const HeaderEntry *e, HeaderUnknown *tmp)
+{
+    DCHECK(e->shape || (e->root == NULL && e->example == NULL),
+           "a header entry that is bytes states an unknown's root or example");
+    if (!e->shape) return NULL;
+    tmp->root = e->root;
+    tmp->example = e->example;
+    return tmp;
+}
+
+const char *header_value_class_token(const HeaderEntry *e)
+{
+    return !e->shape ? "concrete" : e->example ? "example" : "unknown";
+}
+
+const char *header_entry_wire_value(const HeaderEntry *e)
+{
+    return e->shape && e->example ? e->example : e->value;
 }
 
 void header_list_delete(HeaderList *l, const char *name)
@@ -112,23 +138,26 @@ void header_list_delete(HeaderList *l, const char *name)
     char *lo = header_lower(name);
     int i, w = 0;
     for (i = 0; i < l->n; i++) {
-        if (!strcmp(l->e[i].name, lo)) { free(l->e[i].name); free(l->e[i].value); free(l->e[i].root); continue; }
+        if (!strcmp(l->e[i].name, lo)) {
+            free(l->e[i].name); free(l->e[i].value); free(l->e[i].root); free(l->e[i].example);
+            continue;
+        }
         l->e[w++] = l->e[i];
     }
     l->n = w;
     free(lo);
 }
 
-/* §5.1 set over a value that may be an unknown's display shape, with that unknown's root (see HeaderEntry). */
-static void header_list_set_rooted(HeaderList *l, const char *name, const char *value, const char *root)
+/* §5.1 set over a value that may be an unknown's display shape (see HeaderUnknown). */
+static void header_list_set_unknown(HeaderList *l, const char *name, const char *value, const HeaderUnknown *unk)
 {
     header_list_delete(l, name);
-    header_list_append_rooted(l, name, value, root);
+    header_list_append_unknown(l, name, value, unk);
 }
 
 void header_list_set(HeaderList *l, const char *name, const char *value)
 {
-    header_list_set_rooted(l, name, value, NULL);
+    header_list_set_unknown(l, name, value, NULL);
 }
 
 char *header_list_field_lines(const HeaderList *l)
@@ -422,8 +451,11 @@ JSValue headers_new(JSContext *ctx, const HeaderList *src, HeadersGuard guard)
     h->guard = (uint8_t)guard;
     /* The list is copied ALREADY VALIDATED — it is a header list this engine built, never a page's. The guard
        governs what the PAGE may then do to it, which is why "immutable" does not block this loop. */
-    for (i = 0; src && i < src->n; i++)
-        header_list_append_rooted(&h->list, src->e[i].name, src->e[i].value, src->e[i].root);
+    for (i = 0; src && i < src->n; i++) {
+        HeaderUnknown unk;
+        header_list_append_unknown(&h->list, src->e[i].name, src->e[i].value,
+                                   header_entry_unknown(&src->e[i], &unk));
+    }
     JS_SetOpaque(obj, h);
     return obj;
 }
@@ -815,6 +847,35 @@ static int headers_guard_allows(JSContext *ctx, uint8_t guard, const char *name,
     return r;
 }
 
+
+char *header_value_example(JSContext *ctx, JSValueConst unknown)
+{
+    JSValue ex = concolic_example_string(ctx, unknown);
+    const char *bytes;
+    size_t len = 0, n = 0;
+    char *norm;
+
+    if (!JS_IsString(ex)) { JS_FreeValue(ctx, ex); return NULL; }
+    bytes = JS_ToCStringLen(ctx, &len, ex);
+    JS_FreeValue(ctx, ex);
+    CHECK(bytes != NULL, "headers: OOM reading an unknown header value's example");
+    norm = idl_is_bytestring(bytes, len) ? header_value_normalize_valid(bytes, len, &n) : NULL;
+    JS_FreeCString(ctx, bytes);
+    return norm;
+}
+
+/* An unknown header value's facts, read while the value is still the unknown: `unk` filled and returned, or
+   NULL for a value that is bytes. `*ex` owns the example and is the caller's to free() either way. */
+static const HeaderUnknown *header_unknown_of(JSContext *ctx, JSValueConst value, HeaderUnknown *unk, char **ex)
+{
+    *ex = NULL;
+    if (!concolic_is(value)) return NULL;
+    *ex = header_value_example(ctx, value);
+    unk->root = concolic_root_c(value);
+    unk->example = *ex;
+    return unk;
+}
+
 /* §5.1 "APPEND A HEADER (name, value) TO A HEADERS OBJECT", steps 2-5, over the LIST and the GUARD — which is
    all the algorithm reads. ONE function because the standard states it once and TWO callers run it: the
    `append` member, and the FILL, which the standard defines as "append (key, value) to headers" for every
@@ -825,7 +886,7 @@ static int headers_guard_allows(JSContext *ctx, uint8_t guard, const char *name,
    `norm` is the already-normalized value (step 1). Returns 0 for written OR silently refused — two outcomes
    the spec does not let a caller distinguish — and -1 with a TypeError live. */
 static int headers_append_one(JSContext *ctx, HeaderList *l, uint8_t guard, const char *name, const char *norm,
-                              const char *root)
+                              const HeaderUnknown *unk)
 {
     char *lower = header_lower(name);
     int allow = headers_guard_allows(ctx, guard, name, norm);   /* step 2 */
@@ -851,7 +912,7 @@ static int headers_append_one(JSContext *ctx, HeaderList *l, uint8_t guard, cons
         free(combined);
     }
     if (allow > 0) {
-        header_list_append_rooted(l, name, norm, root);                             /* step 4 */
+        header_list_append_unknown(l, name, norm, unk);                             /* step 4 */
         if (guard == HEADERS_GUARD_REQUEST_NO_CORS) header_remove_privileged_no_cors(l);   /* step 5 */
     }
     free(lower);
@@ -867,9 +928,9 @@ static int headers_append_one(JSContext *ctx, HeaderList *l, uint8_t guard, cons
    carrying forward. Exported rather than re-derived at the caller, because a second copy of "which headers
    this guard drops" is a second thing to keep in step with §2.2.2 Headers' two forbidden lists. */
 int header_list_append_guarded(JSContext *ctx, HeaderList *l, HeadersGuard guard,
-                               const char *name, const char *value, const char *root)
+                               const char *name, const char *value, const HeaderUnknown *unk)
 {
-    return headers_append_one(ctx, l, (uint8_t)guard, name, value, root);
+    return headers_append_one(ctx, l, (uint8_t)guard, name, value, unk);
 }
 
 /* ---- a header list a STEP MACHINE owns ------------------------------------------------------------------- */
@@ -909,8 +970,10 @@ static void *header_list_step_clone(JSContext *ctx, void *root, void **cursors[]
            "does not re-point and would leave aimed at the original arm's entries");
     cp = lexbor_calloc(1, sizeof(*cp));
     CHECK(cp, "headers: OOM copying the header list a forked step machine owns");
-    for (i = 0; i < src->n; i++)
-        header_list_append_rooted(cp, src->e[i].name, src->e[i].value, src->e[i].root);
+    for (i = 0; i < src->n; i++) {
+        HeaderUnknown unk;
+        header_list_append_unknown(cp, src->e[i].name, src->e[i].value, header_entry_unknown(&src->e[i], &unk));
+    }
     /* BOTH OPERANDS NAMED, and it can fail: append does not dedupe and must not start, because §5.1 keeps
        `Set-Cookie` pairs separate and `get` is what combines them. A copy shorter than its source is a list
        whose entries two arms would disagree about. */
@@ -1116,15 +1179,21 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
     /* §5.1's three WRITES each run their own steps; a read is not guarded at all, because the page can
        already see every one of these headers and refusing to answer would hide state rather than protect it. */
     switch (magic) {
-    case HDR_APPEND:
-        if (headers_append_one(ctx, l, h->guard, name, norm,
-                               concolic_is(argv[1]) ? concolic_root_c(argv[1]) : NULL) < 0) {
+    case HDR_APPEND: {
+        HeaderUnknown us;
+        char *ex;
+        const HeaderUnknown *unk = header_unknown_of(ctx, argv[1], &us, &ex);
+        int wrote = headers_append_one(ctx, l, h->guard, name, norm, unk);
+
+        free(ex);
+        if (wrote < 0) {
             JS_FreeCString(ctx, name);
             JS_FreeCString(ctx, value);
             free(norm);
             return JS_EXCEPTION;
         }
         break;
+    }
     case HDR_SET: {
         /* §5.1 set steps 2-5. Step 3 tests the value ON ITS OWN, because set REPLACES rather than joins. */
         char *lower = header_lower(name);
@@ -1133,7 +1202,11 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
             !header_is_no_cors_safelisted(lower, norm))
             allow = 0;
         if (allow > 0) {
-            header_list_set_rooted(l, name, norm, concolic_is(argv[1]) ? concolic_root_c(argv[1]) : NULL);
+            HeaderUnknown us;
+            char *ex;
+
+            header_list_set_unknown(l, name, norm, header_unknown_of(ctx, argv[1], &us, &ex));
+            free(ex);
             if (h->guard == HEADERS_GUARD_REQUEST_NO_CORS) header_remove_privileged_no_cors(l);
         }
         free(lower);
@@ -1616,8 +1689,13 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
                and `get("a")` combines them into "1, 2". A replace loop stood here matching on the LOWERCASED
                header name, which is a different equivalence than the record's and belongs to no step: it
                answered "2", and it is deleted rather than kept for the one shape it looked right on. */
-            if (headers_append_one(ctx, out, guard, kname, knorm,
-                                   concolic_is(f->value) ? concolic_root_c(f->value) : NULL) < 0) {
+            HeaderUnknown us;
+            char *ex;
+            const HeaderUnknown *unk = header_unknown_of(ctx, f->value, &us, &ex);
+            int wrote = headers_append_one(ctx, out, guard, kname, knorm, unk);
+
+            free(ex);
+            if (wrote < 0) {
                 free(knorm);
                 JS_FreeCString(ctx, kname); JS_FreeCString(ctx, kval);
                 return -1;

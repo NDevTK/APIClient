@@ -12,10 +12,14 @@
    `Set-Cookie` is the reason the spec keeps them separate, and `getSetCookie` is the member that reads them
    back. It is public because two things need to build one without a JS object in sight: the Headers interface
    itself, and `fetch`'s conversion of an `init.headers` bag into the set an endpoint requires. */
-/* `root` is the delivery root (solver/concolic.h's concolic_root_c) of the unknown whose display shape `value`
-   is, owned, or NULL where the value is bytes: the provenance the @H surface marks a request by, carried
-   because a projected shape is bytes and cannot be asked for it. */
-typedef struct { char *name; char *value; char *root; } HeaderEntry;
+/* What a header value is where it is the display shape of an unknown and not bytes. `root` is that unknown's
+   delivery root (solver/concolic.h's concolic_root_c), the provenance the @H surface marks a request by, NULL
+   for an unknown with none. `example` is the value on the unknown's example, normalized and valid as a header
+   value, NULL where the run holds no such bytes. Both are borrowed by the appends, which copy them. */
+typedef struct { const char *root; const char *example; } HeaderUnknown;
+/* `shape` says `value` is an unknown's display shape, the form the @H surface reports; `root` and `example`
+   are then HeaderUnknown's facts, owned. For bytes `shape` is false and both are NULL. */
+typedef struct { char *name; char *value; char *root; char *example; bool shape; } HeaderEntry;
 typedef struct { HeaderEntry *e; int n, cap; } HeaderList;
 
 /* §5.1: "A Headers object also has an associated guard" — WHICH of the page's writes the object refuses, and how.
@@ -48,8 +52,24 @@ bool  header_forbidden_request(const char *lower_name, const char *value);
 void  header_list_free(HeaderList *l);
 /* §5.1 append: lowercase the name, keep the pair. Both strings are COPIED. */
 void  header_list_append(HeaderList *l, const char *name, const char *value);
-/* …the same for a value that is an unknown's display shape, with that unknown's root (copied; NULL for bytes). */
-void  header_list_append_rooted(HeaderList *l, const char *name, const char *value, const char *root);
+/* …the same for a value that may be an unknown's display shape: `unk` states its facts, NULL for bytes. */
+void  header_list_append_unknown(HeaderList *l, const char *name, const char *value, const HeaderUnknown *unk);
+/* An entry's facts in the form the appends take, for a copy of it: NULL for bytes, else `tmp` filled. */
+const HeaderUnknown *header_entry_unknown(const HeaderEntry *e, HeaderUnknown *tmp);
+/* The value an unknown header value has on its example: §7.1.19 ToString of the example `unknown` holds, where
+   that runs no page code, normalized (Fetch §2.2.2) and accepted as a ByteString and a header value. NULL where
+   the run holds no such bytes. Owned by the caller (free()); asserts `unknown` is a concolic.
+   Named residual. Not covered: an example that is no header value leaves the entry with no bytes, where a
+   session with that input throws from the write (§5.1 validate). Next diff: the write forks its two completions
+   over an unknown value, real on the example. Absence shows as a request whose header value is such an unknown
+   read `unknown`, with no arm in which the write threw. */
+char *header_value_example(JSContext *ctx, JSValueConst unknown);
+/* What an entry's value is for a host that would send it, in core/fetch/fetch.h's address-class words:
+   `concrete` for bytes, `example` for a shape with example bytes, `unknown` for a shape with none. */
+const char *header_value_class_token(const HeaderEntry *e);
+/* The bytes a host sends for an entry that has them: the value, or the example of a shape. For a shape with no
+   example it is the shape, which is shown and never sent. BORROWED from the entry. */
+const char *header_entry_wire_value(const HeaderEntry *e);
 /* A HEADER LIST A STEP MACHINE OWNS, AND THE PAIR THAT COPIES AND DESTROYS IT — quickjs-step.h's `tree`
    operation, which delegates BOTH halves of a deep fork's copy to the host and is therefore the one visit
    operation this list can be declared through. Every operation that copies for itself (`v->buf`, `v->array`,
@@ -73,7 +93,7 @@ extern const JSStepTreeOps header_list_step_ops;
    written OR silently refused — two outcomes the spec does not let a caller distinguish — and -1 with a
    TypeError live, which only the "immutable" guard produces. */
 int   header_list_append_guarded(JSContext *ctx, HeaderList *l, HeadersGuard guard,
-                                 const char *name, const char *value, const char *root);
+                                 const char *name, const char *value, const HeaderUnknown *unk);
 /* §5.1 set: replace every entry with this name by one. */
 void  header_list_set(HeaderList *l, const char *name, const char *value);
 void  header_list_delete(HeaderList *l, const char *name);

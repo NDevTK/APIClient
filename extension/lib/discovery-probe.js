@@ -214,8 +214,9 @@ function _chokepointGetFn(tab, who) {
          a well-known path PUBLISHES, which is the same for every visitor: the authenticated view is not what
          this sweep is asking for, and the header list below could not ride along with cookies anyway. */
       credentialed: false,
-      // safeFetch takes a header list of [name, value] pairs, over which it computes CORS-unsafe names.
-      headers: Object.keys(headers || {}).map((k) => [k, String(headers[k])]),
+      // safeFetch takes a header list of [name, value, class] entries, over which it computes CORS-unsafe
+      // names. This sweep composed each value from bytes it holds.
+      headers: Object.keys(headers || {}).map((k) => [k, String(headers[k]), "concrete"]),
     });
     /* `refusal` IS A POSITIVE STATEMENT ON EVERY RECORD safeFetch RETURNS — `null` means the request reached
        the wire and what follows is the server's answer, an HTTP error status included. So this reads the

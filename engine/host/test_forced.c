@@ -26797,7 +26797,7 @@ TF_UNIT void probes_hdrclass(const char *js, Probe *tab, int *n) {
              "Fetch §5.1's append over an unknown with no example did not carry the class `unknown` to the "
              "request the Headers object was given to");
     const char *xh_why = NULL; int xh_tt = 1;
-    fold_row(&xh_tt, &xh_why, !!strstr(js, "\"/api/hc-xhr\""),
+    fold_row(&xh_tt, &xh_why, !!strstr(js, "/api/hc-xhr\""),
              "NOT REACHED: there is no /api/hc-xhr record, so the XMLHttpRequest was never sent");
     fold_row(&xh_tt, &xh_why, tf_seen_content("/api/hc-xhr\"", "[\"X-Lang\",\"en-US\",\"example\"]"),
              "XHR §3.5.2's setRequestHeader over an unknown with an example did not state the example's bytes "

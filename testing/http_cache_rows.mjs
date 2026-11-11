@@ -108,9 +108,9 @@ const ROWS = [
       await pageGet(PAGE_A, `${A}/nostore`); await pageGet(PAGE_A, `${A}/nostore`);
       return [['GET /nostore', count('GET', '/nostore'), 2]]; } },
   { label: 'a Vary mismatch misses, and a match hits', run: async () => {
-      await pageGet(PAGE_A, `${A}/vary`, [['X-Probe', 'a']]);
-      await pageGet(PAGE_A, `${A}/vary`, [['X-Probe', 'b']]);
-      const again = await pageGet(PAGE_A, `${A}/vary`, [['X-Probe', 'a']]);
+      await pageGet(PAGE_A, `${A}/vary`, [['X-Probe', 'a', 'concrete']]);
+      await pageGet(PAGE_A, `${A}/vary`, [['X-Probe', 'b', 'concrete']]);
+      const again = await pageGet(PAGE_A, `${A}/vary`, [['X-Probe', 'a', 'concrete']]);
       return [['GET /vary', count('GET', '/vary'), 2], ['answered as a', /probe=a$/.test(again.text), true]]; } },
   { label: 'an unsafe method the server accepted invalidates the entry', run: async () => {
       await pageGet(PAGE_A, `${A}/inval`); await pageGet(PAGE_A, `${A}/inval`);
@@ -146,8 +146,8 @@ const ROWS = [
       return [['records written back', kept.some((r) => r.target === `${A}/kept`), true],
               ['GET /kept', count('GET', '/kept'), 1], ['stored body', /#1 /.test(two.text), true]]; } },
   { label: 'a fresh hit that needs a CORS preflight sends the preflight and not the request', run: async () => {
-      const one = await pageGet(PAGE_B, `${A}/pf`, [['X-Probe', 'a']]);
-      const two = await pageGet(PAGE_B, `${A}/pf`, [['X-Probe', 'a']]);
+      const one = await pageGet(PAGE_B, `${A}/pf`, [['X-Probe', 'a', 'concrete']]);
+      const two = await pageGet(PAGE_B, `${A}/pf`, [['X-Probe', 'a', 'concrete']]);
       return [['OPTIONS /pf', count('OPTIONS', '/pf'), 2], ['GET /pf', count('GET', '/pf'), 1],
               ['stored body', two.text, one.text]]; } },
   /* Fetch §4.6 "HTTP-network-or-cache fetch" may answer from a stored response whose Vary names nothing this

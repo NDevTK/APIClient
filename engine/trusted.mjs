@@ -236,7 +236,8 @@ export function trustedZone() {
      `_docOf` refuses on the first request rather than here at assembly. */
   for (const n of ['safeFetchWiden', 'safeFetchPermit', 'safeFetchWidenable', 'safeFetchSignalUsable',
                    'safeFetchEgressStated', 'safeFetchFiringRefusal', 'safeFetchCrossDocumentRefusal',
-                   'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'docRecord', 'docRecordJoin',
+                   'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'safeFetchHeaderListIs', 'docRecord',
+                   'docRecordJoin',
                    'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque',
                    'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordWorldDocument', 'docRecordAskerRefusal',
                    'docRecordNavigableIdentity', 'docRecordOpenerOf', 'docRecordOpenerClaim',
@@ -389,8 +390,8 @@ function decline(reason) { return `decline\t${b64(reason)}`; }
    names (solver/pending_index.h's PEND_DECLINE_RULES) and aborts on a reason that names none. The method and
    address are the record's own key, so the reason repeats neither. It travels base64 as `provide`'s does. */
 /* A fetch record's content field: base64 of the engine's `{headers, body, bodyClass}` text (qjs_request), or
-   `-` for a line whose header list and body digest words are both `-`. Answers `{headers: [[name, value], …],
-   body: Uint8Array | null, bodyClass}`; a record that contradicts its line throws, as every other field of the
+   `-` for a line whose header list and body digest words are both `-`. Answers `{headers: [[name, value,
+   class], …], body: Uint8Array | null, bodyClass}`; a record that contradicts its line throws, as every other field of the
    bill does. */
 const DIGEST_WORD = /^(?:-|[0-9a-f]{64})$/;
 const BODY_CLASSES = ['none', 'concrete', 'example', 'unknown'];
@@ -404,9 +405,8 @@ function fetchContent(headersKey, bodyKey, field, line) {
   }
   let q;
   try { q = JSON.parse(Buffer.from(field, 'base64').toString('utf8')); } catch (_) { q = undefined; }
-  if (!q || typeof q !== 'object' || !Array.isArray(q.headers) ||
-      !q.headers.every((h) => Array.isArray(h) && h.length === 2 && typeof h[0] === 'string' && typeof h[1] === 'string'))
-    throw bad('content holds no header list of [name, value] pairs');
+  if (!q || typeof q !== 'object' || !ZONE.safeFetchHeaderListIs(q.headers))
+    throw bad('content holds no header list of [name, value, class] entries');
   if ((q.headers.length === 0) !== (headersKey === '-')) throw bad('header list contradicts its digest word');
   if (!BODY_CLASSES.includes(q.bodyClass)) throw bad(`body class is \`${q.bodyClass}\``);
   if ((q.body === null) !== (bodyKey === '-') || (q.body === null) !== (q.bodyClass === 'none'))
@@ -1315,8 +1315,9 @@ async function main() {
     for (const k of ['method', 'url', 'credentials', 'mode', 'provenance', 'pinned', 'driven', 'address'])
       if (typeof q[k] !== 'string' || q[k] === '')
         throw new Error(`the engine's xhr.send record states no \`${k}\` — xhr_request_op writes every field`);
-    if (!Array.isArray(q.headers))
-      throw new Error("the engine's xhr.send record carries no header list — xhr_request_op writes one");
+    if (!ZONE.safeFetchHeaderListIs(q.headers))
+      throw new Error("the engine's xhr.send record carries no header list of [name, value, class] entries — " +
+                      'xhr_request_op writes one');
     if (typeof q.useCorsPreflight !== 'boolean')
       throw new Error("the engine's xhr.send record states no use-CORS-preflight flag — xhr_request_op writes one");
     if (!REFERRER_POLICIES.includes(q.referrerPolicy) || typeof q.referrer !== 'string' ||

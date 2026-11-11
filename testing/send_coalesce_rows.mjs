@@ -120,9 +120,9 @@ const ROWS = [
               ['a pinned ask of no such send declined', alone.refusal && alone.refusal.kind, 'decline']]; } },
   { label: 'a request differing in one header is another identity', run: async () => {
       const doc = 'engine:hdr';
-      await ask(PAGE_A, `${A}/hdr`, doc, { headers: [['X-Probe', 'a']] });
-      await ask(PAGE_A, `${A}/hdr`, doc, { headers: [['X-Probe', 'b']] });
-      const again = await ask(PAGE_A, `${A}/hdr`, doc, { headers: [['X-Probe', 'a']] });
+      await ask(PAGE_A, `${A}/hdr`, doc, { headers: [['X-Probe', 'a', 'concrete']] });
+      await ask(PAGE_A, `${A}/hdr`, doc, { headers: [['X-Probe', 'b', 'concrete']] });
+      const again = await ask(PAGE_A, `${A}/hdr`, doc, { headers: [['X-Probe', 'a', 'concrete']] });
       return [['GET /hdr', count('GET', '/hdr'), 2], ['a answered from its own send', /#1 probe=a$/.test(text(again)), true],
               ['census', census(doc), JSON.stringify({ sends: 2, answers: 1, identities: 2 })]]; } },
   { label: 'each asker receives the Set-Cookie and stores it; a request differing only in Cookie is sent',
@@ -166,8 +166,8 @@ const ROWS = [
               ['replay refused', /^blocked-cors:/.test(two.statusText), true]]; } },
   { label: 'a CORS preflight is one act too: one OPTIONS and one GET for two asks', run: async () => {
       const doc = 'engine:pf';
-      const one = await ask(PAGE_B, `${A}/pf`, doc, { headers: [['X-Probe', 'a']] });
-      const two = await ask(PAGE_B, `${A}/pf`, doc, { headers: [['X-Probe', 'a']] });
+      const one = await ask(PAGE_B, `${A}/pf`, doc, { headers: [['X-Probe', 'a', 'concrete']] });
+      const two = await ask(PAGE_B, `${A}/pf`, doc, { headers: [['X-Probe', 'a', 'concrete']] });
       return [['OPTIONS /pf', count('OPTIONS', '/pf'), 1], ['GET /pf', count('GET', '/pf'), 1],
               ['both answered', answered(one) && answered(two), true]]; } },
   { label: 'a document that ended forgets its sends: the same ask is sent again', run: async () => {

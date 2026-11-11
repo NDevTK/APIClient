@@ -1371,10 +1371,12 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             DCHECK(src != NULL, "a Request used as `input` carried no Headers object — §5.4 gives every "
                                 "Request one at step 31, so a source without one was built by a path that "
                                 "skipped it");
-            for (i = 0; i < src->n; i++)
+            for (i = 0; i < src->n; i++) {
+                HeaderUnknown unk;
                 if (header_list_append_guarded(ctx, s->list, guard, src->e[i].name, src->e[i].value,
-                                               src->e[i].root) < 0)
+                                               header_entry_unknown(&src->e[i], &unk)) < 0)
                     return -1;
+            }
         }
         headers_fill_init(&s->fill);
         hdr->stage = REQ_CTOR_SIGNAL;
