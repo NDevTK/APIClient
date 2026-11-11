@@ -1250,7 +1250,7 @@ void decide_history_name(uint64_t *identity, int *ordinal) {
 }
 
 /* See decide.h. */
-int decide_completion_recorded_later(const char *why) {
+int decide_completion_ahead(const char *why) {
     uint32_t asked = dec_arrival_hash(why, NULL, 0), k, r;
     int i, between = 0;
 
@@ -1266,7 +1266,7 @@ int decide_completion_recorded_later(const char *why) {
         if (k == asked) return between > 0;
         if (concolic_root_sig_delivered(r) != CONCOLIC_ROOT_SIG_DELIVERED) between++;
     }
-    return 0;
+    return between > 0;
 }
 
 void decide_live_stats(long *entries, long *bytes) {
@@ -1347,7 +1347,7 @@ static int dec_arrival_fork(const char *why, uint32_t asked, int held, void **si
            through, and dec_leave_path below would discard the record for the flow to re-explore. */
         DCHECKF(!held || g_c == dec_total(),
                 "the held completion %s was taken at slot %d of a record of %d slot(s) that does not take it "
-                "there — its caller holds it while decide_completion_recorded_later answers 1, or leaves the path itself "
+                "there — its caller holds it while decide_completion_ahead answers 1, or leaves the path itself "
                 "(decide_leave_path) once nothing can reach the recorded slot", why, g_c, dec_total());
         if (g_c < dec_total()) dec_leave_path();
     }

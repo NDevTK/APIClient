@@ -479,7 +479,7 @@ void *decide_fork_same_path(const char *why);
  * assemble that arm with. A completion with three arms is asked as two of these, in a fixed order. The sibling
  * and this flow then park on different recipes, which decide_fork_same_path cannot give them. */
 int decide_completion(const char *why, void **sib_blob);
-/* decide_completion for a host arrival (a refusal) the caller holds while decide_completion_recorded_later answers 1: a
+/* decide_completion for a host arrival (a refusal) the caller holds while decide_completion_ahead answers 1: a
    replaying flow takes such an arrival only where its record took it, so the record is never left here. */
 int decide_completion_held(const char *why, void **sib_blob);
 /* A fork over a value that arrived and that this flow can name (`what`, e.g. an orphan body's locator), recorded as
@@ -521,11 +521,12 @@ void *decide_freeze_path(void);
    replay, or the arms of a fork over a value that arrived, recorded or not) name the same creation alike.
    Requires a running flow. */
 void  decide_history_name(uint64_t *identity, int *ordinal);
-/* Whether the running flow's recorded path, from its cursor on, takes the completion `why` (decide_completion's
-   key) first at a slot past the cursor: an arrival the replay reaches before its record took it. One owed behind
-   the cursor (passed over for a later question) is due, not later, and so is one with only slots over a source
-   the running candidate delivers between the cursor and it, which no question reaches. */
-int   decide_completion_recorded_later(const char *why);
+/* Whether the point at which the running flow's record took the completion `why` (decide_completion's key) is
+   ahead of its cursor: the record takes it at a slot past the cursor, or holds no slot for it and has not been
+   replayed to its end (its recording parked before the arrival, so the arrival belongs past the record). One
+   owed behind the cursor (passed over for a later question) is due, not ahead, and so is one with only slots
+   over a source the running candidate delivers between the cursor and that point, which no question reaches. */
+int   decide_completion_ahead(const char *why);
 void *decide_suspend(void);
 void  decide_resume(void *blob, JSValueConst fn);
 void  decide_blob_free(void *blob);

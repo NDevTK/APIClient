@@ -741,7 +741,7 @@ int  pending_entry_declined(JSValueConst e);
 /* Has this register still to fork the arms of this entry's refusal: `declined` without `declineTaken`.
    flow_decline_fork's failure and success arms each take an arrival, so until the fork the refusal is an event
    its timeline has not reached. A replay holds a refusal in this state until its recorded slot
-   (decide_completion_recorded_later); the recording session's request was in flight over the same stretch. */
+   (decide_completion_ahead); the recording session's request was in flight over the same stretch. */
 int  pending_entry_decline_fork_owed(JSValueConst e);
 
 /* …AND "CAN THE HOST STILL BE ASKED FOR THIS ONE", WHICH IS THE ENTRY ARITY THE NOTE ABOVE DOES NOT MENTION AND

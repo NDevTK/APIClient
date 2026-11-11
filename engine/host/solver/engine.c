@@ -6357,14 +6357,10 @@ static int flow_unaddressed_same_origin(JSContext *ctx, Flow *f, JSValueConst e,
 /* The waiting arm's completion key (decide_completion). */
 static const char DECLINE_WAITS[] = "(the trusted zone declined this request — the arm waits for the real reply)";
 
-/* A refusal is due once the flow can fork, and a replay takes it at the slot its record took it: a refusal that
-   reaches a replaying flow before that slot (the trusted zone answered sooner than in the recording session)
-   waits for it, since taking it early leaves the recorded path at the cursor and re-explores what it recorded. */
-static int flow_decline_fork_at(JSContext *ctx, const Flow *f) {
+/* The first declined request whose fork is owed, or -1. A read. */
+static int flow_decline_owed_at(JSContext *ctx, const Flow *f) {
     int n = pending_count(f->pending), i;
 
-    if (!flow_fork_homes_open(ctx, f, 0)) return -1;
-    if (decide_completion_recorded_later(DECLINE_WAITS)) return -1;
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(f->pending, i);
         int owed = pending_entry_decline_fork_owed(e);
@@ -6373,6 +6369,16 @@ static int flow_decline_fork_at(JSContext *ctx, const Flow *f) {
         if (owed) return i;
     }
     return -1;
+}
+
+/* A refusal is due once the flow can fork, and a replay takes it where its record took it: a refusal that
+   reaches a replaying flow before that point (the trusted zone answered sooner than in the recording session,
+   or the recording parked before it was taken) is held, since taking it early leaves the recorded path at the
+   cursor and re-explores what it recorded. flow_step's resting arm ends a hold nothing can reach the end of. */
+static int flow_decline_fork_at(JSContext *ctx, const Flow *f) {
+    if (!flow_fork_homes_open(ctx, f, 0)) return -1;
+    if (decide_completion_ahead(DECLINE_WAITS)) return -1;
+    return flow_decline_owed_at(ctx, f);
 }
 
 static void flow_decline_fork(JSContext *ctx, Flow *f, int i) {
@@ -10691,6 +10697,18 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * compiled out and reads `jobs` rather than `dyn`. It also decides the name, being a fact about the
              * flow's own sequence. */
             else if (seq_awaits || pending_outstanding(f->pending)) {
+                /* A refusal held for the replay (flow_decline_fork_at), with no reply in flight and nothing left
+                   to run: the fork is due on the next step. Where the record still takes it ahead of the cursor,
+                   nothing this timeline can run reaches that point, so the replay has gone off its recorded path
+                   and leaves it here, as the held delivery below does. */
+                if (!pending_host_outstanding(f->pending) && flow_decline_owed_at(ctx, f) >= 0) {
+                    DCHECK(flow_fork_homes_open(ctx, f, 0),
+                           "a flow rests with a refusal's fork owed and a suspension that cannot be cloned — the "
+                           "resting arm is reached with no frame, no parked continuation and no compile in flight");
+                    if (decide_completion_ahead(DECLINE_WAITS)) decide_leave_path();
+                    g_step_unit = STEP_UNIT_HELD_DECLINE;
+                    return 0;
+                }
                 /* Every task source is empty and a row or a reply is not; the three names answer what the flow is
                    waiting for, asked of the cursor and then of the register. */
                 g_step_unit = seq_awaits

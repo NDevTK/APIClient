@@ -388,6 +388,9 @@
     /* branch once nothing else is left to run; whatever deliver_admits     */ \
     /* answers, the step is this one arm (ROUTED_DELIVERY is the rung above) */ \
     X(HELD_DELIVERY,      "held-delivery", BELOW)                                 \
+    /* a refusal held for the replay to reach where its record took it, found  */ \
+    /* due at the resting arm: the fork rung takes it on the next step         */ \
+    X(HELD_DECLINE,       "held-refusal-is-due", BELOW)                           \
     X(AWAIT_PEER,         "await-peer-operation", BELOW)                          \
     X(FINISHED,           "finished", BELOW)
 

@@ -960,7 +960,6 @@ static ParkKind park_kind_of(const Flow *f)
     return PARK_KIND_FLOW;
 }
 
-#if APICLIENT_DEV
 /* A chain's whole decision vector, oldest slot first: its arms and the questions they answer. Returns the slot
    count; `*arms` and `*keys` are malloc'd and the caller's (NULL for an empty chain). */
 static int park_path_flatten(const void *seg, signed char **arms, uint32_t **keys, uint32_t **roots)
@@ -1093,7 +1092,11 @@ static int park_recipe_cmp(const void *pa, const void *pb)
    same path, a drive to the same call. Asked once a whole-frontier park has written every member, over the members
    written (`paged`), sorted by the cheap half of the comparison so only equal runs are compared whole: O(paged log
    paged) per park, never per record. A partial park releases each flow it writes at once, so no written member
-   stands in the registry for it to be compared with. */
+   stands in the registry for it to be compared with.
+   An invariant of the solver and not of the store: the document parses and resumes either way, and twins cost
+   repeated work, never a wrong record. So it is a DFAIL, and its release arm keeps both records (dropping one on
+   the strength of this comparison would shed the only copy of a flow the comparison could not tell apart) and
+   reports the site as a gap the session crossed. */
 static void park_twins_check(void)
 {
     const Flow *f, **v = NULL;
@@ -1115,18 +1118,17 @@ static void park_twins_check(void)
             char loc[17] = "-";
 
             if (a->orphan_chain_n) park_orphan_hex(a->orphan_chain[a->orphan_chain_n - 1], loc);
-            DCHECKF(!(park_path_equal(a, b) && park_rows_equal(a, b)),
-                    "the park document holds two records of a chain of %d drive(s) ending in body o%s on one path "
-                    "(cursor %d) with the same %d commitment(s) and %d undelivered message(s) — two records that "
-                    "say the same thing resume as two copies of one flow. One is waiting %d, driving %d; the other "
-                    "is waiting %d, driving %d",
-                    a->orphan_chain_n, loc, a->dec_blob ? decide_blob_cursor(a->dec_blob) : -1,
-                    flow_world_commits(a), flow_deliver_pending(a), a->orphan_want, !JS_IsUndefined(a->fn),
-                    b->orphan_want, !JS_IsUndefined(b->fn));
+            if (!(park_path_equal(a, b) && park_rows_equal(a, b))) continue;
+            DFAILF("the park document holds two records of a chain of %d drive(s) ending in body o%s on one path "
+                   "(cursor %d) with the same %d commitment(s) and %d undelivered message(s) — two records that "
+                   "say the same thing resume as two copies of one flow. One is waiting %d, driving %d; the other "
+                   "is waiting %d, driving %d",
+                   a->orphan_chain_n, loc, a->dec_blob ? decide_blob_cursor(a->dec_blob) : -1,
+                   flow_world_commits(a), flow_deliver_pending(a), a->orphan_want, !JS_IsUndefined(a->fn),
+                   b->orphan_want, !JS_IsUndefined(b->fn));
         }
     free(v);
 }
-#endif
 
 /* DOES THIS FLOW'S RECORD NAME A SEGMENT — i.e. is it one of the flows that makes a park write 's' records at
    all. It is the same question cold_park_flow asks one line before it writes (`f->dec_blob ? decide_blob_seg
@@ -1635,9 +1637,7 @@ void cold_park(void)
         if (park_flow_deep(f)) deep_written++;
         cold_park_flow(f);
     }
-#if APICLIENT_DEV
     park_twins_check();
-#endif
     cold_parked(&after);
     /* THE RESIDUE IS THE ONE THE HOST WAS SHOWN. Not a restatement of the loop above: the preview walks the
        frontier and the park writes RECORDS, so this is where "one record per member, and of the kind the host
