@@ -12440,7 +12440,11 @@ static void engine_sale_release(Flow *tail) {
     /* The stand-ins before the bulk release frees the register, so no pair loses its last naming and no
        `fetch.cancel` is sent for a request the stub still owes its replay. */
     stand_ins = pending_stand_ins(tail->pending);
+    /* What the release leaves counted is where a cycle the member alone held now is: the scope notes it, above
+       the generation the member last forked at, and owes a collection over that neighbourhood (quickjs.h). */
+    JS_GCReleaseScopeBegin(JS_GetRuntime(g_sess_ctx), tail->delta ? cow_delta_fork_gen(tail->delta) : 0);
     flow_release_bulk(g_sess_ctx, tail);
+    JS_GCReleaseScopeEnd(JS_GetRuntime(g_sess_ctx));
     flow_sale_end(tail, stand_ins);
     g_flows_sold++;
     if (was_cand) g_flows_sold_cands++; else g_flows_sold_flows++;
@@ -12730,9 +12734,9 @@ static long engine_shed_layout_jobs(uint64_t target) {
 /* RAM pressure relocates the cold tail (engine.h): at rest, live bytes above the share of what the limit leaves the
    heap are given back, re-derivable layout jobs first (engine_shed_layout_jobs), then members sold from the tail.
    The footprint never shrinks (dlmalloc never trims; glibc trims only its top), so its growth past the line, or past
-   the mark where pressure last made room, also opens an episode that takes live bytes down by that growth. A sale's
-   bytes are mostly cycles only the collector frees, so a batch of sales owes a collection and pressure reads the
-   live bytes again only once it has finished. A batch is sized in bytes: the excess over the last batch's measured
+   the mark where pressure last made room, also opens an episode that takes live bytes down by that growth. A sale
+   can leave cycles only the collector frees, so each sale owes a collection over what it released
+   (engine_sale_release) and pressure reads the live bytes again only once they have finished. A batch is sized in bytes: the excess over the last batch's measured
    yield per member, since what a sold member's frame chain and private objects hold is counted by no census row.
    With no yield to size it (the first batch, or one whose collection gave nothing back) it is twice the last. */
 static void engine_relocate_under_pressure(JSRuntime *rt) {
@@ -12747,8 +12751,9 @@ static void engine_relocate_under_pressure(JSRuntime *rt) {
     if (g_ram_limit == 0) return;
     JS_GCCycleStats(rt, &st);
     live = (uint64_t)c_alloc_live();
-    /* A batch's collection has finished: what it gave back per member, read before this call's sheds. */
-    if (g_pressure_batch > 0 && st.collections != g_pressure_sold_at_collections) {
+    /* A batch's collections have finished, since this runs only with none owed or standing: what the batch gave
+       back per member, read before this call's sheds. */
+    if (g_pressure_batch > 0) {
         g_pressure_yield = g_pressure_batch_live > live ? (g_pressure_batch_live - live) / (uint64_t)g_pressure_batch
                                                         : 0;
         g_pressure_last = g_pressure_batch;
@@ -12773,13 +12778,11 @@ static void engine_relocate_under_pressure(JSRuntime *rt) {
         g_pressure_last = 0;
         return;
     }
-    if (g_pressure_batch > 0 || g_pressure_sold_at_collections == UINT64_MAX) {
-        /* The session's first pressure, or a batch whose collection has not finished: collect before selling. */
-        if (g_pressure_sold_at_collections == UINT64_MAX) {
-            g_pressure_sold_at_collections = st.collections;
-            JS_GCOwe(rt);
-            g_pressure_collects++;
-        }
+    if (g_pressure_sold_at_collections == UINT64_MAX) {
+        /* The session's first pressure: a whole-heap collection before any sale. */
+        g_pressure_sold_at_collections = st.collections;
+        JS_GCOwe(rt);
+        g_pressure_collects++;
         return;
     }
     want = g_pressure_yield > 0 ? (long)((live - g_pressure_target + g_pressure_yield - 1) / g_pressure_yield)
@@ -12805,9 +12808,6 @@ static void engine_relocate_under_pressure(JSRuntime *rt) {
         g_gc_sale_batches++;
         g_gc_sale_objects += (long long)lc.objects;
     }
-    g_pressure_sold_at_collections = st.collections;
-    JS_GCOwe(rt);
-    g_pressure_collects++;
 }
 
 /* See engine.h. The probe is a plain allocation, freed at once: what it proves is that the address space holds
@@ -14168,8 +14168,8 @@ long long engine_host_turns(void) { return g_host_turns; }
 long long engine_gc_us(void) { return (long long)g_gc_us; }
 
 /* A slice the collector holds: it begins an owed collection, then takes steps of rest_unit_items(REST_UNIT_GC_WORK)
-   units until the collection finishes or the slice's work reaches the quantum, handing the host its turn between
-   two steps (ENGINE_STEP_HOST, resumed as the same slice). No
+   units until nothing is owed or the slice's work reaches the quantum, going on from one finished collection to
+   the next owed, and handing the host its turn between two steps (ENGINE_STEP_HOST, resumed as the same slice). No
    flow runs in it, so nothing separates two steps but the host's own time between slices. Each step's work is
    banked in the instance's currency at THREAD_WORK_UNITS_PER_KI_GC, so the slice ends at the quantum like any
    other and Level 1 sees the instance's collection as service. It answers YIELD: every flow is where it was.
@@ -14201,6 +14201,11 @@ static int engine_collect_slice(JSRuntime *rt, int resume) {
         g_service_work += (int64_t)units;
         if (g_pressure_batch > 0) g_gc_sale_work += st.work - w0;   /* a sold batch awaits this collection */
         w0 = st.work;
+        /* A sale's collection is small, and a batch owes one per member: the slice goes on to the next. */
+        if (done && JS_GCOwed(rt) && engine_slice_work() < ENGINE_QUANTUM_WORK) {
+            JS_GCBegin(rt);
+            done = false;
+        }
         if (!done && engine_slice_work() < ENGINE_QUANTUM_WORK && quantum_host_wants_thread()) {
             g_gc_us += quantum_thread_us() - t0;
             g_turn_resume = 2;

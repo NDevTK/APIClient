@@ -495,6 +495,7 @@ static JSValue JS_ReadFunctionTag(BCReaderState *s)
         b->cpool = (void *)((uint8_t*)b + cpool_offset);
     }
 
+    b->flow_gen = g_flow_gen;
     add_gc_object(ctx->rt, &b->header, JS_GC_OBJ_TYPE_FUNCTION_BYTECODE);
 
     obj = JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, b);

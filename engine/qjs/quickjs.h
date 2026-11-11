@@ -684,6 +684,13 @@ JS_EXTERN bool JS_GCOwed(JSRuntime *rt);
    pressure). The next step it drives begins it. */
 JS_EXTERN void JS_GCOwe(JSRuntime *rt);
 JS_EXTERN void JS_GCBegin(JSRuntime *rt);
+/* A release scope, for an embedder tearing down a holder of its own (a sold flow). Between the two calls, a
+   release that leaves a GC object's count positive notes the object when it was born after fork generation
+   `floor_gen` (JS_ObjFlowGen). A scope that noted any owes a collection over their neighbourhood: what they
+   reach through objects born after the floor, with everything else held as a root. JS_GCOwed then answers true
+   and JS_GCBegin begins it, oldest scope first; a whole-heap collection takes every closed scope. */
+JS_EXTERN void JS_GCReleaseScopeBegin(JSRuntime *rt, uint32_t floor_gen);
+JS_EXTERN void JS_GCReleaseScopeEnd(JSRuntime *rt);
 JS_EXTERN bool JS_GCStep(JSRuntime *rt, uint64_t budget);
 JS_EXTERN void JS_MutatorEnter(JSRuntime *rt);
 typedef struct JSGCCycleStats {
@@ -697,6 +704,7 @@ typedef struct JSGCCycleStats {
     uint64_t decref_step_max, scan_step_max;   /* lifetime: the most work one step of each trial phase did */
     uint64_t free_step_max;                    /* lifetime: the most work one collection's freeing did */
     uint64_t object_work_max;                  /* lifetime: the most work one object's visit did */
+    uint64_t scoped, scoped_work;              /* lifetime: scoped collections finished, and their work */
 } JSGCCycleStats;
 JS_EXTERN void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out);
 JS_EXTERN bool JS_IsLiveObject(JSRuntime *rt, JSValueConst obj);

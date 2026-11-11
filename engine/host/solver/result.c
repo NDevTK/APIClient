@@ -1946,7 +1946,9 @@ char *result_heap_json(JSContext *ctx) {
        rows are the largest step of each phase in the collector's unit, `gcObjectWorkMax` the largest visit of
        one object, which a step can exceed its budget by, and `gcSliceWorkMax` the largest slice in
        engine work. `gcSaleWork` is the collector's work while a sold batch awaited its collections, over
-       `gcSaleBatches` batches, and `gcSaleObjects` the JS objects live at each batch's sale, summed. */
+       `gcSaleBatches` batches, and `gcSaleObjects` the JS objects live at each batch's sale, summed.
+       `gcCollections` counts whole-heap collections; `gcScoped` the collections over one release scope's
+       neighbourhood, and `gcScopedWork` their work. */
     JS_GCCycleStats(rt, &gc);
     navigable_realm_refs(NULL, &rmin, &rmax, &rtotal);   /* `live` is navigable_realm_count() one line down */
     if (!realm_holders_census(&hold))
@@ -1992,7 +1994,7 @@ char *result_heap_json(JSContext *ctx) {
                  "\"gcObjectWorkMax\":%llu,"
                  "\"gcDecrefStepMax\":%llu,\"gcScanStepMax\":%llu,\"gcFreeStepMax\":%llu,"
                  "\"gcSliceWorkMax\":%lld,\"gcSaleWork\":%llu,\"gcSaleBatches\":%lld,"
-                 "\"gcSaleObjects\":%lld}",
+                 "\"gcSaleObjects\":%lld,\"gcScoped\":%llu,\"gcScopedWork\":%llu}",
                  (long long)live.malloc_count, (long long)live.malloc_size, (long long)live.atoms,
                  (long long)live.objects, (long long)live.hashed_shapes,
                  navigable_realm_count(), navigable_realm_made(), navigable_realm_peak(),
@@ -2008,7 +2010,8 @@ char *result_heap_json(JSContext *ctx) {
                  (unsigned long long)gc.object_work_max,
                  (unsigned long long)gc.decref_step_max, (unsigned long long)gc.scan_step_max,
                  (unsigned long long)gc.free_step_max, engine_gc_slice_work_max(),
-                 engine_gc_sale_work(), engine_gc_sale_batches(), engine_gc_sale_objects());
+                 engine_gc_sale_work(), engine_gc_sale_batches(), engine_gc_sale_objects(),
+                 (unsigned long long)gc.scoped, (unsigned long long)gc.scoped_work);
     free(rsites_json);
     return heap;
 }
