@@ -607,6 +607,36 @@ static JSValue js_gc_now(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     return JS_UNDEFINED;
 }
 
+#if !APICLIENT_DEV
+/* The four constructs `gapSite` crosses, as the result document's `_instanceGaps` states each: a DFAIL's literal,
+   a DFAILF's format, and for a text the site composed, that text as its first reach wrote it. */
+#define TF_GAP_FIRST "the fixture's gapSite(0) was crossed: a construct only the release-only gapsite document reaches"
+#define TF_GAP_SECOND "the fixture's gapSite(1) was crossed: a construct only the release-only gapsite document reaches"
+#define TF_GAP_FORMAT "the fixture's gapSite(%d) was crossed, stated by its format"
+#define TF_GAP_COMPOSED "the fixture's gapSite(3) was crossed, stated by a text the site composed"
+
+/* `gapSite(which)`: cross one of this fixture's own DFAIL constructs and return, as a release build does at any
+   DFAIL. A fixture's own surface. */
+static JSValue js_gap_site(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    int32_t which = -1;
+    char why[96];
+
+    (void)this_val;
+    if (argc < 1 || JS_ToInt32(ctx, &which, argv[0]) < 0) return JS_EXCEPTION;
+    switch (which) {
+    case 0: DFAIL(TF_GAP_FIRST); break;
+    case 1: DFAIL(TF_GAP_SECOND); break;
+    case 2: DFAILF(TF_GAP_FORMAT, which); break;
+    case 3:
+        snprintf(why, sizeof why, "%s", TF_GAP_COMPOSED);
+        DFAIL(why);
+        break;
+    default: return JS_ThrowRangeError(ctx, "gapSite takes 0, 1, 2 or 3");
+    }
+    return JS_UNDEFINED;
+}
+#endif
+
 /* `childRealmCount()`: the agent's live child realms (navigable_realm_count), for a row that asks whether a frame's
    realm was reclaimed. A fixture's own surface. */
 static JSValue js_child_realm_count(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -1785,6 +1815,9 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/slicelen.h"
 #include "fixture/strsearch.h"
 #include "fixture/rxsearch.h"
+#if !APICLIENT_DEV
+#include "fixture/gapsite.h"   /* crosses DFAIL constructs, which abort a dev build */
+#endif
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -2596,6 +2629,9 @@ TF_DOCS[] = {
     { "flexscroll", HTML_FLEXSCROLL },
     { "realmfree", HTML_REALMFREE },
     { "navrealm", HTML_NAVREALM },
+#if !APICLIENT_DEV
+    { "gapsite", HTML_GAPSITE },
+#endif
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -9894,6 +9930,9 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     tf_global_define(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
     tf_global_define(ctx, g, "gcNow", JS_NewCFunction(ctx, js_gc_now, "gcNow", 0));   /* a collection at a known point */
     tf_global_define(ctx, g, "childRealmCount", JS_NewCFunction(ctx, js_child_realm_count, "childRealmCount", 0));
+#if !APICLIENT_DEV
+    tf_global_define(ctx, g, "gapSite", JS_NewCFunction(ctx, js_gap_site, "gapSite", 1));   /* a DFAIL crossing */
+#endif
     tf_global_define(ctx, g, "wasmMemoryNew", JS_NewCFunction(ctx, js_wasm_memory_new, "wasmMemoryNew", 1));
     tf_global_define(ctx, g, "wasmStoreNew", JS_NewCFunction(ctx, js_wasm_store_new, "wasmStoreNew", 0));
     tf_global_define(ctx, g, "wasmStoreOp", JS_NewCFunction(ctx, js_wasm_store_op, "wasmStoreOp", 4));
@@ -21451,6 +21490,57 @@ TF_UNIT void probes_navrealm(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+#if !APICLIENT_DEV
+/* The row of the document's `_instanceGaps` that states a construct of this file and ends in `tail` (the row's
+   bytes from its `"message"` key through its closing brace), or NULL. No message here holds a brace. */
+static const char *tf_gap_row(const char *js, const char *tail) {
+    static const char open[] = "{\"file\":\"" __FILE__ "\",\"line\":";
+    const char *g = strstr(js, "\"_instanceGaps\":["), *row;
+
+    if (!g) return NULL;
+    for (row = strstr(g, open); row; row = strstr(row + 1, open)) {
+        const char *end = strchr(row, '}'), *m = strstr(row, tail);
+
+        if (m && end && m + strlen(tail) == end + 1) return row;
+    }
+    return NULL;
+}
+
+/* The rows of the `gapsite` document (fixture/gapsite.h): the page went on past four DFAIL constructs, and the
+   result document lists each by file and message with its count, in the order they were first reached. */
+TF_UNIT void probes_gapsite(const char *js, Probe *tab, int *n) {
+    const char *first = tf_gap_row(js, "\"message\":\"" TF_GAP_FIRST "\",\"composed\":false,\"reached\":2}");
+    const char *second = tf_gap_row(js, "\"message\":\"" TF_GAP_SECOND "\",\"composed\":false,\"reached\":1}");
+    const char *c_why = NULL, *g_why = NULL, *l_why = NULL, *o_why = NULL, *f_why = NULL, *t_why = NULL;
+    int c_tt = 1, g_tt = 1, l_tt = 1, o_tt = 1, f_tt = 1, t_tt = 1;
+
+    fold_row(&c_tt, &c_why, !!strstr(js, "\"/api/gap-continued\""),
+             "NOT REACHED: there is no /api/gap-continued record, so the page did not go on past its gap sites");
+    fold_row(&g_tt, &g_why, !!strstr(js, "\"_instanceGaps\":["),
+             "the result document carries no `_instanceGaps` array: a release run that crossed DFAIL constructs "
+             "states none of them");
+    fold_row(&l_tt, &l_why, first != NULL,
+             "`_instanceGaps` has no row for gapSite(0) with this file, its literal and a count of 2");
+    fold_row(&o_tt, &o_why, first != NULL && second != NULL && first < second,
+             "gapSite(0)'s row does not stand before gapSite(1)'s: the list is not in first-reach order");
+    fold_row(&f_tt, &f_why,
+             !!tf_gap_row(js, "\"message\":\"" TF_GAP_FORMAT "\",\"composed\":false,\"reached\":1}"),
+             "the DFAILF construct is not listed by its format string");
+    fold_row(&t_tt, &t_why,
+             !!tf_gap_row(js, "\"message\":\"" TF_GAP_COMPOSED "\",\"composed\":true,\"reached\":1}"),
+             "the construct handed a composed text is not listed by that text and marked composed");
+    const Probe rows[] = {
+        { "gap-continued", c_tt, "gapArm", SESS_EXPLORE, c_why },
+        { "gap-field", g_tt, "gapArm", SESS_EXPLORE, g_why },
+        { "gap-listed-with-count", l_tt, "gapArm", SESS_EXPLORE, l_why, .gate = "gap-field" },
+        { "gap-first-reach-order", o_tt, "gapArm", SESS_EXPLORE, o_why, .gate = "gap-listed-with-count" },
+        { "gap-format-identity", f_tt, "gapArm", SESS_EXPLORE, f_why, .gate = "gap-field" },
+        { "gap-composed-text", t_tt, "gapArm", SESS_EXPLORE, t_why, .gate = "gap-field" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+#endif
+
 /* The rows of the `uriclass` document (fixture/uriclass.h): an encoded unknown holds only the units Encode
    produces, so a RegExp over a unit outside them is decided, and one over a unit inside them forks. */
 TF_UNIT void probes_uriclass(const char *js, Probe *tab, int *n) {
@@ -31070,6 +31160,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_flexscroll(js, probes, &np);
     probes_realmfree(js, probes, &np);
     probes_navrealm(js, probes, &np);
+#if !APICLIENT_DEV
+    probes_gapsite(js, probes, &np);
+#endif
     probes_xwinfwd(js, probes, &np);
     probes_msgprefix(js, probes, &np);
     probes_prefixjoin(js, probes, &np);
