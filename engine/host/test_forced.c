@@ -1341,6 +1341,122 @@ static int tf_replytwice_pay(JSContext *ctx) {
     return filled;
 }
 
+/* The zone's latency on one refusal and one reply, for the declinekey document (fixture/declinekey.h), as
+   engine/trusted.mjs and extension/bridge.js behave: an answer is composed from the line that was in the bill
+   when the request was first shown, a request whose answer is owed is not worked again when a later bill shows
+   it, and the answer is written at a later read. `/api/dkey`'s first line states `forced` and is refused, the
+   refusal written at the payment whose bill first shows the pair with an unforced vector; `/api/dkrev`'s first
+   line is answered, the reply written at the payment after the one that answered `/api/dkrev-pre`. */
+#define TF_DK_URL "https://x.test/api/dkey"
+#define TF_DKREV_URL "https://x.test/api/dkrev"
+#define TF_DKREV_PRE_URL "https://x.test/api/dkrev-pre"
+static struct {
+    char *refused;      /* the judged line whose refusal is owed, or NULL */
+    int refusal_due;    /* a bill showed the pair since with a vector other than `forced` */
+    int refusals;       /* refusals written for the pair */
+    int unforced_shown; /* bills that showed the pair with a vector other than `forced` */
+    int answered;       /* replies written for TF_DK_URL */
+    char *replied;      /* the line whose reply is owed for TF_DKREV_URL, or NULL */
+    int rev_pre_at;     /* the payment that answered TF_DKREV_PRE_URL, or -1 */
+    int rev_answered;   /* replies written for TF_DKREV_URL */
+} g_tf_dk = { NULL, 0, 0, 0, 0, NULL, -1, 0 };
+
+/* Whether two bill lines name one request: the seven identity fields PendRequestKey holds. */
+static int tf_line_same_request(const char *a, const char *b) {
+    const char *f[2][15];
+    char *c[2] = { strdup(a), strdup(b) };
+    int same = 1;
+
+    CHECK(c[0] != NULL && c[1] != NULL, "the fixture could not read two bill lines it compares");
+    for (int k = 0; k < 2; k++)
+        engine_pending_split(c[k], &f[k][0], &f[k][1], &f[k][2], &f[k][3], &f[k][4], &f[k][5], &f[k][6],
+                             &f[k][7], &f[k][8], &f[k][9], &f[k][10], &f[k][11], &f[k][12], &f[k][13], &f[k][14]);
+    /* METHOD, MODE, REFERRER_POLICY, REFERRER, HEADERS, BODY, URL. */
+    for (int i = 0; i < 7 && same; i++) {
+        static const int at[7] = { 0, 7, 8, 9, 10, 11, 14 };
+        same = !strcmp(f[0][at[i]], f[1][at[i]]);
+    }
+    free(c[0]);
+    free(c[1]);
+    return same;
+}
+
+/* Whether the bill line `line` for `abs`, of provenance `provenance`, is owed rather than answered now. */
+static int tf_dk_hold(const char *abs, const char *line, const char *provenance) {
+    if (!strcmp(abs, TF_DK_URL)) {
+        if (strcmp(provenance, PENDING_PROVENANCE_FORCED)) g_tf_dk.unforced_shown++;
+        if (g_tf_dk.refused) {
+            if (strcmp(provenance, PENDING_PROVENANCE_FORCED)) g_tf_dk.refusal_due = 1;
+            return 1;
+        }
+        if (g_tf_dk.refusals || strcmp(provenance, PENDING_PROVENANCE_FORCED)) return 0;
+        g_tf_dk.refused = strdup(line);
+        CHECK(g_tf_dk.refused != NULL, "the fixture could not record the line it refuses");
+        return 1;
+    }
+    if (!strcmp(abs, TF_DKREV_URL) && g_tf_dk.rev_answered == 0) {
+        if (!g_tf_dk.replied) {
+            g_tf_dk.replied = strdup(line);
+            CHECK(g_tf_dk.replied != NULL, "the fixture could not record the line it owes a reply for");
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/* The provider's statement of what it holds (engine_set_provider). */
+static int tf_dk_holds(const char *line) {
+    return (g_tf_dk.refused && tf_line_same_request(line, g_tf_dk.refused)) ||
+           (g_tf_dk.replied && tf_line_same_request(line, g_tf_dk.replied));
+}
+static int tf_provider_holds(const char *line) { return tf_replytwice_holds(line) || tf_dk_holds(line); }
+
+/* Writes the owed refusal and the owed reply once each is due. */
+static int tf_dk_pay(JSContext *ctx) {
+    int filled = 0;
+
+    if (g_tf_dk.refused && g_tf_dk.refusal_due) {
+        const char *f[15];
+        char *one = g_tf_dk.refused;
+
+        engine_pending_split(one, &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6], &f[7], &f[8], &f[9], &f[10],
+                             &f[11], &f[12], &f[13], &f[14]);
+        {
+            PendRequestKey key = { f[0], f[7], f[8], f[9], f[10], f[11], f[14] };
+
+            filled += engine_decline(ctx, &key, "blocked-signal:provenance=forced");
+        }
+        g_tf_dk.refusals++;
+        free(one);
+        g_tf_dk.refused = NULL;
+        g_tf_dk.refusal_due = 0;
+    }
+    if (g_tf_dk.replied && g_tf_dk.rev_pre_at >= 0 && g_tf_payments > g_tf_dk.rev_pre_at) {
+        static const char rbody[] = "{\"region\":\"us-west-2\"}";
+        const char *const list[1] = { TF_DKREV_URL };
+        const char *f[15];
+        char *one = g_tf_dk.replied;
+        HeaderList eh = { 0 };
+        JSValue reply;
+
+        engine_pending_split(one, &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6], &f[7], &f[8], &f[9], &f[10],
+                             &f[11], &f[12], &f[13], &f[14]);
+        header_list_append(&eh, "x-echo-method", f[0]);
+        reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody), list, 1, "application/json", "basic");
+        header_list_free(&eh);
+        {
+            PendRequestKey key = { f[0], f[7], f[8], f[9], f[10], f[11], f[14] };
+
+            filled += engine_provide(ctx, &key, TF_REPLY_HOW, TF_REPLY_REACH, reply);
+        }
+        JS_FreeValue(ctx, reply);
+        g_tf_dk.rev_answered++;
+        free(one);
+        g_tf_dk.replied = NULL;
+    }
+    return filled;
+}
+
 /* The sale documents' act (fixture/sale.h): `listed` once a bill has named an owed request, `gave` the members
    the reclaim edge then gave back, `relisted` whether the bill still named the request after them. */
 static struct { int listed; long gave; int relisted; int floor; } g_tf_sale;
@@ -1437,7 +1553,7 @@ static int fixture_provide(JSContext *ctx) {
     while (*urls) {
         const char *nl = strchr(urls, '\n');
         size_t len = nl ? (size_t)(nl - urls) : strlen(urls);
-        char *one = malloc(len + 1);
+        char *one = malloc(len + 1), *whole;
         const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
         const char *referrer_policy, *referrer, *headers_key, *body_key, *address, *askers;
         PendRequestKey key;
@@ -1448,6 +1564,8 @@ static int fixture_provide(JSContext *ctx) {
 
         CHECK(one, "the fixture could not name the request it is answering");
         memcpy(one, urls, len); one[len] = 0;
+        whole = strndup(urls, len);
+        CHECK(whole, "the fixture could not keep the line it is answering");
         /* The line is `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>
            MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>HEADERS<TAB>BODY<TAB>ADDRESS<TAB>ASKERS<TAB>URL` and it is split by the
            engine's own splitter — the reply seam is keyed on the pair, so a fixture that answered the whole
@@ -1529,6 +1647,8 @@ static int fixture_provide(JSContext *ctx) {
         if (tf_replytwice_hold(abs, (const char *const[7]){ method, mode, referrer_policy, referrer, headers_key,
                                                              body_key, url })) {
             /* Owed, and written by tf_replytwice_pay below once its lag has passed. */
+        } else if (tf_dk_hold(abs, whole, provenance)) {
+            /* Owed, and written by tf_dk_pay below once it is due. */
         } else if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
             /* The zone's own token (extension/lib/safe-fetch.js): the signal and the value that refused. */
             filled += engine_decline(ctx, &key, "blocked-signal:destination=program");
@@ -1581,14 +1701,19 @@ static int fixture_provide(JSContext *ctx) {
             JS_FreeValue(ctx, reply);
             if (!strcmp(abs, TF_REPLYTWICE_URL)) g_tf_r2.answered++;
             if (!strncmp(abs, TF_REPLYTWICE_DUE, strlen(TF_REPLYTWICE_DUE))) g_tf_r2.due = g_tf_payments;
+            if (!strcmp(abs, TF_DK_URL)) g_tf_dk.answered++;
+            if (!strcmp(abs, TF_DKREV_URL)) g_tf_dk.rev_answered++;
+            if (!strcmp(abs, TF_DKREV_PRE_URL)) g_tf_dk.rev_pre_at = g_tf_payments;
         }
         free(abs);
+        free(whole);
         free(one);
         if (!nl) break;
         urls = nl + 1;
     }
     url_record_free(&base);
     filled += tf_replytwice_pay(ctx);
+    filled += tf_dk_pay(ctx);
     /* THE PEER'S POST IS NOT ROUTED HERE ANY MORE, AND THE MOVE IS A REPAIR RATHER THAN A TIDY-UP — the
        reasoning that put it here is kept because it is what a reader re-derives. It said: a commitment is
        written when a timeline RECEIVES, so the record has to be in the document before the moment can ever be
@@ -1743,6 +1868,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/realmsell.h"
 #include "fixture/gcsale.h"
 #include "fixture/replytwice.h"
+#include "fixture/declinekey.h"
 #include "fixture/realmsellclose.h"
 #include "fixture/adoptexpando.h"
 #include "fixture/reflectint.h"
@@ -2546,6 +2672,7 @@ TF_DOCS[] = {
     { "realmsell", HTML_REALMSELL, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "gcsale", HTML_GCSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "replytwice", HTML_REPLYTWICE, OPENER_POLICY_UNSAFE_NONE, 1 },
+    { "declinekey", HTML_DECLINEKEY },
     { "realmsellclose", HTML_REALMSELLCLOSE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "adoptexpando", HTML_ADOPTEXPANDO },
     { "reflectint", HTML_REFLECTINT },
@@ -28390,6 +28517,50 @@ TF_UNIT void probes_replytwice(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `declinekey` document (fixture/declinekey.h). decline-key-own-sent: a refusal judged on the
+   assumed arm's `forced` line, written after the page's own run parked on the same request, leaves the own
+   run's park outstanding, so it is sent and the own run resumes on the reply unforced.
+   decline-key-forced-fork: the assumed arm's park is refused and its failure arm runs, marked forced.
+   decline-key-reverse-joins: an assumed arm parking on a request whose own-run send is in flight is answered
+   by that one reply. */
+TF_UNIT void probes_declinekey(const char *js, Probe *tab, int *n) {
+    const char *own_why = NULL, *forced_why = NULL, *rev_why = NULL;
+    int own_tt = 1, forced_tt = 1, rev_tt = 1;
+
+    fold_row(&own_tt, &own_why, g_tf_dk.refusals == 1 && g_tf_dk.unforced_shown >= 1,
+             "NOT REACHED: the refusal of /api/dkey's forced line was not written after a bill showed the pair "
+             "with an unforced vector, so the own run's park did not join before the refusal landed");
+    fold_row(&own_tt, &own_why,
+             emitted_record_graded_has(js, "/api/dkey-own-got", "derived", "") ||
+                 emitted_record_graded_has(js, "/api/dkey-own-got", "observed", ""),
+             "no unforced /api/dkey-own-got: the refusal judged on the forced line was written onto the own "
+             "run's park, whose vector that line never stated, so the own run became a forced failure arm and "
+             "a waiting arm");
+    fold_row(&own_tt, &own_why, g_tf_dk.answered == 1,
+             "the own run's /api/dkey park was not sent exactly once after the refusal");
+    fold_row(&forced_tt, &forced_why, emitted_record_graded_has(js, "/api/dkey-forced-fail", "forced", ""),
+             "no forced /api/dkey-forced-fail: the assumed arm's refused park forked no failure arm");
+    fold_row(&forced_tt, &forced_why,
+             !emitted_record_graded_has(js, "/api/dkey-own-fail", "derived", "") &&
+                 !emitted_record_graded_has(js, "/api/dkey-own-fail", "observed", ""),
+             "an unforced /api/dkey-own-fail: the own run's fetch rejected on a path nothing forced");
+    fold_row(&rev_tt, &rev_why, g_tf_dk.rev_answered == 1 && g_tf_dk.rev_pre_at >= 0,
+             "NOT REACHED: /api/dkrev was not answered exactly once with /api/dkrev-pre answered before, so the "
+             "assumed arm's park did not join the own run's send while it was in flight");
+    fold_row(&rev_tt, &rev_why,
+             emitted_record_graded_has(js, "/api/dkrev-forced-got", "forced", "") &&
+                 (emitted_record_graded_has(js, "/api/dkrev-own-got", "derived", "") ||
+                  emitted_record_graded_has(js, "/api/dkrev-own-got", "observed", "")),
+             "the one reply to /api/dkrev did not resume both the own run (unforced) and the assumed arm "
+             "(forced)");
+    const Probe rows[] = {
+        { "decline-key-own-sent", own_tt, "/api/dkey", SESS_EXPLORE, own_why },
+        { "decline-key-forced-fork", forced_tt, "/api/dkey", SESS_EXPLORE, forced_why },
+        { "decline-key-reverse-joins", rev_tt, "/api/dkrev", SESS_EXPLORE, rev_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `realmsellclose` document: realm-sell's ladder over a popup its holder closed before parking,
    with HTML §7.5.10's destroy as the rung between the realm's making and its holder's sale. */
 TF_UNIT void probes_realmsellclose(const char *js, Probe *tab, int *n) {
@@ -32822,6 +32993,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_realmsell(js, probes, &np);
     probes_gcsale(js, probes, &np);
     probes_replytwice(js, probes, &np);
+    probes_declinekey(js, probes, &np);
     probes_realmsellclose(js, probes, &np);
     probes_adoptexpando(js, probes, &np);
     probes_reflectint(js, probes, &np);
@@ -47321,7 +47493,7 @@ int main(int argc, char **argv) {
     idl_args_seal();
 
     /* The trusted host's half: what it is owed, and how it pays. */
-    engine_set_provider(fixture_provide, tf_replytwice_holds);
+    engine_set_provider(fixture_provide, tf_provider_holds);
     engine_set_provider_host_holds(tf_host_holds);
     /* The root document's own response's Set-Cookie, received at the baseline before any script runs, as
        main.c's qjs_receive_cookies hands an instance its root's fields after qjs_init. */
