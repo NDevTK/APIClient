@@ -252,9 +252,11 @@ ReplyTrailRow *reply_trail_push(ReplyTrailRow *head, int64_t slot, uint64_t id, 
 
     DCHECK(slot > 0, "a trail row names no park — a park's ordinal on its path starts at 1");
     DCHECK(id >= 1 && id <= g_recs_n, "a trail row names a reply record the store never issued");
-    DCHECK(!head || (id > head->id && path_work >= head->path_work),
-           "a trail row is older than the row it follows — a flow takes its records in arrival order, at "
-           "coordinates that do not fall");
+    /* One answered send fills every park of its line, and a path may hold several (a module two modules import),
+       so rows of one id are that record's parks on this path, in slot order. */
+    DCHECK(!head || ((id > head->id || (id == head->id && slot > head->slot)) && path_work >= head->path_work),
+           "a trail row is older than the row it follows, or names a park the row before it names — a flow takes "
+           "its records in arrival order and a record's parks in slot order, at coordinates that do not fall");
     row = reclaim_calloc(1, sizeof *row);
     CHECK(row != NULL, "engine: OOM appending a reply trail row");
     row->up = head;

@@ -80,7 +80,8 @@ JSValue     reply_record_reply(JSContext *ctx, const ReplyRecord *r);
 typedef struct ReplyTrailRow ReplyTrailRow;
 
 /* Appends a row to the chain `head` (NULL for an empty trail) and returns the new head. The caller's
-   reference to `head` moves into the new row. Ids rise and coordinates do not fall along a chain. */
+   reference to `head` moves into the new row. Along a chain ids and coordinates
+   do not fall; rows of one id are the parks one record answered on the path, in rising slot order. */
 ReplyTrailRow *reply_trail_push(ReplyTrailRow *head, int64_t slot, uint64_t id, int64_t path_work);
 /* Another holder of the chain `head`; returns `head`. NULL is the empty trail. */
 ReplyTrailRow *reply_trail_share(ReplyTrailRow *head);

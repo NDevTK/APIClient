@@ -8597,8 +8597,8 @@ static void engine_work_bank(JSContext *ctx, uint64_t units) {
     flow_agent_running(flow_running())->work += units;
 }
 
-/* Brings `f`'s reply trail up to the newest record: a row for every record that reached its register since it
-   last ran, in arrival order, at the coordinate it rests at (solver/reply_record.h). Called at a step's
+/* Brings `f`'s reply trail up to the newest record: a row for every park a record filled on its register since
+   it last ran, in arrival order, at the coordinate it rests at (solver/reply_record.h). Called at a step's
    entry: a host's reply arrives between steps, so the flow has not moved since any of them. */
 static void engine_trail_arrivals(Flow *f) {
     uint64_t last = reply_record_last_id();
@@ -8619,9 +8619,13 @@ static void engine_trail_arrivals(Flow *f) {
                 rows = reclaim_realloc(rows, (size_t)cap * sizeof *rows);
                 CHECK(rows != NULL, "engine: OOM ordering a flow's newly answered parks");
             }
-            for (at = n++; at > 0 && rows[at - 1].id > id; at--) rows[at] = rows[at - 1];
+            int64_t slot = pending_get_int(e, PEND_SLOT);
+
+            /* By record, then by slot: one record answers every park of its line this path made. */
+            for (at = n++; at > 0 && (rows[at - 1].id > id || (rows[at - 1].id == id && rows[at - 1].slot > slot)); at--)
+                rows[at] = rows[at - 1];
             rows[at].id = id;
-            rows[at].slot = pending_get_int(e, PEND_SLOT);
+            rows[at].slot = slot;
         }
         JS_FreeValue(pending_ctx(), e);
     }
