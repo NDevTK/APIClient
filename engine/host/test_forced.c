@@ -19623,24 +19623,22 @@ static long tf_hist_above(const char *js, const char *key, int from) {
     return sum;
 }
 
-/* The rows of the four sale documents (fixture/sale.h). sale-forced-returns and sale-own-returns: the member
-   owing the request was sold at the act, a sale wrote its member (`soldRestores`), a stub was restored from its
-   written bytes (`restored`), and the member's report is in the result, so it returned within the session.
-   sale-forced-stays-listed and sale-own-stays-listed: the bill taken after the sale still lists the request the
-   sold member owes. sale-control-reaches: the same shape with no act reports with no member sold.
-   sale-floor-sells: with every allocation refused at the act, the members were sold, a sale took its census on
-   storage it funded, and the bill after the sale still lists the request the sold member owes.
-   sale-chain-spill-returns: there, asked on after the sales, the floor moved a frozen segment to the disk tier,
-   a restore read one back, and the owing member reported.
-   sale-async-returns: as sale-forced-returns, for a member whose delta holds a pre-fork promise's settlement,
-   and its report reads the value the restored settlement carries.
-   sale-keep-same-record: a member whose owed record a holder outside it names (g_tf_keep) gets that record back
-   (`soldNamed`), answered. sale-ctor-busy-returns, sale-catch-busy-returns, sale-pexec-* and sale-asyncfn-*: a
-   member sold in a constructor's body, inside a `try`, in a promise executor two Reflect.construct calls reached,
-   or in an async body before its first await, waits on no gap of the kinds each row names, returns and reports.
-   sale-root-surveyed: a member resting in a machine a promise reaction called was sold and its census's survey of
-   its parked ring named the machine. sale-anchor-written: in `sale`, no sale waited on a keyed read's anchor.
-   sale-apply-returns: a member sold in a frame Function.prototype.apply pushed with no arguments returns. */
+/* The rows of the sale documents (fixture/sale.h). sale-forced-returns, sale-own-returns: the member owing the
+   request was sold at the act, written (`soldRestores`), restored (`restored`), and its report is in the result.
+   sale-forced-stays-listed, sale-own-stays-listed: the bill after the sale still lists what the sold member
+   owes. sale-control-reaches: the shape with no act reports with nothing sold. sale-floor-sells: with every
+   allocation refused at the act, the members were sold, a sale's census ran on storage it funded, and the bill
+   after still lists the owed request. sale-async-returns: as sale-forced-returns, for a member whose delta holds
+   a pre-fork promise's settlement, its report reading the restored value. sale-keep-same-record: a record a
+   holder outside the member names (g_tf_keep) comes back as itself (`soldNamed`), answered.
+   sale-ctor-busy-returns, sale-catch-busy-returns, sale-pexec-*, sale-asyncfn-*, sale-apply-returns: a member
+   sold in a constructor's body, inside a `try`, in a promise executor two Reflect.construct calls reached, in an
+   async body before its first await, or in a frame apply pushed with no arguments, waits on no gap of the kinds
+   each row names, returns and reports. sale-root-surveyed: a member resting in a machine a reaction called was
+   sold, and the census's survey of its parked ring named the machine. sale-anchor-written: in `sale`, no sale
+   waited on a keyed read's anchor. */
+/* sale-chain-spill-returns: in salefloor, asked on after the sales, the floor moved a frozen segment to the
+   disk tier, a restore read one back, and the owing member reported. */
 static long tf_census_row(const char *js, const char *census, const char *key);
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
