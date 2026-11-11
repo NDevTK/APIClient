@@ -17940,16 +17940,16 @@ TF_UNIT void probes_childremoverest(const char *js, Probe *tab, int *n) {
 }
 
 /* The rows of the `insertrecord` document (fixture/insertrecord.h): one per member, each the records and children
-   it leaves. al and ib expect DOM §4.2.3 insert step 6's previousSibling, bound before step 7.1's adopt removes
-   node, where Chrome 153 reads the sibling after the removal; every other value is Chrome 153's. */
+   it leaves, every value Chrome 153.0.8010.12's. al and ib are where that differs from DOM §4.2.3 insert step 6
+   as written (see node_insert.c). */
 TF_UNIT void probes_insertrecord(const char *js, Probe *tab, int *n) {
     static const struct { const char *row, *param, *want, *why; } R[] = {
-        { "insertrecord-append-last", "al", "p_a_rb_pa_n0~p_ab_r_pb_n0_ca.b",
-          "DOM §4.2.3 insert step 8: appendChild of parent's last child queues its addition with step 6's "
-          "previousSibling, which is node itself" },
-        { "insertrecord-insert-own-next", "ib", "p_a_rb_pa_nc~p_ab_r_pb_nc_ca.b.c",
-          "DOM §4.2.3 insert step 8: insertBefore(node, node's next sibling) queues its addition with step 6's "
-          "previousSibling, which is node itself" },
+        { "insertrecord-append-last", "al", "p_a_rb_pa_n0~p_ab_r_pa_n0_ca.b",
+          "DOM §4.2.3 insert steps 6 and 8, as Chrome 153.0.8010.12 answers them: appendChild of parent's last "
+          "child queues its addition with the previousSibling left after step 7.1's adopt removed node" },
+        { "insertrecord-insert-own-next", "ib", "p_a_rb_pa_nc~p_ab_r_pa_nc_ca.b.c",
+          "DOM §4.2.3 insert steps 6 and 8, as Chrome 153.0.8010.12 answers them: insertBefore(node, node's next "
+          "sibling) queues its addition with the previousSibling left after step 7.1's adopt removed node" },
         { "insertrecord-fragment-append", "fr", "f_a_rx.y_p0_n0~p_ax.y_r_pa_n0_ca.x.y",
           "DOM §4.2.3 insert steps 4.2 and 8: appending a fragment queues one record on the fragment, then one "
           "on parent naming both children" },
