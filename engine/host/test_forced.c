@@ -19488,11 +19488,36 @@ TF_UNIT void probes_envtypes(const char *js, Probe *tab, int *n) {
     fold_row(&re_tt, &re_why, emitted_record_graded_has(js, "/api/envtypere", "derived", "etReMoz"),
              "the record of both tests' example answers is not derived: the flow on the example's arms was "
              "marked forced, so the page's own run has no member");
+    const char *once_why = NULL; int once_tt = 1;
+
+    fold_row(&once_tt, &once_why, emitted_record_graded_has(js, "/api/envtypeonce", "derived", "etOnceNn"),
+             "NOT REACHED: /api/envtypeonce has no derived record of the literal failing on the user agent at "
+             "both calls");
+    fold_row(&once_tt, &once_why, emitted_record_graded_has(js, "/api/envtypeonce", "forced", "etOnceIi"),
+             "/api/envtypeonce has no forced record of the literal holding at both calls, the arm the first test "
+             "of that expression forks");
+    fold_row(&once_tt, &once_why,
+             !emitted_record_has(js, "/api/envtypeonce", "etOnceNi") &&
+                 !emitted_record_has(js, "/api/envtypeonce", "etOnceIn"),
+             "a record holds one literal failing at one call and holding at the other over one user agent: "
+             "ECMAScript §13.2.7.3 Runtime Semantics: Evaluation made an object of the literal at each call, the "
+             "objects were named apart, and the later test forked into a world no user agent produces");
+    const char *g_why = NULL; int g_tt = 1;
+
+    fold_row(&g_tt, &g_why, emitted_record_has(js, "/api/envtypeg", "etGY"),
+             "NOT REACHED: /api/envtypeg has no record of the global expression matching the user agent");
+    fold_row(&g_tt, &g_why, emitted_record_graded_has(js, "/api/envtypeg", "derived", "etGYn"),
+             "no derived record holds the global expression matching and then failing, the answers ECMAScript "
+             "§22.2.7.2 RegExpBuiltinExec ( regexp, string ) gives over the example from lastIndex 0 and from "
+             "the first match's end: the second call was answered by the first one's arm, so two values of "
+             "lastIndex share one name");
     const Probe rows[] = {
         { "env-type-equality-decided", eq_tt, "/api/envtype?", SESS_EXPLORE, eq_why },
         { "env-type-open-arms-fork", open_tt, "/api/envtypewide", SESS_EXPLORE, open_why },
         { "env-removed-global-decided", gone_tt, "/api/envtypegone", SESS_EXPLORE, gone_why },
         { "env-regexp-tests-apart", re_tt, "/api/envtypere", SESS_EXPLORE, re_why },
+        { "env-regexp-literal-decides-once", once_tt, "/api/envtypeonce", SESS_EXPLORE, once_why },
+        { "env-regexp-global-calls-apart", g_tt, "/api/envtypeg", SESS_EXPLORE, g_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

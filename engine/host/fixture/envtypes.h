@@ -4,7 +4,9 @@
    Number, so `== undefined`, `== null` and `typeof … === "undefined"` over them have one answer in every world
    and take no fork. Two tests the types leave open (an ordering over screen.width, a search of the user agent)
    fork. Two regular expressions tested over the user agent are two questions: the first fails on the example and
-   the second holds on it. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
+   the second holds on it. One literal evaluated twice is one question, and a global expression tested twice is
+   two, since the second match starts where the first ended. It ends with TF_CANVAS_INK, which test_forced.c
+   defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_ENVTYPES_H
 #define ENGINE_HOST_FIXTURE_ENVTYPES_H
 #ifndef TF_CANVAS_INK
@@ -28,6 +30,12 @@ static const char HTML_ENVTYPES[] =
     "fetch('/api/envtypeapp?w=' + (window.etInjected == null ? 'etAppAbsent' : 'etAppPresent'));"
     "fetch('/api/envtypere?a=' + (/Trident\\/|MSIE /.test(navigator.userAgent) ? 'etReIe' : 'etReNotIe')"
     " + '&b=' + (/^Mozilla/.test(navigator.userAgent) ? 'etReMoz' : 'etReNotMoz'));"
+    "function etIe(u) { return /Trident\\/|MSIE /.test(u); }"
+    "fetch('/api/envtypeonce?w=etOnce' + (etIe(navigator.userAgent) ? 'I' : 'N')"
+    " + (etIe(navigator.userAgent) ? 'i' : 'n'));"
+    "var etG = /Mozilla/g;"
+    "fetch('/api/envtypeg?w=etG' + (etG.test(navigator.userAgent) ? 'Y' : 'N')"
+    " + (etG.test(navigator.userAgent) ? 'y' : 'n'));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
