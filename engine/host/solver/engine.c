@@ -11940,9 +11940,14 @@ static int sale_log2(double v) {
     while (v >= 2.0 && b < SALE_HIST - 1) { v /= 2.0; b++; }
     return b;
 }
-/* The sold member's value roots, gathered for the graph survey as the reach walk is fed them: borrowed, alive for
-   the length of the census. */
-typedef struct { JSValueConst *v; size_t n, cap; } SaleRoots;
+/* The sold member's roots, gathered for the graph survey as the reach walk is fed them: its values, its agents'
+   frames and its rings of parked bases. Borrowed, alive for the length of the census. */
+typedef struct {
+    JSValueConst *v;
+    JSValue **frames;
+    void **parked;
+    size_t n, cap, n_frames, n_parked;
+} SaleRoots;
 static void sale_root(SaleRoots *r, JSValueConst v) {
     if (r->n == r->cap) {
         JSValueConst *g = realloc(r->v, sizeof *g * (r->cap = r->cap ? r->cap * 2 : 64));
@@ -11952,36 +11957,59 @@ static void sale_root(SaleRoots *r, JSValueConst v) {
     r->v[r->n++] = v;
 }
 static void sale_reach_val(JSValueConst v, void *arg) { JS_FlowReachValue(v); sale_root(arg, v); }
+static void sale_reach_parked(void *parked, SaleRoots *r) {
+    JS_FlowReachParked(parked);
+    if (parked) r->parked[r->n_parked++] = parked;
+}
 
-/* WHAT THE PRIVATE-GRAPH WRITER COULD WRITE OF EACH SOLD MEMBER — JS_FlowGraphSurvey over its value roots (its
-   function, register, queues, agents' jobs and programs, and its delta's flow-side values; not yet its frames).
-   Each gap is one case the writer has no body for, counted per reference and per sale, by name. */
-typedef struct { int what, id; long refs, sales; } SaleGap;
-static struct { long sales, complete; double bytes, objs, anchors; SaleGap *gap; int n_gap; } g_sale_graph;
+/* What the private-graph writer could write of each sold member — JS_FlowGraphSurvey over its roots: its function,
+   register, queues, agents' jobs and programs, its delta's flow-side values, and its agents' frames and parked
+   bases. Each gap is one case the writer has no body for, counted per reference and per sale, by name. The
+   frame histograms are per sale, one bucket per count: the bases a member holds, the heap frames stashed on
+   them, the longest one base's chain, and the continuation records and step machines waiting on them. */
+enum { SALE_GAP_NAME = 160 };
+typedef struct { char name[SALE_GAP_NAME]; long refs, sales; } SaleGap;
+static struct {
+    long sales, complete;
+    double bytes, objs, anchors;
+    SaleGap *gap;
+    int n_gap;
+    long h_bases[SALE_HIST], h_heap[SALE_HIST], h_depth[SALE_HIST], h_links[SALE_HIST];
+} g_sale_graph;
+static int sale_count_bucket(uint32_t v) { return v < SALE_HIST - 1 ? (int)v : SALE_HIST - 1; }
 
 static void sale_graph_take(const Flow *f, const SaleRoots *roots) {
-    JSFlowGraph *g = JS_FlowGraphSurvey(g_sess_ctx, roots->v, (int)roots->n,
-                                        f->delta ? cow_delta_fork_gen(f->delta) : 0);
+    JSFlowGraphRoots gr = { .vals = roots->v, .frames = roots->frames, .parked = roots->parked,
+                            .n_vals = (int)roots->n, .n_frames = (int)roots->n_frames,
+                            .n_parked = (int)roots->n_parked };
+    JSFlowGraph *g = JS_FlowGraphSurvey(g_sess_ctx, &gr, f->delta ? cow_delta_fork_gen(f->delta) : 0);
     const uint8_t *bytes;
     const JSValue *anchors;
-    int what, id;
-    uint32_t refs, n_gaps = JS_FlowGraphGaps(g, 0, &what, &id, &refs);
+    JSFlowGraphFrames fr;
+    char name[SALE_GAP_NAME];
+    uint32_t refs = 0, n_gaps = JS_FlowGraphGap(g_sess_ctx, g, UINT32_MAX, name, sizeof name, &refs);
 
     g_sale_graph.sales++;
     g_sale_graph.complete += n_gaps == 0;
     g_sale_graph.bytes += (double)JS_FlowGraphBytes(g, &bytes);
     g_sale_graph.objs += JS_FlowGraphObjects(g);
     g_sale_graph.anchors += JS_FlowGraphAnchors(g, &anchors);
+    JS_FlowGraphFrameCensus(g, &fr);
+    g_sale_graph.h_bases[sale_count_bucket(fr.bases)]++;
+    g_sale_graph.h_heap[sale_count_bucket(fr.heap)]++;
+    g_sale_graph.h_depth[sale_count_bucket(fr.depth)]++;
+    g_sale_graph.h_links[sale_count_bucket(fr.links)]++;
     for (uint32_t i = 0; i < n_gaps; i++) {
         int k;
-        JS_FlowGraphGaps(g, i, &what, &id, &refs);
+        JS_FlowGraphGap(g_sess_ctx, g, i, name, sizeof name, &refs);
         for (k = 0; k < g_sale_graph.n_gap; k++)
-            if (g_sale_graph.gap[k].what == what && g_sale_graph.gap[k].id == id) break;
+            if (!strcmp(g_sale_graph.gap[k].name, name)) break;
         if (k == g_sale_graph.n_gap) {
             SaleGap *grown = realloc(g_sale_graph.gap, sizeof *grown * (size_t)(k + 1));
             CHECK(grown != NULL, "engine: OOM growing the graph survey's gap table");
             g_sale_graph.gap = grown;
-            g_sale_graph.gap[k] = (SaleGap){ what, id, 0, 0 };
+            memset(&grown[k], 0, sizeof grown[k]);
+            memcpy(grown[k].name, name, sizeof name);
             g_sale_graph.n_gap++;
         }
         g_sale_graph.gap[k].refs += refs;
@@ -11998,6 +12026,10 @@ static void engine_sale_census_take(const Flow *f) {
     long full, own, framed = 0;
     SaleRoots roots = { 0 };
 
+    roots.frames = malloc(sizeof *roots.frames * (size_t)(f->n_agents + 1));
+    roots.parked = malloc(sizeof *roots.parked * (size_t)(f->n_agents + 1));
+    CHECK(roots.frames != NULL && roots.parked != NULL, "engine: OOM gathering a sold member's frames for the "
+                                                        "graph survey");
     for (int i = 0; i < f->n_agents; i++) work += (int64_t)f->agents[i].work;
     JS_FlowReachBegin(g_sess_ctx, f->delta ? cow_delta_fork_gen(f->delta) : 0);
     sale_reach_val(f->fn, &roots);
@@ -12006,18 +12038,24 @@ static void engine_sale_census_take(const Flow *f) {
     sale_reach_val(f->deliver_world_q, &roots);
     sale_reach_val(f->perform_q, &roots);
     sale_reach_val(f->orphan_claim_fn, &roots);
-    JS_FlowReachParked(f->parked);
+    sale_reach_parked(f->parked, &roots);
     for (int i = 0; i < f->n_agents; i++) {
         sale_reach_val(f->agents[i].jobs, &roots);
         sale_reach_val(f->agents[i].program, &roots);
-        if (f->agents[i].frame) { framed = 1; JS_FlowReachFrame(f->agents[i].frame); }
-        JS_FlowReachParked(f->agents[i].parked);
+        if (f->agents[i].frame) {
+            framed = 1;
+            JS_FlowReachFrame(f->agents[i].frame);
+            roots.frames[roots.n_frames++] = f->agents[i].frame;
+        }
+        sale_reach_parked(f->agents[i].parked, &roots);
     }
     memset(&hc, 0, sizeof hc);
     if (f->delta) cow_delta_serial_census(f->delta, sale_reach_val, &roots, &hc);
     JS_FlowReachEnd(&r);
     sale_graph_take(f, &roots);
     free(roots.v);
+    free(roots.frames);
+    free(roots.parked);
     dom_cow_serial_census(f->dom, f->dom_n, f->dom_base, &dc);
 
     own = (hc.head + f->dom_n) * SALE_ENTRY_BYTES + r.priv_bytes + r.priv_string_bytes + dc.head_bytes
@@ -12059,7 +12097,7 @@ static int sale_hist_json(char *b, size_t cap, const char *name, const long *h) 
 }
 
 char *engine_sale_census_json(void) {
-    size_t cap = 16384;
+    size_t cap = 20480 + (size_t)g_sale_graph.n_gap * 2 * (SALE_GAP_NAME + 32);
     char *b = malloc(cap);
     int n;
     long g0o, g0b, bo, bb;
@@ -12097,14 +12135,19 @@ char *engine_sale_census_json(void) {
     n += snprintf(b + n, cap - (size_t)n, ",\"graphSales\":%ld,\"graphComplete\":%ld,\"graphBytes\":%.0f,"
                   "\"graphObjs\":%.0f,\"graphAnchors\":%.0f", g_sale_graph.sales, g_sale_graph.complete,
                   g_sale_graph.bytes, g_sale_graph.objs, g_sale_graph.anchors);
+    n += snprintf(b + n, cap - (size_t)n, ",");
+    n += sale_hist_json(b + n, cap - (size_t)n, "hFrameBases", g_sale_graph.h_bases);
+    n += snprintf(b + n, cap - (size_t)n, ",");
+    n += sale_hist_json(b + n, cap - (size_t)n, "hFrameHeap", g_sale_graph.h_heap);
+    n += snprintf(b + n, cap - (size_t)n, ",");
+    n += sale_hist_json(b + n, cap - (size_t)n, "hFrameDepth", g_sale_graph.h_depth);
+    n += snprintf(b + n, cap - (size_t)n, ",");
+    n += sale_hist_json(b + n, cap - (size_t)n, "hFrameLinks", g_sale_graph.h_links);
     for (int pass = 0; pass < 2; pass++) {
         n += snprintf(b + n, cap - (size_t)n, pass ? ",\"graphGapSales\":{" : ",\"graphGapRefs\":{");
-        for (int k = 0; k < g_sale_graph.n_gap && (size_t)n < cap; k++) {
-            char name[96];
-            JS_FlowGraphGapName(g_sess_ctx, g_sale_graph.gap[k].what, g_sale_graph.gap[k].id, name, sizeof name);
-            n += snprintf(b + n, cap - (size_t)n, "%s\"%s\":%ld", k ? "," : "", name,
+        for (int k = 0; k < g_sale_graph.n_gap && (size_t)n < cap; k++)
+            n += snprintf(b + n, cap - (size_t)n, "%s\"%s\":%ld", k ? "," : "", g_sale_graph.gap[k].name,
                           pass ? g_sale_graph.gap[k].sales : g_sale_graph.gap[k].refs);
-        }
         n += snprintf(b + n, cap - (size_t)n, "}");
     }
     n += snprintf(b + n, cap - (size_t)n, "}");

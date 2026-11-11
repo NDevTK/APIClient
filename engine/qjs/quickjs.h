@@ -3741,8 +3741,8 @@ JS_EXTERN JSValue *JS_FlowClone(JSContext *ctx, JSValue *flow);
 /* What a parked flow's own heap is: the objects reachable from its roots that were born after `floor` (its fork
    generation), which no sibling shares and which a serialized delta would have to write. The walk stops at an
    object born at or before `floor` (shared with a sibling, or gen-0 baseline) and at function bytecode (code,
-   named by its script), counting each distinct stop. A stashed heap-frame chain (tramp_top) is counted, not
-   walked, as the collector's own mark does not walk it. Begin, feed roots, End; not reentrant. */
+   named by its script), counting each distinct stop. A stashed heap-frame chain (tramp_top) is counted, and
+   walked as the collector's own mark walks it. Begin, feed roots, End; not reentrant. */
 typedef struct {
     long priv_objs, priv_bytes, priv_strings, priv_string_bytes;
     long shared_born, baseline, bytecode;
@@ -3767,13 +3767,29 @@ JS_EXTERN int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *ro
 JS_EXTERN size_t JS_FlowGraphBytes(const JSFlowGraph *g, const uint8_t **bytes);
 JS_EXTERN uint32_t JS_FlowGraphAnchors(const JSFlowGraph *g, const JSValue **anchors);
 JS_EXTERN void JS_FlowGraphFree(JSContext *ctx, JSFlowGraph *g);
+/* A flow's roots, each list in the caller's order: its values, its bases (JS_FlowNew's and JS_FlowNewCall's
+   handles) and its rings of parked bases (JS_TakeParkedFlows' handles, none NULL). All borrowed. */
+typedef struct JSFlowGraphRoots {
+    const JSValueConst *vals;
+    JSValue *const *frames;
+    void *const *parked;
+    int n_vals, n_frames, n_parked;
+} JSFlowGraphRoots;
 /* The same walk where a case has no writer yet is recorded rather than stopped on: a class, a value tag, a symbol
-   key, an accessor-like property, a sparse array, a weak key or target. Its graph is a census of the writer's
+   key, a property kind, a weak key or target, an open cell, and every part of a frame (a base by its kind and its
+   park site, a heap frame by its shape, a continuation record by its kind, a step machine by its algorithm and by
+   the kinds of field it declares). A frame's values are surveyed as roots. Its graph is a census of the writer's
    gaps and of the bytes and anchors written around them; JS_FlowGraphRead refuses it. */
-JS_EXTERN JSFlowGraph *JS_FlowGraphSurvey(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor);
+JS_EXTERN JSFlowGraph *JS_FlowGraphSurvey(JSContext *ctx, const JSFlowGraphRoots *roots, uint32_t floor);
 JS_EXTERN uint32_t JS_FlowGraphObjects(const JSFlowGraph *g);
-JS_EXTERN uint32_t JS_FlowGraphGaps(const JSFlowGraph *g, uint32_t i, int *what, int *id, uint32_t *n);
-JS_EXTERN void JS_FlowGraphGapName(JSContext *ctx, int what, int id, char *buf, size_t cap);
+/* How many gaps a survey recorded, and gap `i` of them when there is one: its name, a line holding no double
+   quote, backslash or control byte and cut to `cap` on a character, and how many times it was met. */
+JS_EXTERN uint32_t JS_FlowGraphGap(JSContext *ctx, const JSFlowGraph *g, uint32_t i, char *name, size_t cap,
+                                   uint32_t *n);
+/* A survey's frames: the bases it was handed, the heap frames stashed on them, the longest one base's chain of
+   heap frames, and the continuation records and step machines waiting on those frames. */
+typedef struct { uint32_t bases, heap, depth, links; } JSFlowGraphFrames;
+JS_EXTERN void JS_FlowGraphFrameCensus(const JSFlowGraph *g, JSFlowGraphFrames *out);
 /* Why a SUSPENDED flow (or the runtime's parked set) cannot be forked at this instant, or NULL: the first step
    machine on its chain whose JSTrampStepDef.unforkable answers. A fork that may wait asks this before cloning
    and waits for the operation to end; a clone of a flow that answers non-NULL aborts. */
