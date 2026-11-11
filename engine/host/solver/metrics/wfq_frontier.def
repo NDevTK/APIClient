@@ -247,6 +247,12 @@ METRIC(observed_terms, "observedTerms", GAUGE, "operand", AGENT, "solver/flow.c"
 METRIC(observed_env_members, "observedEnvMembers", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(observed_oldest, "observedOldest", GAUGE, "member", AGENT, "solver/flow.c", OBJECT)
 METRIC(priced_over_observed, "pricedOverObserved", LIFETIME, "dispatch", PROCESS, "solver/flow.c", INT)
+/* …and what reading the observed class's extremes cost: the asks (that dispatch count's, and the pick ledger's
+   per row), the heap roots they read, and the largest class one ask was answered over (a high-water mark), so
+   `observedReads / observedAsks` is at most 2 at any class size (solver/flow.c's flow_family_observed). */
+METRIC(observed_asks, "observedAsks", LIFETIME, "ask", PROCESS, "solver/flow.c", INT)
+METRIC(observed_reads, "observedReads", LIFETIME, "entry", PROCESS, "solver/flow.c", INT)
+METRIC(observed_ask_members_max, "observedAskMembersMax", LIFETIME, "member", PROCESS, "solver/flow.c", INT)
 /* …and the assumed worlds against the front (solver/flow.h's `assumed_ops`): the best member resting on an
    assumption, `assumed` in place of `observed`. Read beside `assumedMembers`. */
 METRIC(assumed_wgap, "assumedWGap", GAUGE, "point", AGENT, "solver/flow.c", FIXED3)

@@ -298,9 +298,12 @@ typedef struct FlowAcct {
     unsigned char ix_listed;
     Flow *away_head;
     /* The family's indexed observed-class members (flow_observed_class) and their count, meaningful only on a
-       root: linked where a member enters the index, unlinked where it leaves or stops being of the class. */
+       root: linked where a member enters the index, unlinked where it leaves or stops being of the class. The
+       two heaps hold the classes holding one, by their largest and (negated) smallest optimism, so the class's
+       extremes over the family are read off their roots (flow_family_observed). */
     Flow *obs_head;
     long obs_n;
+    FlowIxNode *ix_osites, *ix_omsites;
     /* The birth sequence of the flow this node was minted for: on a root, the family's name in the pick ledger
        (flow_pick_terms). Written once at flow_new; nothing ranks by it. */
     uint64_t founder;
@@ -354,6 +357,12 @@ struct FlowSite {
     FlowIxNode ix_b, ix_bn, ix_bm, ix_q;
     FlowIxTreap *ix_members;
     unsigned char ix_bin, ix_bnin;
+    /* Its observed-class members (flow_obs_link) in two heaps by fitness, the largest and the negated smallest at
+       the roots, their count, and its nodes in its family's two observed heaps, set under `ix_obin`. */
+    FlowIxNode *obs_max, *obs_min;
+    long obs_n;
+    FlowIxNode ix_ob, ix_obm;
+    unsigned char ix_obin;
 };
 
 /* The node census, counted where a node's lifetime begins and ends and asserted at the frontier's teardown, as for
@@ -520,7 +529,8 @@ static void flow_site_leave(Flow *f) {
     DCHECK(st != NULL && st->members > 0, "a member left a class it does not stand in, or one counting no member");
     f->at = NULL;
     if (--st->members > 0) return;
-    DCHECK(!st->ix_bin && !st->ix_bnin && !st->ix_members,
+    DCHECK(!st->ix_bin && !st->ix_bnin && !st->ix_members && !st->ix_obin && !st->obs_max && !st->obs_min &&
+               st->obs_n == 0,
            "a class lost its last member while still filed in the order's index — every member leaves the index "
            "before it leaves its class");
     for (pp = &st->fam->sites[site_slot(st->code->kind, st->code->key, st->seen, st->priced, st->fam->sites_cap)];
@@ -575,7 +585,7 @@ static void acct_unref(FlowAcct *a) {
            and a family leaves the list with its last site, both before the departure that drops the last
            reference. */
         DCHECK(!a->ix_sites && !a->ix_nsites && !a->ix_msites && !a->ix_listed && !a->away_head && !a->obs_head &&
-                   a->obs_n == 0,
+                   a->obs_n == 0 && !a->ix_osites && !a->ix_omsites,
                "a fork-tree node was freed while the order's index still links it — flow_remove takes a member out "
                "of the index before acct_depart, so a node reaching its free is no member's family");
         acct_free_sites(a);
@@ -708,7 +718,11 @@ static void flow_ix_first_pick(Flow *f);
 static void flow_ix_site_sync(FlowSite *st);
 static int flow_priced(const Flow *f);
 static void flow_obs_unlink(Flow *f);
+static void flow_obs_site_sync(FlowSite *st);
 static int flow_outweighs_observed(const Flow *f);
+static void ix_set(FlowIxNode *n, double key, double x, double ikey, int64_t turn, uint64_t seq);
+static void ix_push(FlowIxNode **root, FlowIxNode *x);
+static void ix_unlink(FlowIxNode **root, FlowIxNode *x);
 static FlowAcct *g_ix_fams;   /* the families holding an indexed member, linked through `ix_fprev`/`ix_fnext` */
 static long g_ix_fams_n;      /* …how many */
 static long g_ix_n;           /* members in the index: the frontier's members not host-owed */
@@ -1962,14 +1976,25 @@ static int flow_observed_class(const Flow *f) {
    member unlinks it here. The other two facts are written only on a member outside the index, which
    flow_family_observed asserts of every member it walks. */
 static void flow_obs_link(Flow *f) {
-    DCHECK(!f->obs_in && f->ix_in && f->family != NULL && flow_observed_class(f),
-           "a member was listed as observed-class twice, outside the index, or without being of the class");
+    FlowSite *st = f->at;
+    DCHECK(!f->obs_in && f->ix_in && f->family != NULL && flow_observed_class(f) && st != NULL &&
+               st->fam == f->family,
+           "a member was listed as observed-class twice, outside the index, without being of the class, or at a "
+           "class of another family");
     f->obs_prev = NULL;
     f->obs_next = f->family->obs_head;
     if (f->obs_next) f->obs_next->obs_prev = f;
     f->family->obs_head = f;
     f->family->obs_n++;
     f->obs_in = 1;
+    /* And in its class's two heaps by the fitness its index key holds, which flow_ix_rekey keeps fresh: a move of
+       the key re-files the member through flow_ix_remove and flow_ix_insert, which unlink and link it here. */
+    ix_set(&f->ix_ox, f->ix_t.key, f->ix_t.key, f->ix_t.key, 0, f->ix_t.seq);
+    ix_push(&st->obs_max, &f->ix_ox);
+    ix_set(&f->ix_on, -f->ix_t.key, -f->ix_t.key, -f->ix_t.key, 0, f->ix_t.seq);
+    ix_push(&st->obs_min, &f->ix_on);
+    st->obs_n++;
+    flow_obs_site_sync(st);
 }
 
 static void flow_obs_unlink(Flow *f) {
@@ -1982,6 +2007,17 @@ static void flow_obs_unlink(Flow *f) {
     f->obs_prev = f->obs_next = NULL;
     f->family->obs_n--;
     f->obs_in = 0;
+    /* Its class is the one it was linked at: every move of `at` takes the member out of the index first
+       (flow_site_move), which unlinks it here. */
+    {
+        FlowSite *st = f->at;
+        DCHECK(st != NULL && st->obs_n > 0 && st->obs_max != NULL && st->obs_min != NULL,
+               "an observed-class member left a class whose observed heaps do not hold it");
+        ix_unlink(&st->obs_max, &f->ix_ox);
+        ix_unlink(&st->obs_min, &f->ix_on);
+        st->obs_n--;
+        flow_obs_site_sync(st);
+    }
 }
 
 void flow_observed_class_moved(Flow *f) {
@@ -4559,25 +4595,52 @@ double flow_weight(const Flow *f) {
     return flow_order_key(f).w;
 }
 
+/* Lifetime: the asks of flow_family_observed, the heap roots they read, and the most observed members one ask
+   was answered over, published as `observedAsks`, `observedReads` and `observedAskMembersMax`, so a row can state
+   that an ask over a large class reads no member list. */
+static int64_t g_obs_asks, g_obs_reads, g_obs_ask_members_max;
+int64_t flow_observed_asks(void) { return g_obs_asks; }
+int64_t flow_observed_reads(void) { return g_obs_reads; }
+int64_t flow_observed_ask_members_max(void) { return g_obs_ask_members_max; }
+
 /* The largest optimism and the least weight among `fam`'s indexed observed-class members, through whichever of
-   `x_max` and `w_min` is not NULL; answers how many stand. A read over the family's list. */
+   `x_max` and `w_min` is not NULL; answers how many stand. Read off the roots of the family's two observed heaps:
+   a member's weight is the family's coordinate plus its optimism, and a sum with one operand fixed is monotone
+   under rounding to nearest, so the least weight is the coordinate plus the least optimism to the bit.
+   flow_ix_check asserts both against a walk of the list. */
 static long flow_family_observed(const FlowAcct *fam, double *x_max, double *w_min) {
+    DCHECK(fam != NULL && fam->up == NULL, "the observed class was asked of a node that is not a family root");
+    DCHECK((fam->obs_n > 0) == (fam->ix_osites != NULL) && (fam->ix_osites != NULL) == (fam->ix_omsites != NULL),
+           "a family's observed-class count and its two observed heaps disagree — a class is filed in both exactly "
+           "while it holds an observed member");
+    g_obs_asks++;
+    if (fam->obs_n > g_obs_ask_members_max) g_obs_ask_members_max = fam->obs_n;
+    if (fam->obs_n == 0) return 0;
+    if (x_max) { *x_max = fam->ix_osites->key; g_obs_reads++; }
+    if (w_min) { *w_min = acct_family_coord(fam) + -fam->ix_omsites->key; g_obs_reads++; }
+    return fam->obs_n;
+}
+
+#if APICLIENT_DEV
+/* flow_family_observed's oracle, a walk of the family's list with flow_order_key and nothing else: what
+   flow_ix_check compares the heaps' answer with at every census. */
+static long flow_family_observed_walk(const FlowAcct *fam, double *x_max, double *w_min) {
     long n = 0;
 
-    DCHECK(fam != NULL && fam->up == NULL, "the observed class was asked of a node that is not a family root");
     for (const Flow *o = fam->obs_head; o; o = o->obs_next, n++) {
         FlowOrderKey k = flow_order_key(o);
 
-        DCHECK(o->ix_in && o->family == fam && flow_observed_class(o),
+        DCHECK(o->ix_in && o->obs_in && o->family == fam && flow_observed_class(o),
                "a family's observed-class list holds a member outside the index, of another family, or no longer "
                "of the class — a writer of the drive mark or the candidate payload did not report it "
                "(flow_observed_class_moved)");
-        if (x_max && (n == 0 || k.x > *x_max)) *x_max = k.x;
-        if (w_min && (n == 0 || k.w < *w_min)) *w_min = k.w;
+        if (n == 0 || k.x > *x_max) *x_max = k.x;
+        if (n == 0 || k.w < *w_min) *w_min = k.w;
     }
     DCHECK(n == fam->obs_n, "a family's observed-class count and its list's length disagree");
     return n;
 }
+#endif
 
 /* Whether `f` is a priced member weighing strictly more than an indexed observed-class member of its family. */
 static int flow_outweighs_observed(const Flow *f) {
@@ -4819,6 +4882,29 @@ static void flow_ix_site_sync(FlowSite *st) {
         if (fam->ix_fprev) fam->ix_fprev->ix_fnext = fam->ix_fnext; else g_ix_fams = fam->ix_fnext;
         if (fam->ix_fnext) fam->ix_fnext->ix_fprev = fam->ix_fprev;
         fam->ix_fprev = fam->ix_fnext = NULL; fam->ix_listed = 0; g_ix_fams_n--;
+    }
+    /* A move of the site's service moves its observed members' optimism with every other member's. */
+    flow_obs_site_sync(st);
+}
+
+/* Re-file a class in its family's two observed heaps after its observed members or its code site's service moved:
+   keyed on the optimism at its largest fitness, and on the negated optimism at its smallest, which bound its
+   observed members from above and below since site_key is non-decreasing in the fitness. */
+static void flow_obs_site_sync(FlowSite *st) {
+    FlowAcct *fam = st->fam;
+    if (st->ix_obin) {
+        ix_unlink(&fam->ix_osites, &st->ix_ob); ix_unlink(&fam->ix_omsites, &st->ix_obm); st->ix_obin = 0;
+    }
+    DCHECK((st->obs_n > 0) == (st->obs_max != NULL) && (st->obs_max != NULL) == (st->obs_min != NULL),
+           "a class's observed count and its two observed heaps disagree — the three move together in flow_obs_link "
+           "and flow_obs_unlink");
+    if (st->obs_max) {
+        double hi = site_key(st, st->obs_max->key), lo = site_key(st, -st->obs_min->key);
+        ix_set(&st->ix_ob, hi, hi, hi, 0, 0);
+        ix_push(&fam->ix_osites, &st->ix_ob);
+        ix_set(&st->ix_obm, -lo, -lo, -lo, 0, 0);
+        ix_push(&fam->ix_omsites, &st->ix_obm);
+        st->ix_obin = 1;
     }
 }
 
@@ -5777,7 +5863,24 @@ static void flow_ix_check(void) {
         }
     }
     for (const Flow *o = g_owed_head; o; o = o->owed_next) owed--;
-    for (const FlowAcct *f = g_ix_fams; f; f = f->ix_fnext) listed++;
+    for (const FlowAcct *f = g_ix_fams; f; f = f->ix_fnext) {
+        listed++;
+        /* And the family's observed extremes off its two heaps, against a walk of its list. Every observed member
+           is indexed, so a family off this list holds none. Read through the walk alone, so the ask counters stay
+           a count of the order's asks. */
+        if (f->obs_n > 0) {
+            double hx = f->ix_osites->key, hw = acct_family_coord(f) + -f->ix_omsites->key, wx = 0.0, ww = 0.0;
+            long wn = flow_family_observed_walk(f, &wx, &ww);
+            DCHECKF(wn == f->obs_n && hx == wx && hw == ww,
+                    "a family's observed heaps answer the largest optimism %.17g and least weight %.17g where a walk "
+                    "of its %ld observed member(s) answers %.17g and %.17g — a class's observed heap or its filing in "
+                    "the family's heaps was not re-synced after its members or its service moved",
+                    hx, hw, wn, wx, ww);
+        } else {
+            DCHECK(!f->ix_osites && !f->ix_omsites && !f->obs_head,
+                   "a family holding no observed-class member is filed in an observed heap or lists one");
+        }
+    }
     DCHECKF(classes_n == g_ix_n && classes_never == g_ix_never_n,
             "the order's index classes count %ld member(s), %ld never dispatched, against %ld and %ld indexed — a "
             "class count moved without its member", classes_n, classes_never, g_ix_n, g_ix_never_n);

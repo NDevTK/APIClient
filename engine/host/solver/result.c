@@ -825,6 +825,9 @@ char *result_wfq_json(void) {
     }
     METRIC_SET(observed_env_members, w.observed_env_members);
     METRIC_SET(priced_over_observed, w.priced_over_observed);
+    METRIC_SET(observed_asks, flow_observed_asks());
+    METRIC_SET(observed_reads, flow_observed_reads());
+    METRIC_SET(observed_ask_members_max, flow_observed_ask_members_max());
     if (w.observed_oldest.present) {
         observed_oldest = composef("{\"seq\":%llu,\"cursor\":%d,\"ownWork\":%lld,\"picks\":%lld,"
                                    "\"stepUnit\":%d,\"unit\":%d,\"hostOwed\":%d,\"indexed\":%d}",

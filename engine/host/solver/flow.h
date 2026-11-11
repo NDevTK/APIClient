@@ -812,6 +812,8 @@ typedef struct Flow {
        it stands on it. Owned by flow.c. */
     struct Flow *obs_prev, *obs_next;
     unsigned char obs_in;
+    /* …and, while it stands on it, its nodes in its site's two observed heaps by fitness (flow.c's FlowSite). */
+    FlowIxNode ix_ox, ix_on;
     /* How many cascade inputs this flow has written: a generation raised at each write chokepoint
        core/css/css_cascade_pass.h lists, which a layout job's held record stamps and checks. Zero at birth,
        never inherited: a fork's arm gets a fresh job, so no record spans the fork. */
@@ -1688,6 +1690,12 @@ _Static_assert(sizeof(((FlowKeyChecks *)0)->armed) >= 8,
                "true it is a STEP CAP, which §NO BOUNDS forbids, and it fires as a wrapped comparison in "
                "solver/result.c rather than as anything a reader would connect to this declaration");
 FlowKeyChecks flow_key_checks(void);
+
+/* Lifetime counts of the asks for a family's observed-class extremes and the heap roots they read (flow.c's
+   flow_family_observed). Never reset; may be differenced. */
+int64_t flow_observed_asks(void);
+int64_t flow_observed_reads(void);
+int64_t flow_observed_ask_members_max(void);
 
 /* Lifetime count of queue entries the order's index took across every runnable ask (flow.c's flow_ix_query):
    the index's own work beside `scan<Entry>Weights`, the members it weighed. Never reset; may be differenced. */
