@@ -1079,6 +1079,7 @@ JSValue     concolic_tostr_hook(JSContext *ctx, JSValueConst v);
 JSValue     concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate);
 /* JSConcolicHooks.key_read — `obj[x]` with an unknown key reads an unknown property. */
 JSValue     concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst key);
+JSValue     concolic_key_stored_hook(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValue stored);
 /* JSConcolicHooks.key_domain_stated / key_domain_holds / key_domain_missed — the String key domain an unknown
    key's facets state (leading bytes before its first hole, a length bound), whether a name lies in it, and the
    check made where an Object base's read is decided a miss over it. A component answering whether a supported

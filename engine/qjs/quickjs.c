@@ -41384,7 +41384,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                         JS_FreeValue(ctx, own.getter);
                                         JS_FreeValue(ctx, own.setter);
                                     } else {
-                                        kv = own.value;
+                                        kv = g_concolic.key_stored(ctx, sp[-2], sp[-1], own.value);
+                                        if (unlikely(JS_IsException(kv))) goto exception;
                                     }
                                 }
                             }

@@ -3009,6 +3009,11 @@ typedef struct JSConcolicHooks {
        the read yields a concolic derived from the base and the key's source, or `undefined` where the key's
        known prefix misses a primitive's whole chain. JS_UNINITIALIZED = not concolic. */
     JSValue (*key_read)(JSContext *ctx, JSValueConst obj, JSValueConst key);
+    /* What that read answers where `obj`'s own data slot under `key`'s name (key_name) holds `stored` (consumed).
+       A slot a write through the same source filled answers the stored value. A slot named by the key's example
+       is the read in the example's world: an Object answers itself, so it keeps its identity, and a primitive
+       is the example of an unknown derived from the base and the key, so a test over it still forks. */
+    JSValue (*key_stored)(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValue stored);
     /* Whether the unknown `key` states a String key domain (its leading bytes before the first hole and a length
        bound), which lets an Object base's [[Get]] be decided over its chain's keys (GP_KEYDOMAIN). */
     bool (*key_domain_stated)(JSContext *ctx, JSValueConst key);
@@ -3041,6 +3046,9 @@ typedef struct JSConcolicHooks {
        through the same unknown source land in the SAME slot, two different sources in different ones, and a
        read through that source finds what was written. That is a sound model of "unknown but consistent", and
        it is what lets `obj[x] = v`, `delete obj[x]`, `x in obj` and every key-taking builtin work at all.
+       An environment unknown that holds an example (Math.random, a device fact, a reply) denotes §7.1.21
+       ToPropertyKey of that example instead: the running world is the example's, so the operation is the real
+       one at the example's key.
        JS_UNINITIALIZED = not concolic. */
     JSValue (*key_name)(JSContext *ctx, JSValueConst key);
     /* THE INVERSE, ASKED WHERE A PROPERTY NAME IS HANDED BACK TO THE PROGRAM AS A VALUE. `key_name` above is
@@ -3210,7 +3218,7 @@ typedef struct JSConcolicHooks {
     X(derived) X(example) X(call) X(type_fix) X(result_types) X(key_domain_holds) X(key_domain_missed)          \
     X(key_domain_stated) X(string_domain) X(string_keep_prefix) X(string_unit_map) X(string_class)              \
     X(string_length_reached) X(json_parse) X(member_never_callable) X(has_property) X(to_str)                   \
-    X(builtin) X(lead) X(own_key_mint) X(get_value_base)
+    X(builtin) X(lead) X(own_key_mint) X(get_value_base) X(key_stored)
 /* THE EXPLORATION OVERLAY (absent, absent_unresolved, present, publish, unit_seq) is the fourth: NULL is the
    host's statement that it does not explore, read at each use. */
 JS_EXTERN void JS_SetConcolicHooks(const JSConcolicHooks *hooks);

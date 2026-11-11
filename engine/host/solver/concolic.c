@@ -7726,11 +7726,35 @@ static const char *keyname_atom(JSContext *ctx, JSValueConst key, const char *sh
 
 /* The name an unknown key denotes: its shape (or the shape of the value it is the string form of) as a real
    string, stable per source, so every key-taking operation agrees (see the contract at JS_ToPropertyKeyInternal). */
+/* §7.1.21 ToPropertyKey ( arg ) of the example an environment unknown holds, or JS_UNINITIALIZED for any other
+   key. No party sets an environment unknown (decide.c's dec_subject_environment reads the same two root facts),
+   so the running world is its example's until this flow takes an arm against it, and an element access through
+   it is the real access at that key. Owned.
+   Named residual. Not covered: the worlds where the key is another member's. Next diff builds: the access as a
+   fork over the base's own keys, each arm against the example priced as a departure from it. Absence shows as:
+   a page that indexes by Math.random() reporting only the example's member's requests. */
+static JSValue key_of_example(JSContext *ctx, JSValueConst key)
+{
+    JSValue name;
+
+    if (!concolic_root_whose_all(key, CONCOLIC_WHOSE_WORLD) || !concolic_root_every(key, concolic_member_environment))
+        return JS_UNINITIALIZED;
+    if (concolic_example_state(key) != CONCOLIC_EX_HELD) return JS_UNINITIALIZED;
+    name = concolic_example_string(ctx, key);
+    return JS_IsUndefined(name) ? JS_UNINITIALIZED : name;
+}
+
 JSValue concolic_key_name_hook(JSContext *ctx, JSValueConst key) {
     const char *sh, *atom, *ident;
     Concolic *kc;
 
     if (!concolic_is(key)) return JS_UNINITIALIZED;
+    /* The example's key is a real name, never one this file spent an unknown on, so it is not recorded. */
+    {
+        JSValue ek = key_of_example(ctx, key);
+
+        if (!JS_IsUninitialized(ek)) return ek;
+    }
     kc = JS_GetOpaque(key, g_concolic_class);
     /* The KEY's identity and slot, §7.1.21 ToPropertyKey ( arg ): a string form of `x` (str_of_record) is the
        key `x` is, so `o[x]`, `o[String(x)]` and `o[x + ""]` name one slot under `x`'s identity. */
@@ -8021,11 +8045,9 @@ void concolic_key_domain_missed(JSContext *ctx, JSValueConst key)
 #endif
 }
 
-JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst key) {
-    const char *src, *root, *f[2];
-    char *shape, *ident, *io, *ik;
-    JSValue r;
+static JSValue key_read_derived(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValue example);
 
+JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst key) {
     if (!concolic_is(key)) return JS_UNINITIALIZED;
     /* A String key whose leading bytes are the page's own (a concatenation's prefix before its first hole)
        names no member of a primitive whose chain holds no key so beginning: the read is the chain's miss. */
@@ -8036,6 +8058,29 @@ JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst ke
             primitive_chain_misses_prefix(ctx, obj, kc->shape, (size_t)kc->hole_span[0]))
             return JS_UNDEFINED;
     }
+    return key_read_derived(ctx, obj, key, JS_UNDEFINED);
+}
+
+/* JSConcolicHooks.key_stored (quickjs.h states the contract). */
+JSValue concolic_key_stored_hook(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValue stored)
+{
+    JSValue ek;
+
+    DCHECK(concolic_is(key), "a stored value was read back through a key that is not an unknown");
+    if (JS_IsObject(stored) || JS_IsUndefined(stored)) return stored;
+    ek = key_of_example(ctx, key);
+    if (JS_IsUninitialized(ek)) return stored;
+    JS_FreeValue(ctx, ek);
+    return key_read_derived(ctx, obj, key, stored);
+}
+
+/* The unknown a read of `obj` at unknown `key` answers, carrying `example` (consumed; JS_UNDEFINED for none). */
+static JSValue key_read_derived(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValue example)
+{
+    const char *src, *root, *f[2];
+    char *shape, *ident, *io, *ik;
+    JSValue r;
+
     src = concolic_src_c(key);
     root = concolic_root_c(key);
     /* Which object was read is half the identity and half the shape: `a[x]` and `b[x]` are two reads, and two
@@ -8052,7 +8097,7 @@ JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst ke
     ident = concolic_ident_compose("[]", f, 2);
     free(io); free(ik);
     r = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape,
-                         root_whose_or_unstated(root_whose_of(key)), ident, JS_UNDEFINED);
+                         root_whose_or_unstated(root_whose_of(key)), ident, example);
     free(shape);
     return r;
 }
@@ -10335,6 +10380,7 @@ static JSConcolicHooks g_hooks = {
     .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
     .to_bool = concolic_tobool_hook,
     .key_read = concolic_key_read_hook,
+    .key_stored = concolic_key_stored_hook,
     .key_domain_stated = concolic_key_domain_stated,
     .key_domain_holds = concolic_key_domain_holds,
     .key_domain_missed = concolic_key_domain_missed,
