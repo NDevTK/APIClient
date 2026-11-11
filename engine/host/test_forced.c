@@ -19883,6 +19883,18 @@ TF_UNIT void probes_storearm(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* A lifetime census count at its last occurrence in the result document (its terminal table), or -1 where the
+   document states none. */
+static long abs_census_last(const char *js, const char *key) {
+    char pat[64];
+    const char *p, *last = NULL;
+    int k = snprintf(pat, sizeof pat, "\"%s\":", key);
+
+    CHECK(k > 0 && (size_t)k < sizeof pat, "a census key did not fit its pattern buffer");
+    for (p = strstr(js, pat); p; p = strstr(p + k, pat)) last = p;
+    return last ? strtol(last + k, NULL, 10) : -1;
+}
+
 /* The rows of the `absentarm` document. */
 TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
     /* The branch over `window.__tfAbsentGate`: this session reads undefined there, so the falsy arm is the one
@@ -19986,8 +19998,22 @@ TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
     fold_row(&abstext_tt, &abstext_why, param_value_only(js, "/api/abstext", "w", "string"),
              "text() over a body built from an unknown resolved with a value whose type is not String in every "
              "world, so `typeof` forked arms Fetch §5.3's UTF-8 decode never produces");
+    /* The observed class's extremes are read off heap roots (flow.c's flow_family_observed): asked at every dispatch
+       of a priced member, an ask reads at most two entries whatever the class's size. The size control is the
+       largest class an ask was answered over; a walk of that class would read more than two. */
+    const char *obsask_why = NULL; int obsask_tt = 1;
+    long obs_asks = abs_census_last(js, "observedAsks"), obs_reads = abs_census_last(js, "observedReads"),
+         obs_max = abs_census_last(js, "observedAskMembersMax");
+
+    fold_row(&obsask_tt, &obsask_why, obs_asks > 0 && obs_max >= 64,
+             "NOT REACHED: no ask of a family's observed extremes, or none over a class of 64 or more members, so "
+             "the run cannot tell a read of two roots from a walk");
+    fold_row(&obsask_tt, &obsask_why, obs_reads >= 0 && obs_reads <= 2 * obs_asks,
+             "an ask of a family's observed extremes read more than two entries: the class is walked instead of "
+             "read off its family's two observed heaps");
     const Probe rows[] = {
         { "absent-arm", absarm_tt, "__tfAbsentGate", SESS_EXPLORE, absarm_why },
+        { "observed-ask-reads", obsask_tt, "__tfAbsentGate", SESS_EXPLORE, obsask_why },
         { "absent-body-text", abstext_tt, "/api/abstext", SESS_EXPLORE, abstext_why },
         { "then-throws", thenrej_tt, "/api/tnrej", SESS_EXPLORE, thenrej_why },
         { "absent-optchain", absopt_tt, "__tfMaybe", SESS_EXPLORE, absopt_why },
