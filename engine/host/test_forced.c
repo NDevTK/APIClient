@@ -1139,6 +1139,37 @@ static int tf_seen_line(const char *prefix, const char *pinned, const char *prov
     return 0;
 }
 
+/* The request content the zone was shown, deduplicated: a fetch()'s content read (engine_pending_request's
+   text) after its absolute address and a space, and an `xhr.send` record whole. A row about a header value's
+   class reads this, since the class is in neither the pending line nor the result document. */
+static char **g_tf_content;
+static int g_tf_content_n, g_tf_content_cap;
+
+static void tf_seen_content_note(const char *address, const char *text, size_t len) {
+    size_t al = address ? strlen(address) + 1 : 0;
+    char *one = malloc(al + len + 1);
+
+    CHECK(one != NULL, "the fixture could not record a request's content it was shown");
+    if (address) { memcpy(one, address, al - 1); one[al - 1] = ' '; }
+    memcpy(one + al, text, len);
+    one[al + len] = 0;
+    for (int i = 0; i < g_tf_content_n; i++)
+        if (!strcmp(g_tf_content[i], one)) { free(one); return; }
+    if (g_tf_content_n == g_tf_content_cap) {
+        g_tf_content_cap = g_tf_content_cap ? 2 * g_tf_content_cap : 16;
+        g_tf_content = realloc(g_tf_content, (size_t)g_tf_content_cap * sizeof *g_tf_content);
+        CHECK(g_tf_content != NULL, "the fixture could not grow its record of the request content it was shown");
+    }
+    g_tf_content[g_tf_content_n++] = one;
+}
+
+/* Whether some request content the zone was shown holds both `address` and `entry`. */
+static int tf_seen_content(const char *address, const char *entry) {
+    for (int i = 0; i < g_tf_content_n; i++)
+        if (strstr(g_tf_content[i], address) && strstr(g_tf_content[i], entry)) return 1;
+    return 0;
+}
+
 /* How many lines whose address begins with `prefix` were shown with the address class `address`. */
 static int tf_seen_address(const char *prefix, const char *address) {
     int n = 0;
@@ -1324,6 +1355,13 @@ static int fixture_provide(JSContext *ctx) {
         url_record_free(&rec);
         CHECK(abs, "the fixture could not serialize the URL it is answering");
         tf_seen_note(abs, pinned, provenance, address);
+        if (strcmp(headers_key, "-")) {
+            char *content = engine_pending_request(ctx, &key);
+
+            CHECK(content != NULL, "the fixture could not read the content of a request it was shown");
+            tf_seen_content_note(abs, content, strlen(content));
+            free(content);
+        }
         /* THE ONE REPLY RECORD every host delivers — the same shape the trusted zone stringifies as JSON. */
         /* `application/json` is what this fixture SERVES, stated by the host that serves it — the same
            position the trusted zone is in when it stamps `computedType` on a real reply (fetch.h). */
@@ -1835,6 +1873,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fileparseworker.h"
 #include "fixture/workererror.h"
 #include "fixture/uspiter.h"
+#include "fixture/hdrclass.h"
 #include "fixture/fileparsetext.h"
 #include "fixture/requestunk.h"
 #include "fixture/respurl.h"
@@ -2648,6 +2687,7 @@ TF_DOCS[] = {
     { "workererror", HTML_WORKERERROR },
     { "workererror-cancel", HTML_WORKERERROR_CANCEL },
     { "uspiter", HTML_USPITER },
+    { "hdrclass", HTML_HDRCLASS },
     { "fileparse-text", HTML_FILEPARSE_TEXT },
     { "requestunk", HTML_REQUESTUNK },
     { "respurl", HTML_RESPURL },
@@ -9679,6 +9719,7 @@ static int hostreq_answer_all(JSContext *ctx)
         }
         /* HTML_DECLINES's XMLHttpRequest refusal: a declined rendezvous gets no value, and flow_decline_fork
            builds its waiting and failure arms. */
+        if (!strncmp(tab + 1, "xhr.send\t", 9)) tf_seen_content_note(NULL, tab + 10, (size_t)(end - (tab + 10)));
         if (!strncmp(tab + 1, "xhr.send\t", 9) && tf_xhr_declined(tab + 1, (size_t)(end - (tab + 1)))) {
             n += engine_host_decline(ctx, id, "blocked-method: this origin has not been widened for this request");
             p = end + 1;
@@ -26731,6 +26772,51 @@ TF_UNIT void probes_workererror(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `hdrclass` document (fixture/hdrclass.h): what a host is shown for each header value. */
+TF_UNIT void probes_hdrclass(const char *js, Probe *tab, int *n) {
+    const char *fi_why = NULL; int fi_tt = 1;
+    fold_row(&fi_tt, &fi_why, !!strstr(js, "\"/api/hc-ex\"") && !!strstr(js, "\"/api/hc-unk\""),
+             "NOT REACHED: there is no /api/hc-ex or no /api/hc-unk record, so the init-record requests never ran");
+    fold_row(&fi_tt, &fi_why, tf_seen_content("https://x.test/api/hc-own ", "[\"x-own\",\"literal\",\"concrete\"]"),
+             "the control's header, a literal of the page's text, was not shown as its bytes with the class "
+             "`concrete`");
+    fold_row(&fi_tt, &fi_why, tf_seen_content("https://x.test/api/hc-ex ", "[\"x-lang\",\"en-US\",\"example\"]"),
+             "a header value that is an unknown with an example was not shown as the example's bytes with the "
+             "class `example`: Fetch §5.1's fill wrote the display shape and stated no class");
+    fold_row(&fi_tt, &fi_why, tf_seen_content("https://x.test/api/hc-unk ", "\"x-frag\",\"") &&
+                              tf_seen_content("https://x.test/api/hc-unk ", ",\"unknown\"]"),
+             "a header value that is an unknown with no example was not shown with the class `unknown`: the "
+             "display shape was stated as bytes a host may send");
+    const char *me_why = NULL; int me_tt = 1;
+    fold_row(&me_tt, &me_why, !!strstr(js, "\"/api/hc-members\""),
+             "NOT REACHED: there is no /api/hc-members record, so the Headers object's request never ran");
+    fold_row(&me_tt, &me_why, tf_seen_content("https://x.test/api/hc-members ", "[\"x-lang\",\"en-US\",\"example\"]"),
+             "Fetch §5.1's set over an unknown with an example did not carry the example's bytes and the class "
+             "`example` to the request the Headers object was given to");
+    fold_row(&me_tt, &me_why, tf_seen_content("https://x.test/api/hc-members ", ",\"unknown\"]"),
+             "Fetch §5.1's append over an unknown with no example did not carry the class `unknown` to the "
+             "request the Headers object was given to");
+    const char *xh_why = NULL; int xh_tt = 1;
+    fold_row(&xh_tt, &xh_why, !!strstr(js, "\"/api/hc-xhr\""),
+             "NOT REACHED: there is no /api/hc-xhr record, so the XMLHttpRequest was never sent");
+    fold_row(&xh_tt, &xh_why, tf_seen_content("/api/hc-xhr\"", "[\"X-Lang\",\"en-US\",\"example\"]"),
+             "XHR §3.5.2's setRequestHeader over an unknown with an example did not state the example's bytes "
+             "and the class `example` on the xhr.send record");
+    fold_row(&xh_tt, &xh_why, tf_seen_content("/api/hc-xhr\"", "[\"X-Both\",\"a, en-US\",\"example\"]"),
+             "Fetch §5.1's combine of bytes with an unknown that has an example did not state the combined "
+             "example `a, en-US` with the class `example`");
+    fold_row(&xh_tt, &xh_why, tf_seen_content("/api/hc-xhr\"", "[\"X-Frag\",\"b, ") &&
+                              tf_seen_content("/api/hc-xhr\"", ",\"unknown\"]"),
+             "Fetch §5.1's combine of bytes with an unknown that has no example did not state the class "
+             "`unknown`: a value half of which has no bytes was shown as bytes");
+    const Probe rows[] = {
+        { "hdrclass-fill", fi_tt, "/api/hc-unk", SESS_EXPLORE, fi_why },
+        { "hdrclass-members", me_tt, "/api/hc-members", SESS_EXPLORE, me_why },
+        { "hdrclass-xhr", xh_tt, "/api/hc-xhr", SESS_EXPLORE, xh_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `uspiter` document (fixture/uspiter.h): walks and mutations over a URLSearchParams whose
    pairs derive from the query. */
 TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
@@ -31951,6 +32037,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_worker_copy(js, probes, &np);
     probes_workererror(js, probes, &np);
     probes_uspiter(js, probes, &np);
+    probes_hdrclass(js, probes, &np);
     probes_fileparse_text(js, probes, &np);
     probes_requestunk(js, probes, &np);
     probes_respurl(js, probes, &np);

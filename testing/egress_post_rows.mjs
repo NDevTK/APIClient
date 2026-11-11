@@ -2,7 +2,9 @@
 // a page from a loopback server that records every request, so each row reads what reached the server beside the
 // zone's `@EGRESS` lines. The page's unforced boot POSTs JSON and reads the reply; it POSTs two bodies to one
 // address; and on an arm that assumes absent state it POSTs to a new address and repeats a POST its unforced run
-// already made. The control is the seed load: the server served the page, or nothing below is a reading.
+// already made. It also sends a header whose value is an unknown with an example (`navigator.language`) and one
+// whose value is an unknown with none (`location.hash`), by fetch() and by XMLHttpRequest. The control is the
+// seed load: the server served the page, or nothing below is a reading.
 //
 //   node testing/egress_post_rows.mjs [path-to-native-binary]      (after `node engine/build.mjs native`)
 "use strict";
@@ -32,6 +34,10 @@ fetch('/api/same', { method: 'POST', body: 's=1' }).then(function () {
     fetch('/api/same', { method: 'POST', body: 's=1' });
   }
 });
+fetch('/api/hdr-ex', { headers: { 'X-Probe': navigator.language } });
+fetch('/api/hdr-unk', { headers: { 'X-Probe': location.hash } });
+var xe = new XMLHttpRequest(); xe.open('GET', '/api/xhr-ex'); xe.setRequestHeader('X-Probe', navigator.language); xe.send();
+var xu = new XMLHttpRequest(); xu.open('GET', '/api/xhr-unk'); xu.setRequestHeader('X-Probe', location.hash); xu.send();
 </script>`;
 
 /* Every request that arrived, as "METHOD path?query <body> <content-type> <x-page>". */
@@ -41,7 +47,8 @@ const server = createServer(async (req, res) => {
   for await (const c of req) chunks.push(c);
   const u = new URL(req.url, 'http://x');
   arrived.push({ method: req.method, path: u.pathname, query: u.search, body: Buffer.concat(chunks).toString('utf8'),
-                 type: req.headers['content-type'] || '', page: req.headers['x-page'] || '' });
+                 type: req.headers['content-type'] || '', page: req.headers['x-page'] || '',
+                 probe: req.headers['x-probe'] === undefined ? '-' : req.headers['x-probe'] });
   if (u.pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(PAGE);
@@ -75,6 +82,9 @@ const said = (list) => list.map((e) => e.how + '/' + (e.admittedBy ? e.admittedB
                                        (e.admittedBy && e.admittedBy.refused ? ' ' + e.admittedBy.refused : '') +
                                        (e.refusal ? ' ' + e.refusal : '')).sort().join(' | ');
 
+/* What an entry says each part's bytes are, and the row that folds them. */
+const bytes = (list) => list.map((e) => (e.vector ? e.vector.bytes : 'no-vector') + ' ' +
+                                        (e.parts ? e.parts.headers.map((h) => h.join(':')).join(',') : 'no-parts')).join(' | ');
 const echo = got('POST', '/api/echo');
 const ROWS = [
   ['CONTROL: the seed load reached the server', [['GET /', got('GET', '/').length, 1]]],
@@ -95,6 +105,22 @@ const ROWS = [
    [['POST /api/same', got('POST', '/api/same').length, 1],
     ['how the zone answered the two asks', said(sends('POST', '/api/same')),
      'answered-locally/record provenance=forced | sent/default']]],
+  ['a fetch() header value that is its unknown\'s example leaves as the example\'s bytes, and the entry says so',
+   [['GET /api/hdr-ex', got('GET', '/api/hdr-ex').length, 1],
+    ['the header that arrived', got('GET', '/api/hdr-ex').map((a) => a.probe).join('|'), 'en-US'],
+    ['how the zone answered it', said(sends('GET', '/api/hdr-ex')), 'sent/default'],
+    ['what the entry states', bytes(sends('GET', '/api/hdr-ex')), 'example x-probe:example']]],
+  ['a fetch() header value with no example is listed, judged and not sent',
+   [['GET /api/hdr-unk', got('GET', '/api/hdr-unk').length, 0],
+    ['how the zone answered it', said(sends('GET', '/api/hdr-unk')), 'not-sent/none bytes=unknown'],
+    ['what the entry states', bytes(sends('GET', '/api/hdr-unk')), 'unknown x-probe:unknown']]],
+  ['an XMLHttpRequest header value is judged the same way: the example leaves, the value with no bytes does not',
+   [['GET /api/xhr-ex', got('GET', '/api/xhr-ex').length, 1],
+    ['the header that arrived', got('GET', '/api/xhr-ex').map((a) => a.probe).join('|'), 'en-US'],
+    ['what its entry states', bytes(sends('GET', '/api/xhr-ex')), 'example X-Probe:example'],
+    ['GET /api/xhr-unk', got('GET', '/api/xhr-unk').length, 0],
+    ['how the zone answered it', said(sends('GET', '/api/xhr-unk')), 'not-sent/none bytes=unknown'],
+    ['what its entry states', bytes(sends('GET', '/api/xhr-unk')), 'unknown X-Probe:unknown']]],
 ];
 let bad = 0;
 for (const [label, notes] of ROWS) {
