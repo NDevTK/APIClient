@@ -3,6 +3,8 @@
    every walk forks per index (a world with no pair there, and one with a pair whose name and value derive from
    the query), and a read after a mutation derives from the mutated list, as does that list sent as a request
    body. A list built with no init is concrete, so its mutation and serialization are the page's own bytes.
+   A known list given an unknown half (on a URL's searchParams, or sent as a body) serializes to an unknown: with
+   an example for every half its bytes are the examples' serialization, and with none it has no bytes.
    Witness fetches carry constants, except the iteration counts, which are concrete in each world.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
@@ -44,6 +46,23 @@ static const char HTML_USPITER[] =
     "var uspE = new URLSearchParams();"
     "uspE.append('k', 'v');"
     "fetch('/api/uspe?' + uspE.toString());"
+    "</script>"
+    "<script>"
+    "var uspU = new URL('/api/uspu', location.origin);"
+    "var uspUn = 0;"
+    "for (var uspT of new URLSearchParams(location.search)) {"
+    "  uspU.searchParams.append(uspT[0], uspT[1]);"
+    "  uspUn++;"
+    "  break;"
+    "}"
+    "fetch(uspU);"
+    "fetch('/api/usp-url-done?n=' + uspUn);"
+    "var uspV = new URL('/api/uspv', location.origin);"
+    "uspV.searchParams.append('lang', navigator.language);"
+    "fetch(uspV);"
+    "var uspW = new URLSearchParams();"
+    "uspW.append('h', location.hash);"
+    "fetch('/api/uspw', { method: 'POST', body: uspW });"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
