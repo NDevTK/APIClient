@@ -63,9 +63,18 @@ enum {
 static void descend_enqueue(JSContext *ctx, JSValueConst proxy, int op, int after);
 static void self_enqueue(JSContext *ctx, JSValueConst proxy, int op, int after);
 static void destroy_a_top_level_traversable(JSContext *ctx, JSValueConst proxy);
-/* §7.5.9's UNLOADING DOCUMENT CLEANUP STEPS — declared here because it has TWO ENTRIES, in two different
-   algorithms: §7.5.9's unload a Document step 18, and §7.5.10's destroy a Document step 4. It is defined beside
-   the salvageable state its own branch reads. */
+/* HTML §7.5.9 "Unloading documents"' unloading document cleanup steps. One body with two entries: unload a
+ * Document reaches it at step 18 and HTML §7.5.10's destroy a Document at step 4, and a Document can arrive
+ * by either alone (a navigation unloads and then destroys; a removed `<iframe>` is destroyed with no unload).
+ *
+ * Of the standard's four sets, the WebTransport and EventSource loops iterate over interfaces this engine
+ * does not have, so they run zero times, as §7.5.10's worker and worklet loops do. The WebSocket loop makes
+ * each of window's sockets disappear (core/websockets/web_socket.h), outside the salvageable branch as the
+ * standard has it. The branch's second half clears window's map of active timers, which is this window's:
+ * core/timing/timer.c keeps one per realm, so clearing it takes nothing from a same-origin popup.
+ *
+ * The branch is read through UNLOAD_SALVAGEABLE rather than assumed away: writing its body unconditionally
+ * would be right for every Document this build has and wrong on the first day one is kept. */
 static void unloading_document_cleanup_steps(JSContext *cctx);
 
 /* THE OPERATION'S CONTINUATION, AND IT TRAVELS WITH THE JOB. §7.5.9's afterAllUnloads is an INPUT of "unload a

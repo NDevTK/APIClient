@@ -9,20 +9,6 @@
  * The request states WebSockets §2.2 step 8's `Sec-WebSocket-Protocol` alone. Steps 3-7 and 9-10 (`Upgrade`,
  * `Connection`, the key nonce, the version, the extension offer) are the connection's: the zone that opens
  * it composes them and checks RFC 6455 §4.1 "Client Requirements"' `Sec-WebSocket-Accept` against its nonce.
- *
- * Named residual: the established connection.
- * Not covered: a reply of status 101 has no frame channel behind it, so no connection is established: the
- * engine fails it, and a declined handshake forks its waiting and failure arms only.
- * Next diff builds: WebSockets §4's open task from a 101 reply, send() and incoming frames as requests and arrivals on
- * the flow's register, the closing handshake, and the established arm of a declined handshake.
- * Its absence shows as: every socket's `close` event carries code 1006 and no `open` event fires.
- *
- * Named residual: unknown arguments.
- * Not covered: a URL, subprotocol, close code or reason that is unknown input with no example is validated
- * as its display shape (or taken as valid, for the code), and send() counts no bytes for unknown data, so the
- * SyntaxError and InvalidAccessError arms of such a call are not forked.
- * Next diff builds: a fork of the throwing and succeeding arms at each validation over an unknown.
- * Its absence shows as: a page's catch block around `new WebSocket(input)` that no flow enters.
  */
 #include <stdbool.h>
 #include <stdint.h>
@@ -313,6 +299,12 @@ static void ws_fail(WebSocketData *d, JSValueConst sock)
 
 /* ---- WebSockets §2.2 "Opening handshake" --------------------------------------------------------------- */
 
+/* Named residual: the established connection.
+   Not covered: a reply of status 101 has no frame channel behind it, so no connection is established: the
+   engine fails it, and a declined handshake forks its waiting and failure arms only.
+   Next diff builds: WebSockets §4's open task from a 101 reply, send() and incoming frames as requests and
+   arrivals on the flow's register, the closing handshake, and the established arm of a declined handshake.
+   Its absence shows as: every socket's `close` event carries code 1006 and no `open` event fires. */
 /* WebSockets §2.2 step 11's processResponse. A network error (the host's null) or a status other than 101 fails the
    connection (step 11.1). A socket close() already failed is no longer CONNECTING and reads nothing. */
 static JSValue ws_handshake_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic,
@@ -328,8 +320,8 @@ static JSValue ws_handshake_deliver(JSContext *ctx, JSValueConst this_val, int a
     if (d->ready_state != WS_CONNECTING) return JS_UNDEFINED;
     if (argc >= 1 && JS_IsObject(argv[0]) && fetch_reply_status(ctx, argv[0]) == 101)
         DFAIL("a host answered a WebSocket handshake with status 101 and the engine has no frame channel to "
-              "establish the connection over; build WebSockets §4's open task and the frame requests (this file's first "
-              "named residual)");
+              "establish the connection over; build WebSockets §4's open task and the frame requests (the "
+              "named residual above)");
     ws_fail(d, func_data[0]);
     return JS_UNDEFINED;
 }
@@ -349,8 +341,14 @@ static bool ws_protocol_is_token(const char *p, size_t n)
     return true;
 }
 
+/* Named residual: unknown arguments.
+   Not covered: a URL, subprotocol, close code or reason that is unknown input with no example is validated
+   as its display shape (or taken as valid, for the code), and send() counts no bytes for unknown data, so the
+   SyntaxError and InvalidAccessError arms of such a call are not forked.
+   Next diff builds: a fork of the throwing and succeeding arms at each validation over an unknown.
+   Its absence shows as: a page's catch block around `new WebSocket(input)` that no flow enters. */
 /* The bytes of a string argument that may be unknown input: an unknown denotes its example where it has a
-   string one, else its display shape (this file's second named residual). Owned: JS_FreeCString. */
+   string one, else its display shape. Owned: JS_FreeCString. */
 static const char *ws_arg_cstring(JSContext *ctx, JSValueConst v, size_t *plen)
 {
     JSValue sv;
