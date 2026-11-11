@@ -2349,10 +2349,8 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         hdr->stage = FETCH_HEADERS;
     }
 
-    /* §5.4 steps 31-33's GUARD, which is a function of the mode step 18 settled — so it is derived and never a
-       constant. It was the literal HEADERS_GUARD_REQUEST, because `mode` was one of the thirteen members this
-       machine never read: `fetch(u, {mode: "no-cors", headers: {Range: "bytes=0-"}})` kept a header the
-       "request-no-cors" guard drops, and the request that reached the host was one no browser makes. */
+    /* §5.4 steps 31 and 32.2's guard, a function of the mode step 18 settled: "request", or
+       "request-no-cors" under a "no-cors" mode, which drops what that mode does not admit. */
     DCHECK(JS_IsString(s->rec.mode) && JS_IsString(s->rec.method),
            "the fetch machine reached §5.4 step 32 with an unfilled request record — every stage from here on "
            "reads the mode and the method, and request_init_apply fills both or fails, so a record with "
@@ -2403,12 +2401,8 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         }
         if (init_body) {
             char *mime = NULL;
-            /* §5.4 step 37's "with keepalive set to request's keepalive" — the value step 24 read out of the
-               dictionary, not a constant. It WAS the constant `false`, with a comment beside it saying the
-               member "is a member neither RequestInit nor Request installs here": that stopped being true when
-               the member was declared, and Fetch §5.2's ReadableStream arm opens "If keepalive is true, then throw a
-               TypeError", so `fetch(u, {method:"POST", keepalive:true, body: stream})` built a request a
-               browser refuses. */
+            /* §5.4 step 37.1 extracts "with keepalive set to request's keepalive", the value step 24 read out
+               of the dictionary: §5.2's ReadableStream arm throws a TypeError where keepalive is true. */
             if (body_extract(ctx, &s->body, bv, s->rec.keepalive != 0, &mime) < 0) {
                 free(mime);
                 JS_FreeValue(ctx, bv);

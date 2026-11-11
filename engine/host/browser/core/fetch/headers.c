@@ -1060,8 +1060,9 @@ int header_pairs_append_guarded(JSContext *ctx, JSValueConst pairs, HeadersGuard
 
 /* ---- the interface ------------------------------------------------------------------------------------ */
 
-/* §5.1: "A Headers object has an associated guard." The guard is the object's and the header list is the
-   pairs above; the runtime releases, marks and writes the record by its layout. */
+/* Fetch §5.1 Headers class: "A Headers object also has an associated guard, which is a headers guard." The
+   guard is the object's and its header list is the pairs above; the runtime releases, marks and writes the
+   record by its layout. */
 typedef struct { JSValue pairs; uint8_t guard; } HeadersObj;
 static const uint16_t HEADERS_VALS[] = { offsetof(HeadersObj, pairs) };
 static const JSRecordLayout HEADERS_LAYOUT = { sizeof(HeadersObj), HEADERS_VALS, 1, NULL, 0, NULL };
