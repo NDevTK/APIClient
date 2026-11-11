@@ -8925,6 +8925,80 @@ TF_UNIT void flow_graph_frame_selftest(void)
     JS_FreeRuntime(rt);
 }
 
+/* @GRAPHRT over a parked flow's chain of heap frames, on a runtime of its own: functions outer and inner are
+   defined at generation 0, and a program at generation 5 calls outer(5) + outer(1); outer calls inner, which
+   parks at its third back-edge, so the base stands mid-call under two ordinary heap frames. The flow is written,
+   rebuilt and written again; the bytes must agree and the graph must hold both frames. The rebuilt flow then
+   runs to completion before the original, and each must finish with 920 over one start: a rebuilt chain that
+   lost a frame, a caller record or a live slot would return elsewhere or with another sum. */
+static int tf_chain_graph_polls;
+static int tf_chain_graph_preempt(int kind) { return kind == JS_PREEMPT_BACKEDGE && ++tf_chain_graph_polls == 3; }
+static const JSFlowControlHooks TF_CHAIN_GRAPH_THIRD = { .preempt = tf_chain_graph_preempt };
+TF_UNIT void flow_graph_chain_selftest(void)
+{
+    static const char *defs =
+        "function inner(k) { let s = 0; for (let i = 0; i < 6; i++) s += i * k; return s; }"
+        "function outer(k) { var t = inner(k) + 1; return t * 10; } 0";
+    static const char *src = "globalThis.starts = (globalThis.starts | 0) + 1; outer(5) + outer(1)";
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx;
+    JSValue *flow, *back = NULL, v1 = JS_UNDEFINED, v2 = JS_UNDEFINED, starts;
+    JSFlowGraphRoots roots = { .n_frames = 1 };
+    JSFlowGraphFrames fr;
+    JSFlowGraph *g1, *g2;
+    const uint8_t *b1, *b2;
+    size_t n1, n2;
+    int32_t got1 = 0, got2 = 0, nstarts = 0;
+    int same, r;
+
+    CHECK(rt != NULL, "the chain graph witness could not make a runtime");
+    JS_SetGCThreshold(rt, (size_t)-1);
+    ctx = JS_NewContext(rt);
+    CHECK(ctx != NULL, "the chain graph witness could not make a context");
+    JS_FreeValue(ctx, tf_graph_program(ctx, defs));
+    JS_SetFlowGen(5);
+    tf_chain_graph_polls = 0;
+    JS_SetFlowControlHooks(&TF_CHAIN_GRAPH_THIRD);
+    flow = JS_FlowNew(ctx, src, strlen(src), "chain-graph", 0);
+    CHECK(flow != NULL, "the chain graph witness could not create its flow");
+    CHECK(JS_FlowResume(ctx, flow, &v1) == 1, "the chain graph witness's flow did not park at its third back-edge");
+    JS_SetFlowControlHooks(&TF_DIFF_DECLINE);
+    roots.frames = &flow;
+    g1 = JS_FlowGraphWriteFlow(ctx, &roots, 2);
+    JS_FlowGraphFrameCensus(g1, &fr);
+    JS_SetFlowGen(9);
+    CHECK(JS_FlowGraphReadFlow(ctx, g1, NULL, &back) == 0 && back != NULL,
+          "the chain graph witness could not rebuild its flow");
+    roots.frames = &back;
+    g2 = JS_FlowGraphWriteFlow(ctx, &roots, 2);
+    n1 = JS_FlowGraphBytes(g1, &b1); n2 = JS_FlowGraphBytes(g2, &b2);
+    same = n1 == n2 && !memcmp(b1, b2, n1);
+    printf("@GRAPHRT {\"chainBytes\":%zu,\"chainFrames\":%u,\"identical\":%d}\n", n1, fr.heap, same);
+    CHECKF(fr.bases == 1 && fr.heap == 2, "the chain graph witness parked with %u bases and %u heap frames, not "
+           "one base under outer and inner — the row's premise did not arise", fr.bases, fr.heap);
+    CHECK(same, "a rebuilt graph holding a parked chain of heap frames did not write the same bytes as its original");
+    while ((r = JS_FlowResume(ctx, back, &v2)) != 0)
+        CHECK(r == 1, "the chain graph witness's rebuilt flow detached — it holds no top-level await");
+    while ((r = JS_FlowResume(ctx, flow, &v1)) != 0)
+        CHECK(r == 1, "the chain graph witness's flow detached — it holds no top-level await");
+    JS_ToInt32(ctx, &got2, v2);
+    JS_ToInt32(ctx, &got1, v1);
+    starts = tf_graph_program(ctx, "starts");
+    JS_ToInt32(ctx, &nstarts, starts);
+    CHECKF(got2 == 920 && got1 == 920 && nstarts == 1,
+           "the rebuilt flow finished with %d and the original with %d over %d starts, not 920 each over one: the "
+           "rebuilt chain does not continue from the park's frames", (int)got2, (int)got1, (int)nstarts);
+    JS_FreeValue(ctx, v1); JS_FreeValue(ctx, v2); JS_FreeValue(ctx, starts);
+    JS_FlowFree(ctx, back);
+    JS_FlowFree(ctx, flow);
+    JS_FlowGraphFree(ctx, g1);
+    JS_FlowGraphFree(ctx, g2);
+    JS_SetFlowControlHooks(&TF_DIFF_NONE);
+    JS_SetFlowGen(0);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+}
+
 TF_UNIT void concat_keyed_selftest(JSContext *ctx)
 {
     int susp_off = 0, mach_off = 0, susp_on = 0, mach_on = 0;
@@ -46758,6 +46832,7 @@ int main(int argc, char **argv) {
     flow_graph_brand_selftest();
     flow_graph_promise_selftest();
     flow_graph_frame_selftest();
+    flow_graph_chain_selftest();
     malloc_accounting_selftest();
     concolic_bound_selftest();
     /* AFTER the two digest primitives and for their reason: this one stands on FIPS 197's cipher
