@@ -1998,6 +1998,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/storearm.h"
 #include "fixture/declwake.h"
 #include "fixture/hostarm.h"
+#include "fixture/freshrun.h"
 #include "fixture/pagewrite.h"
 #include "fixture/keydomain.h"
 #include "fixture/keydomainwalk.h"
@@ -2820,6 +2821,7 @@ TF_DOCS[] = {
     { "storearm", HTML_STOREARM },
     { "declwake", HTML_DECLWAKE },
     { "hostarm", HTML_HOSTARM },
+    { "freshrun", HTML_FRESHRUN },
     { "pagewrite", HTML_PAGEWRITE },
     { "keydomain", HTML_KEYDOMAIN },
     { "keydomainwalk", HTML_KEYDOMAINWALK },
@@ -10690,6 +10692,10 @@ static TfErrEdges g_tf_err_edges[] = {
        `host-example-first` reads their order. */
     { "haBOOMhaOBS", 0, 0, 0, 0 },
     { "haBOOMhaLS",  0, 0, 0, 0 },
+    /* HTML_FRESHRUN's two throws, the example's world after its run and the priced world at once;
+       `observed-fresh-code` reads their order. */
+    { "frBOOMfrOBS", 0, 0, 0, 0 },
+    { "frBOOMfrLS",  0, 0, 0, 0 },
 };
 /* THIS DOCUMENT'S OWN ADDRESS, TAKEN FROM THE ONE CALL THAT ESTABLISHES IT rather than spelled a sixth time.
    `https://x.test/p` is already a literal at several sites and one of their comments complains about it, so a
@@ -20581,6 +20587,29 @@ TF_UNIT void probes_hostarm(const char *js, Probe *tab, int *n) {
              "is unspent and it keeps the thread over a world resting on an assumption");
     const Probe rows[] = {
         { "host-example-first", ord_tt, "haBOOM", SESS_EXPLORE, ord_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `freshrun` document (fixture/freshrun.h). */
+TF_UNIT void probes_freshrun(const char *js, Probe *tab, int *n) {
+    const TfErrEdges *obs = tf_err_edges("frBOOMfrOBS");
+    const TfErrEdges *ls = tf_err_edges("frBOOMfrLS");
+    const char *ord_why = NULL; int ord_tt = 1;
+
+    fold_row(&ord_tt, &ord_why,
+             emitted_record_graded_has(js, "/api/frarm", "derived", "frOBS") &&
+                 emitted_record_graded_has(js, "/api/frarm", "forced", "frLS"),
+             "NOT REACHED: /api/frarm does not stand at the example's arm derived and the arm taking the absent "
+             "key as present forced, so the branch did not run both arms against one example");
+    fold_row(&ord_tt, &ord_why, obs->first > 0 && ls->first > 0,
+             "the stream did not announce both worlds' throws, so their order cannot be read");
+    fold_row(&ord_tt, &ord_why, obs->first < ls->first,
+             "the priced world announced its throw before the example's world — the example's world ran its forty "
+             "functions while standing at the decision it was minted at, so their service lowered that site past "
+             "the priced world's floor; a running member's stand follows it to the code it reaches");
+    const Probe rows[] = {
+        { "observed-fresh-code", ord_tt, "frBOOM", SESS_EXPLORE, ord_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -33446,6 +33475,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_storearm(js, probes, &np);
     probes_declwake(js, probes, &np);
     probes_hostarm(js, probes, &np);
+    probes_freshrun(js, probes, &np);
     probes_pagewrite(js, probes, &np);
     probes_keydomain(js, probes, &np);
     probes_keydomainwalk(js, probes, &np);
