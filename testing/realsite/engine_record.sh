@@ -1,0 +1,35 @@
+#!/bin/bash
+# The engine half of the real-site request diff: one live pass of a bench page through a frozen snapshot's native
+# binary, its sends answered from the network and recorded (testing/bench/bench.mjs record) into a store of this
+# lane's own, so the engine and Chromium are compared on what the site serves in the same hour.
+#   engine_record.sh <snapshot> <store> <page> <work> <mem-cap MiB> <backstop s>
+# It holds the machine-wide heavy-run lock for its whole run, and starts only with 1500 MB of disk free and
+# memory headroom (headroom.sh) of the cap plus 500 MiB; it stops its own run if free disk falls under 1300 MB.
+# Its artifacts are <store>/logs/<page>.rec*.{wire.jsonl,final.results.json,stderr.tail,progress.jsonl,
+# census.tsv.gz} and one line appended to <store>/logs/record.jsonl.
+set -u
+snap=$1; store=$2; page=$3; work=$4; cap=$5; backstop=$6
+here=$(cd "$(dirname "$0")" && pwd)
+slot=${REALSITE_SLOT:-/tmp/apiclient-frozen/slots/bigmem}
+exec 8>"$slot" || exit 4
+flock 8
+free_mb() { df --output=avail -BM / | tail -1 | tr -dc 0-9; }
+if [ "$(free_mb)" -lt 1500 ]; then echo "$page not started: $(free_mb) MB free, under 1500"; exit 3; fi
+room=$("$here/headroom.sh")
+if [ "$room" -lt $((cap + 500)) ]; then echo "$page not started: memory headroom $room MiB, under cap $cap + 500"; exit 3; fi
+echo "$page start: $(free_mb) MB free, headroom $room MiB, $(uptime | sed 's/.*load/load/')"
+setsid node "$snap/testing/bench/bench.mjs" record --store "$store" --snap "$snap" --pages "$page" \
+  --work "$work" --mem-cap "$cap" --backstop "$backstop" 8>&- &
+pid=$!
+low=0
+while kill -0 $pid 2>/dev/null; do
+  if [ "$(free_mb)" -lt 1300 ] && [ $low = 0 ]; then
+    low=1
+    # bench.mjs spawns the zone as a process group of its own; its group is the run and nothing else.
+    for q in $(ps -o pid= --ppid $pid); do kill -9 -- "-$q" 2>/dev/null; done
+  fi
+  sleep 5
+done
+wait $pid; st=$?
+echo "$page done (bench exit $st, stopped for disk: $low): $(free_mb) MB free, $(uptime | sed 's/.*load/load/')"
+exit $st
