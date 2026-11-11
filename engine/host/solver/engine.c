@@ -7448,7 +7448,12 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     /* The memo is recorded only by an empty walk: a one-at-a-time take leaves the rest of the set standing at
        the same generation (seeding a flow creates no function object), so recording it after a successful take
        would declare a heap of untaken orphans empty for the session. */
-    /* The walk is priced by the heap entries it visited, the one input its cost grows with. */
+    /* The walk is priced by the heap entries it visited, the one input its cost grows with.
+       Named residual. Not covered: those entries include closures other timelines built and dead ones the
+       collector has not freed, and the generation memo above is one slot every member overwrites, so the price
+       is not a function of this member's path. Next diff builds: the price as the entries this timeline can
+       take (orphan_candidate's timeline test) and the memo on the member. Absence shows as: a member of a drained
+       document retiring a few units more or less at a slice twin, at a step that asked for an orphan. */
     /* The walk is the seed's act whatever it finds, so its work is the act's (FLOW_SITE_ACT) even when the step
        falls through to a rung of the page's own loop. */
     uint64_t walked0 = JS_OrphanWalkCost(JS_GetRuntime(ctx)).entries;
