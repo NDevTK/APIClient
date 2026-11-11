@@ -130,6 +130,10 @@ bool css_style_sheet_build_rules_step(JSContext *ctx, JSValueConst sheet, JSValu
    exposed. OWNED (a JS string). */
 JSValue css_style_sheet_title(JSContext *ctx, JSValueConst sheet);
 
+/* §6.1's location: the absolute-URL string of the sheet's first request, or null for an embedded sheet.
+   css-values-4 §4.5.4 "URL Processing Model"'s style resource base URL reads it. Owned (a JS string or null). */
+JSValue css_style_sheet_location(JSContext *ctx, JSValueConst sheet);
+
 /* §6.1's DISABLED FLAG, reached by name because HTML §4.2.6's `HTMLStyleElement.disabled` is defined as a
    forwarding to it and not as a content-attribute reflection. Both go through this component's capture
    accessor, so the flag time-travels whichever member wrote it. */

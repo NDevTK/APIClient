@@ -111,6 +111,7 @@
 #include "core/css/css_font_family.h"
 #include "core/css/css_font_feature_values.h"   /* css-fonts-4 §6.9.1's seven feature value blocks, which are not property bodies */
 #include "core/css/css_font_src.h"
+#include "core/css/css_unicode_range.h"
 #include "core/css/css_keyframes.h"
 #include "core/css/css_logical.h"
 #include "core/css/css_match_result.h"   /* the author origin's matched declarations, one result per element */
@@ -1115,6 +1116,18 @@ static bool cssd_decl_take(const lxb_css_rule_declaration_t *d, const char *text
         char *raw = cssd_decl_source_value(d, text, len);
 
         value = raw ? css_font_src_descriptor_value(raw) : NULL;
+        free(raw);
+        if (!value) { free(name); return false; }
+        *pname = name;
+        *pvalue = value;
+        return true;
+    }
+    /* css-fonts-4 §4.5 "Character range: the unicode-range descriptor", a descriptor like `src` above: asked
+       only in a descriptor body, and a value outside its grammar is an invalid declaration, dropped whole. */
+    if (strcmp(name, "unicode-range") == 0 && cssd_block_is_descriptor_body(context)) {
+        char *raw = cssd_decl_source_value(d, text, len);
+
+        value = raw ? css_unicode_range_descriptor_value(raw) : NULL;
         free(raw);
         if (!value) { free(name); return false; }
         *pname = name;

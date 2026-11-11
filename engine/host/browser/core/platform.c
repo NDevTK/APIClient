@@ -56,6 +56,7 @@
 #include "core/file/file_system_handle.h"
 #include "core/file/file_system_writable.h"
 #include "core/file/storage_manager.h"
+#include "core/css/css_font_selector.h"
 #include "core/fonts/font_face.h"
 #include "core/frame/agent_cluster.h"
 #include "core/frame/browsing_context_group.h"
@@ -319,6 +320,7 @@ static void d_element(JSContext *c, const PlatformAgent *a) { (void)a; element_i
 static void d_intersection_observer(JSContext *c, const PlatformAgent *a) { (void)a; intersection_observer_init(c); }
 static void d_resize_observer(JSContext *c, const PlatformAgent *a) { (void)a; resize_observer_init(c); }
 static void d_font_face(JSContext *c, const PlatformAgent *a) { (void)a; font_face_init(c); }
+static void d_css_font_selector(JSContext *c, const PlatformAgent *a) { (void)a; css_font_selector_init(c); }
 static void d_iframe(JSContext *c, const PlatformAgent *a) { (void)a; iframe_init(c); }
 static void d_document(JSContext *c, const PlatformAgent *a) { (void)a; document_init(c); }
 static void d_cookie_jar(JSContext *c, const PlatformAgent *a) { (void)a; cookie_jar_init(c); }
@@ -557,6 +559,7 @@ static void r_element(JSRuntime *rt) { element_free(rt); }
 static void r_intersection_observer(JSRuntime *rt) { intersection_observer_free(rt); }
 static void r_resize_observer(JSRuntime *rt) { resize_observer_free(rt); }
 static void r_font_face(JSRuntime *rt) { font_face_free(rt); }
+static void r_css_font_selector(JSRuntime *rt) { css_font_selector_free(rt); }
 static void r_iframe(JSRuntime *rt) { iframe_free(rt); }
 static void r_dom_rect_list(JSRuntime *rt) { dom_rect_list_free(rt); }
 static void r_dom_string_list(JSRuntime *rt) { dom_string_list_free(rt); }
@@ -1087,6 +1090,8 @@ static const PlatformComponent PLATFORM[] = {
        `intersection_observer`, `media_query_list`, `dom_rect_list`, `page_reveal`, `xml_serializer` and
        `document`'s XMLDocument are `[Exposed=Window]`. */
     { "font_face",           d_font_face,           NULL,              r_font_face },
+    /* css-fonts-4 §5.2's `@font-face` half: a document's font resources, which text layout's loads write. */
+    { "css_font_selector",   d_css_font_selector,   NULL,              r_css_font_selector },
     { "html_iframe",         d_iframe,              NULL,        r_iframe },
     /* RFC 6265bis-22 §5.7's cookie store, before the component whose §3.1.4 members read it. The store is the user
        agent's and an instance is one origin-keyed agent cluster, so it belongs to the JSRuntime, not to any

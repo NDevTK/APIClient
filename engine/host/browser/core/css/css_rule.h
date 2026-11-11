@@ -377,6 +377,18 @@ bool css_rule_build_sheet_step(JSContext *ctx, JSValueConst list, JSValueConst p
  *
  * False when the sheet cannot be resolved at all: a stored text that could not be read back, which leaves a
  * pending exception on `ctx`. Nothing is allocated in that case. */
+/* One applying `@font-face` rule as css-fonts-4 §5.2 "Matching font styles" reads it. A rule lacking either
+   required descriptor is not one: css-fonts-4 §4.1 "The @font-face rule" says it "must not be considered when
+   performing the font matching algorithm". Every string is owned. */
+typedef struct {
+    char *family;          /* §4.2's `font-family` descriptor, the decoded family name */
+    char *src;             /* §4.3's `src` descriptor, serialized */
+    char *unicode_range;   /* §4.5's `unicode-range` descriptor, serialized; NULL where the rule declares none */
+    char *location;        /* the parent style sheet's CSSOM §6.1 location; NULL for an embedded sheet */
+} CssRuleFontFace;
+
+void css_rule_font_face_free(CssRuleFontFace *f);
+
 typedef struct {
     char                *text;    /* the flattened sheet. OWNED. NULL when the sheet emitted nothing. */
     const CssLayerNode **layer;   /* one entry per emitted rule, in emission order. OWNED. */
@@ -385,6 +397,8 @@ typedef struct {
     uint32_t             nregs;
     char               **keyframes;       /* the sheet's applying `@keyframes` names in document order. OWNED. */
     uint32_t             nkeyframes;
+    CssRuleFontFace     *font_faces;      /* the sheet's applying `@font-face` rules in document order. OWNED. */
+    uint32_t             nfont_faces;
 } CssRuleCascadeSheet;
 
 void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s);

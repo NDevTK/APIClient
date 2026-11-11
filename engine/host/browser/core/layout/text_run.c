@@ -13,6 +13,7 @@
 #include "check.h"
 #include "core/dom/flat_tree.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_font_selector.h"
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/line_break.h"
@@ -152,6 +153,7 @@ void text_run_measure_init(TextRunMeasure *m)
     m->atomic_sizes_differ = false;
     m->faces_of = NULL;
     m->faces.n = 0;
+    m->web_faces = NULL;
     m->advance_of = NULL;
     m->finished = false;
     m->prep = 0;
@@ -204,8 +206,14 @@ static void tr_append(TextRunMeasure *m, uint32_t cp, const TextRunText *t, uint
 
     if (m->faces_of != style) {
         css_font_fallback_list(style, &m->faces);
+        if (m->web_faces != NULL) css_font_selector_walk_free(m->web_faces);
+        m->web_faces = css_font_selector_walk_open(style);
         m->faces_of = style;
     }
+    /* css-fonts-4 §5.2's load step for a character this run renders. A collapsible space is left out: Chrome
+       153 requests no font for an element whose text is white space only. */
+    if (m->web_faces != NULL && space != TEXT_RUN_SPACE_COLLAPSIBLE)
+        css_font_selector_walk_character(m->web_faces, cp);
     if (m->advance_of != style) {
         m->advance_basis = css_font_advance_basis(style);
         m->advance_of = style;
@@ -1301,6 +1309,8 @@ void text_run_measure_release(TextRunMeasure *m)
                          "first one returned to the allocator");
     m->released = true;
     if (m->prep == TR_PREP_BREAKS) line_break_pass_release(&m->breaks);
+    if (m->web_faces != NULL) css_font_selector_walk_free(m->web_faces);
+    m->web_faces = NULL;
     free(m->items);
     free(m->actions);
     free(m->item_of_cp);

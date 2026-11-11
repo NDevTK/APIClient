@@ -15,24 +15,9 @@
  * consumer has to resolve urls out of it, which is what CSS Font Loading §2.2 "The load() method" does with
  * the `[[Urls]]` slot core/fonts/font_face.c fills.
  *
- * THE LIST IS NOT EXPORTED, AND THAT IS A DECISION WITH A NAMED READER RATHER THAN AN OMISSION — the same one
- * core/css/css_font_family.h makes and for the same reason. Nothing in this engine consumes a `<font-src>`
- * yet: no CSS url is fetched anywhere (`engine_pending_resource_url`'s callers are both ELEMENTS — an
- * `<img>` and a `<link>` — rather than values), so a list handed out today would be a producer with no
- * consumer, free to be wrong for as long as nobody missed it. The reader is named below.
- *
- * NAMED RESIDUAL — THE PARSED LIST IS INTERNAL AND A CONSUMER TAKES THE SERIALIZATION.
- *   WHAT IS NOT COVERED: an entry answering the ITEMS — each item's url, its `format()` and its `tech()` list
- *     as separate values — which CSS Font Loading §2.2's "Using the value of font face's [[Urls]] slot,
- *     attempt to load a font as defined in [CSS-FONTS-3], as if it was the value of a @font-face rule's src
- *     descriptor" needs, and which css-fonts-4 §4.3.2 "Loading an individual item in the src descriptor" is
- *     stated over.
- *   WHAT THE NEXT DIFF BUILDS: that entry, here, over the list this file already builds — never a second
- *     parse at the consumer, which would be two grammars over one descriptor free to disagree about the same
- *     bytes on the same page.
- *   HOW ITS ABSENCE WOULD SHOW: a component that has to name the resources a `src` refers to can only obtain
- *     them by re-parsing a string, so the same declaration is parsed twice in one document load and the two
- *     answers are separately maintainable.
+ * The parsed list has one reader: css-fonts-4 §4.3.3 "Selecting items in the src", asked by
+ * core/css/css_font_selector.h when a face is loaded. It takes the items from css_font_src_items below, over
+ * the same parse the serialization is built from, so the two cannot disagree about one declaration.
  *
  * NAMED RESIDUAL — NO ITEM IS FILTERED BY WHAT THIS ENGINE SUPPORTS, AND THE STANDARD PERMITS THAT ARM.
  *   WHAT IS NOT COVERED: half of §4.3.1's sentence "If a component value is parsed correctly and is of a font
@@ -97,6 +82,27 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_FONT_SRC_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_FONT_SRC_H
 
+#include <stdbool.h>
+#include <stddef.h>
+
+/* One `<font-src>` of §4.3.1: a `<url>` with its optional `format()` and `tech()`, or a `local()` name.
+   Exactly one of `url` and `local` is non-NULL. */
+typedef struct {
+    char *url;              /* the decoded `<url>`, UTF-8, owned. NULL for a `local()` item. */
+    char *local;            /* the serialized `<font-family-name>`, owned. NULL for a `<url>` item. */
+    const char *format_kw;  /* §4.3.1's `<font-format>` keyword, lower case, or NULL. Not owned. */
+    char *format_str;       /* the decoded `<string>` arm of `<font-format>`, owned, or NULL. */
+    const char **tech;      /* §4.3.1's `<font-tech>` keywords, lower case, in the page's order. The array
+                               is owned; the keywords are not. */
+    size_t ntech, captech;
+} CssFontSrcItem;
+
+/* §4.3.1's list in the page's order. It grows: the list has no upper bound. */
+typedef struct {
+    CssFontSrcItem *v;
+    size_t n, cap;
+} CssFontSrcList;
+
 /* The SPECIFIED value of a `src` descriptor whose value is `value`, CSSOM-serialized — the answer CSSOM
    §6.6.1 "The CSSStyleDeclaration Interface"'s getPropertyValue reads back for an `@font-face` rule, and
    therefore the text the block's own re-parse sees next. NULL is §4.3.1's "If there are no supported entries
@@ -107,5 +113,11 @@
    one, so `src: inherit` falls into this grammar like any other value and is refused by it.
    OWNED: the caller frees. */
 char *css_font_src_descriptor_value(const char *value);
+
+/* §4.3.1's list out of a `src` value into the empty `out`, each item parsed independently and an invalid one
+   dropped. False, with `out` left empty, when no item is valid or the value still carries an arbitrary
+   substitution function. Release with css_font_src_items_free. */
+bool css_font_src_items(const char *value, CssFontSrcList *out);
+void css_font_src_items_free(CssFontSrcList *l);
 
 #endif

@@ -4499,12 +4499,17 @@ typedef struct {
        scratch emitter, for the same reason */
     char               **keyframes;
     uint32_t             nkeyframes, keyframes_cap;
+    /* css-fonts-4 §4.1's applying `@font-face` rules the walk met, in document order, owned; none for a
+       scratch emitter, since a font face is per document and a scratch condition holds per element */
+    CssRuleFontFace     *font_faces;
+    uint32_t             nfont_faces, font_faces_cap;
     bool                 scratch;
 } CascadeEmit;
 
 static void cascade_emit_registration(JSContext *ctx, CascadeEmit *e, const CssRuleData *r);
 static void cascade_emit_registrations_free(CascadeEmit *e);
 static void cascade_emit_keyframes(JSContext *ctx, CascadeEmit *e, const CssRuleData *r);
+static void cascade_emit_font_face(JSContext *ctx, CascadeEmit *e, const CssRuleData *r);
 
 /* The memo of `@media` answers the walk's current run reads (core/css/media_query.h): set for the run's length
    and cleared at every return, so it is never kept across a rest. */
@@ -4753,13 +4758,13 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         free(ln);
         return true;
     }
-    /* AN `@font-face` DECLARES A FONT FACE AND NOT A STYLE: nothing it contains can match an element, so it is
-       not a rule the selector matcher has anything to do with, and it declares no layer of its own.
-       CSS Cascade 5 §6.4 "Cascade Layers"'s own note that at-rules "defined inside cascade layers also use
-       the layer order" is about the layer they are IN, which `cur` already is. THE STANDARD IS NAMED ON ONE
-       LINE because every other CSSOM §6.4 in this file is CSSOM's "CSS Rules", which says nothing about layers —
-       and because a standard's name broken across a line break is a name no reader and no audit can see. */
-    if (r->type == RULE_TYPE_FONT_FACE) return true;
+    /* An `@font-face` declares a font face and no style: it has no selector and declares no layer. The faces
+       reach an element through css-fonts-4 §5.2 "Matching font styles", below the cascade, which reads the
+       ones this walk collects under the same gates as the rules it emits. */
+    if (r->type == RULE_TYPE_FONT_FACE) {
+        if (!e->scratch) cascade_emit_font_face(ctx, e, r);
+        return true;
+    }
     /* AND NEITHER DOES AN `@page`, for a third reason of its own: its declarations style the PAGE BOX, which
        CSS Paged Media §3 makes a box outside the document tree. Its page selector list selects pages and not
        elements — `named:first` matches no element, and there is no element it could — so nothing in it can
@@ -4993,6 +4998,10 @@ CssRuleCascadeStep css_rule_cascade_walk_run(JSContext *ctx, CssRuleCascadeWalk 
     out->nregs = w->e.nregs;
     out->keyframes = w->e.keyframes;
     out->nkeyframes = w->e.nkeyframes;
+    out->font_faces = w->e.font_faces;
+    out->nfont_faces = w->e.nfont_faces;
+    w->e.font_faces = NULL;
+    w->e.nfont_faces = w->e.font_faces_cap = 0;
     w->e.out.s = NULL;
     w->e.layer = NULL;
     w->e.n = 0;
@@ -5035,6 +5044,10 @@ void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s)
     free(s->keyframes);
     s->keyframes = NULL;
     s->nkeyframes = 0;
+    for (i = 0; i < s->nfont_faces; i++) css_rule_font_face_free(&s->font_faces[i]);
+    free(s->font_faces);
+    s->font_faces = NULL;
+    s->nfont_faces = 0;
     s->text = NULL;
     s->layer = NULL;
     s->n = 0;
@@ -5098,6 +5111,76 @@ static void cascade_emit_registrations_free(CascadeEmit *e)
     free(e->keyframes);
     e->keyframes = NULL;
     e->nkeyframes = e->keyframes_cap = 0;
+    for (i = 0; i < e->nfont_faces; i++) css_rule_font_face_free(&e->font_faces[i]);
+    free(e->font_faces);
+    e->font_faces = NULL;
+    e->nfont_faces = e->font_faces_cap = 0;
+}
+
+void css_rule_font_face_free(CssRuleFontFace *f)
+{
+    free(f->family);
+    free(f->src);
+    free(f->unicode_range);
+    free(f->location);
+    f->family = f->src = f->unicode_range = f->location = NULL;
+}
+
+/* `r`'s face, appended to `e`'s in document order, or nothing for a rule css-fonts-4 §4.1 excludes from font
+   matching: "@font-face rules require a font-family and src descriptor". */
+static void cascade_emit_font_face(JSContext *ctx, CascadeEmit *e, const CssRuleData *r)
+{
+    CssFontFamilyList names = { 0 };
+    CssRuleFontFace f = { NULL, NULL, NULL, NULL };
+    char *block, *family;
+    size_t len;
+    bool parsed;
+
+    DCHECK(JS_IsString(r->block_text), "an `@font-face` record lacks the block text its constructor always writes");
+    block = rule_field_cstr(ctx, r->block_text);
+    len = strlen(block);
+    family = cssom_declared_value(block, len, "font-family");
+    f.src = cssom_declared_value(block, len, "src");
+    if (family == NULL || f.src == NULL) {
+        free(family);
+        free(f.src);
+        free(block);
+        return;
+    }
+    /* The stored descriptor is css-fonts-4 §4.2's one `<font-family-name>`, read through the property's list
+       grammar as a list of one. That grammar reads an unquoted generic keyword as a generic family, which no
+       `<font-family-name>` of an element's list matches, so such a rule defines no family a walk can reach. */
+    parsed = css_font_family_list(family, &names);
+    DCHECKF(parsed && names.n == 1,
+            "an `@font-face` rule's stored `font-family` descriptor `%s` is not one item of the property's "
+            "list grammar, though the descriptor's grammar admitted it when the block was stored", family);
+    free(family);
+    if (!parsed || names.n != 1 || names.v[0].name == NULL) {
+        css_font_family_list_free(&names);
+        free(f.src);
+        free(block);
+        return;
+    }
+    f.family = names.v[0].name;
+    names.v[0].name = NULL;
+    css_font_family_list_free(&names);
+    f.unicode_range = cssom_declared_value(block, len, "unicode-range");
+    free(block);
+    if (JS_IsObject(r->parent_style_sheet)) {
+        JSValue loc = css_style_sheet_location(ctx, r->parent_style_sheet);
+
+        if (JS_IsString(loc)) f.location = rule_field_cstr(ctx, loc);
+        JS_FreeValue(ctx, loc);
+    }
+    if (e->nfont_faces == e->font_faces_cap) {
+        uint32_t cap = e->font_faces_cap ? e->font_faces_cap * 2 : 8;
+        CssRuleFontFace *grown = lexbor_realloc(e->font_faces, (size_t)cap * sizeof *grown);
+
+        CHECK(grown != NULL, "cssom: OOM recording a sheet's `@font-face` rules");
+        e->font_faces = grown;
+        e->font_faces_cap = cap;
+    }
+    e->font_faces[e->nfont_faces++] = f;
 }
 
 /* `r`'s `<keyframes-name>` (CSS Animations 1 §6.3.2's `name`), appended to `e`'s in document order. */

@@ -230,6 +230,9 @@ typedef struct {
        `font-family` once. Scoped to this measurement, during which no computed value moves. */
     lxb_dom_element_t *faces_of;
     FontFallbackList faces;
+    /* css-fonts-4 §5.2's walk over the same box's `@font-face` families (core/css/css_font_selector.h), NULL
+       where its list names none. Owned; freed when the box changes and by `text_run_measure_release`. */
+    struct CssFontSelectorWalk *web_faces;
     /* The same box's advance operands (core/css/css_computed_value.h), held for the same reason. */
     lxb_dom_element_t *advance_of;
     CssFontAdvanceBasis advance_basis;

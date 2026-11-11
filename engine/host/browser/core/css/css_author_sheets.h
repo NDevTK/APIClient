@@ -49,5 +49,8 @@ bool css_author_sheets_registration(const CssAuthorSheets *s, const char *name, 
 /* CSS Animations 1 §3's half: does an applying `@keyframes` rule of the set's sheets have `<keyframes-name>`
    `name` (case-sensitively, as CSS Animations Level 2 §3.2 matches it)? */
 bool css_author_sheets_keyframes(const CssAuthorSheets *s, const char *name);
+/* css-fonts-4 §4.1's half: the applying `@font-face` rules of the set's sheets in document order, `*n` of
+   them, borrowed for the set's life. */
+const CssRuleFontFace *css_author_sheets_font_faces(const CssAuthorSheets *s, uint32_t *n);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_CSS_CSS_AUTHOR_SHEETS_H */

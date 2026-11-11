@@ -3,8 +3,8 @@
    guidelines" forbids downloading a face no text uses. Each family below is one case, with its own address:
    used by two elements (one naming it in another case), never named, named only under `display: none`, named
    for text outside its unicode-range, a composite of two ranges, named after an installed family that has
-   the text, a src list whose first format is unknown, a rule in a linked sheet with a relative address (test_forced.c's FONTLOAD_SHEET), text
-   no script measures, and white space only.
+   the text, a src list whose first format is unknown, a rule in a linked sheet with a relative address
+   (test_forced.c's FONTLOAD_SHEET), text no script measures, and white space only.
    Chrome 153.0.8010.12 loading this same markup requests fl-used, fl-comp-latin, fl-fmt.ttf, fl-ext and
    fl-paint, each once, and none of the others.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which

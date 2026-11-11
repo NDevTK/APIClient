@@ -26,19 +26,8 @@
  * the list has no upper bound, so a fixed buffer that dropped a long fallback stack would be a CAP wearing a
  * parse error — and a real page's `src` is exactly the value that stacks woff2, woff and ttf against one
  * family. */
-typedef struct {
-    char *url;              /* the DECODED `<url>`, UTF-8, OWNED. NULL for a `local()` item. */
-    char *local;            /* the SERIALIZED `<font-family-name>`, OWNED. NULL for a `<url>` item. */
-    const char *format_kw;  /* a row of FONT_FORMAT below, or NULL. NOT owned. */
-    char *format_str;       /* the DECODED `<string>` arm of `<font-format>`, OWNED, or NULL. */
-    const char **tech;      /* rows of FONT_TECH below, in the page's own order. The ARRAY is owned; the rows are not. */
-    size_t ntech, captech;
-} SrcItem;
-
-typedef struct {
-    SrcItem *v;
-    size_t n, cap;
-} SrcList;
+typedef CssFontSrcItem SrcItem;
+typedef CssFontSrcList SrcList;
 
 typedef struct {
     char *s;
@@ -839,4 +828,35 @@ char *css_font_src_descriptor_value(const char *value)
            "empty declaration — which CSSOM reads back as UNDECLARED and which the block's own re-parse "
            "cannot turn back into this list");
     return out.s;
+}
+
+bool css_font_src_items(const char *value, CssFontSrcList *out)
+{
+    const char *p, *end;
+    char *text;
+
+    DCHECK(value != NULL && out != NULL && out->v == NULL && out->n == 0,
+           "css-fonts-4 §4.3.1's list was asked of no value or into a list that already holds items");
+    /* A value still carrying an arbitrary substitution function has no items until it is substituted. */
+    if (css_var_references(value)) return false;
+    text = src_strip_comments(value);
+    p = text;
+    end = text + strlen(text);
+    for (;;) {
+        const char *a, *e;
+        SrcItem it;
+
+        src_next_component(&p, end, &a, &e);
+        if (src_parse_item(a, e, &it)) src_list_add(out, &it);
+        else                           src_item_free(&it);
+        if (p == end) break;
+    }
+    free(text);
+    if (out->n == 0) { src_list_free(out); return false; }
+    return true;
+}
+
+void css_font_src_items_free(CssFontSrcList *l)
+{
+    src_list_free(l);
 }

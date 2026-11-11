@@ -123,6 +123,30 @@ static bool fm_match_generic(const char *generic, InstalledFont *out)
     return false;
 }
 
+bool font_matching_installed_family(const char *generic, const char *name, InstalledFont *out)
+{
+    DCHECK((generic != NULL) != (name != NULL) && out != NULL,
+           "css-fonts-4 §2.1's list item is exactly one of a generic family and a family name");
+    return generic != NULL ? fm_match_generic(generic, out) : fm_match_name(name, out);
+}
+
+bool font_matching_installed_face_named(const char *name, InstalledFont *out)
+{
+    char folded[64], installed[64];
+    int f;
+
+    DCHECK(name != NULL && out != NULL, "css-fonts-4 §4.3.3.1's local face was asked for no name");
+    if (!fm_fold_ascii(name, folded, sizeof folded)) return false;
+    for (f = 0; f < INSTALLED_FONT_COUNT; f++) {
+        bool ascii = fm_fold_ascii(installed_font_family((InstalledFont)f), installed, sizeof installed);
+
+        DCHECKF(ascii, "installed font %s has a family name that is not ASCII",
+                installed_font_family((InstalledFont)f));
+        if (strcmp(folded, installed) == 0) { *out = (InstalledFont)f; return true; }
+    }
+    return false;
+}
+
 void font_matching_resolve(const char *computed_family, FontFallbackList *out)
 {
     CssFontFamilyList list = { 0 };

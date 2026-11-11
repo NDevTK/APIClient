@@ -447,6 +447,14 @@ JSValue css_style_sheet_title(JSContext *ctx, JSValueConst sheet)
     return sheet_title_concept(ctx, s);
 }
 
+JSValue css_style_sheet_location(JSContext *ctx, JSValueConst sheet)
+{
+    CssStyleSheetData *s = sheet_of(sheet);
+
+    DCHECK(s != NULL, "the location was read off something that is not a CSS style sheet");
+    return JS_DupValue(ctx, s->location);
+}
+
 /* ---- §6.2's "create a CSS style sheet" and "remove a CSS style sheet" ------------------------------------ */
 
 /* THE OBJECT AND ITS STATE ITEMS, WITHOUT ANY DECISION ABOUT WHERE THE SHEET THEN GOES. §6.2's create-a-CSS-

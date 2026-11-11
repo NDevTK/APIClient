@@ -28,6 +28,8 @@ struct CssAuthorSheets {
     uint32_t            nregs, regs_cap;
     char              **keyframes;   /* every applying sheet's `@keyframes` names, in document order, owned */
     uint32_t            nkeyframes, keyframes_cap;
+    CssRuleFontFace    *font_faces;  /* every applying sheet's `@font-face` rules, in document order, owned */
+    uint32_t            nfont_faces, font_faces_cap;
     uint32_t            at;       /* the sheet list position the build reads next */
     CssRuleCascadeWalk *walk;     /* owned: the walk over the sheet at `at`, NULL between sheets */
     bool                sealed;
@@ -92,6 +94,28 @@ static void cas_take_keyframes(CssAuthorSheets *s, CssRuleCascadeSheet *view)
     view->nkeyframes = 0;
 }
 
+/* `view`'s `@font-face` rules moved onto the set's, after every earlier sheet's. */
+static void cas_take_font_faces(CssAuthorSheets *s, CssRuleCascadeSheet *view)
+{
+    uint32_t i;
+
+    if (view->nfont_faces == 0) return;
+    if (s->nfont_faces + view->nfont_faces > s->font_faces_cap) {
+        uint32_t cap = s->font_faces_cap ? s->font_faces_cap : 8;
+        CssRuleFontFace *grown;
+
+        while (cap < s->nfont_faces + view->nfont_faces) cap *= 2;
+        grown = lexbor_realloc(s->font_faces, (size_t)cap * sizeof *grown);
+        CHECK(grown != NULL, "cssom: OOM recording the author origin's `@font-face` rules");
+        s->font_faces = grown;
+        s->font_faces_cap = cap;
+    }
+    for (i = 0; i < view->nfont_faces; i++) s->font_faces[s->nfont_faces++] = view->font_faces[i];
+    free(view->font_faces);
+    view->font_faces = NULL;
+    view->nfont_faces = 0;
+}
+
 /* The sheets hang off the root's wrapper, which belongs to the realm whose record owns the document. */
 static JSContext *cas_realm(const CssAuthorSheets *s)
 {
@@ -133,7 +157,7 @@ bool css_author_sheets_run(CssAuthorSheets *s, bool rests)
         JS_FreeValue(ctx, len);
     }
     for (; s->at < ns; s->at++) {
-        CssRuleCascadeSheet view = { NULL, NULL, 0, NULL, 0, NULL, 0 };
+        CssRuleCascadeSheet view = { NULL, NULL, 0, NULL, 0, NULL, 0, NULL, 0 };
         CssRuleCascadeStep step;
 
         if (s->walk == NULL) {
@@ -166,6 +190,7 @@ bool css_author_sheets_run(CssAuthorSheets *s, bool rests)
         if (step == CSS_RULE_CASCADE_FAILED) continue;
         cas_take_registrations(s, &view);
         cas_take_keyframes(s, &view);
+        cas_take_font_faces(s, &view);
         /* A sheet of `@layer a, b;` alone emits no rule and has already declared its layers. */
         if (view.text == NULL) { css_rule_cascade_sheet_free(&view); continue; }
         cas_push(s, s->at, view);
@@ -194,6 +219,8 @@ void css_author_sheets_free(CssAuthorSheets *s)
     free(s->regs);
     for (i = 0; i < s->nkeyframes; i++) free(s->keyframes[i]);
     free(s->keyframes);
+    for (i = 0; i < s->nfont_faces; i++) css_rule_font_face_free(&s->font_faces[i]);
+    free(s->font_faces);
     free(s->v);
     css_layer_order_free(s->order);
     free(s);
@@ -252,4 +279,12 @@ const CssAuthorSheet *css_author_sheets_at(const CssAuthorSheets *s, uint32_t i)
     DCHECKF(s != NULL && s->sealed && i < s->n, "the author origin's sheet %u was read from a set of %u that is "
             "absent or open", i, s ? s->n : 0);
     return &s->v[i];
+}
+
+const CssRuleFontFace *css_author_sheets_font_faces(const CssAuthorSheets *s, uint32_t *n)
+{
+    DCHECK(s != NULL && s->sealed && n != NULL,
+           "the `@font-face` rules were asked of no sheet set, an open one, or with nowhere to put their count");
+    *n = s->nfont_faces;
+    return s->font_faces;
 }
