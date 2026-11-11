@@ -7335,18 +7335,19 @@ function pressureParityStages(bin, runs) {
 
 /* The slicing parity stages: a document run again on the same program with other slicing and the two compared
    (engine/regimeparity.mjs's compareSlicing). A host turn every microsecond (`--host-turn-us 1`) moves no slice
-   boundary, so its twin keeps the pick digest and the steps as well as the stand series and the work. A slice of
-   other work (`--slice-work`) moves where steps end, so its twin keeps only what is a function of the members'
-   paths, and only on a document that drains and whose paths read nothing where a step ends (fixture/standslice.h:
-   no reply, no timer). A difference is a DEFECT: something moved where a slice or a turn ended. */
-const SLICE_TWIN_WORK = 13007;
-const SLICE_TWINS = {
-  hostTurn: { what: "a host turn every microsecond", args: ["--host-turn-us", "1"],
-              rows: ["standSeries", "standMoves", "pickDigest", "steps"] },
-  slice: { what: `a slice of ${SLICE_TWIN_WORK} units`, args: ["--slice-work", String(SLICE_TWIN_WORK)],
-           rows: ["standSeries", "standMoves"] },
-};
-const SLICE_PARITY_DOCS = { min: [SLICE_TWINS.hostTurn], standslice: [SLICE_TWINS.hostTurn, SLICE_TWINS.slice] };
+   boundary, so its twin keeps the pick digest, the steps and the instance's work as well as the stand series and
+   the steps' work. A slice of other work (`--slice-work`, at two odd sizes) moves where steps end, so its twins keep
+   only what is a function of the members' paths, the stand series and the steps' work, and only between two runs
+   that drained. Not the instance's whole work: it holds the collector's path price, a residual named at
+   solver/engine.c's engine_collect_slice. A difference is a DEFECT: something moved where a slice or a turn ended. */
+const SLICE_TWIN_WORKS = [7919, 31013];
+const SLICE_TWIN_HOST_TURN = { what: "a host turn every microsecond", args: ["--host-turn-us", "1"],
+                               rows: ["standSeries", "standMoves", "pickDigest", "steps", "stepWork"],
+                               retired: true, drained: false };
+const SLICE_TWINS_WORK = SLICE_TWIN_WORKS.map((n) => ({ what: `a slice of ${n} units`, args: ["--slice-work", String(n)],
+                                                        rows: ["standSeries", "standMoves", "stepWork"],
+                                                        retired: false, drained: true }));
+const SLICE_PARITY_DOCS = { min: [SLICE_TWIN_HOST_TURN], standslice: [SLICE_TWIN_HOST_TURN, ...SLICE_TWINS_WORK] };
 function sliceParityStages(bin, runs) {
   const mine = runs.filter((r) => r.doc && r.doc in SLICE_PARITY_DOCS && "captured" in r);
   if (bin === null) return [];
@@ -7355,7 +7356,7 @@ function sliceParityStages(bin, runs) {
     const twin = runChild(`${label}, the twin`, bin, [...regimeDocArgs(run.doc), ...t.args],
                           "an abort above is the twin's own; the comparison below reads both runs");
     const read = (r) => regimeReading(r.captured, r.signal, r.log);
-    const c = compareSlicing(run.doc, read(run), read(twin), t.rows);
+    const c = compareSlicing(run.doc, read(run), read(twin), t);
     console.log(`[build] ${label}: compared ${c.compared.join("; ")}`);
     if (c.defect !== null)
       return onHost({ label, verdict: `DEFECT — ${c.defect}`, code: 1, kind: STAGE_KIND.DEFECT }, STAGE_HOST.NATIVE);

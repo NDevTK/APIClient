@@ -133,9 +133,11 @@ export function comparePressure(doc, act, none) {
 /* The comparison of one document run on one binary as stated and as its twin with other slicing (`--slice-work`
    or `--host-turn-us`): `{ defect, answered, compared, differing }`. Where a slice ends moves the pick sequence and
    the step count but no member's path, so each member's stand series (solver/flow.h's flow_stand_series) and the
-   work retired are the same; a host turn moves no slice boundary either, so it also keeps the pick digest and the
-   steps. `rows` names the census rows the twin must keep. */
-export function compareSlicing(doc, base, twin, rows) {
+   work the steps retired are the same; a host turn moves no slice boundary either, so it also keeps the pick
+   digest and the steps. `twin.rows` names the census rows the twin must keep; `twin.retired` also asks the
+   instance's whole `_workRetired`; `twin.drained` asks it only of two runs whose frontiers drained (census `live`
+   0), since a run the fixture ended with members still live stopped where its schedule had got to. */
+export function compareSlicing(doc, base, twin, spec) {
   const compared = [], differing = [];
   if (base.crash !== null || twin.crash !== null || base.cold === null || twin.cold === null ||
       !base.cold.terminal || !twin.cold.terminal)
@@ -143,14 +145,21 @@ export function compareSlicing(doc, base, twin, rows) {
              compared: [`nothing (stated: ${base.crash ?? (base.cold?.terminal ? "completed" : "no terminal census")}; ` +
                         `twin: ${twin.crash ?? (twin.cold?.terminal ? "completed" : "no terminal census")})`] };
   const bc = base.cold.census, tc = twin.cold.census;
-  for (const k of rows) {
+  for (const [c, who] of [[bc, "stated"], [tc, "twin"]])
+    if (!Number.isInteger(c.live))
+      throw new Error(`${doc}: the ${who} run's frontier census carries no integer \`live\` — solver/metrics/cold.def ` +
+                      `declares one integer row`);
+  if (spec.drained && (bc.live !== 0 || tc.live !== 0))
+    return { defect: null, answered: false, differing,
+             compared: [`nothing (a run ended with members live, stated ${bc.live} and twin ${tc.live}: cut, not drained)`] };
+  for (const k of spec.rows) {
     if (!Number.isInteger(bc[k]) || !Number.isInteger(tc[k]))
       throw new Error(`${doc}: the frontier census row \`${k}\` is ${JSON.stringify(bc[k])} as stated and ` +
                       `${JSON.stringify(tc[k])} in the twin — solver/metrics/cold.def declares one integer row`);
     if (bc[k] !== tc[k]) differing.push(`${k}=${bc[k]}|${tc[k]}`);
   }
-  if (base.retired !== twin.retired) differing.push(`_workRetired=${base.retired}|${twin.retired}`);
-  compared.push(`${rows.join(", ")} and _workRetired (standMoves ${bc.standMoves})`);
+  if (spec.retired && base.retired !== twin.retired) differing.push(`_workRetired=${base.retired}|${twin.retired}`);
+  compared.push(`${spec.rows.join(", ")}${spec.retired ? " and _workRetired" : ""} (standMoves ${bc.standMoves})`);
   return { defect: differing.length ? `${doc}: a twin with other slicing moved what no slice boundary may move ` +
                                       `(stated|twin): ${differing.join(" ")}` : null,
            answered: true, compared, differing };
