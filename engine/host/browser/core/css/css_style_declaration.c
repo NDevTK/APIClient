@@ -1420,22 +1420,16 @@ static void cssd_inline_collect(lxb_dom_element_t *el, CssCascadedStyle *s, CssL
 
 /* ---- The sheet, parsed once per content -----------------------------------------------------------------
  *
- * The match-result build re-parses each held sheet's emission for its selector lists and declaration blocks,
- * a round trip CSSOM §6.4's objects force because a rule holds only lexbor's serialization of itself. This
- * table stores one parse per sheet position (as Blink's StyleSheetContents), served while the emission is
- * byte-identical to the one parsed; a parse is a function of the text alone (each run has its own parser,
- * core/css/css_sheet_parse.h), so no flow is served another's parse, and two flows alternating on one slot
- * thrash it. An unfinished parse stays in its slot with its run, so a build asking for the same bytes continues
- * it and one asking for other bytes aborts it. Nothing is captured into the COW delta and dropping the table
- * changes no answer. A text that does not parse is stored as an ended parse with no rules.
- *
- * The table decides no charge. A parse runs in work units (the run's begin and each step, the last one with
- * its finish), each making exactly one charge, which the slot records; a flow pays each unit the first time its
- * own path asks for it (solver/flow.h's paid sheet parses, keyed by the emission's digest): a unit the slot
- * holds is charged as recorded, one it does not is run and charged, and a unit the path paid that the slot no
- * longer holds is run again in a residency span. A unit is taken from a resting drive's allowance either way,
- * so a flow's charges and rest points are the same whichever flow parsed first. A paid parse served whole is a
- * hit, and a hit charges nothing.
+ * The match-result build re-parses each held sheet's emission (CSSOM §6.4's rules hold only lexbor's
+ * serialization of themselves). This table stores one parse per sheet position (as Blink's StyleSheetContents),
+ * served while the emission is byte-identical; a parse is a function of the text alone (core/css/
+ * css_sheet_parse.h), so no flow is served another's parse. An unfinished parse stays in its slot with its run;
+ * other bytes asked of the slot replace it. A text that does not parse is stored as an ended parse with no rules.
+ * The table decides no charge. A parse runs in work units (begin, each step, the last with its finish), one
+ * charge each, which the slot records; a flow pays each unit the first time its own path asks (solver/flow.h's
+ * paid sheet parses): a held unit is charged as recorded, an unheld one is run and charged, and a paid unit the
+ * slot no longer holds is run again in a residency span. Each unpaid unit is taken from a resting drive's
+ * allowance, so charges and rest points do not depend on which flow parsed first. A paid parse is a free hit.
  *
  * RETIREMENT: this table goes when a CSSOM §6.4 rule owns a parsed form that survives its own serialization. */
 typedef struct {
