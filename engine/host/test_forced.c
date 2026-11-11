@@ -1342,16 +1342,21 @@ static int fixture_provide(JSContext *ctx) {
         if (tf_replytwice_hold(abs, (const char *const[5]){ method, mode, referrer_policy, referrer, url })) {
             /* Owed, and written by tf_replytwice_pay below once its lag has passed. */
         } else if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
+            /* The zone's own token (extension/lib/safe-fetch.js): the signal and the value that refused. */
             filled += engine_decline(ctx, method, mode, referrer_policy, referrer, url,
-                                     "blocked-signal: this origin has not been widened for a program load "
-                                     "at this address, so the act is derived and reported and not spent");
+                                     "blocked-signal:destination=program");
         } else if (!strncmp(abs, "https://x.test/api/decl", strlen("https://x.test/api/decl")) &&
                    (strcmp(method, "GET") || !strcmp(provenance, PENDING_PROVENANCE_FORCED) ||
                     !strcmp(driven, PENDING_DRIVEN_YES))) {
             /* HTML_DECLINES's refusals, the unconfigured zone's: a method other than GET, and a request a fork
                or a drive composed, for an origin nobody widened. */
+            char by_method[64];
+
+            snprintf(by_method, sizeof by_method, "blocked-method:%.40s", method);
             filled += engine_decline(ctx, method, mode, referrer_policy, referrer, url,
-                                     "blocked-method: this origin has not been widened for this request");
+                                     strcmp(method, "GET") ? by_method
+                                     : !strcmp(driven, PENDING_DRIVEN_YES) ? "blocked-signal:actor=tool"
+                                                                           : "blocked-signal:provenance=forced");
         } else {
             HeaderList eh = { 0 };
             /* WHAT THIS PARTICULAR ADDRESS IS SERVED AS, which for every address this table does not hold

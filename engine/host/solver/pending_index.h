@@ -102,7 +102,34 @@ void pending_index_answered(JSValueConst rec);
    the record out of the set the HOST is looked up in; it stays OUTSTANDING on every register naming it, which
    is solver/pending.c's `pend_owed` against its `pending_entry_host_owed` — the flow is parked at the line that asked,
    and a flow that reads as FINISHED has its whole timeline torn down. Two sets, and this is one of them. */
-void pending_index_declined(JSValueConst rec);
+void pending_index_declined(JSValueConst rec, int rule);
+
+/* The rule a refusal's reason names, one census row each: X(id, is_signal, token, metric). The trusted zone
+   composes a reason from closed sets (extension/lib/safe-fetch.js): `blocked-signal:<signal>=<value>` for a
+   gating signal of its egress table, where the token here is the signal's own name, or a rule family's token
+   followed by `:` and its word. A hop's refusal spells `-redirect` before the colon and is the same rule. */
+#define PEND_DECLINE_RULES(X) \
+    X(DESTINATION, 1, "destination", reply_declined_destination) \
+    X(ACTOR, 1, "actor", reply_declined_actor) \
+    X(PROVENANCE, 1, "provenance", reply_declined_provenance) \
+    X(DOC_REACH, 1, "doc-reach", reply_declined_doc_reach) \
+    X(COOKIES, 1, "cookies", reply_declined_cookies) \
+    X(HEADER_AUTHORITY, 1, "header-authority", reply_declined_header_authority) \
+    X(WITNESS, 1, "witness", reply_declined_witness) \
+    X(URL_AUTHORITY, 1, "url-authority", reply_declined_url_authority) \
+    X(LINEAGE, 1, "lineage", reply_declined_lineage) \
+    X(REACHES, 1, "reaches", reply_declined_reaches) \
+    X(METHOD, 0, "blocked-method", reply_declined_method) \
+    X(DESTRUCTIVE, 0, "blocked-destructive", reply_declined_destructive) \
+    X(STREAM_BODY, 0, "blocked-stream-body-gated", reply_declined_stream_body) \
+    X(WIRE_IDLE, 0, "wire-idle", reply_declined_wire_idle) \
+    X(ASKER, 0, "blocked-asker", reply_declined_asker)
+#define PEND_DECLINE_ENUM_(id, is_signal, token, metric) PEND_DECLINE_##id,
+enum { PEND_DECLINE_RULES(PEND_DECLINE_ENUM_) PEND_DECLINE_RULE_N };
+/* The rule `reason` names, or -1 for a reason of no rule above. Reads only the reason's bytes. */
+int  pending_index_decline_rule(const char *reason);
+/* How many keyed records were refused under `rule`: lifetime counts that sum to pending_index_declined_total. */
+long pending_index_declined_by(int rule);
 
 /* ---- the two host doors ---------------------------------------------------------------------------------- */
 

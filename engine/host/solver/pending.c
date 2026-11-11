@@ -903,7 +903,23 @@ static void pend_index_sync(JSValueConst e, int field)
                "and `declined` says nobody asked it, so the flow parked on it would run its failure path over "
                "a body it already holds. engine_decline asserts the same pair at the write it makes; this is "
                "the index's half, at the instant the record would leave the set the reply seam is keyed on");
-        pending_index_declined(e);
+        {
+            JSValue why = pending_get(e, PEND_DECLINED);
+            const char *reason = JS_ToCString(pending_ctx(), why);
+            int rule;
+
+            CHECK(reason != NULL, "pending: OOM reading a refusal's reason");
+            rule = pending_index_decline_rule(reason);
+            /* The zone's words are this codebase's (extension/lib/safe-fetch.js), so an unknown rule is a
+               contract failure at this edge, never a row of its own. Fatal in every build: the rule indexes the
+               census. */
+            CHECKF(rule >= 0,
+                    "a request was refused for `%s`, which names no rule of pending_index.h's PEND_DECLINE_RULES: "
+                    "the zone added a signal or a decline family, and the census owes it a row", reason);
+            JS_FreeCString(pending_ctx(), reason);
+            JS_FreeValue(pending_ctx(), why);
+            pending_index_declined(e, rule);
+        }
         return;
     }
     if (pending_get_int(e, PEND_HAVE_VALUE)) { pending_index_answered(e); return; }

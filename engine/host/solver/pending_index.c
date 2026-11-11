@@ -155,6 +155,7 @@ static long g_answered_total;
 /* THE THIRD AND FOURTH ENDS, AND THE GAUGE THAT CLOSES THE IDENTITY — see the banner above for why the three
    of them are one diff and for the inspection that says the four states are the only four. */
 static long g_declined_total;
+static long g_declined_by[PEND_DECLINE_RULE_N];
 static long g_dropped_total;
 /* KEYED RIGHT NOW. A GAUGE: it rises at the one line that keys a record and falls at the one line that unkeys
    one, so it is the count of requests the host may still be shown — never differenced, and 0 at a reset. */
@@ -431,9 +432,52 @@ void pending_index_answered(JSValueConst rec)
     pend_untrack(m);
 }
 
-void pending_index_declined(JSValueConst rec)
+int pending_index_decline_rule(const char *reason)
+{
+    static const struct { int is_signal; const char *token; } RULE[PEND_DECLINE_RULE_N] = {
+#define PEND_DECLINE_ROW_(id, is_signal, token, metric) { is_signal, token },
+        PEND_DECLINE_RULES(PEND_DECLINE_ROW_)
+#undef PEND_DECLINE_ROW_
+    };
+    static const char SIGNAL[] = "blocked-signal", HOP[] = "-redirect";
+    const char *word = NULL;
+    int i;
+
+    DCHECK(reason != NULL, "a refusal's rule was asked of no reason");
+    /* The signal's name, where the reason is the egress table's: past `blocked-signal`, an optional hop mark
+       and the colon, up to `=`. */
+    if (!strncmp(reason, SIGNAL, sizeof SIGNAL - 1)) {
+        word = reason + sizeof SIGNAL - 1;
+        if (!strncmp(word, HOP, sizeof HOP - 1)) word += sizeof HOP - 1;
+        if (*word++ != ':') return -1;
+    }
+    for (i = 0; i < PEND_DECLINE_RULE_N; i++) {
+        size_t n = strlen(RULE[i].token);
+        const char *rest;
+
+        if (RULE[i].is_signal) {
+            if (word && !strncmp(word, RULE[i].token, n) && word[n] == '=') return i;
+            continue;
+        }
+        if (word || strncmp(reason, RULE[i].token, n)) continue;
+        rest = reason + n;
+        if (!strncmp(rest, HOP, sizeof HOP - 1)) rest += sizeof HOP - 1;
+        if (*rest == ':' || *rest == '\0') return i;
+    }
+    return -1;
+}
+
+long pending_index_declined_by(int rule)
+{
+    CHECK(rule >= 0 && rule < PEND_DECLINE_RULE_N, "a refusal count was asked for a rule that is not one");
+    return g_declined_by[rule];
+}
+
+void pending_index_declined(JSValueConst rec, int rule)
 {
     PendIndexMember *m = pend_member(rec);
+
+    CHECK(rule >= 0 && rule < PEND_DECLINE_RULE_N, "a refusal was filed under a rule that is not one");
 
     DCHECK(m != NULL, "a refusal landed on a record this index is not tracking — a fetch record is tracked from "
                       "its push until it is answered or refused, so this is a second refusal of one request or "
@@ -450,7 +494,7 @@ void pending_index_declined(JSValueConst rec)
        row, so `replyAnswered/replyAsked` stays exactly the rate it was and `asked - answered` stops being a
        number with two readings. Guarded on `m->node` for `answered`'s reason exactly: an UNKEYED record was
        never a request the host could be shown, so it entered neither `asked` nor this. */
-    if (m->node) g_declined_total++;
+    if (m->node) { g_declined_total++; g_declined_by[rule]++; }
     pend_untrack(m);
 }
 

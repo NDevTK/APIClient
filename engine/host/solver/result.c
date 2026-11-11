@@ -1669,6 +1669,18 @@ char *result_cold_json(void) {
     METRIC_SET(reply_asked, pending_index_asked_total());
     METRIC_SET(reply_answered, pending_index_answered_total());
     METRIC_SET(reply_declined, pending_index_declined_total());
+    {
+        long by_rule = 0;
+
+#define PEND_DECLINE_SET_(id, is_signal, token, metric) \
+        METRIC_SET(metric, pending_index_declined_by(PEND_DECLINE_##id)); \
+        by_rule += pending_index_declined_by(PEND_DECLINE_##id);
+        PEND_DECLINE_RULES(PEND_DECLINE_SET_)
+#undef PEND_DECLINE_SET_
+        DCHECKF(by_rule == pending_index_declined_total(),
+                "the refusals filed by rule sum to %ld and the reply door counted %ld declined records",
+                by_rule, pending_index_declined_total());
+    }
     METRIC_SET(reply_unaddressed, engine_unaddressed_total());
     METRIC_SET(reply_dropped, pending_index_dropped_total());
     METRIC_SET(reply_outstanding, pending_index_keyed_now());
