@@ -1714,6 +1714,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rangedelrest.h"
 #include "fixture/openrest.h"
 #include "fixture/shadowattachrest.h"
+#include "fixture/htmlbytesrest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2517,6 +2518,7 @@ TF_DOCS[] = {
     { "rangedelrest", HTML_RANGEDELREST },
     { "openrest", HTML_OPENREST },
     { "shadowattachrest", HTML_SHADOWATTACHREST },
+    { "htmlbytesrest", HTML_HTMLBYTESREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -19033,6 +19035,31 @@ TF_UNIT void probes_shadowattachrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `htmlbytesrest` document (fixture/htmlbytesrest.h). innerhtml-bytes-rest: the setting arm's
+   innerHTML of 800,007 bytes of markup rests inside the parse's feed (`sliceOverrunGapWork` under one quantum),
+   and the arm then reads the `<b>` and its 800,000 characters. innerhtml-bytes-sibling-tree: the sibling arm
+   reads the target empty. */
+TF_UNIT void probes_htmlbytesrest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1, kt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/hb-done", "c", "1") && param_value_is(js, "/api/hb-done", "l", "800000"),
+             "NOT REACHED: no /api/hb-done?c=1&l=800000 record, so the setter did not finish with the parsed `<b>` "
+             "holding its text");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: an innerHTML of 800,007 bytes was "
+             "charged for its bytes in one step instead of as its feed consumed them");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/hb-kept", "t", "0"),
+             "NOT REACHED: no /api/hb-kept?t=0 record, so the sibling arm did not read the target empty");
+    const Probe rows[] = {
+        { "innerhtml-bytes-rest", tt, "hbTarget", SESS_EXPLORE, why },
+        { "innerhtml-bytes-sibling-tree", kt, "hbTarget", SESS_EXPLORE, kwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `mixinrest` document (fixture/mixinrest.h). mixin-<k>-rests, for append (ap), replaceWith (rw)
    and replaceChildren (rc): the arm's call with the box of 100,002 elements and a string rests inside itself
    (`sliceOverrunGapWork` under one quantum, a fact of the whole document), and the arm then reads the box in the
@@ -32087,6 +32114,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rangedelrest(js, probes, &np);
     probes_openrest(js, probes, &np);
     probes_shadowattachrest(js, probes, &np);
+    probes_htmlbytesrest(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
