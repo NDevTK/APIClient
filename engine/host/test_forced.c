@@ -1803,6 +1803,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/mixinunknown.h"
 #include "fixture/griditem.h"
 #include "fixture/contentsflex.h"
+#include "fixture/flexfloat.h"
 #include "fixture/inlineflex.h"
 #include "fixture/clientextent.h"
 #include "fixture/paintrest.h"
@@ -2609,6 +2610,7 @@ TF_DOCS[] = {
     { "mixinunknown", HTML_MIXINUNKNOWN },
     { "griditem", HTML_GRIDITEM },
     { "contentsflex", HTML_CONTENTSFLEX },
+    { "flexfloat", HTML_FLEXFLOAT },
     { "inlineflex", HTML_INLINEFLEX },
     { "clientextent", HTML_CLIENTEXTENT },
     { "paintrest", HTML_PAINTREST },
@@ -27980,6 +27982,22 @@ TF_UNIT void probes_contentsflex(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `flexfloat` document. */
+TF_UNIT void probes_flexfloat(const char *js, Probe *tab, int *n) {
+    /* css-flexbox-1 §3: a floated flex item is placed by flex layout, after the 30px item before it
+       (fixture/flexfloat.h). */
+    const char *ffloat_why = NULL; int ffloat_tt = 1;
+    fold_row(&ffloat_tt, &ffloat_why, !!strstr(js, "\"/api/flexfloat\""),
+             "NOT REACHED: there is no /api/flexfloat record at all — the document aborted placing the flex item "
+             "as a float, whose containing block chain never meets the context root");
+    fold_row(&ffloat_tt, &ffloat_why, param_value_is(js, "/api/flexfloat", "x", "30"),
+             "css-flexbox-1 §3: the floated flex item does not start where the first flex item ends");
+    const Probe rows[] = {
+        { "flex-item-float-ignored", ffloat_tt, "/api/flexfloat", SESS_EXPLORE, ffloat_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `custommedia` document. */
 TF_UNIT void probes_custommedia(const char *js, Probe *tab, int *n) {
     /* CSS Syntax 3 §8 discards an at-rule the user agent does not recognize, and Chrome 155 does not recognize
@@ -32377,6 +32395,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_mixinunknown(js, probes, &np);
     probes_griditem(js, probes, &np);
     probes_contentsflex(js, probes, &np);
+    probes_flexfloat(js, probes, &np);
     probes_inlineflex(js, probes, &np);
     probes_contchain(js, probes, &np);
     probes_weakchain(js, probes, &np);
