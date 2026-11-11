@@ -1,17 +1,14 @@
 /* The font load document. css-fonts-4 §5.2 "Matching font styles" loads an `@font-face` face when a character
    being rendered is in its unicode-range and the face is not loaded; css-fonts-4 §4.8.1 "Font loading
-   guidelines" forbids downloading a face no text uses. Each family below is one case, with its own address:
-   used by two elements (one naming it in another case), never named, named only under `display: none`, named
-   for text outside its unicode-range, a composite of two ranges, named after an installed family that has
-   the text, a src list whose first format is unknown, a rule in a linked sheet with a relative address
-   (test_forced.c's FONTLOAD_SHEET), text no script measures, and white space only.
-   The families after FlSpace are css-fonts-4 §5.2's narrowing, one per case: two weights under normal
-   text, two weights under weight 600, a normal and an italic face under italic text, two rules of one style,
-   a weight range, a condensed and a normal width under condensed text, and a face with no weight descriptor
-   beside a bold one under bold text.
-   Chrome 153.0.8010.12 loading this same markup requests fl-used, fl-comp-latin, fl-fmt.ttf, fl-ext,
-   fl-paint, fl-w-400, fl-b-700, fl-i-italic, fl-o-second, fl-v-range, fl-s-condensed and fl-a-700, each
-   once, and none of the others.
+   guidelines" forbids downloading a face no text uses. Each family is one case with its own address. Up to
+   FlSpace: used by two elements, never named, named only under `display: none`, text outside the
+   unicode-range, a composite of two ranges, behind an installed family that has the text, a src list whose
+   first format is unknown, a linked sheet's relative address (test_forced.c's FONTLOAD_SHEET), text no script
+   measures, and white space only. After it, §5.2's narrowing: two weights under normal text and under weight
+   600, normal and italic under italic text, two rules of one style, a weight range, two widths under
+   condensed text, and a face with no weight descriptor beside a bold one under bold text.
+   Chrome 153.0.8010.12 loading this markup requests fl-used, fl-comp-latin, fl-fmt.ttf, fl-ext, fl-paint,
+   fl-w-400, fl-b-700, fl-i-italic, fl-o-second, fl-v-range, fl-s-condensed and fl-a-700 and no other font.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_FONTLOAD_H
