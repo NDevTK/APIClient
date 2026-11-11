@@ -8,9 +8,9 @@
    `salefloor`: `sale`'s shape, sold with the allocator placed at its floor (tf_floor_place), so the sale's own
    allocations are refused unless the sale funds them. `saleasync`: `sale`'s shape where the owing arm first
    settles a promise made before the fork, so its delta holds that promise's settlement and its resolving
-   function's latch when it is sold, and its report reads the settled value. `salekeep`, `salector` and
-   `salecatch` are described at their constants. Eight of test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c
-   defines before including this file. */
+   function's latch when it is sold, and its report reads the settled value. `salekeep`, `salector`,
+   `salecatch` and `salepexec` are described at their constants. Nine of test_forced.c's exploring documents
+   (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c defines before including this file. */
 #ifndef ENGINE_HOST_FIXTURE_SALE_H
 #define ENGINE_HOST_FIXTURE_SALE_H
 #ifndef TF_CANVAS_INK
@@ -131,6 +131,28 @@ static const char HTML_SALECATCH[] =
     "  (function () { var n = 0;"
     "    try { for (var i = 0; i < 200000; i++) n += i & 1; } catch (e) { n = -1; }"
     "    fetch('/api/sl-catch-busy?n=' + n); })();"
+    "}"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+/* `sale`'s shape where the busy arm's loop runs in a promise executor reached through two Reflect.construct calls,
+   the spelling of a transpiled class extending Promise (Babel's _wrapNativeSuper wrapper). The member sold beside
+   the owing one stands in the executor's frame (CONT_PROMISE_EXEC, requested by the inner Reflect.construct
+   machine) above the wrapper's body (CONT_CONSTRUCT, requested by the outer one). */
+static const char HTML_SALEPEXEC[] =
+    "<!doctype html><html><body>"
+    "<script>"
+    "function SlWrap() { return Reflect.construct(Promise, arguments, new.target); }"
+    "SlWrap.prototype = Object.create(Promise.prototype);"
+    "var slPexecOwe = location.hash === '#owe';"
+    "if (slPexecOwe) {"
+    "  fetch('/api/sl-pexec-owed').then(function (r) { return r.text(); })"
+    "    .then(function (t) { fetch('/api/sl-pexec-done?b=' + t.length); });"
+    "} else {"
+    "  var slP = Reflect.construct(SlWrap, [function (res) { var n = 0;"
+    "    for (var i = 0; i < 200000; i++) n += i & 1; res(n); }], SlWrap);"
+    "  slP.then(function (n) { fetch('/api/sl-pexec-busy?n=' + n); });"
     "}"
     "</script>"
     TF_CANVAS_INK

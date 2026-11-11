@@ -1607,7 +1607,7 @@ static void tf_keep_watch(void) {
 static const char *tf_sale_act(const char *urls) {
     static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed", "/api/sl-floor-owed",
                                         "/api/sl-async-owed", "/api/sl-keep-owed", "/api/sl-ctor-owed",
-                                        "/api/sl-catch-owed" };
+                                        "/api/sl-catch-owed", "/api/sl-pexec-owed" };
 
     if (g_tf_pressure_none) return urls;
     for (size_t i = 0; !g_tf_sale.listed && i < COUNTOF(owed); i++) {
@@ -2845,6 +2845,7 @@ TF_DOCS[] = {
     { "salekeep", HTML_SALEKEEP },
     { "salector", HTML_SALECTOR },
     { "salecatch", HTML_SALECATCH },
+    { "salepexec", HTML_SALEPEXEC },
     { "layoutshed", HTML_LAYOUTSHED, OPENER_POLICY_UNSAFE_NONE, 0, NULL, NULL, 1 },
     { "replyrec", HTML_REPLYREC },
     { "replynone", HTML_REPLYNONE },
@@ -19488,7 +19489,10 @@ static long tf_hist_above(const char *js, const char *key, int from) {
    and its report reads the value the restored settlement carries.
    sale-keep-same-record: a member whose owed record a holder outside it names (g_tf_keep) gets that record back
    (`soldNamed`), answered. sale-ctor-busy-returns and sale-catch-busy-returns: a member sold in a constructor's
-   body, or inside a `try`, waits on no gap of that kind, returns and reports its count. */
+   body, or inside a `try`, waits on no gap of that kind, returns and reports its count. sale-pexec-record,
+   sale-pexec-machine and sale-pexec-link: a member sold in a promise executor two Reflect.construct calls reached
+   waits on no `cont PROMISE_EXEC`, no Reflect.construct machine or its `array` field, and no `cont CONSTRUCT`;
+   sale-pexec-returns: it returns and reports its count. */
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
     const char *cat = strstr(js, "\"saleCensus\":{\"n\":");
@@ -19500,8 +19504,9 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     long restored = rat ? strtol(rat + strlen("\"restored\":"), NULL, 10) : -1;
     const char *nat = strstr(js, "\"soldNamed\":");
     long named = nat ? strtol(nat + strlen("\"soldNamed\":"), NULL, 10) : -1;
-    int ft = 1, ot = 1, ct = 1, lt = 1, yt = 1, kt = 1, rt = 1, ht = 1;
+    int ft = 1, ot = 1, ct = 1, lt = 1, yt = 1, kt = 1, rt = 1, ht = 1, pr = 1, pm = 1, pl = 1, pt = 1;
     const char *awhy = NULL, *kwhy = NULL, *rwhy = NULL, *hwhy = NULL, *gk = strstr(js, "\"waitsGapKinds\":{");
+    const char *prwhy = NULL, *pmwhy = NULL, *plwhy = NULL, *ptwhy = NULL;
     const char *gk_end = gk ? strchr(gk, '}') : NULL;
 
     fold_row(&lt, &lwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
@@ -19580,6 +19585,32 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     fold_row(&ht, &hwhy, param_value_is(js, "/api/sl-catch-busy", "n", "100000"),
              "NOT REACHED: no /api/sl-catch-busy?n=100000 record, so the member sold inside the `try` did not return "
              "within the session with its count");
+    {
+        const int armed = g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0 &&
+                          tf_hist_above(js, "\"hFrameHeap\":[", 1) > 0;
+        const char *unarmed = "NOT ARMED: the act sold nothing, or no sold member held a heap frame (`hFrameHeap`), so "
+                              "none was sold in the executor";
+
+        fold_row(&pr, &prwhy, armed, unarmed);
+        fold_row(&pr, &prwhy, gk_end && !tf_span_has(gk, gk_end, "\"cont PROMISE_EXEC\""),
+                 "a sale waited on `cont PROMISE_EXEC`, or the result carries no `waitsGapKinds`: the executor's "
+                 "record was not written");
+        fold_row(&pm, &pmwhy, armed, unarmed);
+        fold_row(&pm, &pmwhy, gk_end && !tf_span_has(gk, gk_end, "\"step 28.1.2 Reflect.construct\"") &&
+                              !tf_span_has(gk, gk_end, "\"stepField array\""),
+                 "a sale waited on the Reflect.construct machine or its `array` field, or the result carries no "
+                 "`waitsGapKinds`: the machine that requested a construct was not written");
+        fold_row(&pl, &plwhy, armed, unarmed);
+        fold_row(&pl, &plwhy, gk_end && !tf_span_has(gk, gk_end, "\"cont CONSTRUCT\""),
+                 "a sale waited on `cont CONSTRUCT`, or the result carries no `waitsGapKinds`: a constructor body a "
+                 "machine requested was not written with its requester link");
+        fold_row(&pt, &ptwhy, armed, unarmed);
+        fold_row(&pt, &ptwhy, wrote > 0 && restored > 0,
+                 "no sold member was restored from its written bytes (`soldRestores`, `restored`)");
+        fold_row(&pt, &ptwhy, param_value_is(js, "/api/sl-pexec-busy", "n", "100000"),
+                 "NOT REACHED: no /api/sl-pexec-busy?n=100000 record, so the member sold in the executor did not "
+                 "return within the session with its count");
+    }
     fold_row(&ot, &owhy, param_value_is(js, "/api/sl-own-done", "b", "22"),
              "NOT REACHED: no /api/sl-own-done?b=22 record, so the page's own run, sold while it owed "
              "/api/sl-own-owed, did not return within the session");
@@ -19607,6 +19638,10 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
         { "sale-keep-same-record", kt, "slKeep", SESS_EXPLORE, kwhy },
         { "sale-ctor-busy-returns", rt, "slCtorOwe", SESS_EXPLORE, rwhy },
         { "sale-catch-busy-returns", ht, "slCatchOwe", SESS_EXPLORE, hwhy },
+        { "sale-pexec-record", pr, "slPexecOwe", SESS_EXPLORE, prwhy },
+        { "sale-pexec-machine", pm, "slPexecOwe", SESS_EXPLORE, pmwhy },
+        { "sale-pexec-link", pl, "slPexecOwe", SESS_EXPLORE, plwhy },
+        { "sale-pexec-returns", pt, "slPexecOwe", SESS_EXPLORE, ptwhy },
         { "sale-control-reaches", ct, "slCtl", SESS_EXPLORE, cwhy },
         { "sale-forced-stays-listed", lt, "slForced", SESS_EXPLORE, lwhy },
         { "sale-own-stays-listed", lt, "slOwn", SESS_EXPLORE, lwhy },
