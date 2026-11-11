@@ -6435,7 +6435,7 @@ static void flow_decline_fork(JSContext *ctx, Flow *f, int i) {
               : !flow_unaddressed_same_origin(ctx, f, e, in_program, in_job);
         /* The waiting arm is completion 1 of a recorded choice, asked first; a flow whose recorded path chose
            it is that arm, and only a new choice mints it as a sibling. */
-        if (decide_completion(DECLINE_WAITS, &dblob) == 1) {
+        if (decide_completion_held(DECLINE_WAITS, &dblob) == 1) {
             arm_flow = f;
         } else if (dblob != NULL) {
             flow_suspension_clone(ctx, f, in_program, in_job, &clone, &parked, "a declined request's waiting arm");

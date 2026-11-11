@@ -1328,7 +1328,7 @@ void *decide_fork_same_path(const char *why) {
 /* The two-armed arrival slot `asked`, counted under the census row `why`: the recorded arm on a replay that holds
    it, or 0 with `*sib_blob` the sibling's state on arm 1. A replay that reaches another question here diverges
    (dec_replay's key comparison) rather than consuming an arm recorded for another. */
-static int dec_arrival_fork(const char *why, uint32_t asked, void **sib_blob) {
+static int dec_arrival_fork(const char *why, uint32_t asked, int held, void **sib_blob) {
     DecideBlob *b;
     int arm;
 
@@ -1342,6 +1342,13 @@ static int dec_arrival_fork(const char *why, uint32_t asked, void **sib_blob) {
     if (g_c < dec_total()) {
         arm = dec_replay(asked);
         if (arm >= 0) return arm;
+        /* A replaying flow takes a host arrival only where its record took it. The caller holds the arrival
+           while that point is ahead of the cursor, so a recorded slot still standing here is one the hold let
+           through, and dec_leave_path below would discard the record for the flow to re-explore. */
+        DCHECKF(!held || g_c == dec_total(),
+                "the held completion %s was taken at slot %d of a record of %d slot(s) that does not take it "
+                "there — its caller holds it while decide_completion_recorded_later answers 1, or leaves the path itself "
+                "(decide_leave_path) once nothing can reach the recorded slot", why, g_c, dec_total());
         if (g_c < dec_total()) dec_leave_path();
     }
     b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM forking a flow's decision state at a completion");
@@ -1358,12 +1365,17 @@ static int dec_arrival_fork(const char *why, uint32_t asked, void **sib_blob) {
 
 /* See decide.h. Keyed by `why`, the mechanism's own name. */
 int decide_completion(const char *why, void **sib_blob) {
-    return dec_arrival_fork(why, dec_arrival_hash(why, NULL, 0), sib_blob);
+    return dec_arrival_fork(why, dec_arrival_hash(why, NULL, 0), /*held*/ 0, sib_blob);
+}
+
+/* See decide.h. */
+int decide_completion_held(const char *why, void **sib_blob) {
+    return dec_arrival_fork(why, dec_arrival_hash(why, NULL, 0), /*held*/ 1, sib_blob);
 }
 
 /* See decide.h. */
 int decide_fork_arrival(const char *why, uint64_t what, void **sib_blob) {
-    return dec_arrival_fork(why, dec_arrival_hash(why, &what, sizeof what), sib_blob);
+    return dec_arrival_fork(why, dec_arrival_hash(why, &what, sizeof what), /*held*/ 0, sib_blob);
 }
 
 /* See decide.h. The arrivals owed behind the cursor first, then dec_replay's scan of the run at it: arrivals

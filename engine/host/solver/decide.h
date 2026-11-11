@@ -479,6 +479,9 @@ void *decide_fork_same_path(const char *why);
  * assemble that arm with. A completion with three arms is asked as two of these, in a fixed order. The sibling
  * and this flow then park on different recipes, which decide_fork_same_path cannot give them. */
 int decide_completion(const char *why, void **sib_blob);
+/* decide_completion for a host arrival (a refusal) the caller holds while decide_completion_recorded_later answers 1: a
+   replaying flow takes such an arrival only where its record took it, so the record is never left here. */
+int decide_completion_held(const char *why, void **sib_blob);
 /* A fork over a value that arrived and that this flow can name (`what`, e.g. an orphan body's locator), recorded as
    decide_completion records a completion: one arrival slot keyed by `why` and `what`, this flow on arm 0 and the
    sibling standing past it on arm 1. A replay that recorded it returns the recorded arm with `*sib_blob` NULL and
