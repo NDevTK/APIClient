@@ -47988,7 +47988,8 @@ static JSValueConst fg_rborrow(FGReader *r)
     return v;
 }
 
-/* A base's chain of heap frames (fg_chain_calls), rebuilt bottom-up onto the base `s` whose body is `cb`: each
+/* A base's chain of heap frames (fg_chain_calls), rebuilt bottom-up onto the base `s` whose body is `cb` (NULL
+   for a call root, whose realm the bottom frame names): each
    frame as do_tramp_call pushes it, its caller records taken from the frame below it, and the base dormant, its
    live point being the top frame's. Each frame's caller cells are the caller closure's, which is a shell until
    the bodies are read; fg_rchain_cells sets them then. */
@@ -47998,6 +47999,7 @@ static void fg_rchain_calls(FGReader *r, JSAsyncFunctionState *s, JSFunctionByte
     JSStackFrame *csf = &s->frame;
     JSValue *cbuf = s->frame.arg_buf, *cend = s->frame.cur_sp;
     TrampFrame *below = NULL;
+    JSContext *realm = cb ? cb->realm : NULL;
     uint32_t n = fg_r32(r);
 
     CHECK(n > 0, "flow graph: a base marked as holding heap frames holds none");
@@ -48011,6 +48013,12 @@ static void fg_rchain_calls(FGReader *r, JSAsyncFunctionState *s, JSFunctionByte
         uint8_t flags, amode;
 
         CHECK(fg_r8(r) == 'c', "flow graph: a heap frame carries a kind this reader does not know");
+        if (!cb) {
+            uint32_t ri = fg_r32(r);
+
+            CHECK(ri < r->g->n_realms, "flow graph: a call root's realm is no realm the graph holds");
+            realm = r->g->realms[ri];
+        }
         bv = fg_rvalue(r);
         CHECK(JS_VALUE_GET_TAG(bv) == JS_TAG_FUNCTION_BYTECODE, "flow graph: a heap frame's body is not a body");
         b = JS_VALUE_GET_PTR(bv);
@@ -48069,28 +48077,32 @@ static void fg_rchain_calls(FGReader *r, JSAsyncFunctionState *s, JSFunctionByte
         t->seq_req = NULL; t->seq_req_kind = CONT_NONE;
         t->async_data = NULL; t->async_promise = JS_UNDEFINED; t->gen_data = NULL; t->cont_state = NULL;
         t->up = below;
-        t->caller_sf = csf; t->caller_b = cb; t->caller_ctx = cb->realm;
+        t->caller_sf = csf; t->caller_b = cb; t->caller_ctx = realm;
         t->caller_local_buf = cbuf; t->caller_var_buf = csf->var_buf; t->caller_arg_buf = csf->arg_buf;
-        t->caller_stack_buf = csf->var_buf + cb->var_count;
+        t->caller_stack_buf = csf->var_buf + (cb ? cb->var_count : 0);
         t->caller_sp = cend;
         t->caller_argv = (JSValueConst *)csf->arg_buf;
         t->caller_var_refs = NULL;   /* fg_rchain_cells, once the caller's closure holds its body */
         JS_FreeValue(ctx, bv);
-        below = t; csf = sf; cb = b; cbuf = t->local_buf; cend = t->local_buf + live;
+        below = t; csf = sf; cb = b; realm = b->realm; cbuf = t->local_buf; cend = t->local_buf + live;
     }
     s->tramp_top = below;
     tramp_chain_park_ends(below, true);
 }
 
-/* Each rebuilt frame's caller cells: its caller closure's, read once the closure holds its body. */
+/* Each rebuilt frame's caller cells: its caller closure's, read once the closure holds its body; a call root
+   calls from no closure and holds none. */
 static void fg_rchain_cells(JSAsyncFunctionState *s)
 {
     for (TrampFrame *t = s->tramp_top; t; t = t->up) {
         JSStackFrame *csf = t->caller_sf;
 
-        t->caller_var_refs = JS_VALUE_GET_OBJ(csf->cur_func)->u.func.var_refs;
+        t->caller_var_refs = csf->is_call_root ? NULL : JS_VALUE_GET_OBJ(csf->cur_func)->u.func.var_refs;
     }
 }
+
+/* Defined beside JSReactionFlow, the record a call-root base is embedded in. */
+static JSAsyncFunctionState *fg_rbase_step_root(FGReader *r);
 
 static JSAsyncFunctionState *fg_rbase_bytecode(FGReader *r)
 {
@@ -48184,8 +48196,10 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
     CHECK(n_bases == 0 || frames != NULL, "flow graph: a graph holding a flow's bases was handed to a reader of "
                                           "values");
     for (uint32_t i = 0; i < n_bases; i++) {
-        CHECK(fg_r8(&r) == 'b', "flow graph: a base carries a kind this reader does not know");
-        frames[i] = (JSValue *)fg_rbase_bytecode(&r);
+        uint8_t kind = fg_r8(&r);
+
+        CHECK(kind == 'b' || kind == 'r', "flow graph: a base carries a kind this reader does not know");
+        frames[i] = (JSValue *)(kind == 'b' ? fg_rbase_bytecode(&r) : fg_rbase_step_root(&r));
     }
     for (uint32_t i = 0; i < r.n_objs; i++) {
         JSValue o = r.objs[i], proto = fg_rvalue(&r);
@@ -48237,7 +48251,8 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
         const JSObject *fp = JS_VALUE_GET_OBJ(sf->cur_func);
         const JSFunctionBytecode *b = js_class_has_bytecode(fp->class_id) ? fp->u.func.function_bytecode : NULL;
 
-        CHECK(b != NULL && sf->cur_pc >= b->byte_code_buf && sf->cur_pc <= b->byte_code_buf + b->byte_code_len,
+        CHECK(sf->is_call_root
+                  || (b != NULL && sf->cur_pc >= b->byte_code_buf && sf->cur_pc <= b->byte_code_buf + b->byte_code_len),
               "flow graph: a rebuilt base's function is not the one its frame was written against");
         fg_rchain_cells((JSAsyncFunctionState *)frames[i]);
     }
@@ -84228,12 +84243,14 @@ static bool fg_frame_call_written(const TrampFrame *t)
    local_slots, arg_count), the caller's argc and argument allocation, its flags (strict, constructor), where
    its arguments are (its own buffer, none, or an offset into its caller's), its program counter, its live
    slots and its cells. The caller's stack position is the caller's live end, which the caller's record states,
-   and every other caller pointer is the caller's own frame, so neither is written; each is asserted here. */
+   and every other caller pointer is the caller's own frame, so neither is written; each is asserted here. A
+   frame whose caller is a call root (a step-root base) also names the caller's realm, which no body states. */
 static void fg_chain_calls(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s, uint32_t n)
 {
     TrampFrame **ts = fg_grow(NULL, sizeof *ts * n);
     JSStackFrame *csf = &s->frame;
-    JSFunctionBytecode *cb = JS_VALUE_GET_OBJ(s->frame.cur_func)->u.func.function_bytecode;
+    JSFunctionBytecode *cb = s->base_kind == FLOW_BASE_BYTECODE
+                             ? JS_VALUE_GET_OBJ(s->frame.cur_func)->u.func.function_bytecode : NULL;
     JSValue *cbuf = s->frame.arg_buf, *cend;
     uint32_t i = n;
 
@@ -84255,9 +84272,10 @@ static void fg_chain_calls(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s, uin
         }
         DCHECK(t->up == (i ? ts[i - 1] : NULL) && t->caller_sf == csf && sf->prev_frame == csf,
                "flow graph: a heap frame's caller records do not name the frame below it on its chain");
-        DCHECK(t->caller_b == cb && t->caller_ctx == cb->realm && t->caller_local_buf == cbuf
-                   && t->caller_var_buf == csf->var_buf && t->caller_arg_buf == csf->arg_buf
-                   && t->caller_stack_buf == csf->var_buf + cb->var_count && t->caller_sp == cend,
+        DCHECK(t->caller_b == cb && (cb == NULL) == csf->is_call_root && (!cb || t->caller_ctx == cb->realm)
+                   && t->caller_local_buf == cbuf && t->caller_var_buf == csf->var_buf
+                   && t->caller_arg_buf == csf->arg_buf
+                   && t->caller_stack_buf == csf->var_buf + (cb ? cb->var_count : 0) && t->caller_sp == cend,
                "flow graph: a heap frame's caller record is not its caller's own frame and live end, which its "
                "reader derives from the caller");
         DCHECK(JS_VALUE_GET_TAG(sf->cur_func) == JS_TAG_OBJECT && JS_VALUE_GET_OBJ(sf->cur_func)->u.func.function_bytecode == b
@@ -84274,6 +84292,7 @@ static void fg_chain_calls(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s, uin
                "flow graph: a heap frame's arguments are neither its own, absent, nor its caller's operands");
         live = (uint32_t)(end - t->local_buf);
         fg_u8(out, 'c');
+        if (!cb) fg_u32(out, fg_realm(w, t->caller_ctx));   /* a call root runs in the realm it was resumed in */
         fg_value(w, out, JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, b));
         fg_value(w, out, sf->cur_func);
         fg_value(w, out, t->this_val);
@@ -84304,6 +84323,91 @@ static void fg_chain_calls(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s, uin
     (free)(ts);
 }
 
+/* A call-root base (reaction_call_flow_init, embedded in a JSReactionFlow): 'r', the callee it calls, its
+   argument count (which sizes its block), its flags (a pending throw, a live point on its chain), the record's
+   phase and take_result, its capability and hook promise, and its live slots, the pushed [this, callee,
+   args...] and what the trampoline left above them. It runs no bytecode, so it has no pc and no cells. */
+static void fg_base_step_root(FGWriter *w, FGBuf *out, JSAsyncFunctionState *s)
+{
+    JSReactionFlow *rf = (JSReactionFlow *)s;
+    JSStackFrame *sf = &s->frame;
+    TrampFrame *bt = s->tramp_top;
+    JSValue *end;
+    uint32_t live;
+
+    while (bt && bt->up) bt = bt->up;
+    end = bt ? bt->caller_sp : sf->cur_sp;
+    DCHECK(sf->is_call_root && sf->cur_pc == NULL && sf->var_ref_count == 0 && sf->var_buf == sf->arg_buf
+               && TRAMP_SP_LIMIT(sf) == sf->arg_buf + STEP_FLOW_SLOTS + sf->arg_count && s->argc == 0
+               && JS_IsUndefined(s->this_val) && sf->eval_hold == NULL,
+           "flow graph: a step-root base's frame is not the block reaction_call_flow_init builds");
+    DCHECK(end != NULL && end >= sf->arg_buf && end <= TRAMP_SP_LIMIT(sf),
+           "flow graph: a step-root base's live end is outside its block — the base is running");
+    live = (uint32_t)(end - sf->arg_buf);
+    fg_u8(out, 'r');
+    fg_value(w, out, sf->cur_func);
+    fg_u32(out, sf->arg_count);
+    fg_u8(out, (uint8_t)(s->throw_flag | (bt != NULL) << 3));
+    fg_u8(out, rf->phase);
+    fg_u8(out, rf->take_result);
+    fg_value(w, out, rf->resolve);
+    fg_value(w, out, rf->reject);
+    fg_value(w, out, rf->hook_promise);
+    fg_u32(out, live);
+    for (uint32_t i = 0; i < live; i++) fg_value(w, out, sf->arg_buf[i]);
+}
+
+/* A call-root base (fg_base_step_root), rebuilt in the record it is embedded in, as reaction_call_flow_init
+   builds one, with its chain when it has one. */
+static JSAsyncFunctionState *fg_rbase_step_root(FGReader *r)
+{
+    JSContext *ctx = r->ctx;
+    JSReactionFlow *rf = js_mallocz(ctx, sizeof *rf);
+    JSAsyncFunctionState *s = &rf->fs;
+    JSStackFrame *sf = &s->frame;
+    uint32_t argc, live, slots;
+    uint8_t flags;
+
+    CHECK(rf != NULL, "flow graph: OOM rebuilding a call-root base");
+    sf->cur_func = fg_rvalue(r);
+    argc = fg_r32(r);
+    flags = fg_r8(r);
+    rf->phase = fg_r8(r);
+    rf->take_result = fg_r8(r);
+    rf->resolve = fg_rvalue(r);
+    rf->reject = fg_rvalue(r);
+    rf->hook_promise = fg_rvalue(r);
+    live = fg_r32(r);
+    CHECK(argc <= UINT16_MAX && live <= STEP_FLOW_SLOTS + argc && rf->phase <= 1 && rf->take_result <= 1,
+          "flow graph: a call-root base's counts or phase are not the ones its block and record allow");
+    slots = STEP_FLOW_SLOTS + argc;
+    s->this_val = JS_UNDEFINED;
+    s->argc = 0;
+    s->throw_flag = flags & 1;
+    s->base_kind = FLOW_BASE_STEP_ROOT;
+    s->tramp_top = NULL;
+    s->chain_sp = NULL;
+    flow_park_init(s);
+    sf->arg_buf = js_malloc(ctx, sizeof(JSValue) * slots);
+    CHECK(sf->arg_buf != NULL, "flow graph: OOM rebuilding a call-root base's block");
+    sf->var_buf = sf->arg_buf;
+    sf->var_refs = (JSVarRef **)(sf->arg_buf + slots);
+    sf->var_ref_count = 0;
+    sf->arg_count = (uint16_t)argc;
+    sf->is_strict_mode = false;
+    sf->is_constructor = false;
+    sf->is_call_root = true;
+    sf->cur_gc_obj = NULL;
+    sf->step_func = sf->step_this = JS_UNDEFINED;
+    sf->eval_hold = NULL;
+    sf->this_val = JS_UNDEFINED;
+    sf->cur_pc = NULL;
+    for (uint32_t i = 0; i < live; i++) sf->arg_buf[i] = fg_rvalue(r);
+    sf->cur_sp = sf->arg_buf + live;
+    if (flags & 8) fg_rchain_calls(r, s, NULL);
+    return s;
+}
+
 /* One base: its record by its kind, its park, each heap frame stashed on it with what waits on that frame, and
    for a survey the values the unwritten parts hold. A base's kind names the record it is embedded in. */
 static void fg_frame_base(FGWriter *w, JSAsyncFunctionState *s)
@@ -84315,6 +84419,7 @@ static void fg_frame_base(FGWriter *w, JSAsyncFunctionState *s)
     fr->bases++;
     fg_frame_sf(w, &s->frame);
     if (s->base_kind == FLOW_BASE_BYTECODE) fg_base_bytecode(w, &w->fbuf, s);
+    else if (s->base_kind == FLOW_BASE_STEP_ROOT) fg_base_step_root(w, &w->fbuf, s);
     else fg_frame_gap(w, FG_GAP_FRAME_BASE, s->base_kind, NULL);
     if (s->park_fn) fg_frame_gap(w, FG_GAP_PARK, 0, fg_park_site(s));
     for (TrampFrame *t = s->tramp_top; t; t = t->up, depth++) {
@@ -84334,7 +84439,7 @@ static void fg_frame_base(FGWriter *w, JSAsyncFunctionState *s)
         if ((t->gen_data || (agd && t->cont_kind == CONT_AGEN_CREATE)) && t->seq_req_kind != CONT_NONE)
             fg_frame_gap(w, FG_GAP_REQUESTER, t->seq_req_kind, NULL);
     }
-    if (s->base_kind == FLOW_BASE_BYTECODE && s->tramp_top) fg_chain_calls(w, &w->fbuf, s, depth);
+    if (s->base_kind != FLOW_BASE_ASYNC_CALL && s->tramp_top) fg_chain_calls(w, &w->fbuf, s, depth);
     fr->heap += depth;
     if (depth > fr->depth) fr->depth = depth;
     if (!w->survey) return;
