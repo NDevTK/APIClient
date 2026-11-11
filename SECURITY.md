@@ -193,7 +193,7 @@ Which extension context can open a connection at all is enforced by CSP in all b
 | closed option set: an option `safeFetch` does not read (`as`, …) is refused, not dropped | `_refuseUnreadOptions` (DCHECK) | throws in dev; in release the option is dropped |
 | facts every caller must state | `_destinationOf`, `_provenanceOf`, `_docOf`, `_pinnedOf`, `_actorOf`, `_credentialedOf`, `_addressOf`, `_methodOf`, `_bodyOf`, `_bodyClassOf`, and each header list entry's class (`_headerListIs`) (CHECK) | throws in dev and release |
 | a URL the URL Standard §6.1 "URL class" constructor refuses is no request, as in a browser | `safeFetch`, `safeFetchOperator` | `bad-url`, graded `network` |
-| the method is the caller's statement and a gating signal: a non-GET leaves only where a default arm admits it, and never credentialed | `_methodOf`, the `method` row (default-only), `_safeFetchJudged` (CHECK: a credentialed request is a GET); for an XMLHttpRequest both hosts still ask `safeFetchMethodRefusal` first | `blocked-signal:method=<VERB>`; `blocked-method:<M>` on an XMLHttpRequest only |
+| the method is the caller's statement and a gating signal: a non-GET leaves only where a default arm admits it, and never credentialed | `_methodOf`, the `method` row (default-only), `_safeFetchJudged` (CHECK: a credentialed request is a GET); an XMLHttpRequest's method, body and body class reach `safeFetch` as a fetch()'s do | `blocked-signal:method=<VERB>` |
 | http(s) only | `safeFetch` | `blocked-scheme:<scheme>` |
 | no userinfo in the URL | `safeFetch` | `blocked-url-credentials` |
 | Fetch §4.5 "HTTP-redirect fetch"'s network errors: a `Location` that does not parse, a non-HTTP(S) location, a 21st redirect, credentials in a location a `cors` request may not follow | `_followRedirect` | `redirect-location-failure`, `blocked-scheme:<scheme>`, `redirect-count:20`, `blocked-url-credentials`, graded `network` |
@@ -231,7 +231,8 @@ Every request the chokepoint judges leaves an entry in its reply record's `egres
 vector, the class of each part the `bytes` row folds (`parts`), the default arm or grant that admitted it, how it was answered (sent, answered locally, or not sent) and
 the refusal where there is one. The extension's zone takes a settled request's list into the log of the instance
 that asked (`egressTake` in `bridge.js`, a CHECK: a record with no list is refused, never read as an empty one),
-the instance's analysis states the log as `egressSends`, and its run row carries a census of it (`egressHow`).
+the instance's analysis states the log as `egressSends` (each entry carrying `parts` exactly where it carries
+its vector), and its run row carries a census of it (`egressHow`).
 A load no instance asked (the seed load, a declared route, a cold re-derivation) is validated where it settles
 and stands on no instance's list.
 
@@ -260,9 +261,10 @@ fetch skips the browser's own CORS, so `safeFetch` runs Fetch §4.1 "Main fetch"
   never sent: one every gate admits is declined `blocked-transport:websocket`, since the zone opens no
   connection.
 - A fetch()'s header list (each entry `[name, value, class]`), body bytes and body class, and an
-  XMLHttpRequest record's header list in the same form, are the untrusted engine's statement (`qjs_request`, the
+  XMLHttpRequest record's header list, body (base64) and body class in the same form, are the untrusted engine's statement (`qjs_request`, the
   Renderer interface's `GetRequest`; on the native host the last field of the bill's `fetch` record). Each host
-  reads it as input (`pendingRequestContent` in `bridge.js`, `fetchContent` in `engine/trusted.mjs`): a record
+  reads it as input (`pendingRequestContent` and `xhrRecordRefusal` in `bridge.js`, `fetchContent` and `workXhr`
+  in `engine/trusted.mjs`, sharing `requestBodyOf`): a record
   whose shape contradicts its line's digest words, whose header list is not such entries
   (`safeFetchHeaderListIs`), or whose body class is none the zone declares, is refused.
   The digest words are the engine's own key; the zone computes its own wire identity for a send and trusts
