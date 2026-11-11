@@ -9077,32 +9077,31 @@ TF_UNIT void wasm_compile_fork_selftest(JSContext *ctx)
     JS_SetFlowControlHooks(&TF_DIFF_NONE);
 }
 
-/* HTML §7.5.3's discard of a failed XML parse's partial tree rests per node: an ill-formed document of 2,001
-   elements (a root holding 1,000 `<i>`, each holding a `<b>`, closed by an end tag that matches nothing) is
-   loaded one step at a time, and no step is charged more than two THREAD_WORK_DOM_WALK nodes (the walk's own
-   and the name index's upkeep of the one node a step frees) while the load is charged at least 2,001 in all.
-   The document is left holding HTML §8.5.1's `parsererror` element and nothing else. */
-TF_UNIT void xml_discard_walk_selftest(void)
+/* HTML §7.5.3's discard of a failed XML parse's partial tree rests per node. An ill-formed document (a root
+   holding `pairs` `<i>`, each holding a `<b>`, closed by an end tag that matches nothing) is loaded one step at a
+   time, and the most THREAD_WORK_DOM_WALK nodes any one step is charged is the same for 1,000 pairs and for 2,000,
+   so no step's work grows with the document, while each load is charged at least one per node in all. The
+   document is left holding HTML §8.5.1's `parsererror` element and nothing else. */
+static uint64_t xml_discard_walk_load(int pairs, uint64_t *total)
 {
-    enum { XD_PAIRS = 1000 };
     static const char PAIR[] = "<i><b/></i>";
     lxb_html_document_t *d = dom_document_create();
-    lxb_dom_node_t *root, *only;
+    lxb_dom_node_t *only;
     XmlDocumentLoad *load;
     MimeType type;
-    size_t len = 3 + XD_PAIRS * (sizeof PAIR - 1) + 4, at = 0;
+    size_t len = 3 + (size_t)pairs * (sizeof PAIR - 1) + 4, at = 3;
     char *xml = malloc(len + 1);
-    uint64_t worst = 0, total = 0;
+    uint64_t worst = 0;
 
     CHECK(d != NULL && xml != NULL, "the XML discard fixture could not allocate its document");
-    memcpy(xml, "<r>", 3); at = 3;
-    for (int i = 0; i < XD_PAIRS; i++) { memcpy(xml + at, PAIR, sizeof PAIR - 1); at += sizeof PAIR - 1; }
+    memcpy(xml, "<r>", 3);
+    for (int i = 0; i < pairs; i++) { memcpy(xml + at, PAIR, sizeof PAIR - 1); at += sizeof PAIR - 1; }
     memcpy(xml + at, "</x>", 5);
     CHECK(mime_type_parse(&type, "application/xml", strlen("application/xml")),
           "the XML discard fixture's own MIME type did not parse");
-    root = lxb_dom_interface_node(d);
     load = xml_document_load_begin(d, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, &type, (const lxb_char_t *)xml,
                                    len);
+    *total = 0;
     while (!xml_document_load_ended(load)) {
         ThreadWorkCensus before, now;
         uint64_t step;
@@ -9112,19 +9111,30 @@ TF_UNIT void xml_discard_walk_selftest(void)
         thread_work_census(&now);
         step = now.charged_input[THREAD_WORK_DOM_WALK] - before.charged_input[THREAD_WORK_DOM_WALK];
         if (step > worst) worst = step;
-        total += step;
+        *total += step;
     }
     CHECK(xml_document_load_finish(load) == LXB_STATUS_OK, "an ill-formed XML load did not finish");
-    only = root->first_child;
+    only = lxb_dom_interface_node(d)->first_child;
     CHECK(only != NULL && only->next == NULL && only->type == LXB_DOM_NODE_TYPE_ELEMENT,
           "an ill-formed XML load left something other than one parsererror element in its document");
-    CHECKF(worst <= 2 && total >= 2 * XD_PAIRS + 1,
-           "an ill-formed XML load of 2,001 elements was charged %llu DOM-walk nodes in one step and %llu in all, "
-           "not at most 2 a step and at least 2,001: HTML §7.5.3's discard freed a subtree inside one step, or a "
-           "walk of it charged nothing", (unsigned long long)worst, (unsigned long long)total);
     mime_type_free(&type);
     free(xml);
     dom_document_destroy(d);
+    return worst;
+}
+
+TF_UNIT void xml_discard_walk_selftest(void)
+{
+    static const int PAIRS[2] = { 1000, 2000 };
+    uint64_t worst[2], total[2];
+
+    for (int k = 0; k < 2; k++) worst[k] = xml_discard_walk_load(PAIRS[k], &total[k]);
+    CHECKF(worst[0] == worst[1] && total[0] >= 2001 && total[1] >= 4001,
+           "ill-formed XML loads of 2,001 and 4,001 elements were charged at most %llu and %llu DOM-walk nodes in "
+           "one step, and %llu and %llu in all: a step's work grew with the document, so HTML §7.5.3's discard "
+           "freed a subtree inside one step, or a walk charged less than a node each",
+           (unsigned long long)worst[0], (unsigned long long)worst[1], (unsigned long long)total[0],
+           (unsigned long long)total[1]);
 }
 
 /* DOM §4.2.10's live collections rest per node: the same reads of 300 detached elements answer the same under a
