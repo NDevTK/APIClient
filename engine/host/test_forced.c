@@ -1666,6 +1666,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/replyrecord.h"
 #include "fixture/rangeinsertrest.h"
 #include "fixture/rangedelrest.h"
+#include "fixture/openrest.h"
+#include "fixture/shadowattachrest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2467,6 +2469,8 @@ TF_DOCS[] = {
     { "replynone", HTML_REPLYNONE },
     { "rangeinsertrest", HTML_RANGEINSERTREST },
     { "rangedelrest", HTML_RANGEDELREST },
+    { "openrest", HTML_OPENREST },
+    { "shadowattachrest", HTML_SHADOWATTACHREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -18848,6 +18852,81 @@ TF_UNIT void probes_rangedelrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `openrest` document (fixture/openrest.h). open-rests: the opening arm's open() of a document
+   holding the box of 100,002 elements rests inside the call (`sliceOverrunGapWork` under one quantum), and the arm
+   then reads the document returned and empty, the box whole and disconnected, both names absent, no listener
+   left on the document, the box or the Window, and the written `<p>` in the new tree. open-sibling-tree: the
+   sibling arm reads the box in place, both names present and all three listeners firing. */
+TF_UNIT void probes_openrest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1, kt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/or-done", "e", "1-0-1"),
+             "NOT REACHED: no /api/or-done?e=1-0-1 record, so open() did not return its document with no child and "
+             "no document element (HTML §8.4.1 steps 11 and 19)");
+    fold_row(&tt, &why, param_value_is(js, "/api/or-done", "c", "100002") && param_value_is(js, "/api/or-done", "k", "0"),
+             "the opening arm did not read the box whole and disconnected after HTML §8.4.1 step 11's replace all");
+    fold_row(&tt, &why, param_value_is(js, "/api/or-done", "n", "1") && param_value_is(js, "/api/or-done", "w", "1"),
+             "the opening arm still found a removed element by name: the name index kept an entry replace all took "
+             "out of the document tree");
+    fold_row(&tt, &why, param_value_is(js, "/api/or-done", "l", "0"),
+             "HTML §8.4.1 steps 9-10: a listener on the document, a descendant or the Window survived open()");
+    fold_row(&tt, &why, param_value_is(js, "/api/or-done", "p", "1"),
+             "HTML §8.4.1 steps 16-17: the `<p>` written after open() is not in the document");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: an open() of a document of 100,002 "
+             "elements erased their listeners or removed them inside one step instead of resting per node");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/or-kept", "p", "1") && param_value_is(js, "/api/or-kept", "c", "100002"),
+             "NOT REACHED: no /api/or-kept?p=1&c=100002 record, so the sibling arm did not read the box in place "
+             "with its children");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/or-kept", "n", "1") && param_value_is(js, "/api/or-kept", "w", "1"),
+             "the sibling arm did not find the box's named elements: the opening arm's name-index upkeep reached a "
+             "flow whose tree still holds them");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/or-kept", "l", "111"),
+             "the sibling arm's listeners did not all fire: the opening arm's HTML §8.4.1 step 9 erased a listener "
+             "in a flow that never opened the document");
+    const Probe rows[] = {
+        { "open-rests", tt, "orBox", SESS_EXPLORE, why },
+        { "open-sibling-tree", kt, "orBox", SESS_EXPLORE, kwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `shadowattachrest` document (fixture/shadowattachrest.h). attachshadow-rests: the attaching
+   arm's attachShadow over a declarative shadow root of 100,002 children rests inside the call
+   (`sliceOverrunGapWork` under one quantum), and the arm then reads the same root returned and empty, the span
+   unassigned, the first child detached and a second call's "NotSupportedError". attachshadow-sibling-tree: the
+   sibling arm reads the root's children in place and the span assigned. */
+TF_UNIT void probes_shadowattachrest(const char *js, Probe *tab, int *n) {
+    const char *why = NULL, *kwhy = NULL, *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int tt = 1, kt = 1;
+
+    fold_row(&tt, &why, param_value_is(js, "/api/sa-done", "s", "1") && param_value_is(js, "/api/sa-done", "c", "0"),
+             "NOT REACHED: no /api/sa-done?s=1&c=0 record, so attachShadow did not return the declarative shadow "
+             "root with no children (DOM §4.9 attach a shadow root steps 4.3 and 4.5)");
+    fold_row(&tt, &why, param_value_is(js, "/api/sa-done", "w", "1") && param_value_is(js, "/api/sa-done", "a", "1") &&
+             param_value_is(js, "/api/sa-done", "p", "1"),
+             "DOM §4.2.3 remove steps 7-10: the removed slot still has a parent, or the span is still assigned to it");
+    fold_row(&tt, &why, param_value_is(js, "/api/sa-done", "t", "NotSupportedError"),
+             "DOM §4.9 attach a shadow root step 4.4: a second attachShadow did not throw step 4.2's "
+             "\"NotSupportedError\", so the root's declarative is still true");
+    fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+    fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK,
+             "a turn held the thread for a quantum or more between two offers: an attachShadow over a declarative "
+             "shadow root of 100,002 children removed them inside one step instead of resting per node");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/sa-kept", "c", "100002") && param_value_is(js, "/api/sa-kept", "a", "1"),
+             "NOT REACHED: no /api/sa-kept?c=100002&a=1 record, so the sibling arm did not read the shadow root's "
+             "children in place and the span assigned");
+    const Probe rows[] = {
+        { "attachshadow-rests", tt, "saHost", SESS_EXPLORE, why },
+        { "attachshadow-sibling-tree", kt, "saHost", SESS_EXPLORE, kwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `mixinrest` document (fixture/mixinrest.h). mixin-<k>-rests, for append (ap), replaceWith (rw)
    and replaceChildren (rc): the arm's call with the box of 100,002 elements and a string rests inside itself
    (`sliceOverrunGapWork` under one quantum, a fact of the whole document), and the arm then reads the box in the
@@ -31900,6 +31979,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_replyrecord(js, probes, &np);
     probes_rangeinsertrest(js, probes, &np);
     probes_rangedelrest(js, probes, &np);
+    probes_openrest(js, probes, &np);
+    probes_shadowattachrest(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
