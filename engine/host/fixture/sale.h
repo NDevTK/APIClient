@@ -8,8 +8,8 @@
    `salefloor`: `sale`'s shape, sold with the allocator placed at its floor (tf_floor_place), so the sale's own
    allocations are refused unless the sale funds them. `saleasync`: `sale`'s shape where the owing arm first
    settles a promise made before the fork, so its delta holds that promise's settlement and its resolving
-   function's latch when it is sold, and its report reads the settled value. `salekeep`, `salector`: below.
-   Seven of test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c
+   function's latch when it is sold, and its report reads the settled value. `salekeep`, `salector`, `salecatch`: below.
+   Eight of test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c
    defines before including this file. */
 #ifndef ENGINE_HOST_FIXTURE_SALE_H
 #define ENGINE_HOST_FIXTURE_SALE_H
@@ -112,6 +112,23 @@ static const char HTML_SALECTOR[] =
     "} else {"
     "  var slC = new SlCtor();"
     "  fetch('/api/sl-ctor-busy?n=' + slC.n);"
+    "}"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+/* `sale`'s shape where the busy arm's loop runs inside a `try`, so the member sold beside the owing one holds
+   the catch offset OP_catch pushed (JS_TAG_CATCH_OFFSET) among its frame's live values. */
+static const char HTML_SALECATCH[] =
+    "<!doctype html><html><body>"
+    "<script>"
+    "var slCatchOwe = location.hash === '#owe';"
+    "if (slCatchOwe) {"
+    "  fetch('/api/sl-catch-owed').then(function (r) { return r.text(); })"
+    "    .then(function (t) { fetch('/api/sl-catch-done?b=' + t.length); });"
+    "} else {"
+    "  try {" TF_SALE_BUSY "} catch (e) { slN = -1; }"
+    "  fetch('/api/sl-catch-busy?n=' + slN);"
     "}"
     "</script>"
     TF_CANVAS_INK

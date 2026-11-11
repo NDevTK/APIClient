@@ -1606,7 +1606,8 @@ static void tf_keep_watch(void) {
    gives a written stub's bytes back at the floor, is not asked. A held member is never sold. */
 static const char *tf_sale_act(const char *urls) {
     static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed", "/api/sl-floor-owed",
-                                        "/api/sl-async-owed", "/api/sl-keep-owed", "/api/sl-ctor-owed" };
+                                        "/api/sl-async-owed", "/api/sl-keep-owed", "/api/sl-ctor-owed",
+                                        "/api/sl-catch-owed" };
 
     if (g_tf_pressure_none) return urls;
     for (size_t i = 0; !g_tf_sale.listed && i < COUNTOF(owed); i++) {
@@ -2840,6 +2841,7 @@ TF_DOCS[] = {
     { "saleasync", HTML_SALEASYNC },
     { "salekeep", HTML_SALEKEEP },
     { "salector", HTML_SALECTOR },
+    { "salecatch", HTML_SALECATCH },
     { "layoutshed", HTML_LAYOUTSHED, OPENER_POLICY_UNSAFE_NONE, 0, NULL, NULL, 1 },
     { "replyrec", HTML_REPLYREC },
     { "replynone", HTML_REPLYNONE },
@@ -19480,7 +19482,9 @@ static long tf_hist_above(const char *js, const char *key, int from) {
    act (g_tf_keep); the sale read the held record back as itself (`soldNamed`), the reply reached it, and the
    restored register names it rather than a copy.
    sale-ctor-busy-returns: the member sold while its loop ran in a constructor's body was written (no sale
-   waited on `frame call` or `cont CONSTRUCT`), restored, and reported the count its constructor computed. */
+   waited on `frame call` or `cont CONSTRUCT`), restored, and reported the count its constructor computed.
+   sale-catch-busy-returns: the member sold while its loop ran inside a `try` was written (no sale waited on
+   `tag 5`, a catch offset among a frame's values), restored, and reported its count. */
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
     const char *cat = strstr(js, "\"saleCensus\":{\"n\":");
@@ -19492,8 +19496,8 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     long restored = rat ? strtol(rat + strlen("\"restored\":"), NULL, 10) : -1;
     const char *nat = strstr(js, "\"soldNamed\":");
     long named = nat ? strtol(nat + strlen("\"soldNamed\":"), NULL, 10) : -1;
-    int ft = 1, ot = 1, ct = 1, lt = 1, yt = 1, kt = 1, rt = 1;
-    const char *awhy = NULL, *kwhy = NULL, *rwhy = NULL, *gk = strstr(js, "\"waitsGapKinds\":{");
+    int ft = 1, ot = 1, ct = 1, lt = 1, yt = 1, kt = 1, rt = 1, ht = 1;
+    const char *awhy = NULL, *kwhy = NULL, *rwhy = NULL, *hwhy = NULL, *gk = strstr(js, "\"waitsGapKinds\":{");
     const char *gk_end = gk ? strchr(gk, '}') : NULL;
 
     fold_row(&lt, &lwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
@@ -19562,6 +19566,16 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     fold_row(&rt, &rwhy, param_value_is(js, "/api/sl-ctor-busy", "n", "100000"),
              "NOT REACHED: no /api/sl-ctor-busy?n=100000 record, so the member sold in the constructor's body did "
              "not return within the session with the count its body computed");
+    fold_row(&ht, &hwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
+             "NOT ARMED: the act sold nothing, so no member holding a catch offset was sold");
+    fold_row(&ht, &hwhy, gk_end && !tf_span_has(gk, gk_end, "\"tag 5\""),
+             "a sale waited on `tag 5`: a member holding a catch offset among its frame's values was not written, "
+             "or the result carries no `waitsGapKinds`");
+    fold_row(&ht, &hwhy, wrote > 0 && restored > 0,
+             "no sold member was restored from its written bytes (`soldRestores`, `restored`)");
+    fold_row(&ht, &hwhy, param_value_is(js, "/api/sl-catch-busy", "n", "100000"),
+             "NOT REACHED: no /api/sl-catch-busy?n=100000 record, so the member sold inside the `try` did not return "
+             "within the session with its count");
     fold_row(&ot, &owhy, param_value_is(js, "/api/sl-own-done", "b", "22"),
              "NOT REACHED: no /api/sl-own-done?b=22 record, so the page's own run, sold while it owed "
              "/api/sl-own-owed, did not return within the session");
@@ -19588,6 +19602,7 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
         { "sale-async-returns", yt, "slAsync", SESS_EXPLORE, awhy },
         { "sale-keep-same-record", kt, "slKeep", SESS_EXPLORE, kwhy },
         { "sale-ctor-busy-returns", rt, "slCtorOwe", SESS_EXPLORE, rwhy },
+        { "sale-catch-busy-returns", ht, "slCatchOwe", SESS_EXPLORE, hwhy },
         { "sale-control-reaches", ct, "slCtl", SESS_EXPLORE, cwhy },
         { "sale-forced-stays-listed", lt, "slForced", SESS_EXPLORE, lwhy },
         { "sale-own-stays-listed", lt, "slOwn", SESS_EXPLORE, lwhy },
