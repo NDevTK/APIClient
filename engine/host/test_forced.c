@@ -2124,6 +2124,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/datenum.h"
 #include "fixture/dateslot.h"
 #include "fixture/splitarr.h"
+#include "fixture/slotunk.h"
 #include "fixture/rxcompile.h"
 #include "fixture/codegenrest.h"
 #include "fixture/b64coerce.h"
@@ -2962,6 +2963,7 @@ TF_DOCS[] = {
     { "datenum", HTML_DATENUM },
     { "dateslot", HTML_DATESLOT },
     { "splitarr", HTML_SPLITARR },
+    { "slotunk", HTML_SLOTUNK },
     { "rxcompile", HTML_RXCOMPILE },
     { "codegenrest", HTML_CODEGENREST },
     { "b64coerce", HTML_B64COERCE },
@@ -26982,6 +26984,38 @@ TF_UNIT void probes_splitarr(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `slotunk` document (fixture/slotunk.h): a built-in's receiver check over an unknown carrier
+   answers by the carrier's types, and forks where an Object may or may not hold the slot. */
+TF_UNIT void probes_slotunk(const char *js, Probe *tab, int *n) {
+    const char *sy_why = NULL; int sy_tt = 1;
+    fold_row(&sy_tt, &sy_why, param_value_is(js, "/api/su-sym", "w", "suSTRING"),
+             "no /api/su-sym?w=suSTRING record: Symbol.prototype.toString over a carrier `typeof` narrowed to a "
+             "Symbol did not return a String on any flow");
+    fold_row(&sy_tt, &sy_why, !param_value_is(js, "/api/su-sym", "w", "suTHREW") &&
+                              !param_value_is(js, "/api/su-sym", "w", "suOTHER"),
+             "Symbol.prototype.toString over a carrier `typeof` narrowed to a Symbol threw or answered no String "
+             "on some flow, though ThisSymbolValue's step 1 returns a Symbol carrier itself");
+    const char *dt_why = NULL; int dt_tt = 1;
+    fold_row(&dt_tt, &dt_why, param_value_is(js, "/api/su-date", "w", "suSTRING") &&
+                              param_value_is(js, "/api/su-date", "w", "suTYPE"),
+             "toISOString over an unknown that `instanceof Date` held for did not run both completions of "
+             "RequireInternalSlot ( dateObj, [[DateValue]] ): the String arm and the TypeError arm");
+    fold_row(&dt_tt, &dt_why, !param_value_is(js, "/api/su-date", "w", "suOTHER"),
+             "a /api/su-date?w=suOTHER record: toISOString over an unknown carrier threw something that is neither "
+             "RequireInternalSlot's TypeError nor step 4's RangeError");
+    const char *nm_why = NULL; int nm_tt = 1;
+    fold_row(&nm_tt, &nm_why, param_value_is(js, "/api/su-num", "w", "suTYPE") &&
+                              !param_value_is(js, "/api/su-num", "w", "suVALUE"),
+             "Number.prototype.valueOf over a carrier `typeof` narrowed to a String returned on some flow, or threw "
+             "on none: ThisNumberValue holds no Number for a String");
+    const Probe rows[] = {
+        { "su-symbol", sy_tt, "/api/su-sym", SESS_EXPLORE, sy_why },
+        { "su-date", dt_tt, "/api/su-date", SESS_EXPLORE, dt_why },
+        { "su-number", nm_tt, "/api/su-num", SESS_EXPLORE, nm_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `datenum` document (fixture/datenum.h): both arms of the gate after each coercion. */
 TF_UNIT void probes_datenum(const char *js, Probe *tab, int *n) {
     const char *pl_why = NULL; int pl_tt = 1;
@@ -33458,6 +33492,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_datenum(js, probes, &np);
     probes_dateslot(js, probes, &np);
     probes_splitarr(js, probes, &np);
+    probes_slotunk(js, probes, &np);
     probes_rxcompile(js, probes, &np);
     probes_codegenrest(js, probes, &np);
     probes_b64coerce(js, probes, &np);
