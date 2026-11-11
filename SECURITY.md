@@ -190,10 +190,10 @@ Which extension context can open a connection at all is enforced by CSP in all b
 
 | Gate | Enforcing symbol | Refusal reason |
 |------|------------------|----------------|
-| closed option set: an option `safeFetch` does not read (`method`, `body`, `as`, …) is refused, not dropped | `_refuseUnreadOptions` (DCHECK) | throws in dev; in release the option is dropped, which always lands on the GET this file sends |
-| facts every caller must state | `_destinationOf`, `_provenanceOf`, `_docOf`, `_pinnedOf`, `_actorOf`, `_credentialedOf` (CHECK) | throws in dev and release |
+| closed option set: an option `safeFetch` does not read (`as`, …) is refused, not dropped | `_refuseUnreadOptions` (DCHECK) | throws in dev; in release the option is dropped |
+| facts every caller must state | `_destinationOf`, `_provenanceOf`, `_docOf`, `_pinnedOf`, `_actorOf`, `_credentialedOf`, `_addressOf`, `_methodOf`, `_bodyOf`, `_bodyClassOf` (CHECK) | throws in dev and release |
 | a URL the URL Standard §6.1 "URL class" constructor refuses is no request, as in a browser | `safeFetch`, `safeFetchOperator` | `bad-url`, graded `network` |
-| GET only: `init.method` is the literal `"GET"` | `safeFetch`; callers ask `safeFetchMethodRefusal` first | `blocked-method:<M>` |
+| the method is the caller's statement and a gating signal: a non-GET leaves only where a default arm admits it, and never credentialed | `_methodOf`, the `method` row (default-only), `_safeFetchJudged` (CHECK: a credentialed request is a GET); for an XMLHttpRequest both hosts still ask `safeFetchMethodRefusal` first | `blocked-signal:method=<VERB>`; `blocked-method:<M>` on an XMLHttpRequest only |
 | http(s) only | `safeFetch` | `blocked-scheme:<scheme>` |
 | no userinfo in the URL | `safeFetch` | `blocked-url-credentials` |
 | Fetch §4.5 "HTTP-redirect fetch"'s network errors: a `Location` that does not parse, a non-HTTP(S) location, a 21st redirect, credentials in a location a `cors` request may not follow | `_followRedirect` | `redirect-location-failure`, `blocked-scheme:<scheme>`, `redirect-count:20`, `blocked-url-credentials`, graded `network` |
@@ -217,7 +217,8 @@ identity: method, URL, header list, the speak-as set with its Cookie, body, cred
 partition, so composing the key reads the identity's cookies only where the unforced run sent that method to
 that URL). The engine declines
 on the same grade a request whose address holds a value it has no bytes for (`pending_park_request`), and a
-record that states `address=unknown` to the zone is refused there too. A
+record that states `address=unknown` to the zone is refused there too. A request whose body has no bytes is
+listed with the body class `unknown` and refused by the zone (`blocked-signal:body=unknown`). A
 declined request's outcome is unobserved, so the engine runs both outcomes (`flow_decline_fork`): one arm stays
 parked on the request, a search that fires when the origin is widened or the address is grounded; the other
 takes Fetch §5.6's network error and runs the page's failure path with its path marked forced, so nothing it
@@ -248,10 +249,18 @@ fetch skips the browser's own CORS, so `safeFetch` runs Fetch §4.1 "Main fetch"
   engine sees them. A cross-origin `no-cors` reply is opaque: for a `fetch()` the body is not read and the engine
   builds Fetch §2.2.6's opaque filtered response (`response_new_opaque`, `fetch_reply_type`); for an element (a
   classic script, an image, a stylesheet) the bytes are delivered for that element to consume.
-- The mode is part of the request's identity: the engine keys its pending register on (method, mode, url)
-  (`pending_index_key`, `engine_provide`), so a `<script src=u>` and a `fetch(u)` are two requests with two
+- The mode is part of the request's identity: the engine keys its pending register on (method, mode, referrer
+  policy, referrer, header list digest, body digest, url) (`PendRequestKey` in `solver/pending_index.h`,
+  `engine_provide`), so a `<script src=u>` and a `fetch(u)` are two requests with two
   answers. The pending channel carries only `same-origin`, `cors` and `no-cors` (`pendingRequest` in `bridge.js`
   CHECKs it), because its reply returns to the asking page.
+- A fetch()'s header list, body bytes and body class are the untrusted engine's statement (`qjs_request`, the
+  Renderer interface's `GetRequest`; on the native host the last field of the bill's `fetch` record). Each host
+  reads it as input (`pendingRequestContent` in `bridge.js`, `fetchContent` in `engine/trusted.mjs`): a record
+  whose shape contradicts its line's digest words, or whose body class is none the zone declares, is refused.
+  The digest words are the engine's own key; the zone computes its own wire identity for a send and trusts
+  neither word as a digest. What the statement can cause is bounded as any engine statement is: the request is
+  judged by the signal table with the document record's floors, and leaves uncredentialed.
 - Page-script reads of a no-cors element's bytes are refused inside the engine where the platform defines a
   read: a canvas tainted by a cross-origin image (`html_canvas_element.c`, origin-clean) and a cross-origin
   stylesheet's rules (`css_style_sheet.c`, origin-clean).
@@ -267,8 +276,8 @@ fetch skips the browser's own CORS, so `safeFetch` runs Fetch §4.1 "Main fetch"
 - Every document the person visits is seeded by `content.js`, so the extension repeats each same-origin page
   load with the person's cookies. That is a second GET of a page the person already loaded (a single-use URL
   cannot be loaded twice); the deny list does not apply to it because its provenance is `observed`.
-- `credentialed` here means cookies and nothing wider. It does not strip an `Authorization` header (on the XHR
-  path `opts.headers` is the bundle's own list), authority carried in the URL, or the lineage of an address
+- `credentialed` here means cookies and nothing wider. It does not strip an `Authorization` header (on the
+  fetch() and XHR paths `opts.headers` is the bundle's own list), authority carried in the URL, or the lineage of an address
   computed from a credentialed reply. Those are separate egress signals.
 - A credentialed request may not state a header list (`_credentialedOf`, a `CHECK`), because a header such as
   `X-Http-Method-Override` is a route to a verb other than GET.
@@ -538,8 +547,9 @@ signal → permitted values; `_firingRefusal` fires a request when a default arm
 signal's value is permitted at the request URL's own `.origin`, and otherwise names the signal that decided:
 the first condition of the page's-own-run arm the request fails (`provenance`, `doc-reach`, `actor`, `witness`,
 in that order) that the origin's table does not permit either, or else the first unpermitted signal in
-registry order. One value is refused at every setting: `address=unknown`, an address holding a value with
-no concrete example. No default arm admits it, the attacker-site arm included, and no grant can name it.
+registry order. Two values are refused at every setting: `address=unknown` and `body=unknown`, an address or
+a body holding a value with no concrete example. No default arm admits either, the attacker-site arm
+included, and no grant can name them.
 
 | Signal | Values | Reliability |
 |--------|--------|-------------|
@@ -554,7 +564,8 @@ no concrete example. No default arm admits it, the attacker-site arm included, a
 | `url-authority` | `present`, `unknown` | partial: a miss is `unknown`, never "none" |
 | `lineage` | `unknown` | undetermined |
 | `reaches` | `attacker-site`, `another-party` | certain: the URL parser's host against the attacker site the person configured (`lib/attacker-site.js`); `attacker-site` fires by default, since it is the person's own server |
-| `method` (does not gate) | `GET` | certain |
+| `method` | `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, `other` | stated (the caller): every value but `GET` is default-only, admitted by a default arm and named by no grant |
+| `body` | `none`, `concrete`, `example`, `unknown` | stated (engine): `none` is a request with no body; `unknown` is never permitted |
 | `invalidity` (does not gate) | `unstated` | intent |
 
 `actor` is the one gating row the untrusted zone cannot reach; the `stated` rows are words the
@@ -662,8 +673,9 @@ included. The mark can only narrow `actor`, never widen it, and a `page` caller 
 - Signals added since grants were first stored, each narrowing every grant stored before it: `reaches`
   (`attacker-site`, `another-party`), with the attacker-site setting. A grant stored before it refuses
   `reaches=another-party` until the person permits it again. `actor` gained the value `drive`: a grant of
-  `actor=tool` stored before it does not cover a driven request. `address` gates: a grant stored before it
-  names no value of it and permits nothing at that origin until the person permits it again.
+  `actor=tool` stored before it does not cover a driven request. `address`, `method` and `body` gate: a grant
+  stored before one of them names no value of it and permits nothing at that origin until the person permits
+  it again.
 - The native host states its table synchronously, and `--explore <origin>` in `engine/trusted.mjs` is
   `safeFetchWiden`.
 
@@ -884,7 +896,7 @@ Each residual states what is not covered, what would close it, and how its absen
 | A localhost page's analysis lends its origin to a public page's fetch | mitigated: the principal is per call, never a global |
 | A page sandboxes its own iframe to read the embedder's credentialed API | mitigated: the credentialed-read principal is the requesting frame's `MessageSender.origin`, opaque-unique, and an opaque origin is same-origin with nothing |
 | A seeded page's server redirects the cookie-bearing document load to another origin | mitigated: the credentialed SOP reads the landed origin (`blocked-cors-credentialed:`), and `bridge.js` refuses to seat a cross-origin response (`cross-origin-redirect:`) |
-| The analyzer's own credentialed GET ends the person's session or destroys a resource | mitigated as a floor: GET only, and `_destructiveToken` refuses a listed path token before the request and before each redirect hop is sent, for any credentialed request that is not `observed`; an unmatched path is not thereby safe |
+| The analyzer's own credentialed GET ends the person's session or destroys a resource | mitigated as a floor: a credentialed request is a GET, and `_destructiveToken` refuses a listed path token before the request and before each redirect hop is sent, for any credentialed request that is not `observed`; an unmatched path is not thereby safe |
 | A compromised renderer forges an operator's reply | not a threat: an operator send is the offscreen document's own fetch and never passes through the renderer |
 | A compromised extension page sends as an observed frame | residual: the operator tier trusts every extension document, which can also state any `Origin` and `Referer`; the pages' Trusted Types policy and CSP bound it |
 | A compromised renderer drives the socket, port or window send relays | not a threat: it cannot reach them, and the channel is the page's own |
