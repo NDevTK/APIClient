@@ -8,11 +8,7 @@
    `salefloor`: `sale`'s shape, sold with the allocator placed at its floor (tf_floor_place), so the sale's own
    allocations are refused unless the sale funds them. `saleasync`: `sale`'s shape where the owing arm first
    settles a promise made before the fork, so its delta holds that promise's settlement and its resolving
-   function's latch when it is sold, and its report reads the settled value. `salekeep`: `sale`'s shape where,
-   at the act, a holder outside the sold member (test_forced.c's tf_keep) names the member's owed record, so
-   its restore must give that holder's record back rather than a copy of it. `salector`: `sale`'s shape where the
-   busy arm's loop runs in a constructor's body (`new SlCtor()`), so the member sold beside the owing one is
-   parked in a heap frame whose continuation is the construct's record.
+   function's latch when it is sold, and its report reads the settled value. `salekeep`, `salector`: below.
    Seven of test_forced.c's exploring documents (TF_DOCS); each ends with TF_CANVAS_INK, which test_forced.c
    defines before including this file. */
 #ifndef ENGINE_HOST_FIXTURE_SALE_H
@@ -86,6 +82,8 @@ static const char HTML_SALEASYNC[] =
     TF_CANVAS_INK
     "</body></html>";
 
+/* `sale`'s shape where, at the act, a holder outside the sold member (test_forced.c's g_tf_keep) names the
+   member's owed record, so its restore gives that record back rather than a copy of it. */
 static const char HTML_SALEKEEP[] =
     "<!doctype html><html><body>"
     "<script>"
@@ -101,6 +99,8 @@ static const char HTML_SALEKEEP[] =
     TF_CANVAS_INK
     "</body></html>";
 
+/* `sale`'s shape where the busy arm's loop runs in a constructor's body, so the member sold beside the owing
+   one is parked in a heap frame whose continuation is the construct's record (CONT_CONSTRUCT). */
 static const char HTML_SALECTOR[] =
     "<!doctype html><html><body>"
     "<script>"
