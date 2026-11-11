@@ -48056,7 +48056,7 @@ static void fg_gap_name(JSContext *ctx, const FGGap *gap, char *buf, size_t cap)
     static const char *const frame[] = { "call", "async", "generator", "asyncGeneratorCreate",
                                          "asyncGeneratorDrive", "anchor", "callHoldsEval" };
     static const char *const field[] = { "strbuf", "props", "slots", "buf", "atom", "array", "shared", "maprec",
-                                         "reexec", "tree", "cache" };
+                                         "reexec", "tree", "cache", "machine", "views", "subSequence" };
     char name[ATOM_GET_STR_BUF_SIZE];
     int id = gap->id;
     size_t n, k;
@@ -48485,6 +48485,76 @@ static void *fg_rrec(FGReader *r, uint8_t kind)
     return NULL;
 }
 
+/* A machine's declared fields (fg_step_write), read in the same order into the state's byte copy. */
+static FGReader *g_fg_reader;
+static const JSStepVisit fg_step_read;
+static void fg_mr_val(JSContext *ctx, JSValue *slot) { (void)ctx; *slot = fg_rvalue(g_fg_reader); }
+static void fg_mr_array(JSContext *ctx, void **slot, size_t size, int n, int cap,
+                        void (*each)(JSContext *, void *, JSStepVisit *)) {
+    FGReader *r = g_fg_reader;
+    uint8_t *a;
+
+    *slot = NULL;
+    if (!fg_r8(r)) return;
+    CHECK(each == js_step_visit_value_elem && size == sizeof(JSValue) && fg_r32(r) == (uint32_t)n &&
+              fg_r32(r) == (uint32_t)cap && n <= cap,
+          "flow graph: a machine's serialized array is not the array its declaration names");
+    a = js_malloc(ctx, size * (size_t)(cap > 0 ? cap : 1));
+    CHECK(a != NULL, "flow graph: OOM rebuilding a machine's array");
+    for (int i = 0; i < n; i++) each(ctx, a + size * (size_t)i, (JSStepVisit *)&fg_step_read);
+    *slot = a;
+}
+static const JSStepVisit fg_step_read = { .val = fg_mr_val, .array = fg_mr_array };
+
+/* A machine (fg_machine), rebuilt as tramp_step_state_clone builds a copy: its bytes, then its arguments and
+   the header's owned values read where the copy takes references, the borrowed slots dead at rest, and its
+   declared fields; on the runtime's census once whole. Its requester link is NULL until fg_rlinks sets it. */
+static JSStepHdr *fg_rmachine(FGReader *r)
+{
+    JSContext *ctx = r->ctx;
+    const JSTrampStepDef *def;
+    FGReader *saved = g_fg_reader;
+    uint32_t argc;
+    size_t sz;
+    JSStepHdr *h;
+
+    memcpy(&def, fg_take(r, sizeof def), sizeof def);
+    argc = fg_r32(r);
+    CHECK(def != NULL && def->plain_rest && def->visit != NULL && argc <= JS_MAX_LOCAL_VARS,
+          "flow graph: a serialized machine names a definition the writer does not write, or its argument count "
+          "is out of range");
+    sz = STEP_ARGV_OFFSET(def->size);
+    h = js_malloc(ctx, sz + sizeof(JSValue) * (argc ? argc : 1));
+    CHECK(h != NULL, "flow graph: OOM rebuilding a step machine");
+    memcpy(h, fg_take(r, sz), sz);
+    CHECK(h->def == def && h->argc == (int)argc, "flow graph: a machine's bytes disagree with its definition");
+    h->census_prev = h->census_next = NULL;
+    h->outer = NULL;
+    h->outer_kind = CONT_NONE;
+    h->argv = (JSValue *)((uint8_t *)h + sz);
+    for (uint32_t i = 0; i < argc; i++) h->argv[i] = fg_rvalue(r);
+    h->this_val = fg_rvalue(r);
+    h->func_obj = fg_rvalue(r);
+    h->coerce = fg_rvalue(r);
+    h->ctor_ntgt = fg_rvalue(r);
+    h->cap_promise = fg_rvalue(r);
+    h->cap_funcs[0] = fg_rvalue(r);
+    h->cap_funcs[1] = fg_rvalue(r);
+    h->park_in = fg_rvalue(r);
+    h->park_exc = fg_rvalue(r);
+    h->keys_pred = fg_rvalue(r);
+    h->unknown_operand = fg_rvalue(r);
+    h->prog_src = fg_rvalue(r);
+    h->desc_get = h->desc_set = h->fork_over = JS_UNDEFINED;
+    h->cb_coerce[0] = h->cb_coerce[1] = h->cb_coerce[2] = JS_UNDEFINED;
+    h->fork_op = NULL;
+    g_fg_reader = r;
+    def->visit(ctx, h, (JSStepVisit *)&fg_step_read);
+    g_fg_reader = saved;
+    js_step_census_add(ctx->rt, h);
+    return h;
+}
+
 /* The links a frame's continuation waits on (fg_links), rebuilt in order, each one's requester set to the next.
    Returns the frame's own record, or NULL for a kind with none. */
 static void *fg_rlinks(FGReader *r, uint8_t kind)
@@ -48493,7 +48563,7 @@ static void *fg_rlinks(FGReader *r, uint8_t kind)
     uint8_t prev_kind = CONT_NONE;
 
     while (kind != CONT_NONE && !cont_kind_recordless(kind)) {
-        void *st = fg_rrec(r, kind);
+        void *st = kind == CONT_STEP ? (void *)fg_rmachine(r) : fg_rrec(r, kind);
 
         if (prev) cont_outer_set(prev, prev_kind, st, kind);
         else first = st;
@@ -48563,7 +48633,7 @@ static void fg_rchain_calls(FGReader *r, JSAsyncFunctionState *s, JSFunctionByte
         live = fg_r32(r);
         CHECK(JS_IsObject(sf->cur_func) && js_class_has_bytecode(JS_VALUE_GET_OBJ(sf->cur_func)->class_id)
                   && al <= UINT16_MAX && pc < (uint32_t)b->byte_code_len
-                  && (t->cont_kind == CONT_NONE || cont_kind_declared(t->cont_kind)
+                  && (t->cont_kind == CONT_NONE || t->cont_kind == CONT_STEP || cont_kind_declared(t->cont_kind)
                       || cont_kind_recordless(t->cont_kind))
                   && (amode == 'o' ? al != 0 : al == 0 && (amode == 'n' || amode == 'b'))
                   && (amode != 'b' || cbuf + aoff + sf->arg_count <= cend),
@@ -77033,13 +77103,13 @@ static const char *const js_reflect_apply_steps[];
 static const char *const js_reflect_construct_steps[];
 static const JSTrampStepDef js_function_apply_def = { sizeof(JSFuncApply), js_function_apply_step, js_function_apply_fini, 0, .visit = js_function_apply_visit,
                         .algorithm = "20.2.3.1 Function.prototype.apply",
-                        .steps = js_function_apply_steps };
+                        .steps = js_function_apply_steps, .plain_rest = 1 };
 static const JSTrampStepDef js_reflect_apply_def  = { sizeof(JSFuncApply), js_function_apply_step, js_function_apply_fini, 1, .visit = js_function_apply_visit,
                         .algorithm = "28.1.1 Reflect.apply",
-                        .steps = js_reflect_apply_steps };
+                        .steps = js_reflect_apply_steps, .plain_rest = 1 };
 static const JSTrampStepDef js_reflect_construct_def = { sizeof(JSFuncApply), js_reflect_construct_step, js_function_apply_fini, 0, .visit = js_function_apply_visit,
                         .algorithm = "28.1.2 Reflect.construct",
-                        .steps = js_reflect_construct_steps };
+                        .steps = js_reflect_construct_steps, .plain_rest = 1 };
 static const char *const js_array_tostring_steps[];
 static const JSTrampStepDef js_array_tostring_def = { sizeof(JSArrayToString), js_array_tostring_step, js_array_tostring_fini, 0, .visit = js_array_tostring_visit,
                         .algorithm = "23.1.3.36 Array.prototype.toString", .steps = js_array_tostring_steps };
@@ -85069,7 +85139,7 @@ static FGWriter *g_fg_frames;
 enum { FG_FRAME_CALL, FG_FRAME_ASYNC, FG_FRAME_GENERATOR, FG_FRAME_AGEN_CREATE, FG_FRAME_AGEN_DRIVE, FG_FRAME_ANCHOR,
        FG_FRAME_CALL_EVAL };
 enum { FG_SF_STRBUF, FG_SF_PROPS, FG_SF_SLOTS, FG_SF_BUF, FG_SF_ATOM, FG_SF_ARRAY, FG_SF_SHARED, FG_SF_MAPREC,
-       FG_SF_REEXEC, FG_SF_TREE, FG_SF_CACHE };
+       FG_SF_REEXEC, FG_SF_TREE, FG_SF_CACHE, FG_SF_MACHINE, FG_SF_VIEWS, FG_SF_SUBSEQ };
 
 /* A part of a frame with no writer: a survey records it, and a strict write stops on it by the survey's name. */
 static void fg_frame_gap(FGWriter *w, int what, int id, const void *ref)
@@ -85113,10 +85183,13 @@ static void fg_frame_mark(JSRuntime *rt, JSGCObjectHeader *gp)
 }
 static void fg_mark_nothing(JSRuntime *rt, JSGCObjectHeader *gp) { (void)rt; (void)gp; }
 
-/* A step declaration's fields by kind. A value is a slot the value writer has; a machine is surveyed as one. */
+/* A step declaration's fields by kind. A value, and an array of values, are slots the machine writer has
+   (fg_machine); a held machine is surveyed as one and is a gap of its holder. `g_fg_sf_noted` counts the gaps
+   noted, so fg_frame_machine knows whether the machine it surveys has any. */
 static void fg_frame_machine(FGWriter *w, JSStepHdr *h);
 static const JSStepVisit fg_step_fields;
-static void fg_sf_note(int kind) { fg_frame_gap(g_fg_frames, FG_GAP_STEP_FIELD, kind, NULL); }
+static uint32_t g_fg_sf_noted;
+static void fg_sf_note(int kind) { g_fg_sf_noted++; fg_frame_gap(g_fg_frames, FG_GAP_STEP_FIELD, kind, NULL); }
 static void fg_sf_val(JSContext *ctx, JSValue *slot) { (void)ctx; (void)slot; }
 static void fg_sf_strbuf(JSContext *ctx, StringBuffer *slot) { (void)ctx; (void)slot; fg_sf_note(FG_SF_STRBUF); }
 static void fg_sf_props(JSContext *ctx, JSPropertyEnum **slot, uint32_t n) {
@@ -85127,11 +85200,16 @@ static void fg_sf_slots(JSContext *ctx, ValueSlot **slot, int64_t cap, int64_t f
 }
 static void fg_sf_buf(JSContext *ctx, void **slot, size_t bytes) { (void)ctx; (void)slot; (void)bytes; fg_sf_note(FG_SF_BUF); }
 static void fg_sf_atom(JSContext *ctx, JSAtom *slot) { (void)ctx; (void)slot; fg_sf_note(FG_SF_ATOM); }
-static void fg_sf_machine(JSContext *ctx, void **slot) { (void)ctx; if (*slot) fg_frame_machine(g_fg_frames, *slot); }
+static void fg_sf_machine(JSContext *ctx, void **slot) {
+    (void)ctx;
+    if (!*slot) return;
+    fg_sf_note(FG_SF_MACHINE);
+    fg_frame_machine(g_fg_frames, *slot);
+}
 static void fg_sf_array(JSContext *ctx, void **slot, size_t size, int n, int cap,
                         void (*each)(JSContext *, void *, JSStepVisit *)) {
     (void)cap;
-    fg_sf_note(FG_SF_ARRAY);
+    if (each != js_step_visit_value_elem || size != sizeof(JSValue)) fg_sf_note(FG_SF_ARRAY);
     if (*slot)
         for (int i = 0; i < n; i++) each(ctx, (uint8_t *)*slot + size * (size_t)i, (JSStepVisit *)&fg_step_fields);
 }
@@ -85154,12 +85232,29 @@ static const JSStepVisit fg_step_fields = {
     .maprec = fg_sf_maprec, .reexec = fg_sf_reexec, .tree = fg_sf_tree, .cache = fg_sf_cache
 };
 
-/* A step machine and each delegate it holds, by its declaration. */
+/* Whether a machine rests with no sub-sequence of its header in flight: every phase at its start, no fork asked,
+   no coercion, delegate, descriptor answer, parse or property key held. The header's borrowed slots (cb_coerce,
+   desc_get, desc_set, fork_over) are dead there, so the machine writer leaves them out. */
+static bool fg_step_at_rest(const JSStepHdr *h)
+{
+    return !(h->len_phase | h->spc_phase | h->num_phase | h->str_phase | h->get_phase | h->cs_phase |
+             h->exec_phase | h->prog_phase | h->keys_phase | h->desc_phase | h->coercing | h->fork_phase |
+             h->fork_kind)
+           && h->keys_probe == KEYS_PROBE_UNASKED && h->delegate == NULL && h->desc_facts == NULL
+           && h->prog_compile == NULL && h->get_atom == JS_ATOM_NULL;
+}
+
+/* A step machine and each delegate it holds, by its declaration: a gap when a field, its resting header or its
+   undeclared bytes (JSTrampStepDef.plain_rest) has no writer. */
 static void fg_frame_machine(FGWriter *w, JSStepHdr *h)
 {
     for (; h; h = h->delegate) {
-        fg_frame_gap(w, FG_GAP_STEP, 0, h->def);
+        const uint32_t noted = g_fg_sf_noted;
+
+        if (!h->def->plain_rest) fg_sf_note(FG_SF_VIEWS);
+        if (!fg_step_at_rest(h)) fg_sf_note(FG_SF_SUBSEQ);
         h->def->visit(w->ctx, h, (JSStepVisit *)&fg_step_fields);
+        if (g_fg_sf_noted != noted || h->delegate) fg_frame_gap(w, FG_GAP_STEP, 0, h->def);
     }
 }
 
@@ -85188,11 +85283,13 @@ static bool fg_rec_writable(uint8_t kind, void *st)
 }
 
 /* Whether the continuation `st` of `kind` waiting on a frame is one the call writer writes with the frame: none,
-   a kind whose frame's own operands are the whole of it, or a declared record whose fields the record writer
-   has. The links it waits on are asked one by one (fg_frame_links). */
+   a kind whose frame's own operands are the whole of it, a machine (fg_frame_machine says whether it is
+   written), or a declared record whose fields the record writer has. The links it waits on are asked one by one
+   (fg_frame_links). */
 static bool fg_cont_written(uint8_t kind, void *st)
 {
-    return kind == CONT_NONE || cont_kind_recordless(kind) || (cont_kind_declared(kind) && fg_rec_writable(kind, st));
+    return kind == CONT_NONE || cont_kind_recordless(kind) || kind == CONT_STEP
+           || (cont_kind_declared(kind) && fg_rec_writable(kind, st));
 }
 
 /* A declared record's fields (p_fields) in declaration order: an owned or borrowed value, a key, plain bytes;
@@ -85208,9 +85305,58 @@ static void fg_recw_other(void *u, const char *role) {
 static const ContRecFieldsVisit fg_recw = { fg_recw_val, fg_recw_val, fg_recw_atom, fg_recw_pod, fg_rec_none,
                                             fg_recw_other };
 
-/* The records waiting from a frame's continuation outward, the chain fg_frame_links surveys: each link a
-   declared record's fields (fg_rec_fields), followed by the kind of the link it waits on, CONT_NONE ending it.
-   The frame's record states its own kind, and a recordless kind has no link. */
+/* A step machine's declared fields in the strict write: a value, and an array of values as its count, its
+   capacity and its live elements. Every other kind is a gap fg_frame_machine has refused. */
+static FGBuf *g_fg_mout;
+static const JSStepVisit fg_step_write;
+static void fg_mw_val(JSContext *ctx, JSValue *slot) { (void)ctx; fg_value(g_fg_frames, g_fg_mout, *slot); }
+static void fg_mw_array(JSContext *ctx, void **slot, size_t size, int n, int cap,
+                        void (*each)(JSContext *, void *, JSStepVisit *)) {
+    DCHECK(each == js_step_visit_value_elem && size == sizeof(JSValue) && n <= cap,
+           "flow graph: a strict write reached a machine's array of something other than values");
+    fg_u8(g_fg_mout, *slot != NULL);
+    if (!*slot) return;
+    fg_u32(g_fg_mout, (uint32_t)n);
+    fg_u32(g_fg_mout, (uint32_t)cap);
+    for (int i = 0; i < n; i++) each(ctx, (uint8_t *)*slot + size * (size_t)i, (JSStepVisit *)&fg_step_write);
+}
+static const JSStepVisit fg_step_write = { .val = fg_mw_val, .array = fg_mw_array };
+
+/* A resting machine (fg_step_at_rest) whose undeclared bytes are plain (plain_rest): its definition and its
+   argument count, the state's bytes as tramp_step_state_clone's byte copy reads them, then every value the
+   clone takes a second reference to (its arguments and the header's owned values, in the clone's order) and its
+   declared fields. The requester link is the chain's (fg_links). */
+static void fg_machine(FGWriter *w, FGBuf *out, JSStepHdr *h)
+{
+    const size_t sz = STEP_ARGV_OFFSET(h->def->size);
+    FGBuf *saved = g_fg_mout;
+
+    DCHECK(h->def->plain_rest && fg_step_at_rest(h) && h->argc >= 0 && g_fg_frames == w,
+           "flow graph: a strict write reached a machine fg_frame_machine refuses");
+    fg_put(out, &h->def, sizeof h->def);
+    fg_u32(out, (uint32_t)h->argc);
+    fg_put(out, h, sz);
+    for (int i = 0; i < h->argc; i++) fg_value(w, out, h->argv[i]);
+    fg_value(w, out, h->this_val);
+    fg_value(w, out, h->func_obj);
+    fg_value(w, out, h->coerce);
+    fg_value(w, out, h->ctor_ntgt);
+    fg_value(w, out, h->cap_promise);
+    fg_value(w, out, h->cap_funcs[0]);
+    fg_value(w, out, h->cap_funcs[1]);
+    fg_value(w, out, h->park_in);
+    fg_value(w, out, h->park_exc);
+    fg_value(w, out, h->keys_pred);
+    fg_value(w, out, h->unknown_operand);
+    fg_value(w, out, h->prog_src);
+    g_fg_mout = out;
+    h->def->visit(w->ctx, h, (JSStepVisit *)&fg_step_write);
+    g_fg_mout = saved;
+}
+
+/* The records and machines waiting from a frame's continuation outward, the chain fg_frame_links surveys: each
+   link a declared record's fields (fg_rec_fields) or a machine (fg_machine), followed by the kind of the link it
+   waits on, CONT_NONE ending it. The frame's record states its own kind, and a recordless kind has no link. */
 static void fg_links(FGWriter *w, FGBuf *out, void *st, uint8_t kind)
 {
     while (kind != CONT_NONE && !cont_kind_recordless(kind)) {
@@ -85218,9 +85364,13 @@ static void fg_links(FGWriter *w, FGBuf *out, void *st, uint8_t kind)
         uint8_t next_kind;
         void *next;
 
-        DCHECKF(st != NULL && cont_kind_declared(kind) && fg_rec_writable(kind, st),
-                "flow graph: a strict write reached continuation kind %d, which has no record writer", (int)kind);
-        fg_rec_fields(kind, st, &fg_recw, &o);
+        DCHECK(st != NULL, "flow graph: a continuation of a recorded kind holds no record");
+        if (kind == CONT_STEP) fg_machine(w, out, st);
+        else {
+            DCHECKF(cont_kind_declared(kind) && fg_rec_writable(kind, st),
+                    "flow graph: a strict write reached continuation kind %d, which has no record writer", (int)kind);
+            fg_rec_fields(kind, st, &fg_recw, &o);
+        }
         next = cont_outer_get(st, kind, &next_kind);
         fg_u8(out, next_kind);
         st = next; kind = next_kind;

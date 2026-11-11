@@ -397,6 +397,10 @@ typedef struct JSTrampStepDef {
        its completion, or JS_UNINITIALIZED where the facets decide no step. Asked by the unknown-callee [[Call]]
        machine before it runs the examples; NULL where the algorithm states none. */
     JSValue (*over_unknown_receiver)(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+    /* 1 where every byte of the state past the header that `visit` does not name is plain data a byte copy
+       keeps (no borrowed view, no pointer), so the flow graph writes the machine as those bytes and its
+       declared fields. 0 = not audited: the graph records the machine as a gap (`stepField views`). */
+    uint8_t plain_rest;
 } JSTrampStepDef;
 
 enum { JS_SEARCH_RESULT_NONE = 0, JS_SEARCH_RESULT_FIRST = 1, JS_SEARCH_RESULT_LAST = 2 };
