@@ -69,12 +69,11 @@
  * There are two such lines, and each states the instance's engine work at the read. `stalled` says the
  * frontier is out of work, so blocking denies nobody the thread and a round that pays nothing is this zone
  * refusing, the one thing that ends a live session. `poll` says the frontier is running, at every slice.
- * A send's answer is written at the first read after the wire produced it (a streamed one record by record): the
- * engine lands it at its due point on the path of the flow that asked (solver/engine.h's engine_reply_clock), so
- * the read it is written at decides nothing. A record a peer's read causes here is due at the clock of the read
- * after its cause plus `PEER_RECORD_LATENCY_WORK`, on the one timeline the cluster's clocks share; a read pays
- * the peer records due at its clock once every peer has passed the point where it could still cause one, and a
- * stalled instance's clock first moves to its earliest such due point.
+ * A send's answer is written at the first read after the wire produced it; the engine lands it at its due point
+ * on the asking flow's path (solver/engine.h's engine_reply_clock). A record a peer's read causes here is due at
+ * the clock of the read after its cause plus `PEER_RECORD_LATENCY_WORK`, on the cluster's one timeline; a read
+ * pays the peer records due at its clock once no peer can still cause one, and a stalled instance's clock first
+ * moves to its earliest such due point.
  *
  * AND IT ROUTES, WHICH IS THE ZONE'S ONE OTHER FACT: which instance holds which document. An instance is an
  * ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), so a CROSS-ORIGIN child is a second PROCESS of the same binary and
@@ -1517,22 +1516,18 @@ async function main() {
      cannot supply what the frontier is waiting for, and it is the same test `engine_run` makes one level down
      (`r == ENGINE_STEP_STALLED && filled == 0`). It is not a bound and it truncates nothing — every flow keeps
      its snapshot, and the reason travels as the zone's own words rather than as a guess made by the child. */
-  /* One round, written to a child standing in the read; both verbs write exactly this. It writes the owed
-     answers the wire has produced, in announcement order (a streamed one every record landed so far, in turn);
-     then the records peers' reads owe it (`crossSend`) due at its clock, ordered by due point, then the causing
-     instance's document name, then that instance's ordinal; then the other ready records; then `go`, which it
-     always writes: the child blocks in `abi_pay` until it. A caller writes once no instance can still cause a
-     record due by its clock (`clusterSafe`). A written fetch key is owed no longer (the child re-announces its
-     bill when let go, see `track`); a request id stays in `answered`.
-     Named residual. Not covered: a cross-agent operation or a post held for a document no instance holds yet
-     (`held`) is stamped at its causing instance's first read after the document lands, the product's
-     identities other instances emitted (`noveltyHand`) are handed at whatever read follows their arrival, and a
-     peer record reaches each flow wherever that flow stands when the round is written, while an owed answer
-     reaches it at its due point on its path. Next diff builds: a held record stamped at its causing read and
-     resolved to its holder before any instance passes its due point, the novelty hand-off as a record on the
-     same timeline, and a peer record's due point carried onto each receiving flow's path. Absence shows as: two
-     runs of a multi-instance session whose census rows differ only where a held record, a peer's identity or a
-     peer record arrived. */
+  /* One round, written to a child standing in the read; both verbs write exactly this: the owed answers the
+     wire has produced, in announcement order (a streamed one each landed record in turn); then the peer records
+     (`crossSend`) due at its clock, by due point, causing document name and ordinal; then the ready records;
+     then `go`, which the child blocks in `abi_pay` until. A caller writes once no instance can still cause a
+     record due by its clock (`clusterSafe`). A written fetch key is owed no longer (see `track`); a request id
+     stays in `answered`.
+     Named residual. Not covered: a record held for a document no instance holds yet (`held`) is stamped at its
+     causing instance's first read after the document lands, other instances' identities (`noveltyHand`) are
+     handed at whatever read follows, and a peer record reaches each flow wherever it stands when the round is
+     written. Next diff builds: a held record stamped at its causing read, the novelty hand-off as a record on
+     the same timeline, and a peer record's due point carried onto each receiving flow's path. Absence shows as:
+     two runs of a multi-instance session whose census rows differ only where such a record arrived. */
   const payRound = (i) => {
     noveltyHand(i);
     for (const x of landedOwed(i)) {
