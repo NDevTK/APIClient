@@ -10983,12 +10983,13 @@ static bool gc_born_after(const JSGCObjectHeader *p, uint32_t floor)
 
 /* A release under an open scope left `p`'s count positive. The scope takes the reference the releaser gave up,
    one per noted release, which its trial subtracts and returns. An object at or below the scope's floor is
-   shared, so its trial would hold it as a root, and it is not noted. */
+   shared, so its trial would hold it as a root, and it is not noted. Nor is a release inside an unpriced span:
+   it gives back a reference an assert's condition took, which a release build never takes. */
 static void gc_release_note(JSRuntime *rt, JSGCObjectHeader *p)
 {
     JSGCCycle *c = &rt->gc_cycle;
 
-    if (!gc_born_after(p, c->scope_floor))
+    if (APICLIENT_UNPRICED_OPEN() || !gc_born_after(p, c->scope_floor))
         return;
     if (c->rel_n == c->rel_cap) {
         size_t cap = c->rel_cap ? c->rel_cap * 2 : 64;
