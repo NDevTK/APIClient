@@ -26445,10 +26445,15 @@ static _Thread_local JSAsyncFunctionState *g_flow_base_gen = NULL;
    side of the hook decides whether the flow parks. The value is who asked, biased by one so zero means nobody
    (JS_PREEMPT_* + 1); last raise wins, which loses nothing, since a raise is answered at the next dispatch.
    Every raiser runs on the polling thread, so the byte is a plain thread-local; local-exec keeps the
-   per-opcode poll a constant offset from the thread pointer. */
+   per-opcode poll a constant offset from the thread pointer.
+   Its top bit is a second request beside the kind: the running flow's path has reached a rest of its stand
+   (FLOW_STAND_DUE, JSFlowControlHooks.stand). Only the interpreter's poll answers it, since it is the one point
+   whose position is a function of the path, so FLOW_YIELD_SET keeps it and a step machine's poll reads the kind. */
 static _Thread_local uint8_t g_flow_yield_req __attribute__((tls_model("local-exec"))) = 0;
+#define FLOW_STAND_DUE           0x80u
 #define FLOW_YIELD_READ()        (g_flow_yield_req)
-#define FLOW_YIELD_SET(v)        (g_flow_yield_req = (uint8_t)(v))
+#define FLOW_YIELD_KIND()        (g_flow_yield_req & 0x7fu)
+#define FLOW_YIELD_SET(v)        (g_flow_yield_req = (uint8_t)((g_flow_yield_req & FLOW_STAND_DUE) | (v)))
 #define FLOW_YIELD_REQUEST(kind) FLOW_YIELD_SET((kind) + 1)
 void JS_RequestFlowYield(void) { FLOW_YIELD_REQUEST(JS_PREEMPT_HOST); }
 
@@ -26468,7 +26473,29 @@ void JS_RequestFlowYield(void) { FLOW_YIELD_REQUEST(JS_PREEMPT_HOST); }
  * every opcode. Discarded at a flow's switch-in (JS_FlowDiscardRetiredWork): what stands there then is host
  * work or a finished flow's residue, neither of them the incoming flow's. */
 static _Thread_local uint64_t g_flow_work_retired __attribute__((tls_model("local-exec"))) = 0;
-#define FLOW_WORK_RETIRE()  (g_flow_work_retired++, g_js_dispatch_life++)
+
+/* The running flow's path work left until its next rest of the stand (JSFlowControlHooks.stand): the work above
+   less the compiles, which a replay that finds a body's parse held does not repeat, so it counts down the flow's
+   coordinate. The host arms it (JS_FlowStandArm); at zero the poll's stand bit is raised, and it keeps counting
+   below zero until the hook re-arms it, so the host reads the overshoot. INT64_MAX is the no-policy value. */
+static _Thread_local int64_t g_flow_stand_left __attribute__((tls_model("local-exec"))) = INT64_MAX;
+static inline void js_flow_stand_retire(uint64_t units)
+{
+    int64_t before = g_flow_stand_left;
+
+    g_flow_stand_left -= (int64_t)units;
+    if (unlikely(before > 0 && g_flow_stand_left <= 0))
+        g_flow_yield_req |= FLOW_STAND_DUE;
+}
+void JS_FlowStandArm(int64_t left)
+{
+    g_flow_stand_left = left;
+    if (left <= 0) g_flow_yield_req |= FLOW_STAND_DUE;
+    else           g_flow_yield_req &= (uint8_t)~FLOW_STAND_DUE;
+}
+int64_t JS_FlowStandLeft(void) { return g_flow_stand_left; }
+#define FLOW_WORK_RETIRE()  (g_flow_work_retired++, g_js_dispatch_life++, \
+                             unlikely(--g_flow_stand_left == 0) ? (void)(g_flow_yield_req |= FLOW_STAND_DUE) : (void)0)
 
 /* The nearest frame running a page's bytecode, walking outward past call roots and frames with no bytecode body,
    or NULL: the frame JS_RunningSiteHash names. A C function this engine runs for the page code beneath it (a DOM
@@ -26506,6 +26533,7 @@ void JS_FlowRetireWork(uint64_t units)
 {
     if (APICLIENT_UNPRICED_OPEN()) return;
     g_flow_work_retired += units;
+    js_flow_stand_retire(units);
     js_flow_frameless_charge(g_flow_base_gen != NULL ? g_flow_base_rt : NULL, units);
 }
 
@@ -39487,11 +39515,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                quantum's asynchronous raise lands on an already-raised byte or a clear one). Exact, the split
                is invisible. */
             {
-                int ykind = (int)FLOW_YIELD_READ() - 1;
-                FLOW_YIELD_SET(0);
-                DCHECK(ykind >= 0, "the yield poll ran with no request standing — the poll is reached only from "
-                                   "DISPATCH under a raised request, so a zero here means something cleared the "
-                                   "request without taking the branch that owns it");
+                int ykind = (int)FLOW_YIELD_KIND() - 1;
+                bool stand = (g_flow_yield_req & FLOW_STAND_DUE) != 0;
+                g_flow_yield_req = 0;
+                DCHECK(ykind >= 0 || stand, "the yield poll ran with no request standing — the poll is reached only "
+                                            "from DISPATCH under a raised request, so a zero here means something "
+                                            "cleared the request without taking the branch that owns it");
                 /* NO FLOW, NO PARK. g_flow_base_gen == NULL is baseline setup before any flow exists — the same
                    exemption the drive-to-completion guards carry, and for the same reason: there is nothing to
                    suspend, so the offer is answered by taking it back rather than by asking a policy about a
@@ -39518,7 +39547,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                       g_flow_work_retired = 0;
                       g_flow_control.work(ctx, units);
                   }
-                  if (g_flow_control.preempt != NULL && g_flow_control.preempt(ykind)) {
+                  /* The stand's rest, after the bank so the host charges the site it leaves with the work done
+                     there, and before the policy, which the move's rank change raises a request for. */
+                  if (stand && g_flow_control.stand != NULL)
+                      g_flow_control.stand(ctx);
+                  if (ykind >= 0 && g_flow_control.preempt != NULL && g_flow_control.preempt(ykind)) {
                     FLOW_PREEMPT_COUNT(g_flow_preempt_requested);
                     if (likely(gen_state == g_flow_base_gen)) {
                         FLOW_PREEMPT_COUNT(g_flow_preempt_fired);
@@ -53578,7 +53611,12 @@ static __exception int json_next_token(JSParseState *s)
     int c;
     JSAtom atom;
 
-    js_flow_frameless_charge(s->ctx->rt, js_parse_count_bytes(s));
+    {
+        uint64_t units = js_parse_count_bytes(s);
+
+        js_flow_stand_retire(units);
+        js_flow_frameless_charge(s->ctx->rt, units);
+    }
     json_free_token(s, &s->token);
 
     p = s->last_ptr = s->buf_ptr;
@@ -62053,12 +62091,12 @@ static bool js_parse_want_yield(JSParseState *s)
         s->pd_offer_at = g_flow_work_retired;
         return true;
     }
-    if (period > 0 && !FLOW_YIELD_READ() && g_flow_work_retired - s->pd_offer_at >= period)
+    if (period > 0 && !FLOW_YIELD_KIND() && g_flow_work_retired - s->pd_offer_at >= period)
         FLOW_YIELD_REQUEST(g_flow_control.budget != NULL && g_flow_control.budget() ? JS_PREEMPT_HOST
                                                                                       : JS_PREEMPT_BACKEDGE);
-    if (likely(!FLOW_YIELD_READ()))
+    if (likely(!FLOW_YIELD_KIND()))
         return false;
-    ykind = (int)FLOW_YIELD_READ() - 1;
+    ykind = (int)FLOW_YIELD_KIND() - 1;
     /* Answered here, so cleared here, as the interpreter's poll does: a request left standing after a "no"
        would be re-asked at every step, and one answered "yes" is consumed by the suspension it caused. */
     FLOW_YIELD_SET(0);

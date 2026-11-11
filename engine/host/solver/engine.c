@@ -5609,6 +5609,29 @@ static void engine_stand_running(Flow *f, int kind, uint64_t key) {
     flow_stand_at(f, kind, key);
 }
 
+/* JSFlowControlHooks.stand: the running member's path has run its rest unit since its last rest, so it stands at the
+   code it is executing (JS_RunningSiteHash), and the service since its last move is charged to the site it leaves.
+   The unit is the quantum, counted on the member's own coordinate (Flow's `stand_next`) and never on the slice, so
+   where a rest falls is a function of the path, the same on every host and across a resume; a stretch that crossed
+   several units (one host charge) rests once. Asked from the interpreter's poll, where a page frame stands. */
+static void engine_stand_rest(JSContext *ctx) {
+    Flow *f = flow_running();
+    int64_t left = JS_FlowStandLeft();
+    uint64_t site;
+
+    DCHECKF(f != NULL && g_in_step > 0 && left <= 0,
+            "a stand's rest was raised with no flow running, outside a step, or with %lld units still to run — "
+            "flow_switch_in arms the count for the member it switches in", (long long)left);
+    CHECK(JS_RunningSiteHash(ctx, &site), "a stand's rest was asked with no page frame standing — the interpreter's "
+                                         "poll is its one caller, and it runs a bytecode frame");
+    engine_stand_running(f, FLOW_SITE_CODE, site);
+    do {
+        f->stand_next += ENGINE_QUANTUM_WORK;
+        left += ENGINE_QUANTUM_WORK;
+    } while (left <= 0);
+    JS_FlowStandArm(left);
+}
+
 /* Whose work a step unit's frameless part is, asked at the step's charge for every step that retired any. 1: an act
  * the engine forces because it chose to explore (a drive's seed, a modelled close request, scroll or second open, a
  * fork over a value no observation decided, a retirement), whose frameless work is exploration and is service at
@@ -10110,16 +10133,13 @@ typedef struct {
    It writes nothing, so the scheduler asks it after a step to stand the member at its next unit, and flow_step
    asks it at each pass and dispatches on the answer. `entry` is the step's first pass (the one rest point where
    an agent is chosen); `task_done` is flow_step's `turn_task_done`. A program entry is named by its row's content
-   digest, a job's by JS_JobSiteHash over its callee. A member's site is thus the last decision it reached (the fork
-   stands it there) or the entry of the unit it began since, never where a quantum ended: the quantum is the
-   scheduler's rest granularity, and no ranking term may move with it.
+   digest, a job's by JS_JobSiteHash over its callee. Where a step ended names no site, since the slice's end is
+   the schedule's; page code a unit runs moves the member at its rests (engine_stand_rest), on its own path.
    A host rung or a step-machine job names no entry: its own work runs with no page frame, which serves no site in a
    unit of the page's own loop and serves the act's site in an act the engine forces (step_unit_forced_act).
    Named residual. Not covered: the agent choice of a flow with more than one agent, and the rungs below
-   run-a-task, answer HOOK_UNDECIDED; and page code such a unit hands control to (a settled reply's head reaction,
-   a timer task's handler, an animation frame callback) is served at the member's previous stand. Next diff builds:
-   those hooks as due reads beside their performs, and a stand at each callback's entry. Absence shows as: a
-   member's previous site served by steps that ran a callback's code and no code of that site's subtree. */
+   run-a-task, answer HOOK_UNDECIDED. Next diff builds: those hooks as due reads beside their performs. Absence
+   shows as: a step that dispatches one of those rungs with `next_arm1` naming HOOK_UNDECIDED's rung. */
 static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry, int task_done) {
     FlowNextUnit nu = { .arm = NEXT_IDLE, .due = NEXT_DUE, .index = -1, .row = ROW_NONE };
     int stack_empty;
@@ -10149,8 +10169,8 @@ static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry
     else if ((nu.index = flow_reply_success_fork_at(ctx, f)) >= 0) nu.arm = NEXT_FORK_REPLY_SUCCESS;
     else if (JS_HasParkedFlow(JS_GetRuntime(ctx))) nu.arm = NEXT_RESUME_PARKED;
     else if (flow_frame(f)) nu.arm = NEXT_RESUME_PROGRAM;
-    /* A fork rung or a resumption continues the unit the member is in, so it names no site: the member keeps standing
-       at its last decision or at the entry of that unit, which its path decides and where a quantum ended does not. */
+    /* A fork rung or a resumption continues the unit the member is in, so it names no site: the member keeps its
+       stand, which its path moves (the fork, its rests) and where a step ended does not. */
     if (nu.arm != NEXT_IDLE) return nu;
     if (!task_done && g_link_connected_due && g_link_connected_due(ctx)) { nu.arm = NEXT_LINK_CONNECTED; return nu; }
     if (!task_done && flow_deliver_pending(f) && flow_deliver_head_ready(ctx, f)) {
@@ -12136,6 +12156,8 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
        residue of a flow that finished without parking, never `f`'s. Banked, it would put another timeline's
        duration into this flow's first `performance.now()`. */
     thread_work_note_discarded(JS_FlowDiscardRetiredWork());
+    /* And its stand's next rest, counted from its coordinate (engine_stand_rest). */
+    JS_FlowStandArm(f->stand_next - f->path_work);
     if (!f->delta) f->delta = cow_delta_new();
     cow_set_current((CowDelta *)f->delta);
     cow_apply(ctx, (CowDelta *)f->delta);
@@ -12301,7 +12323,8 @@ static const JSFlowControlHooks FC_EXPLORE = { .branch = engine_branch_hook, .ou
                                                .budget = engine_budget_hook,
                                                .budget_period = ENGINE_QUANTUM_ASK_EVERY,
                                                .work = engine_work_hook,
-                                               .parse_units_per_byte = THREAD_WORK_UNITS_PER_BYTE_SCRIPT };
+                                               .parse_units_per_byte = THREAD_WORK_UNITS_PER_BYTE_SCRIPT,
+                                               .stand = engine_stand_rest };
 static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook,      /* candidate re-fire: no fork, still preemptible */
                                                .budget = engine_budget_hook, /* and the same slice: a candidate
                                                                                 holds the thread as any flow does */
@@ -12310,7 +12333,8 @@ static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook,      /* 
                                                                                 candidate re-fires as a flow, and a
                                                                                 sink reading a duration must see the
                                                                                 one the explore run saw */
-                                               .parse_units_per_byte = THREAD_WORK_UNITS_PER_BYTE_SCRIPT };
+                                               .parse_units_per_byte = THREAD_WORK_UNITS_PER_BYTE_SCRIPT,
+                                               .stand = engine_stand_rest };
 static const JSFlowControlHooks FC_OFF     = { 0 };
 
 /* The wall clock, which times nothing the scheduler decides on: the cooperative slice and the WFQ's aging charge
@@ -14446,9 +14470,15 @@ static int engine_sched_slice(int resume) {
                 flow_age_running(step_work, (int64_t)JS_FlowCompileWorkLife() - step_compile0, frameless,
                                  frameless > 0 && step_unit_forced_act(g_step_unit));
             }
-            /* The service just charged was the site the flow stood at while it ran. A member about to begin a unit
-               stands at that unit's entry (flow_next_unit: the program or task the ladder starts next, the head of a
-               checkpoint); one in the middle of a unit keeps its last decision or that unit's entry. */
+            /* The stand's count and the coordinate are one quantity read two ways: quickjs counts down what the
+               path retired and the charge above added it, compiles left out of both. */
+            DCHECKF(flow_running() != cur || JS_FlowStandLeft() == cur->stand_next - cur->path_work,
+                    "the running member's count to its next rest (%lld) is not its rest's coordinate less its own "
+                    "(%lld - %lld) — a retire site counts down one and not the other", (long long)JS_FlowStandLeft(),
+                    (long long)cur->stand_next, (long long)cur->path_work);
+            /* The service just charged was the site the flow stood at since its last move. A member about to begin a
+               unit stands at that unit's entry (flow_next_unit: the program or task the ladder starts next, the head
+               of a checkpoint); one in the middle of a unit keeps its stand until its next rest or decision. */
             if (r == FLOW_STEP_MORE || r == FLOW_STEP_OWED) {
                 FlowNextUnit nu = flow_next_unit(ctx, cur);
 

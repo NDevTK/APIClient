@@ -2285,6 +2285,11 @@ typedef struct JSFlowControlHooks {
        this many units, added to the count `work` receives. 0 retires none. The conversion is the host's
        (core/timing/thread_work.h states it), so the interpreter holds no rate of its own. */
     uint32_t parse_units_per_byte;
+    /* The running flow's path has reached a rest of its stand: the work JS_FlowStandArm armed has been retired
+       on its path, compiles left out. Called from the interpreter's yield poll at the first dispatch after the
+       crossing, so where it is called is a function of the path, after `work` has banked and before `preempt` is
+       asked. The host moves the flow's stand to the code it is executing and re-arms the count. NULL declines. */
+    void (*stand)(JSContext *ctx);
 } JSFlowControlHooks;
 JS_EXTERN void JS_SetFlowControlHooks(const JSFlowControlHooks *hooks);
 /* Re-arm the budget's dispatch countdown to a whole period: the scheduler calls it where a slice opens, so the
@@ -2301,6 +2306,11 @@ JS_EXTERN void JS_FlowBudgetArm(void);
 JS_EXTERN uint64_t JS_FlowDiscardRetiredWork(void);   /* returns what it discarded */
 /* Retires `units` of work the host did on the running flow's behalf, into the count `work` receives next. */
 JS_EXTERN void JS_FlowRetireWork(uint64_t units);
+/* The running flow's path work left before its stand's next rest (JSFlowControlHooks.stand): armed by the
+   scheduler where a step opens and by the hook, counted down by every unit retired on the path but a compile's.
+   An arm at or below zero raises the rest at once; the count keeps falling below zero until it is re-armed. */
+JS_EXTERN void JS_FlowStandArm(int64_t left);
+JS_EXTERN int64_t JS_FlowStandLeft(void);
 /* The retired-work count standing in the interpreter, unbanked and unchanged: what a budget adds to the work
    already banked to know the running flow's whole work so far. */
 JS_EXTERN uint64_t JS_FlowPeekRetiredWork(void);

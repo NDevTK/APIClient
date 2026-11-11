@@ -316,17 +316,16 @@ typedef struct FlowAcct {
    UCB bonus is optimism over that service, `1/(1 + pulls + ...)` with `pulls` the service in quanta of work (Level
    1's unit of a pull, a real number, so service shorter than a quantum still counts), so the count a member's
    optimism reads is the family's (a share the family owns, kept on the account), and every member at one code site
-   reads it at every instant. A fork moves nothing: both arms stand at the parent's code site. Service at a site
-   lowers every member standing there at once, and an arm that reaches a site its family has not served stands at
-   full optimism, less what its own operands price (FlowSite).
+   reads it at every instant. Both arms of a fork stand at the decision. Service at a site lowers every member
+   standing there at once; a member that reaches code its family has not served reads full optimism, less what its
+   own operands price (FlowSite).
    The identity is (`kind`, `key`): `kind` 0 is the site of a member that has decided nothing, FLOW_SITE_CODE a code
    position (quickjs's JS_RunningSiteHash: the body's cross-session locator, which folds the bundle's content
    digest, plus the opcode offset; or a program's entry, its row's content digest), FLOW_SITE_DRIVE a driven body
    (its orphan hash), FLOW_SITE_ACT an act the engine forces (its rung's step unit).
-   A member stands where it last decided (the fork) or at the entry of the unit it last began (engine.c's
-   flow_next_unit, asked after each step), so a quantum's service is charged to the decision whose subtree it runs.
-   Where a quantum ended names no site: the quantum is the scheduler's rest granularity, so a key that moved with
-   it would make optimism a function of the slice size.
+   A member stands at its last decision, at the entry of the unit it last began (engine.c's flow_next_unit), or at
+   the code it executed at its last rest (engine.c's engine_stand_rest, each quantum of its own path work, never of
+   the slice), whichever came last, so service is charged to the code whose work it is.
    Named residual. Not covered: the ledger is not parked, so a cold-resumed member stands at its family's keyless
    site at zero service. Next diff builds: the ledger in the cold tier's family record. Absence shows as: a resumed
    session re-serving sites from zero. */
@@ -2562,6 +2561,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     DCHECK(sib->path_work == 0 && sib->park_slots == 0 && sib->trail == NULL && sib->trail_seen == 0,
            "a forked sibling ran, parked or took a reply before inheriting its parent's path");
     sib->path_work = parent->path_work;
+    sib->stand_next = parent->stand_next;
     sib->park_slots = parent->park_slots;
     sib->trail = reply_trail_share(parent->trail);
     sib->trail_seen = parent->trail_seen;
@@ -3243,6 +3243,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
        uncharged flow reads a current window holding nothing. */
     f->val = 0.0; f->work = 0; f->work_gen = 0; f->visits = 0; f->orphan_seen = 0;
     f->path_work = 0; f->park_slots = 0; f->trail = NULL; f->trail_seen = 0;
+    f->stand_next = ENGINE_QUANTUM_WORK;
     /* And the dispatch count, which nothing else writes to zero: a member arrives never-chosen and the number only
        rises. */
     f->picks = 0;
@@ -3400,6 +3401,7 @@ void flow_arrive_on_snapshot(Flow *sib, const Flow *snap, FlowPathMarks at_cut) 
        code site in its own ledger. */
     sib->visits = snap->visits;
     sib->path_work = snap->path_work;
+    sib->stand_next = snap->stand_next;
     sib->park_slots = snap->park_slots;
     sib->trail = reply_trail_share(snap->trail);
     sib->trail_seen = snap->trail_seen;
