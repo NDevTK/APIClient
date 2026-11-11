@@ -311,6 +311,10 @@ bool element_view_subtree_has_boxes(const lxb_dom_node_t *n)
         none = css_display_spells(d, CSS_KEYWORD_NONE);
         if (none) return false;
     }
+    /* A connected element whose flat-tree chain ends short of the Document is in no flat tree (a host's light
+       child no slot takes, or a child of a slot that has assigned nodes), and css-shadow-1 §4.1 generates boxes
+       for the flat tree only. */
+    if (a == NULL) return false;
     return !ev_in_replaced_content(n);
 }
 

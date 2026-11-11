@@ -78,13 +78,8 @@
  * read: `el.offsetHeight` under a transformed or will-changed ancestor now answers instead of aborting the
  * document, wherever nothing on the chain is absolutely or fixed positioned.
  *
- * AND THE FLAT TREE IS THE THIRD, ANSWERED THE SAME WAY. §7's walk is over "the parent of the element in the
- * flat tree" — CSS Scoping §4.1 "Flattening the DOM into an Element Tree" — and its second clause is DOM §4.8's
- * "closed-shadow-hidden". Neither exists in this engine: there is no flat-tree parent and no slot assignment to
- * read one from. The node tree IS the flat tree for an element whose root is not a shadow root and none of
- * whose ancestors hosts one, which is a checkable condition and is checked; anything else crashes naming both
- * definitions. A silent node-tree walk would answer a slotted element's offsetParent with an ancestor the flat
- * tree does not have it under, which is a wrong element rather than an absent one.
+ * The walk is over the flat tree (core/dom/flat_tree.h), and an ancestor in a shadow tree the element is only
+ * slotted into is skipped (html_element_view.c's hev_hidden_from states which, and the measurement it follows).
  *
  * NOTHING HERE IS STORED. Every answer is derived per read from the running flow's own tree and its own
  * cascade, which is core/layout/used_value.h's decision for its reason: a box tree cached across a context

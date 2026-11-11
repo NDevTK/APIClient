@@ -15,6 +15,7 @@
 #include "core/dom/document.h"
 #include "core/dom/element.h"
 #include "core/dom/element_view.h"
+#include "core/dom/flat_tree.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
 #include "core/html/html_element.h"
@@ -133,42 +134,17 @@ static bool hev_declares(lxb_dom_element_t *el, const char *name)
     return declared;
 }
 
-/* THE CHAIN, CHECKED ONCE BEFORE ANY OF §7's FACTS IS READ. The absences are asked about together because they
-   are the same failure — an input the walk below cannot see — and because all of them are decided over the same
-   ancestor chain.
-   The shadow question is first because it is what makes this chain the right one. §7 walks the FLAT TREE (CSS Scoping §4.1 "Flattening the DOM
-   into an Element Tree"), and the node tree is that tree exactly when no element on the chain hosts a shadow
-   root and the element's root is not one — a slotted element's flat-tree parent is its assigned SLOT, which the
-   node tree does not have it under at all. That reaches an EXTENT too, because CSS Viewport §4's effective zoom
-   is a product over "all flat tree ancestors" and a shadow tree's elements are not node-tree ancestors of a
-   slotted element. Neither the flat tree nor DOM §4.8's `closed-shadow-hidden` exists in this engine, so a tree
-   with a shadow root in it crashes naming both rather than being walked in the tree §7 does not name. */
-static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n)
+/* The flat-tree chain (css-shadow-1 §4.1), checked once before any of §7's facts is read for the input the walk
+   below cannot see: a `zoom` declaration, since CSS Viewport §4's effective zoom is a product over "all flat tree
+   ancestors". */
+static void hev_require_readable_chain(lxb_dom_node_t *n)
 {
-    lxb_dom_node_t *a, *root = n;
+    lxb_dom_node_t *a;
     size_t i;
 
-    for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
+    for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = flat_tree_parent(a)) {
         lxb_dom_element_t *el = lxb_dom_interface_element(a);
 
-        if (shadow_root_of_element(ctx, el) != NULL)
-            DFAIL("CSSOM VIEW §7's offsetParent walk is over 'the parent of the element in the FLAT TREE', and "
-                  "an element on this chain HOSTS A SHADOW ROOT — so the flat tree and the node tree are "
-                  "different trees here and this engine only has the second. CSS Scoping §4.1 'Flattening the "
-                  "DOM into an Element Tree' is the construction: a shadow host's flat-tree children are its "
-                  "shadow root's children, and a light child that is assigned to a slot appears under THAT "
-                  "SLOT. Walking the node tree instead would answer a slotted element's offsetParent with an "
-                  "ancestor the flat tree does not have it under — a WRONG element, not an absent one. §7's "
-                  "second clause needs the other half as well: DOM §4.8 'Interface ShadowRoot' defines "
-                  "closed-shadow-hidden over three conditions — 'A's root is a shadow root', 'A's root is not "
-                  "a shadow-including inclusive ancestor of B', and 'A's root is a shadow root whose mode is "
-                  "`closed` or A's root's host is closed-shadow-hidden from B' — which decide whether an "
-                  "ancestor is visible to this element at all. THE THIRD CONDITION IS RECURSIVE, and reading a "
-                  "mode alone is a WRONG answer rather than a narrower one: an element under an OPEN shadow "
-                  "root whose HOST sits under a CLOSED one IS closed-shadow-hidden, and the mode says `open` "
-                  "at every step of that walk. BUILD the flat-tree parent over DOM §4.2.2's assigned slot and "
-                  "slottable, then closed-shadow-hidden as the disjunction the section states — "
-                  "shadow_root_is_open's mode test OR the same predicate re-asked at shadow_root_host's host");
         for (i = 0; i < sizeof HEV_UNREADABLE_ALWAYS / sizeof HEV_UNREADABLE_ALWAYS[0]; i++)
             if (hev_declares(el, HEV_UNREADABLE_ALWAYS[i]))
                 DFAILF("an element on this CSSOM VIEW §7 chain DECLARES `%s`, whose computed value "
@@ -183,14 +159,7 @@ static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n)
                        "different-effective-zoom bullet can fire. BUILD this property's `Computed value:` line "
                        "in css_computed_value.c and record its shorthands in css_shorthand.c",
                        HEV_UNREADABLE_ALWAYS[i]);
-        root = a;
     }
-    if (root->parent != NULL && shadow_root_is(root->parent))
-        DFAIL("CSSOM VIEW §7's walk is over the FLAT TREE and this element's root IS A SHADOW ROOT, so the walk "
-              "would leave the tree at the shadow root rather than continuing through its HOST, which is where "
-              "CSS Scoping §4.1's flattening puts the shadow tree's children. BUILD the flat-tree parent (the "
-              "host, for the shadow root's own children) together with DOM §4.8's closed-shadow-hidden, which "
-              "is the other half §7's every bullet is qualified by");
 }
 
 /* ---- §7's `offsetParent` --------------------------------------------------------------------------------- */
@@ -214,10 +183,23 @@ static lxb_dom_element_t *hev_fixedpos_containing_block(const lxb_dom_node_t *n)
 {
     lxb_dom_node_t *a;
 
-    for (a = n->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent)
+    for (a = flat_tree_parent(n); a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = flat_tree_parent(a))
         if (hev_establishes_fixedpos_containing_block(lxb_dom_interface_element(a)))
             return lxb_dom_interface_element(a);
     return NULL;
+}
+
+/* Whether the flat-tree ancestor `a` is hidden from `el` in §7's walk: DOM §4.8 "Interface ShadowRoot"'s
+   closed-shadow-hidden without its mode condition — `a`'s root is a shadow root that is not a shadow-including
+   inclusive ancestor of `el`. §7 says closed-shadow-hidden, which keeps an open tree's ancestor; Chrome
+   157.0.8103.50, Firefox 160.0 and Safari 27.2 skip it whatever the mode (WPT
+   shadow-dom/offsetParent-across-shadow-boundaries.html, the open-mode slot subtests, wpt.fyi stable runs of
+   2026-11-11), so an offsetParent is always a shadow-including ancestor. */
+static bool hev_hidden_from(const lxb_dom_node_t *a, const lxb_dom_node_t *el)
+{
+    lxb_dom_node_t *root = node_root((lxb_dom_node_t *)a);
+
+    return shadow_root_is(root) && !shadow_root_is_shadow_including_inclusive_ancestor(root, el);
 }
 
 /* §7's own first list, shared by `offsetParent` and (in the ED) `scrollParent`: the four conditions under which
@@ -232,36 +214,46 @@ static bool hev_null_offset_parent(const HevTarget *t)
            hev_fixedpos_containing_block(t->node) == NULL;
 }
 
-/* §7's `offsetParent` ALGORITHM, in the spec's own step order. Returns the element or NULL.
-   "The element is in a fixed position containing block" is read as: it is `position: fixed` and step 1 found
-   an ancestor establishing one, so its containing block is that ancestor's. Step 2's first bullet then returns
-   the nearest such ancestor, and its second bullet's three conditions decide every other element. The third
-   bullet (different effective zoom) is unreachable because every effective zoom in this model is 1 (CSS
-   Viewport §4); `hev_require_readable_chain` asserts that over the whole chain.
-   THE WALK IS OVER ELEMENTS. §7 says "the parent of the element in the flat tree", and the flat tree contains
-   the document root's element and no Document node, so running out of element parents IS its "if there is no
-   more parent of ancestor, terminate this algorithm and return null". */
+/* §7's `offsetParent` algorithm, in the spec's own step order, over the flat tree. Returns the element or NULL.
+   "The element is in a fixed position containing block" is read as: it is `position: fixed`, step 1 found an
+   ancestor establishing one, and that ancestor is not hidden from it. The last clause is the same measurement
+   as hev_hidden_from's: for a fixed element whose fixed containing block is in a shadow tree it is slotted into,
+   the three engines answer the nearest absolute containing block the element can see (that file's "fixed
+   element assigned to a slot within a fixed containing block" subtests), where §7's fixed bullet finds none.
+   The different-effective-zoom bullet is unreachable: every effective zoom here is 1, which
+   hev_require_readable_chain asserts. Running out of element parents is "no more parent of ancestor in the flat
+   tree", since the flat tree holds the root element and no Document. */
 static lxb_dom_element_t *hev_offset_parent(const HevTarget *t)
 {
+    lxb_dom_element_t *el = lxb_dom_interface_element(t->node), *fixed_cb;
+    bool in_fixed_cb, is_static;
     lxb_dom_node_t *a;
 
     /* step 1 */
     if (hev_null_offset_parent(t)) return NULL;
-    /* step 2, the first bullet: no body or table bullet stands in front of it. */
-    if (css_computed_keyword_is(lxb_dom_interface_element(t->node), "position", CSS_KEYWORD_FIXED))
-        return hev_fixedpos_containing_block(t->node);
+    fixed_cb = css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED) ? hev_fixedpos_containing_block(t->node)
+                                                                          : NULL;
+    in_fixed_cb = fixed_cb != NULL && !hev_hidden_from(lxb_dom_interface_node(fixed_cb), t->node);
+    is_static = css_computed_keyword_is(el, "position", CSS_KEYWORD_STATIC);
     /* step 2 */
-    for (a = t->node->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
+    for (a = flat_tree_parent(t->node); a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = flat_tree_parent(a)) {
         lxb_dom_element_t *anc = lxb_dom_interface_element(a);
-        bool is_body = document_body_of(lxb_dom_interface_node(t->node->owner_document)) == a;
-        bool table_cell = hev_html_local_name_is(a, "td") || hev_html_local_name_is(a, "th") ||
-                          hev_html_local_name_is(a, "table");
         bool matches;
 
-        /* Step 2's first substep is over a closed-shadow-hidden ancestor, which the chain check has already
-           crashed on. */
-        matches = hev_establishes_abspos_containing_block(anc) || is_body ||
-                  (table_cell && css_computed_keyword_is(lxb_dom_interface_element(t->node), "position", CSS_KEYWORD_STATIC));
+        if (hev_hidden_from(a, t->node)) {
+            /* step 2's first substep */
+            if (css_computed_keyword_is(anc, "position", CSS_KEYWORD_FIXED) && hev_fixedpos_containing_block(a) == NULL)
+                return NULL;
+            continue;
+        }
+        /* step 2's second substep */
+        if (in_fixed_cb)
+            matches = hev_establishes_fixedpos_containing_block(anc);
+        else
+            matches = hev_establishes_abspos_containing_block(anc) ||
+                      document_body_of(lxb_dom_interface_node(t->node->owner_document)) == a ||
+                      (is_static && (hev_html_local_name_is(a, "td") || hev_html_local_name_is(a, "th") ||
+                                     hev_html_local_name_is(a, "table")));
         if (!matches) continue;
         /* §7 states its first two bullets over a BOX — a containing block is a box, and step 3 of `offsetTop`
            goes on to subtract this element's top PADDING EDGE — while `display: contents` gives an element none.
@@ -525,7 +517,7 @@ static int js_hev_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         hev_target(hdr->this_val, &t);
         /* The chain check runs for every member: `offsetWidth` reads no ancestor, yet CSS Viewport §4 makes its
            unscaled value a function of every flat-tree ancestor's `zoom`. */
-        hev_require_readable_chain(t.rctx, t.node);
+        hev_require_readable_chain(t.node);
         while (block_flow_drive_deferred(&d)) {
             /* HTML §15.4.2's rule 5 label is measured ahead of the member's read, which takes it from the
                job's record. */
