@@ -83,8 +83,8 @@ QJS_EXPORT void qjs_teardown(void);
 /* WHAT THE TRUSTED ZONE OWES THE FRONTIER, and how it pays. */
 QJS_EXPORT const char *qjs_pending(void);
 /* The header list and body of one line of qjs_pending, named by the line's identity fields: the JSON text
-   `{"headers":[[name,value,class],…],"body":<RFC 4648 §4 base64>|null,"bodyClass":<word>,"methodClass":<word>}`,
-   or `null` for an identity
+   `{"headers":[[name,value,class],…],"body":<RFC 4648 §4 base64>|null,"bodyClass":<word>}`, or `null` for an
+   identity
    with no outstanding park. Valid until the next call. */
 QJS_EXPORT const char *qjs_request(const char *method, const char *mode, const char *referrer_policy,
                                    const char *referrer, const char *headers, const char *body,

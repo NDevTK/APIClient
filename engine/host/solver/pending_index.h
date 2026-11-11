@@ -135,7 +135,8 @@ void pending_index_declined(JSValueConst rec, int rule);
     X(WIRE_IDLE, 0, "wire-idle", reply_declined_wire_idle) \
     X(ASKER, 0, "blocked-asker", reply_declined_asker) \
     X(TRANSPORT, 0, "blocked-transport", reply_declined_transport) \
-    X(UNADDRESSED, 0, "unaddressed", reply_declined_unaddressed)
+    X(UNADDRESSED, 0, "unaddressed", reply_declined_unaddressed) \
+    X(UNMETHODED, 0, "unmethoded", reply_declined_unmethoded)
 #define PEND_DECLINE_ENUM_(id, is_signal, token, metric) PEND_DECLINE_##id,
 enum { PEND_DECLINE_RULES(PEND_DECLINE_ENUM_) PEND_DECLINE_RULE_N };
 /* The rule `reason` names, or -1 for a reason of no rule above. Reads only the reason's bytes. */

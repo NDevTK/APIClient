@@ -199,7 +199,8 @@ FetchBodyClass fetch_body_class_of(const BodyState *b, bool grounded);
    literal, or XHR, whose open() keeps an unknown method off the host edge (core/xhr/xml_http_request.c) — so
    it is the zero. EXAMPLE: the normalized example of an unknown method (Fetch §5.4 step 25.3's derivation over
    it), which a session with that input sends. UNKNOWN: the display shape of an unknown method with no
-   example; the request is listed and judged, and the trusted zone never sends it. */
+   example, which is no method; the engine declines the request before any host is asked (solver/engine.c's
+   pending_park_request, PENDING_DECLINED_UNMETHODED), as it declines an address with no bytes. */
 typedef enum {
     FETCH_METHOD_CONCRETE = 0,
     FETCH_METHOD_EXAMPLE,

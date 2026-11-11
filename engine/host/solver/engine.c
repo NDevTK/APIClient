@@ -460,6 +460,11 @@ static void pending_park_request(JSContext *ctx, Flow *f, JSValue e, const Fetch
     pending_set_int(e, PEND_BODY_CLASS, (int)req->body_class);
     pending_set(e, PEND_URL, JS_NewString(ctx, use_url));
     pending_set(e, PEND_METHOD, JS_NewString(ctx, req->method));
+    /* Named residual. Not covered: the method's class reaches no host — the pending line carries no class word
+       for it, and the content read is skipped for a line with no header list and no body, so it cannot ride
+       there. Next diff: a method-class word on the pending line (engine_pending_split), read by
+       extension/bridge.js and engine/trusted.mjs into safe-fetch.js's `bytes` row beside the address. How its
+       absence shows: a fetch() whose method is an unknown's example is sent with `bytes` graded `concrete`. */
     pending_set_int(e, PEND_METHOD_CLASS, (int)req->method_class);
     pending_set(e, PEND_DESTINATION, JS_NewString(ctx, req->destination));
     /* `fetch_credentials_token` owns the one wire spelling (core/fetch/fetch.h) and is fatal on the unplaced
@@ -483,6 +488,15 @@ static void pending_park_request(JSContext *ctx, Flow *f, JSValue e, const Fetch
         pending_mark_unaddressed(ctx, e, req->address_value, req->address_url);
         pending_set(e, PEND_DECLINED, JS_NewString(ctx, PENDING_DECLINED_UNADDRESSED));
         g_reply_unaddressed++;
+        free(up_url);
+        return;
+    }
+    /* A METHOD WITH NO BYTES IS NOT FETCHABLE EITHER, for the address's reason: its field is the display shape
+       of an unknown, which names the request and is no Fetch §2.2.1 method. Declined here with no same-origin
+       question, since the address is bytes; flow_decline_fork's arms are the network error and the success
+       over an unknown reply, and a later session whose run has an example sends it. */
+    if (req->method_class == FETCH_METHOD_UNKNOWN) {
+        pending_set(e, PEND_DECLINED, JS_NewString(ctx, PENDING_DECLINED_UNMETHODED));
         free(up_url);
         return;
     }
@@ -4540,9 +4554,6 @@ char *engine_pending_request(JSContext *ctx, const PendRequestKey *key) {
     json_buf_raw(&b, ",");
     json_buf_key(&b, "bodyClass");
     json_buf_str(&b, fetch_body_class_token((FetchBodyClass)cls));
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "methodClass");
-    json_buf_str(&b, fetch_method_class_token((FetchMethodClass)pending_get_int(pe, PEND_METHOD_CLASS)));
     json_buf_raw(&b, "}");
     JS_FreeValue(ctx, bv);
     JS_FreeValue(ctx, hl);

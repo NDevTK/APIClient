@@ -809,6 +809,9 @@ const PolicyContainer *engine_document_policy(uint32_t doc);
 /* The engine's own refusal of a request whose address holds an unknown no example grounds (core/fetch/fetch.h's
    FETCH_ADDRESS_UNKNOWN): written where the zone writes its reasons, so the record states why its flow is parked. */
 #define PENDING_DECLINED_UNADDRESSED "unaddressed: the address holds a value this run has no bytes for"
+/* The same refusal of a request whose METHOD has no bytes (core/fetch/fetch.h's FETCH_METHOD_UNKNOWN: an unknown
+   method with no example), whose method field is its display shape and no token a host could send. */
+#define PENDING_DECLINED_UNMETHODED "unmethoded: the method holds a value this run has no bytes for"
 /* How many requests the engine declined that way, over both channels (the pending lines and the synchronous
    rendezvous). */
 long engine_unaddressed_total(void);
@@ -958,12 +961,10 @@ void engine_pending_split(char *line, const char **method, const char **destinat
                           const char **referrer_policy, const char **referrer, const char **headers,
                           const char **body, const char **address, const char **askers, const char **url);
 /* The header list and body of the outstanding request `key` names, as the JSON text
-   `{"headers":[[name,value,class],…],"body":<RFC 4648 §4 base64>|null,"bodyClass":<word>,"methodClass":<word>}`,
-   for the host to
+   `{"headers":[[name,value,class],…],"body":<RFC 4648 §4 base64>|null,"bodyClass":<word>}`, for the host to
    send what the page composed (Fetch §2.2.5 "Requests"' header list and body). A header's `class` is
    header_value_class_token of its value, which is the example's bytes for `example` and the display shape for
-   `unknown`. `bodyClass` and `methodClass` are fetch_body_class_token and fetch_method_class_token of the member
-   the line is judged as. Owned by the caller (free()); NULL for a key with no outstanding park,
+   `unknown`. `bodyClass` is fetch_body_class_token of the member the line is judged as. Owned by the caller (free()); NULL for a key with no outstanding park,
    which is a host reading a request it was not shown (asserted). */
 char *engine_pending_request(JSContext *ctx, const PendRequestKey *key);
 /* Deliver a body for one request, keyed on the identity the flow parked on (solver/pending_index.h's
