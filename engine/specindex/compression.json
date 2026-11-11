@@ -1,0 +1,62 @@
+{
+ "spec": "Compression Standard",
+ "key": "compression",
+ "base": "https://compression.spec.whatwg.org/",
+ "specUpdated": "19 October 2026",
+ "fetched": "2026-11-11",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Infrastructure",
+   "page": "",
+   "id": "infrastructure"
+  },
+  "3": {
+   "title": "Supported formats",
+   "page": "",
+   "id": "supported-formats"
+  },
+  "4": {
+   "title": "Interface CompressionStream",
+   "page": "",
+   "id": "compression-stream"
+  },
+  "5": {
+   "title": "Interface DecompressionStream",
+   "page": "",
+   "id": "decompression-stream"
+  },
+  "6": {
+   "title": "Privacy and security considerations",
+   "page": "",
+   "id": "privacy-security"
+  },
+  "7": {
+   "title": "Examples",
+   "page": "",
+   "id": "examples"
+  },
+  "7.1": {
+   "title": "Gzip-compress a stream",
+   "page": "",
+   "id": "example-gzip-compress-stream"
+  },
+  "7.2": {
+   "title": "Deflate-compress an ArrayBuffer to a Uint8Array",
+   "page": "",
+   "id": "example-deflate-compress"
+  },
+  "7.3": {
+   "title": "Gzip-decompress a Blob to Blob",
+   "page": "",
+   "id": "example-gzip-decompress"
+  }
+ },
+ "dfns": {},
+ "ops": {},
+ "uses": {}
+}

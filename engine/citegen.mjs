@@ -544,6 +544,9 @@ const SPECS = [
     anchors: ["subresource integrity", "sri"] },
   { key: "xhr", label: "XMLHttpRequest Standard", kind: "bikeshed",
     base: "https://xhr.spec.whatwg.org/", edition: "maintained", anchors: ["xhr", "xmlhttprequest"] },
+  /* The Compression Standard: core/compression cites it. Bikeshed-rendered. */
+  { key: "compression", label: "Compression Standard", kind: "bikeshed",
+    base: "https://compression.spec.whatwg.org/", edition: "maintained", anchors: ["compression"] },
   /* The WebSockets Standard: core/websockets and core/events/close_event.c cite it. Bikeshed-rendered. */
   { key: "websockets", label: "WebSockets Standard", kind: "bikeshed",
     base: "https://websockets.spec.whatwg.org/", edition: "maintained", anchors: ["websockets"] },

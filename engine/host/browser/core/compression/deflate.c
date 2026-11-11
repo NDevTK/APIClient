@@ -52,7 +52,7 @@ static void header(Deflate *d, DeflateOut *out)
         out_put(out, h, sizeof h);
     } else if (d->wrapping == DEFLATE_GZIP) {
         /* RFC 1952 §2.3.1: ID1 31, ID2 139, CM 8, then FLG, MTIME and XFL at 0 and OS at 255, the defaults
-           §2.3.1.2 Compliance gives "for all the other fields in the fixed-length part of the header". */
+           RFC 1952 §2.3.1.2 Compliance gives "for all the other fields in the fixed-length part of the header". */
         static const uint8_t h[10] = { 0x1f, 0x8b, 0x08, 0, 0, 0, 0, 0, 0, 0xff };
         out_put(out, h, sizeof h);
     }
