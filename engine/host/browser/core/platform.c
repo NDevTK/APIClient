@@ -28,6 +28,7 @@
 #include "core/dom/scroll_events.h"
 #include "core/encoding/encoding.h"
 #include "core/encoding/text_stream.h"
+#include "core/compression/compression_stream.h"
 #include "core/events/broadcast_channel.h"
 #include "core/websockets/web_socket.h"
 #include "core/eventsource/event_source.h"
@@ -215,6 +216,7 @@ static void d_blob(JSContext *c, const PlatformAgent *a) { (void)a; blob_init(c)
 static void d_data_transfer(JSContext *c, const PlatformAgent *a) { (void)a; data_transfer_init(c); }
 static void d_encoding(JSContext *c, const PlatformAgent *a) { (void)a; encoding_init(c); }
 static void d_text_stream(JSContext *c, const PlatformAgent *a) { (void)a; text_stream_init(c); }
+static void d_compression_stream(JSContext *c, const PlatformAgent *a) { (void)a; compression_stream_init(c); }
 static void d_event_target(JSContext *c, const PlatformAgent *a) { (void)a; event_target_init(c); }
 static void d_window(JSContext *c, const PlatformAgent *a) { (void)a; window_init(c); }
 static void d_navigator(JSContext *c, const PlatformAgent *a) { (void)a; navigator_init(c); }
@@ -470,6 +472,9 @@ static void r_form_data(JSRuntime *rt) { (void)rt; form_data_free(); }
    elsewhere reads generated tables rather than a static this release resets. */
 static void r_encoding(JSRuntime *rt) { (void)rt; encoding_free(); }
 static void r_text_stream(JSRuntime *rt) { (void)rt; text_stream_free(); }
+/* Compression §4: one class id, a runtime handle and step ids, no JSValue or JSAtom. It reads `encoding`'s
+   buffer-source helper and `transform_stream`'s operations, both declared above it, so it releases first. */
+static void r_compression_stream(JSRuntime *rt) { (void)rt; compression_stream_free(); }
 /* DOM §3.1/§3.2 and the Observable standard. Observable depends on abort: §2.2 SubscribeOptions declares
    `AbortSignal signal` (observable.c brands it through abort_signal_class()), and the Observable standard §2.1
    "The Subscriber interface"'s subscription controller is an AbortSignal. So `abort` is declared first and
@@ -734,6 +739,8 @@ static const PlatformComponent PLATFORM[] = {
        `[Exposed=*]`: no document half. */
     { "encoding",            d_encoding,            NULL,        r_encoding },
     { "text_stream",         d_text_stream,         NULL,        r_text_stream },
+    /* Compression §4 CompressionStream, `[Exposed=*]`: no document half. */
+    { "compression_stream",  d_compression_stream,  NULL,        r_compression_stream },
     /* §2.7 before §7.2.5, and its per-document half is inside window_install for the reason above. */
     { "event_target",        d_event_target,        NULL,        r_event_target },
     /* HTML §10.2.1.1 "The WorkerGlobalScope common interface" and §10.2.1.2 "Dedicated workers and the
@@ -1252,6 +1259,7 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "DataTransfer",          "data_transfer" },
     { "TextEncoder",           "encoding" },
     { "TextDecoderStream",     "text_stream" },
+    { "CompressionStream",     "compression_stream" },
     { "ReadableStream",        "readable_stream" },
     { "WritableStream",        "writable_stream" },
     { "TransformStream",       "transform_stream" },
