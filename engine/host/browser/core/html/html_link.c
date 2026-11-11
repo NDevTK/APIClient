@@ -1415,18 +1415,21 @@ static void link_modulepreload(JSContext *ctx, lxb_dom_element_t *el)
        mode". So the state decides the CREDENTIALS here and decides nothing about the mode. */
     {
         JSValue promise, fetch, on[2], derived;
+        ModuleMapAsk ask = module_map_ask(ctx, abs, MODULE_TYPE_JAVASCRIPT_OR_WASM, &promise, &fetch);
 
-        /* Fetch §4.1 steps 4, 6 and 7 run inside link_fetch_request. */
-        if (module_map_ask(ctx, abs, MODULE_TYPE_JAVASCRIPT_OR_WASM, &promise, &fetch) == MODULE_MAP_FETCH)
-            link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_NOT_PARSER_INSERTED,
-                               cors_settings_attribute_credentials(cors_settings_attribute_state(el)),
-                               FETCH_MODE_CORS, link_module_deliver, -1, fetch);
+        /* The onComplete is on the entry before its fetch is issued, as step 7 appends it before step 8's
+           request: a request link_fetch_request refuses settles the entry on the spot. */
         on[0] = JS_NewCFunctionData(ctx, link_module_complete, 1, 1, 1, (JSValueConst *)&wrap);
         on[1] = JS_NewCFunctionData(ctx, link_module_complete, 1, 0, 1, (JSValueConst *)&wrap);
         CHECK(!JS_IsException(on[0]) && !JS_IsException(on[1]),
               "§4.6.8.12: OOM minting a modulepreload's step 14 onComplete");
         derived = JS_PerformPromiseThen(ctx, promise, on[0], on[1]);
         CHECK(!JS_IsException(derived), "§4.6.8.12: OOM attaching a modulepreload's step 14 onComplete");
+        /* Fetch §4.1 steps 4, 6 and 7 run inside link_fetch_request. */
+        if (ask == MODULE_MAP_FETCH)
+            link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_NOT_PARSER_INSERTED,
+                               cors_settings_attribute_credentials(cors_settings_attribute_state(el)),
+                               FETCH_MODE_CORS, link_module_deliver, -1, fetch);
         JS_FreeValue(ctx, derived);
         JS_FreeValue(ctx, on[0]);
         JS_FreeValue(ctx, on[1]);
