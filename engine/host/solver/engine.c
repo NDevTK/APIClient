@@ -12967,7 +12967,8 @@ static int sale_write_gaps(Flow *f, SaleVals *vals, uint8_t **head, size_t *head
 static FlowSold *sale_write(Flow *f, SaleVals *vals, uint8_t *head, size_t head_n) {
     FlowSold *s = calloc(1, sizeof *s);
     JSValue *frames[1] = { f->agents[0].frame };
-    JSFlowGraphRoots gr = { .vals = vals->v, .frames = frames, .n_vals = vals->n, .n_frames = frames[0] != NULL };
+    JSFlowGraphRoots gr = { .vals = vals->v, .frames = frames, .n_vals = vals->n, .n_frames = frames[0] != NULL,
+                            .released = true };
 
     CHECK(s != NULL, "engine: OOM writing a sold member");
     DCHECK(f->delta != NULL && head != NULL, "a member was written with no delta head to write");

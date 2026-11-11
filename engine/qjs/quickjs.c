@@ -47198,7 +47198,7 @@ struct JSFlowGraph {
     FGGap *gaps;
     uint32_t n_gaps;
     JSFlowGraphFrames frames;
-    /* A flow write's hold (JS_FlowGraphWriteFlow): each object and closed cell it built by content, in written
+    /* A released flow write's hold (JS_FlowGraphRoots.released): each object and closed cell it built by content, in written
        order, one counted reference each, until JS_FlowGraphSettle. The settle leaves, by the same index, the
        ones something outside the write still names (`named_*`, one counted reference each, NULL where the read
        builds the object), which the read gives back as themselves. */
@@ -47791,7 +47791,7 @@ JSFlowGraph *JS_FlowGraphWrite(JSContext *ctx, const JSValueConst *roots, int n,
 
 JSFlowGraph *JS_FlowGraphWriteFlow(JSContext *ctx, const JSFlowGraphRoots *roots, uint32_t floor)
 {
-    return fg_write(ctx, roots, floor, false, true);
+    return fg_write(ctx, roots, floor, false, roots->released);
 }
 
 JSFlowGraph *JS_FlowGraphSurvey(JSContext *ctx, const JSFlowGraphRoots *roots, uint32_t floor)
