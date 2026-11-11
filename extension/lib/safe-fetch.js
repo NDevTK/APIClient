@@ -184,6 +184,12 @@ function _wireSendKey(href, init, facts) {
                          speak.stated, Object.keys(speak.headers).sort().map(function (n) { return [n, speak.headers[n]]; }),
                          body, facts.credentials, facts.partition]);
 }
+/* What every `_wireSendKey` of `method` to `href` begins with, whatever else the send carries. */
+function _wireSendKeyStart(method, href) {
+  var u = new URL(href);
+  u.hash = "";
+  return JSON.stringify([method, u.href]).slice(0, -1) + ",";
+}
 /* One send of a page's request (safeFetch's, and its CORS preflight), answered {resp, requestTime,
    responseTime}. A send that speaks as a document is made once per identity (_wireSendKey) within that
    document's exploration, and a byte-identical send of the same document is answered from the record
@@ -191,12 +197,13 @@ function _wireSendKey(href, init, facts) {
    is a Response of this asker's own, whose Set-Cookie fields ride beside it as the wire's do, so every check,
    cookie store and grade after this runs on it as on a fresh reply. `facts` is {credentials, partition} of the
    send's identity, or null for a send that speaks as no document. `reached` is told, before the wire is asked,
-   whether this ask makes the send (true) or is answered from the document's record (false).
+   whether this ask makes the send (true) or is answered from the document's record (false); `madeBy` is what
+   admitted this ask (the firing decision's kind), kept on the record of a send it makes.
    Named residual. Not covered: a send that speaks as no document (no `opts.identity`, as engine/trusted.mjs's
    navigation load) is never coalesced, since no document key scopes it. Next diff: that load states its
    issuing document's identity. Its absence shows as a server log counting one navigation of one document
    once per world that makes it. */
-async function _wireSend(href, init, facts, reached) {
+async function _wireSend(href, init, facts, reached, madeBy) {
   var speak = init.speakAs === undefined ? null : init.speakAs;
   CHECK((speak === null) === (facts === null) &&
         (facts === null || (!!facts && typeof facts.credentials === "string" && "partition" in facts)),
@@ -210,7 +217,7 @@ async function _wireSend(href, init, facts, reached) {
     return { resp: bare, requestTime: requestTime, responseTime: Date.now() };
   }
   var key = _wireSendKey(href, init, facts);
-  reached(!sendCoalesceHolds(speak.docKey, key));
+  reached(sendCoalesceMadeBy(speak.docKey, key) === null);
   var answer = await sendCoalesce(speak.docKey, key, init.signal, async function (signal) {
     var resp = await _wire(href, Object.assign({}, init, { signal: signal }));
     var headers = [];
@@ -220,7 +227,7 @@ async function _wireSend(href, init, facts, reached) {
            "body status");
     return { head: { status: resp.status, statusText: resp.statusText, headers: headers, setCookie: _setCookiesOf(resp) },
              body: resp.body };
-  });
+  }, madeBy);
   var own = new Response(answer.body, { status: answer.head.status, statusText: answer.head.statusText,
                                         headers: answer.head.headers });
   _wireSetCookies.set(own, answer.head.setCookie);
@@ -1383,7 +1390,8 @@ function _firingRefusal(facts) {
 /* One firing question's whole answer: the vector it was judged on, what admitted it, and the refusal.
    `admittedBy` is {kind: "default", arm, why} for a default arm (the page's own act), {kind: "widened", origin}
    for a request that fires only because a person widened its origin (this tool's act: a forked value, a probe,
-   a tool-composed request), and null beside a refusal. */
+   a tool-composed request), and null beside a refusal. safeFetch writes a third on its entry, {kind: "record",
+   refused}, for a refused request it served from the record of the unforced run's identical send. */
 function _firingDecision(facts) {
   var v, i, s, arm, unpermitted = [], failed;
   v = _signalVector(facts);
@@ -1427,8 +1435,9 @@ function _firingDecision(facts) {
   s = failed === undefined ? unpermitted[0] : failed.signal;
   return { vector: v, admittedBy: null, refusal: s + "=" + v[s] };
 }
-/* The zone's count of the entries its reply records carried, keyed "<how> <what admitted it>": `default` or
-   `widened` for a judged request, `none` for a refused one, `cache` for a hop the HTTP cache answered. */
+/* The zone's count of the entries its reply records carried, keyed "<how> <what admitted it>": `default`,
+   `widened` or `record` for a judged request, `none` for a refused one, `cache` for a hop the HTTP cache
+   answered. */
 var _EGRESS_CENSUS = Object.create(null);
 function safeFetchEgressCensus() {
   return Object.assign({}, _EGRESS_CENSUS);
@@ -2261,14 +2270,31 @@ async function _safeFetchJudged(url, opts, egress) {
       var _entry = { url: _current.href, vector: _decision.vector, admittedBy: _decision.admittedBy,
                      how: "not-sent", refusal: _decision.refusal };
       egress.push(_entry);
+      var _ptok = _decision.refusal;
+      var _declined = _ptok === null ? null
+        : _refused("decline", "blocked-signal" + (_hop ? "-redirect:" : ":") + _ptok, _exposedUrlList(_urlList), {});
+      /* A refused request byte-identical to a send this document's unforced run made is served from that
+         send's record (lib/send-coalesce.js) and reaches no other party: `send` below asks the record, by the
+         key the wire would carry, in place of the wire. The key holds the speak-as set, so the request is
+         composed as a send is (which reads the identity's cookies), and only where that run sent this method
+         to this URL at all; its reply's cookies stay out of the person's jar.
+         Named residual. Not covered: a request that needs a CORS preflight, whose OPTIONS is a send of its
+         own, and a request that speaks as no document (engine/trusted.mjs's navigation load). Next diff: ask
+         the record for the preflight's key too. Its absence shows as a forced world's preflighted request,
+         identical to one the unforced run sent, recorded `not-sent`. */
+      var _keyStart = _wireSendKeyStart(_method, _current.href);
+      var _served = _ptok !== null && !!_identity && !_preflight &&
+                    sendCoalesceSome(_identity.client.docKey, function (key, madeBy) {
+                      return madeBy === "default" && key.slice(0, _keyStart.length) === _keyStart;
+                    });
+      if (_ptok && !_served) return _declined;
       var _reached = function (made) {
+        CHECK(!(made && _served),
+              "a refused request was about to reach the wire as one served from the record — the record is " +
+              "asked for its key before the wire is");
         if (made) _entry.how = "sent";
         else if (_entry.how === "not-sent") _entry.how = "answered-locally";
       };
-      var _ptok = _decision.refusal;
-      if (_ptok)
-        return _refused("decline", "blocked-signal" + (_hop ? "-redirect:" : ":") + _ptok,
-                        _exposedUrlList(_urlList), {});
       /* The destructive-path deny list, before this URL is requested (see `_destructiveToken`). It is scoped
          to credentialed requests, because without cookies a logout path ends no session, and to provenance
          other than `observed`. An `observed` credentialed request is the ambient seed: the person's own
@@ -2300,7 +2326,7 @@ async function _safeFetchJudged(url, opts, egress) {
          identity speaks as it (`_speakAs`); a preflight failure is a network error and the request is never
          sent. */
       _sent = await _speakAs(_identity, _urlList, _method, mode, destination, _cookies,
-                             _decision.admittedBy.kind === "default",
+                             _decision.admittedBy !== null && _decision.admittedBy.kind === "default",
                              _preflight ? _unsafeNames : null, null, init, async function (speak) {
         /* A wire that rejects is Fetch §5.6's network error ("reject p with a TypeError"), answered as this
            chokepoint's network refusal like every other one; an aborted send rejects to its asker, which
@@ -2319,14 +2345,23 @@ async function _safeFetchJudged(url, opts, egress) {
           var _pf = await _corsPreflight(_current.href, _method, _headerList || [], opts.credentials,
                                          opts.useCorsPreflight, _serializedOrigin, opts.signal, speak.preflight,
                                          function (i) {
-            return _wireSend(_current.href, i, _sendFacts, _reached).then(function (w) { return w.resp; });
+            return _wireSend(_current.href, i, _sendFacts, _reached, _entry.admittedBy.kind).then(function (w) {
+              return w.resp;
+            });
           });
           if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + _current.origin,
                                               [parsed.href], {}) };
         }
         if (_answered) return { resp: httpCacheResponse(_stored) };
         init.speakAs = speak === null ? null : speak.request;
-        return await _wireSend(_current.href, init, _sendFacts, _reached);
+        if (_served) {
+          /* Only a send a default arm admitted is the unforced run's; no await separates this from the ask. */
+          if (sendCoalesceMadeBy(speak.request.docKey, _wireSendKey(_current.href, init, _sendFacts)) !== "default")
+            return { refusal: _declined };
+          _entry.admittedBy = { kind: "record", refused: _ptok };
+          _entry.refusal = null;
+        }
+        return await _wireSend(_current.href, init, _sendFacts, _reached, _entry.admittedBy.kind);
       }
       if (_sent.refusal) return _sent.refusal;
       if (_cache !== null && !_answered) {

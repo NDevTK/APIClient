@@ -18,8 +18,8 @@ var _sendCoalesceDocs = new Map();
 
 /* The record of one send: its head once answered, every body chunk received so far, `end` (null while the
    body is arriving, then {error}), and the controllers of the askers' bodies still following it. */
-function _sendCoalesceRecord(send) {
-  var rec = { controller: new AbortController(), head: null, hasBody: false, chunks: [], end: null,
+function _sendCoalesceRecord(send, madeBy) {
+  var rec = { madeBy: madeBy, controller: new AbortController(), head: null, hasBody: false, chunks: [], end: null,
               readers: new Set(), requestTime: Date.now(), responseTime: 0, answered: null };
   rec.answered = send(rec.controller.signal).then(function (sent) {
     DCHECK(!!sent && !!sent.head && typeof sent.head.status === "number" && Array.isArray(sent.head.headers) &&
@@ -90,9 +90,11 @@ function _sendCoalesceBody(rec, signal) {
    {head, body, requestTime, responseTime}: its own body stream and the record's times (RFC 9111 §4.2.3
    "Calculating Age": "request_time" and "response_time" are when the send was made and its reply received,
    so a replay is no fresher than the reply it repeats). A send that rejects rejects every ask. `signal` is this
-   asker's abort, which ends this asker's answer and never the send. */
-function sendCoalesce(docKey, key, signal, send) {
-  CHECK(typeof docKey === "string" && docKey !== "" && typeof key === "string" && typeof send === "function",
+   asker's abort, which ends this asker's answer and never the send. `madeBy` is the caller's word for what let
+   this ask make the send, kept on the record the first ask creates (sendCoalesceMadeBy). */
+function sendCoalesce(docKey, key, signal, send, madeBy) {
+  CHECK(typeof docKey === "string" && docKey !== "" && typeof key === "string" && typeof send === "function" &&
+        typeof madeBy === "string" && madeBy !== "",
         "a send was coalesced with no document key, no send key or no send — the table is one document's, and " +
         "a send with no document to scope it would be answered from another document's acts");
   var doc = _sendCoalesceDocs.get(docKey);
@@ -102,7 +104,7 @@ function sendCoalesce(docKey, key, signal, send) {
   }
   var rec = doc.replies.get(key);
   if (rec === undefined) {
-    rec = _sendCoalesceRecord(send);
+    rec = _sendCoalesceRecord(send, madeBy);
     doc.replies.set(key, rec);
     doc.sends++;
   } else {
@@ -139,11 +141,20 @@ function sendCoalesceDocumentEnded(docKey) {
   }
 }
 
-/* Whether the document `docKey` has made the send `key`, so an ask of it now is answered from the record and
-   reaches no other party. */
-function sendCoalesceHolds(docKey, key) {
+/* What made the send `key` of the document `docKey` (the `madeBy` word of the ask that made it), or null when
+   the document has made no such send. An ask of a send the record holds is answered from it and reaches no
+   other party. */
+function sendCoalesceMadeBy(docKey, key) {
   var doc = _sendCoalesceDocs.get(docKey);
-  return doc !== undefined && doc.replies.has(key);
+  return doc !== undefined && doc.replies.has(key) ? doc.replies.get(key).madeBy : null;
+}
+
+/* Whether the document `docKey` has made a send whose key and `madeBy` word `test` accepts. */
+function sendCoalesceSome(docKey, test) {
+  var doc = _sendCoalesceDocs.get(docKey);
+  if (doc === undefined) return false;
+  for (var [key, rec] of doc.replies) if (test(key, rec.madeBy)) return true;
+  return false;
 }
 
 /* The census of the document `docKey`'s table: `sends` made, `answers` given from a record (counted at the
@@ -161,5 +172,6 @@ if (typeof self !== "undefined") {
   self.sendCoalesce = sendCoalesce;
   self.sendCoalesceDocumentEnded = sendCoalesceDocumentEnded;
   self.sendCoalesceCensus = sendCoalesceCensus;
-  self.sendCoalesceHolds = sendCoalesceHolds;
+  self.sendCoalesceMadeBy = sendCoalesceMadeBy;
+  self.sendCoalesceSome = sendCoalesceSome;
 }

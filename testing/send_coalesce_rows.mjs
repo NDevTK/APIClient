@@ -107,13 +107,17 @@ const ROWS = [
       return [['GET /boot', count('GET', '/boot'), 1], ['answered', all.filter(answered).length, 60],
               ['every body is the one send\'s', all.every((r) => /^GET \/boot #1 /.test(text(r))), true],
               ['census', census(doc), JSON.stringify({ sends: 1, answers: 59, identities: 1 })]]; } },
-  { label: 'the firing decision is each world\'s: a pinned ask at an unwidened origin is declined, not answered',
+  { label: 'the firing decision is each world\'s: at an unwidened origin a pinned ask is answered only from the ' +
+           'record of a send the unforced run made',
     run: async () => {
       const doc = 'engine:gate';
       const seen = await ask(PAGE_B, `${B}/gate`, doc);
-      const pinned = await ask(PAGE_B, `${B}/gate`, doc, { provenance: 'forced', pinned: 'pinned' });
+      const same = await ask(PAGE_B, `${B}/gate`, doc, { provenance: 'forced', pinned: 'pinned' });
+      const alone = await ask(PAGE_B, `${B}/gate-alone`, doc, { provenance: 'forced', pinned: 'pinned' });
       return [['GET /gate', count('GET', '/gate'), 1], ['observed answered', answered(seen), true],
-              ['pinned declined', pinned.refusal && pinned.refusal.kind, 'decline']]; } },
+              ['the pinned ask of that send read its reply', answered(same) && text(same), 'GET /gate #1 probe='],
+              ['GET /gate-alone', count('GET', '/gate-alone'), 0],
+              ['a pinned ask of no such send declined', alone.refusal && alone.refusal.kind, 'decline']]; } },
   { label: 'a request differing in one header is another identity', run: async () => {
       const doc = 'engine:hdr';
       await ask(PAGE_A, `${A}/hdr`, doc, { headers: [['X-Probe', 'a']] });
