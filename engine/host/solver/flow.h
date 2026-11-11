@@ -84,7 +84,7 @@ typedef struct {
     int64_t priced_work;  /* FLOW_PRICED_WORK, the service floor in work per assumption and per against_env */
     int host_owed, running;
     FlowUnitAt unit;
-    int next_arm, next_sited;   /* Flow.next_arm1 - 1 (-1: never stood by a step end) and Flow.next_sited */
+    int next_arm;               /* Flow.next_arm1 - 1 (-1: no step has ended) */
     int64_t site_served_elsewhere;  /* the same code site's service in every other family's ledger; no term reads it */
     int site_kind;                  /* the kind of that code site (FLOW_SITE_*, 0 keyless); no term reads it */
 } FlowWeightOperands;
@@ -249,6 +249,12 @@ typedef struct Flow {
     /* The work an idle flow's reply clock moved to reach its next due point (engine.h's engine_reply_clock): the
        wait a browser spends while a request is in flight, a function of the path. Inherited at a fork. */
     int64_t reply_skip;
+    /* The stand series: a digest folded at every move to a different code site, over the move's `framed_work`
+       coordinate and the site's identity, and the number of such moves. Both are inherited at a fork, so every
+       member's pair is a function of its path; flow.c's flow_stand_series sums them over the frontier. An
+       observation no term reads. */
+    uint64_t stand_digest;
+    int64_t stand_moves;
     /* How many address parks the path has made: the next park's slot is this plus one (engine.c's
        pending_park_request). Inherited at a fork. */
     int64_t park_slots;
@@ -278,9 +284,8 @@ typedef struct Flow {
        outside the frontier. Owned by the family root. */
     FlowSite *at;
     /* An observation no term reads: one plus the ladder rung (engine.c's NextArm) flow_next_unit answered at this
-       member's last step end, 0 before its first, and whether that answer named the site `at` was moved to. A fork's
-       arm is born with both at 0: it stands at the decision, which no step end named. */
-    int next_arm1, next_sited;
+       member's last step end, 0 before its first. A fork's arm is born with it at 0. */
+    int next_arm1;
     /* The part of the running step's work already charged to sites it moved off (flow_site_bank_running), and its
        frameless part already charged to act sites (flow_act_bank_running), which flow_age_running leaves out of the
        site the step ends at. Zero between steps. */
@@ -1938,11 +1943,16 @@ void  flow_set_orphan_seen(Flow *f, int64_t seen);
 /* The member stands at a code site (FlowSite's identity): a code position named by quickjs's JS_RunningSiteHash
    (or a program's entry, by its content digest), a driven body named by its orphan hash, or an act the engine
    forces named by its rung's step unit (solver/step_unit.h). Moves it to its class at that code site in its family
-   and raises a rank change. */
+   and raises a rank change; a move to a different code site is folded into the stand series at `coord`, the
+   member's `framed_work` at the move (the running member's includes its open step's). */
 #define FLOW_SITE_CODE  1
 #define FLOW_SITE_DRIVE 2
 #define FLOW_SITE_ACT   3
-void  flow_stand_at(Flow *f, int kind, uint64_t key);
+void  flow_stand_at(Flow *f, int kind, uint64_t key, int64_t coord);
+/* The stand series over every member this instance has held, departed and live: the sum of their digests and of
+   their move counts. Both are functions of the members' paths, so two runs of one document whose slices end at
+   different points read the same pair. */
+void  flow_stand_series(uint64_t *digest, int64_t *moves);
 /* The member's optimism denominator in work, `Q*(1 + orphan_seen) + max(site_served, W*priced)` with
    Q = ENGINE_PULL_WORK and W = FLOW_PRICED_WORK: engine.c's rank assertions snapshot it. */
 int64_t flow_optimism_den(const Flow *f);

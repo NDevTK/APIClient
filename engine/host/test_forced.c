@@ -48274,6 +48274,17 @@ int main(int argc, char **argv) {
             quantum_set_step_turn(tf_step_turn);
         }
     }
+    /* A slice of N units of engine work in place of ENGINE_QUANTUM_WORK (solver/quantum.h), asked only to show that
+       where slices end moves no member's stand series (engine/regimeparity.mjs's compareSlices). */
+    {
+        const char *work = arg_val(argc, argv, "--slice-work");
+        if (work) {
+            char *end;
+            long long units = strtoll(work, &end, 10);
+            CHECK(*work != '\0' && *end == '\0' && units > 0, "--slice-work takes a positive count of work units");
+            quantum_set_slice_work((int64_t)units);
+        }
+    }
     /* THE ABI ARM IS TAKEN FIRST, BEFORE ANY OF THE FIXTURE'S OWN STATE EXISTS. `qjs_init` roots an agent —
        its runtime, its class registrations, its world namespace and its frontier — and the selftests below
        root a second one under the name "fixture". Two agents in one process is not a smaller version of one;

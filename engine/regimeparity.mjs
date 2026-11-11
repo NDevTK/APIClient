@@ -130,6 +130,32 @@ export function comparePressure(doc, act, none) {
            answered: true, compared, differing };
 }
 
+/* The comparison of one document run on one binary as stated and as its twin with other slicing (`--slice-work`
+   or `--host-turn-us`): `{ defect, answered, compared, differing }`. Where a slice ends moves the pick sequence and
+   the step count but no member's path, so each member's stand series (solver/flow.h's flow_stand_series) and the
+   work retired are the same; a host turn moves no slice boundary either, so it also keeps the pick digest and the
+   steps. `rows` names the census rows the twin must keep. */
+export function compareSlicing(doc, base, twin, rows) {
+  const compared = [], differing = [];
+  if (base.crash !== null || twin.crash !== null || base.cold === null || twin.cold === null ||
+      !base.cold.terminal || !twin.cold.terminal)
+    return { defect: null, answered: false, differing,
+             compared: [`nothing (stated: ${base.crash ?? (base.cold?.terminal ? "completed" : "no terminal census")}; ` +
+                        `twin: ${twin.crash ?? (twin.cold?.terminal ? "completed" : "no terminal census")})`] };
+  const bc = base.cold.census, tc = twin.cold.census;
+  for (const k of rows) {
+    if (!Number.isInteger(bc[k]) || !Number.isInteger(tc[k]))
+      throw new Error(`${doc}: the frontier census row \`${k}\` is ${JSON.stringify(bc[k])} as stated and ` +
+                      `${JSON.stringify(tc[k])} in the twin — solver/metrics/cold.def declares one integer row`);
+    if (bc[k] !== tc[k]) differing.push(`${k}=${bc[k]}|${tc[k]}`);
+  }
+  if (base.retired !== twin.retired) differing.push(`_workRetired=${base.retired}|${twin.retired}`);
+  compared.push(`${rows.join(", ")} and _workRetired (standMoves ${bc.standMoves})`);
+  return { defect: differing.length ? `${doc}: a twin with other slicing moved what no slice boundary may move ` +
+                                      `(stated|twin): ${differing.join(" ")}` : null,
+           answered: true, compared, differing };
+}
+
 /* ── The lane-facing driver ─────────────────────────────────────────────────────────────────────────────── */
 
 function args(argv) {

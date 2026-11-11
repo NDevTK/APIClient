@@ -1125,10 +1125,14 @@ typedef struct {
        JSON number: two runs of one artifact over one fixture agree on it exactly when they picked the same
        members in the same order, which is the witness that the order is a function of the paths. */
     int64_t pick_digest;
+    /* The stand series (solver/flow.h's flow_stand_series): the sum over members of their digests, low 52 bits, and
+       of their moves. Functions of the members' paths, so they agree between two runs of one fixture whose slices
+       end at different points, where the pick digest does not. */
+    int64_t stand_series, stand_moves;
     /* Turns whose step alone retired at least a slice's work, so `slice_overruns / steps` is a fraction of a
      * published denominator; the lifetime mean `step_work / steps` hides that a few long turns usually carry the
-     * work. It compares the step's work against ENGINE_QUANTUM_WORK, the inequality engine_quantum_spent asks,
-     * so an overrun is a turn that met the budget between two of its asks. Neither seam verdict
+     * work. It compares the step's work against the slice's budget (quantum_slice_work), the inequality
+     * engine_quantum_spent asks, so an overrun is a turn that met the budget between two of its asks. Neither seam verdict
      * in engine_sched_step can judge these turns: both require `g_preempt_asked == pa0`, and an overrunning turn
      * consulted the hook to end. A count, not a maximum, so it cannot plateau like a ceiling. */
     int64_t slice_overruns;

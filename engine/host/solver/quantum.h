@@ -22,6 +22,11 @@ void quantum_end(void);
    may return to the host only outside one (main.c's qjs_step asserts it). An assertion's operand, never a branch:
    a caller that branches on it is choosing between a scheduled and an unscheduled path. */
 int quantum_slice_open(void);
+/* The slice's budget in engine work: ENGINE_QUANTUM_WORK unless a driver states another between slices. It moves
+   only where slices end, which no move of a member's stand, no charge and no path depends on, so a driver states
+   one to show that (test_forced.c's `--slice-work`). */
+void quantum_set_slice_work(int64_t work);
+int64_t quantum_slice_work(void);
 /* The host's turn, in wall microseconds a slice may hold the thread (0, the default, is never), stated by the host
    between steps: a renderer frame, whose event loop runs only between two qjs_step calls, states one; a native
    driver is its own process and states none. */
@@ -53,7 +58,7 @@ int64_t quantum_thread_us(void);
 const char *quantum_measure(void);
 int quantum_measure_is_cpu(void);
 /* `{"sliceWork":…,"price":…,"priceIsCpu":…}`, malloc'd, caller frees; NULL only on allocation
-   failure. Compile-time constants of this host, so askable inside a slice or out; result.c composes it as
+   failure. The slice's budget and this host's clock, both stated outside any slice, so askable inside one or out; result.c composes it as
    `_quantum`, and quantum.c prints it once per instance as the `@QUANTUM` line at the first slice. */
 char *quantum_json(void);
 

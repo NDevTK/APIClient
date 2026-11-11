@@ -26,6 +26,19 @@ static int64_t quantum_wall_us(void)
     return (int64_t)t.tv_sec * 1000000 + t.tv_nsec / 1000;
 }
 
+/* The slice's budget in engine work. */
+static int64_t g_slice_work = ENGINE_QUANTUM_WORK;
+
+void quantum_set_slice_work(int64_t work)
+{
+    DCHECKF(work > 0, "a slice of %lld units was set — a slice hands the thread over after positive work",
+            (long long)work);
+    DCHECK(!g_slice_open, "a slice's budget was set inside a slice — it is the driver's policy, stated between slices");
+    g_slice_work = work;
+}
+
+int64_t quantum_slice_work(void) { return g_slice_work; }
+
 void quantum_set_host_turn_us(int64_t us)
 {
     DCHECKF(us >= 0, "a host turn of %lld us was set — 0 is never, and a turn is a duration", (long long)us);
@@ -164,7 +177,7 @@ char *quantum_json(void)
                "quantum_measure() returned a string that is not a bare JSON string body");
 #endif
     return composef("{\"sliceWork\":%lld,\"price\":\"%s\",\"priceIsCpu\":%s}",
-                    (long long)ENGINE_QUANTUM_WORK, measure, quantum_measure_is_cpu() ? "true" : "false");
+                    (long long)g_slice_work, measure, quantum_measure_is_cpu() ? "true" : "false");
 }
 
 /* Printed once per instance, at its first slice: the line reports that a stage opened a slice, the `_quantum`

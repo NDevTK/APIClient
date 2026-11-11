@@ -20,7 +20,7 @@ import { probeTables } from "./probe_rows.mjs";
 import { abortRecord } from "./abort_record.mjs";
 import { curDeepTermSplit, neverPickedTermSplit } from "./wfq_gap.mjs";
 import { vehicleReading, compareVehicle, emsdkNode } from "./vehicle.mjs";
-import { regimeReading, compareRegimes, comparePressure, regimeDocArgs } from "./regimeparity.mjs";
+import { regimeReading, compareRegimes, comparePressure, compareSlicing, regimeDocArgs } from "./regimeparity.mjs";
 import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
 import { objStore, toolIdentity } from "./obj_store.mjs";
 import { cpuText } from "./gate_cpu.mjs";
@@ -7307,6 +7307,37 @@ function pressureParityStages(bin, runs) {
   });
 }
 
+/* The documents the slicing parity stages run again on the same program: once with a slice of other work
+   (`--slice-work`), whose twin keeps the stand series and the work, and once with a host turn every microsecond
+   (`--host-turn-us 1`), whose twin also keeps the pick digest and the steps (engine/regimeparity.mjs's
+   compareSlicing). A difference is a DEFECT: a member's stand moved where a slice or a turn ended, not on its path. */
+const SLICE_PARITY_DOCS = ["min"];
+const SLICE_TWIN_WORK = 7919;
+function sliceParityStages(bin, runs) {
+  const mine = runs.filter((r) => r.doc && SLICE_PARITY_DOCS.includes(r.doc) && "captured" in r);
+  if (bin === null) return [];
+  const twins = [
+    { what: `a slice of ${SLICE_TWIN_WORK} units`, args: ["--slice-work", String(SLICE_TWIN_WORK)],
+      rows: ["standSeries", "standMoves"] },
+    { what: "a host turn every microsecond", args: ["--host-turn-us", "1"],
+      rows: ["standSeries", "standMoves", "pickDigest", "steps"] },
+  ];
+  return mine.flatMap((run) => twins.map((t) => {
+    const label = `slicing parity (${run.doc}, ${t.what})`;
+    const twin = runChild(`${label}, the twin`, bin, [...regimeDocArgs(run.doc), ...t.args],
+                          "an abort above is the twin's own; the comparison below reads both runs");
+    const read = (r) => regimeReading(r.captured, r.signal, r.log);
+    const c = compareSlicing(run.doc, read(run), read(twin), t.rows);
+    console.log(`[build] ${label}: compared ${c.compared.join("; ")}`);
+    if (c.defect !== null)
+      return onHost({ label, verdict: `DEFECT — ${c.defect}`, code: 1, kind: STAGE_KIND.DEFECT }, STAGE_HOST.NATIVE);
+    if (!c.answered)
+      return onHost({ label, verdict: `NOT ASKED — ${c.compared.join("; ")}`, code: 1, kind: STAGE_KIND.NOT_ASKED },
+                    STAGE_HOST.NATIVE);
+    return onHost({ label, verdict: "PASS", code: 0, kind: null }, STAGE_HOST.NATIVE);
+  }));
+}
+
 /* WHAT A STAMP'S `dirty`/`unasked` PAIR SAYS, IN ONE PLACE, BECAUSE BOTH STAMP SITES SAY IT. The wasm install
    gate below turns this answer into a DECISION — `null` installs, anything else refuses — and the native link
    below puts it in the line that names the binary. The words are ONE fact, and two spellings of one fact are two
@@ -7681,6 +7712,7 @@ if (NATIVE) {
   stages.push(...bridgeAcceptanceStages(runs));
   stages.push(...regimeParityStages(kind, dev, bin, runs));
   stages.push(...pressureParityStages(bin, runs));
+  stages.push(...sliceParityStages(bin, runs));
   /* This target runs no wasm, so it has no vehicle stage; the gate suite (`node engine/build.mjs gates`) runs
      the `vehicle (<document>)` comparisons. */
   report(stages, []);

@@ -552,11 +552,11 @@ static char *weight_operands_json(const FlowWeightOperands *o) {
                     "\"pullWork\":%lld,\"visits\":%lld,\"orphanSeen\":%lld,\"replay\":%.17g,"
                     "\"surv\":%.17g,\"rung\":%d,\"assumed\":%lld,\"againstEnv\":%lld,\"picks\":%lld,"
                     "\"hostOwed\":%d,\"running\":%d,"
-                    "\"unit\":%d,\"nextArm\":%d,\"nextSited\":%d,\"siteServedElsewhere\":%lld,\"siteKind\":%d}",
+                    "\"unit\":%d,\"nextArm\":%d,\"siteServedElsewhere\":%lld,\"siteKind\":%d}",
                     o->w, o->reward, (long long)o->coord_notch, (long long)o->own_notch, (long long)o->site_served,
                     (long long)o->pull_work, (long long)o->visits, (long long)o->orphan_seen, o->replay,
                     o->surv, o->rung, (long long)o->assumed, (long long)o->against_env,
-                    (long long)o->picks, o->host_owed, o->running, (int)o->unit, o->next_arm, o->next_sited,
+                    (long long)o->picks, o->host_owed, o->running, (int)o->unit, o->next_arm,
                     (long long)o->site_served_elsewhere, o->site_kind);
 }
 
@@ -1806,6 +1806,8 @@ char *result_cold_json(void) {
     METRIC_SET(between_slices_us, r.between_slices_us);
     METRIC_SET(slices, r.slices);
     METRIC_SET(pick_digest, r.pick_digest);
+    METRIC_SET(stand_series, r.stand_series);
+    METRIC_SET(stand_moves, r.stand_moves);
     METRIC_SET(slice_us, r.slice_us);
     METRIC_SET(sched_us, r.sched_us);
     METRIC_SET(slice_overruns, r.slice_overruns);

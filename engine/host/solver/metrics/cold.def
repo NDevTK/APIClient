@@ -398,6 +398,11 @@ METRIC(slices, "slices", LIFETIME, "slice", PROCESS, "solver/engine.c", INT)
    `pick_digest`): equal on two runs of one artifact over one fixture exactly when both picked the
    same members in the same order. An identity, never a magnitude, so a gauge: a digest does not climb. */
 METRIC(pick_digest, "pickDigest", GAUGE, "digest", PROCESS, "solver/engine.c", INT)
+/* …and where the members stood, as the stand series (solver/flow.h's flow_stand_series): the sum
+   of every member's digest over its moves to a new code site and their count. A function of the
+   paths, so equal on two runs of one fixture whose slices end at different points. */
+METRIC(stand_series, "standSeries", GAUGE, "digest", PROCESS, "solver/flow.c", INT)
+METRIC(stand_moves, "standMoves", GAUGE, "move", PROCESS, "solver/flow.c", INT)
 /* The two phases `stepUs` sums: a step overrunning the slice is the quantum with no asynchronous
    source to expire it, a dominant pick-and-swap is the ordering costing more than the work.
    `schedUs` is everything in the turn that is not the step, including the previous iteration's

@@ -323,9 +323,10 @@ typedef struct FlowAcct {
    position (quickjs's JS_RunningSiteHash: the body's cross-session locator, which folds the bundle's content
    digest, plus the opcode offset; or a program's entry, its row's content digest), FLOW_SITE_DRIVE a driven body
    (its orphan hash), FLOW_SITE_ACT an act the engine forces (its rung's step unit).
-   A member stands at its last decision, at the entry of the unit it last began (engine.c's flow_next_unit), or at
-   the code it executed at its last rest (engine.c's engine_stand_rest, each quantum of service it gives, never of
-   the slice), whichever came last, so service is charged to the code whose work it is.
+   A member stands at its last decision, at the entry of the unit it last began (engine.c's engine_stand_unit, as
+   the unit begins on its path), or at the code it executed at its last rest (engine.c's engine_stand_rest, each
+   quantum of service it gives, never of the slice), whichever came last, so service is charged to the code whose
+   work it is and every move is a function of the path.
    Named residual. Not covered: the ledger is not parked, so a cold-resumed member stands at its family's keyless
    site at zero service. Next diff builds: the ledger in the cold tier's family record. Absence shows as: a resumed
    session re-serving sites from zero. */
@@ -1785,11 +1786,37 @@ static FlowSite *flow_site_for(Flow *f, int kind, uint64_t key) {
     return flow_site_of(f->family, kind, key, f->orphan_seen, flow_priced(f));
 }
 
-void flow_stand_at(Flow *f, int kind, uint64_t key) {
+/* The stand series of the members that have departed (flow.h's flow_stand_series), folded at flow_remove. */
+static uint64_t g_stand_digest_gone;
+static int64_t g_stand_moves_gone;
+
+static uint64_t stand_fold(uint64_t h, uint64_t v) {
+    for (int i = 0; i < 8; i++) { h ^= (v >> (8 * i)) & 0xff; h *= 1099511628211ULL; }
+    return h;
+}
+
+void flow_stand_at(Flow *f, int kind, uint64_t key, int64_t coord) {
     DCHECK(f != NULL && f->family != NULL && f->at != NULL &&
                (kind == FLOW_SITE_CODE || kind == FLOW_SITE_DRIVE || kind == FLOW_SITE_ACT),
            "a code site was stood at by a flow outside the frontier, or with a kind the ledger does not name");
+    DCHECKF(coord >= f->framed_work,
+            "a member was stood at a code site at coordinate %lld, behind its own framed work %lld — the coordinate "
+            "is the member's framed work at the move", (long long)coord, (long long)f->framed_work);
+    if (f->at->code->kind != kind || f->at->code->key != key) {
+        f->stand_digest = stand_fold(stand_fold(stand_fold(f->stand_digest, (uint64_t)coord), (uint64_t)kind), key);
+        f->stand_moves++;
+    }
     flow_site_move(f, flow_site_for(f, kind, key));
+}
+
+void flow_stand_series(uint64_t *digest, int64_t *moves) {
+    uint64_t d = g_stand_digest_gone;
+    int64_t m = g_stand_moves_gone;
+
+    DCHECK(digest != NULL && moves != NULL, "the stand series was asked for with nowhere to put it");
+    for (int i = 0; i < g_flows_n; i++) { d += g_flows[i]->stand_digest; m += g_flows[i]->stand_moves; }
+    *digest = d;
+    *moves = m;
 }
 
 void flow_set_orphan_seen(Flow *f, int64_t seen) {
@@ -2617,6 +2644,8 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     sib->framed_work = parent->framed_work;
     sib->stand_next = parent->stand_next;
     sib->reply_skip = parent->reply_skip;
+    sib->stand_digest = parent->stand_digest;
+    sib->stand_moves = parent->stand_moves;
     sib->park_slots = parent->park_slots;
     sib->trail = reply_trail_share(parent->trail);
     sib->trail_seen = parent->trail_seen;
@@ -3298,6 +3327,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     f->val = 0.0; f->work = 0; f->work_gen = 0; f->visits = 0; f->orphan_seen = 0;
     f->path_work = 0; f->reply_skip = 0; f->park_slots = 0; f->trail = NULL; f->trail_seen = 0;
     f->framed_work = 0; f->stand_next = ENGINE_QUANTUM_WORK;
+    f->stand_digest = 14695981039346656037ULL; f->stand_moves = 0;
     /* And the dispatch count, which nothing else writes to zero: a member arrives never-chosen and the number only
        rises. */
     f->picks = 0;
@@ -3458,6 +3488,8 @@ void flow_arrive_on_snapshot(Flow *sib, const Flow *snap, FlowPathMarks at_cut) 
     sib->framed_work = snap->framed_work;
     sib->stand_next = snap->stand_next;
     sib->reply_skip = snap->reply_skip;
+    sib->stand_digest = snap->stand_digest;
+    sib->stand_moves = snap->stand_moves;
     sib->park_slots = snap->park_slots;
     sib->trail = reply_trail_share(snap->trail);
     sib->trail_seen = snap->trail_seen;
@@ -4656,7 +4688,6 @@ static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
             : flow_agent_running(f)->parked ? FLOW_UNIT_PARKED
             : flow_job_microtask(f) ? FLOW_UNIT_CHECKPOINT : FLOW_UNIT_BETWEEN;
     o->next_arm = f->next_arm1 - 1;
-    o->next_sited = f->next_sited;
     o->site_kind = f->at->code->kind;
     DCHECKF(flow_weight_recompose(o) == o->w,
             "a member's weight does not recompose from the operands the census publishes (weight %.17g, recomposed "
@@ -7418,6 +7449,9 @@ void flow_remove(JSContext *ctx, Flow *f) {
            `f->picks` is unreachable two statements below, so this cannot stand beside `g_departures++` (see the
            banner at `g_picks_departed`). */
         g_picks_departed += f->picks;
+        /* …and its stand series, for the same reason. */
+        g_stand_digest_gone += f->stand_digest;
+        g_stand_moves_gone += f->stand_moves;
         /* And out of the order: the index if it is runnable, the host-owed list if it is not, the two exactly
            partitioning the members. Before acct_depart, which clears the bucket and family the index reads. */
         DCHECK(!f->assembling, "a sibling was removed from the frontier before its assembly ended");

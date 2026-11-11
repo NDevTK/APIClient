@@ -5642,7 +5642,7 @@ static void engine_bank_step_framed(Flow *f) {
    and before it forks, so every arm the act mints stands at the act and reads one count. */
 static void engine_stand_running(Flow *f, int kind, uint64_t key) {
     engine_bank_step_framed(f);
-    flow_stand_at(f, kind, key);
+    flow_stand_at(f, kind, key, f->framed_work + engine_step_framed());
 }
 
 /* JSFlowControlHooks.stand: the running member has given a quantum of service since its last rest, so it stands at
@@ -7441,7 +7441,7 @@ static int engine_orphan_redrive(JSContext *ctx, Flow *f) {
         char loc[17];
         const char *fields[1] = { loc };
         snprintf(loc, sizeof loc, "%016llx", (unsigned long long)hash);
-        flow_stand_at(sib, FLOW_SITE_DRIVE, hash);
+        flow_stand_at(sib, FLOW_SITE_DRIVE, hash, sib->framed_work);
         flow_set_orphan_seen(sib, (int64_t)novelty_drive_note(novelty_id(NOVELTY_DRIVE, fields, 1), sib->visits));
     }
     return ORPHAN_STEP_SEEDED;
@@ -7615,7 +7615,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
         char loc[17];
         const char *fields[1] = { loc };
         snprintf(loc, sizeof loc, "%016llx", (unsigned long long)hash);
-        flow_stand_at(sib, FLOW_SITE_DRIVE, hash);
+        flow_stand_at(sib, FLOW_SITE_DRIVE, hash, sib->framed_work);
         flow_set_orphan_seen(sib, (int64_t)novelty_drive_note(novelty_id(NOVELTY_DRIVE, fields, 1), sib->visits));
     }
     /* Where it enters the queue, asserted at the one entry that manufactures its own work: a drive entering at
@@ -9041,7 +9041,7 @@ static int64_t engine_slice_work(void) { return g_service_work - g_slice_work0; 
 static int engine_quantum_spent(void) {
     DCHECK(quantum_slice_open(), "the slice's budget was asked outside an open slice — whoever is running this "
                                  "flow is not the scheduler");
-    return engine_slice_work() + (int64_t)JS_FlowPeekRetiredWork() >= ENGINE_QUANTUM_WORK;
+    return engine_slice_work() + (int64_t)JS_FlowPeekRetiredWork() >= quantum_slice_work();
 }
 /* The rival is cached; the comparison is not. What is cached is the rival's identity, found by the O(flows) scan,
    and the scan reruns only when the generation or running flow changes. Both weights are recomputed at every
@@ -10174,8 +10174,9 @@ typedef struct {
    It writes nothing, so the scheduler asks it after a step to stand the member at its next unit, and flow_step
    asks it at each pass and dispatches on the answer. `entry` is the step's first pass (the one rest point where
    an agent is chosen); `task_done` is flow_step's `turn_task_done`. A program entry is named by its row's content
-   digest, a job's by JS_JobSiteHash over its callee. Where a step ended names no site, since the slice's end is
-   the schedule's; page code a unit runs moves the member at its rests (engine_stand_rest), on its own path.
+   digest, a job's by JS_JobSiteHash over its callee; flow_step stands the member there as the unit begins
+   (engine_stand_unit). Where a step ended names no site, since whether a step ends between two units is the
+   slice's decision; page code a unit runs moves the member at its rests (engine_stand_rest), on its own path.
    A host rung or a step-machine job names no entry: its own work runs with no page frame, which serves no site in a
    unit of the page's own loop and serves the act's site in an act the engine forces (step_unit_forced_act).
    Named residual. Not covered: the agent choice of a flow with more than one agent, and the rungs below
@@ -10272,6 +10273,14 @@ static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry
 /* The unit `f` runs when it is next stepped, from the rest point between two steps. */
 static FlowNextUnit flow_next_unit(JSContext *ctx, const Flow *f) {
     return flow_next_unit_pass(ctx, f, /*entry*/ 1, /*task_done*/ 0);
+}
+
+/* The running member begins the unit `nu` names, so it stands at that unit's entry when the unit names one. Asked
+   where flow_step dispatches the unit, at the same point of the path whether or not a step ended just before it. */
+static void engine_stand_unit(Flow *f, const FlowNextUnit *nu) {
+    DCHECK(nu->arm == NEXT_START_PROGRAM || nu->arm == NEXT_RUN_TASK || nu->arm == NEXT_MICROTASK,
+           "a unit entry was stood at for a rung that begins no program or job — only those three name an entry");
+    if (nu->site_kind != 0) engine_stand_running(f, nu->site_kind, nu->site);
 }
 
 /* flow_step's own reading of the state a rung is decided by names rung `seen`; the answer it dispatches on must
@@ -10507,6 +10516,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 DCHECKF(JS_ParkedFlowsScriptForbidden(ctx) == NULL,
                         "a microtask checkpoint ran while a parked continuation forbids script: %s",
                         JS_ParkedFlowsScriptForbidden(ctx));
+                engine_stand_unit(f, &nu);
                 flow_run_one_job(ctx, f);
                 if (flow_blocked(f)) return FLOW_STEP_OWED;
                 /* The checkpoint is a loop: §8.1.7.3 Processing model's perform a microtask checkpoint runs "While
@@ -10798,6 +10808,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     g_step_unit = queued ? STEP_UNIT_PARSE_SPIN_RENDERING : STEP_UNIT_PARSE_SPIN;
                     return 0;
                 }
+                engine_stand_unit(f, &nu);
             }
             else if (nu.arm == NEXT_RUN_TASK) {
                 /* What is left on the queue is a task (HTML §8.1.7.3 Processing model step 2, whose 2.3 takes "the
@@ -10837,6 +10848,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 else if (seq_awaits) g_task_arm_row_wait++;
                 else g_task_arm_no_row++;
                 g_step_unit = STEP_UNIT_RUN_TASK;
+                engine_stand_unit(f, &nu);
                 flow_run_one_job(ctx, f);
                 return flow_blocked(f) ? FLOW_STEP_OWED : 0;
             }
@@ -11897,6 +11909,12 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->between_slices_us = g_between_us + (g_slice_exit_set ? now - g_slice_exit_us : 0);
     out->slices            = g_slices;
     out->pick_digest       = (int64_t)(g_pick_digest & ((1ULL << 52) - 1));
+    {
+        uint64_t sd;
+
+        flow_stand_series(&sd, &out->stand_moves);
+        out->stand_series = (int64_t)(sd & ((1ULL << 52) - 1));
+    }
     /* The containment, an identity rather than an expectation: `g_instance_us0` is opened at engine_sched_slice's
        entry from the reading the first turn's `t0` is carried from, and every charge in `g_step_us` is a
        sub-interval closed before this line reads the clock. A total above its span is a baseline taken after a
@@ -14552,7 +14570,7 @@ static int engine_sched_slice(int resume) {
             /* Whether this turn overran, by the inequality engine_quantum_spent asks: a step that retired a slice's
                work met the budget between two of its asks, which a mean of turn costs cannot report. Counted and
                nothing else; no branch depends on it, since a per-turn overrun test is what a watchdog is built of. */
-            if (step_work >= ENGINE_QUANTUM_WORK) {
+            if (step_work >= quantum_slice_work()) {
                 g_slice_over++;
                 /* Keyed on the arm this turn declared, still in hand: `g_step_unit` is written at flow_step's
                    convergence point above and not overwritten until the next step, so arm, readings and budget are
@@ -14683,16 +14701,10 @@ static int engine_sched_slice(int resume) {
                     "the running member's count to its next rest (%lld) is not its rest's coordinate less its own "
                     "(%lld - %lld) — a retire site counts down one and not the other", (long long)JS_FlowStandLeft(),
                     (long long)cur->stand_next, (long long)cur->framed_work);
-            /* The service just charged was the site the flow stood at since its last move. A member about to begin a
-               unit stands at that unit's entry (flow_next_unit: the program or task the ladder starts next, the head
-               of a checkpoint); one in the middle of a unit keeps its stand until its next rest or decision. */
-            if (r == FLOW_STEP_MORE || r == FLOW_STEP_OWED) {
-                FlowNextUnit nu = flow_next_unit(ctx, cur);
-
-                if (nu.site_kind != 0) flow_stand_at(cur, nu.site_kind, nu.site);
-                cur->next_arm1 = (int)nu.arm + 1;
-                cur->next_sited = nu.site_kind != 0;
-            }
+            /* The rung the member's next step takes, an observation: the member keeps its stand, since whether a
+               step ended here is the slice's decision, and the unit it begins next stands it at its entry when it
+               begins (engine_stand_unit). */
+            if (r == FLOW_STEP_MORE || r == FLOW_STEP_OWED) cur->next_arm1 = (int)flow_next_unit(ctx, cur).arm + 1;
 #if APICLIENT_DEV
             /* The WFQ's monopolizer half, asserted where the charge meets the pick. Its twin, the UCB bonus that
                keeps a never-served site from starving, is a floor on the weight flow_pick returns; flow_pick_walk's
@@ -14898,7 +14910,7 @@ static int engine_sched_slice(int resume) {
          * the running flow's standing count, so the banked work is the whole of it here. Level 1 ranks documents
          * in the trusted zone by their novel value per unit of work served, and no flow weight of this frontier
          * is compared with another document's. */
-        if (engine_slice_work() >= ENGINE_QUANTUM_WORK) {
+        if (engine_slice_work() >= quantum_slice_work()) {
             /* The other closing edge of a turn, discharged without buying a return (@PERWORLD): a yield hands the
                host this member standing, with its deltas applied and a step of real work behind it, which is the
                turn a picture is owed of, so a mark still up is paid by the return already happening. This is what
