@@ -161,24 +161,49 @@ int step_tostring_carry_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValu
     return step_tostring_run(ctx, h, v, in, pout, out_cb, out_argc);
 }
 
-/* THE COMPLETION OF A MACHINE THAT MET UNKNOWN INPUT: derived from `v` (consumed), the operand the driver took
- * off the machine's header, and named by the ALGORITHM of `def` and the SPEC STEP `stage` it was coercing at.
- * `real` (consumed) is the machine's own completion over the operand's example, which becomes the derivation's
- * example; JS_UNDEFINED where the operand had none and the machine stopped there.
- *
- * THE NAME IS BOTH HALVES BECAUSE THE IDENTITY IS WHAT THE PATH CONSTRAINT IS KEYED BY. `def->algorithm` alone
- * would give `x.replace(x, x)`'s search coercion and its replacement coercion ONE identity, and decide.c would
- * then let a branch over the first decide a branch over the second. A stage NAMES ONE SPEC STEP
- * (JSTrampStepDef.steps), and it is the label rather than the index because the label is what survives a build
- * whose stages moved. */
+/* The operands a machine's completion over unknown input is derived from, as owned values in a js_malloc'd array of
+   `*pn`: the receiver unless it is undefined (a call with none), the arguments in order, and `unk` where it is
+   none of those (a value the algorithm read off an operand). Read off the header, so it runs before the state is
+   freed. */
+static JSValue *js_step_unknown_operands(JSContext *ctx, const JSStepHdr *h, JSValueConst unk, int *pn)
+{
+    JSValue *ops = js_malloc(ctx, sizeof *ops * ((size_t)h->argc + 2));
+    int n = 0, i, held = 0;
+
+    CHECK(ops != NULL, "out of memory listing the operands of a completion over unknown input — a dropped "
+                       "concolic collapses a branch to a concrete arm and deletes everything behind the other");
+    if (!JS_IsUndefined(h->this_val) && !JS_IsUninitialized(h->this_val)) ops[n++] = js_dup(h->this_val);
+    for (i = 0; i < h->argc; i++) ops[n++] = js_dup(h->argv[i]);
+    for (i = 0; i < n; i++)
+        held |= JS_VALUE_GET_TAG(ops[i]) == JS_TAG_OBJECT && JS_VALUE_GET_OBJ(ops[i]) == JS_VALUE_GET_OBJ(unk);
+    if (!held) ops[n++] = js_dup(unk);
+    *pn = n;
+    return ops;
+}
+
+/* The completion of a machine that met unknown input: derived from the machine's operands `ops` (`n` of them,
+   consumed with the array, js_step_unknown_operands'), `v` (consumed) being the one a coercion met as unknown,
+   and named by the algorithm of `def` and the spec step `stage` it was coercing at. `real` (consumed) is the
+   machine's own completion over the operand's example, which becomes the derivation's example; JS_UNDEFINED
+   where the operand had none and the machine stopped there.
+
+   The identity is what the path constraint is keyed by, so it holds everything the completion is a function of.
+   The algorithm alone would give `x.replace(x, x)`'s search coercion and its replacement coercion one identity;
+   the unknown operand alone would give `/a/.test(x)` and `/b/.test(x)` one, and decide.c would let a branch over
+   the first decide a branch over the second. An operand the host cannot name leaves the value no identity, and
+   its branches fork by code site. A stage is named by its label, which survives a build whose stages moved.
+   Named residual. Not covered: two RegExp objects of one pattern, flags and lastIndex are one question and are
+   named apart, by JS_CreationName's ordinal. Next diff builds: a RegExp operand's value name for the algorithms
+   that read only its matcher and lastIndex. Absence shows as: a function holding a regular expression literal,
+   called twice over one unknown, forking at each call. */
 static JSValue js_step_unknown_result(JSContext *ctx, const JSTrampStepDef *def, uint16_t stage, JSValue v,
-                                      JSValue real)
+                                      JSValue *ops, int n, JSValue real)
 {
     JSValue r;
     const char *label;
     char *op;
-    size_t n;
-    int nstages = 0;
+    size_t len;
+    int nstages = 0, i;
 
     DCHECK(g_concolic.is(v),
            "a step machine's completion was derived from something that is not unknown external input — the "
@@ -197,16 +222,18 @@ static JSValue js_step_unknown_result(JSContext *ctx, const JSTrampStepDef *def,
     label = (int)stage < nstages ? def->steps[stage] : "(an undeclared stage)";
     /* Sized from the two strings: a stage label is prose, and a truncated name is two coercions sharing one
        identity. */
-    n = strlen(def->algorithm) + 3 + strlen(label) + 1;
-    op = js_malloc(ctx, n);
+    len = strlen(def->algorithm) + 3 + strlen(label) + 1;
+    op = js_malloc(ctx, len);
     CHECK(op != NULL, "out of memory naming a derived unknown — a dropped concolic collapses a branch to a "
                       "concrete arm and deletes everything behind the other");
-    snprintf(op, n, "%s @ %s", def->algorithm, label);
-    r = js_concolic_derive(ctx, v, op, real);
+    snprintf(op, len, "%s @ %s", def->algorithm, label);
+    r = g_concolic.derived(ctx, op, ops, n, js_concolic_real(ctx, real));
     js_free(ctx, op);   /* the derivation COPIES what it keeps (its shape and its identity are its own) */
     DCHECK(!JS_IsUninitialized(r),
-           "the concolic derivation declined an operand this engine had already recognised as unknown input — "
-           "the value semantics were installed without the builtin-derivation hook");
+           "the concolic derivation declined an operand list holding a value this engine had already recognised "
+           "as unknown input — the value semantics were installed without the derivation hook");
+    for (i = 0; i < n; i++) JS_FreeValue(ctx, ops[i]);
+    js_free(ctx, ops);
     JS_FreeValue(ctx, v);
     return r;
 }

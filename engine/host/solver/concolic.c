@@ -7075,11 +7075,20 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
     if (n == 1) {
         shape = shapef("%s.%s()", parts[0], op);
     } else {
+        /* One pass over the operands' shapes: a machine's operand list is as long as the page's call made it. */
+        size_t len = 0, at = 0;
+
+        for (i = 0; i < n; i++) len += strlen(parts[i]) + 2;
+        args = reclaim_malloc(len + 1);
+        CHECK(args != NULL, "concolic: OOM joining a derivation's operand shapes");
         for (i = 0; i < n; i++) {
-            char *next = args ? shapef("%s, %s", args, parts[i]) : shapef("%s", parts[i]);
-            free(args);
-            args = next;
+            size_t pl = strlen(parts[i]);
+
+            if (i) { memcpy(args + at, ", ", 2); at += 2; }
+            memcpy(args + at, parts[i], pl);
+            at += pl;
         }
+        args[at] = '\0';
         shape = shapef("%s(%s)", op, args);
     }
     /* `example` is what the caller got by running the real operation on the operands' own examples. */

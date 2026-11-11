@@ -15960,14 +15960,19 @@ static bool js_concolic_codec_operand(JSValueConst v, JSValueConst ex)
    operand FORKS a feasible success arm and a throw arm — `decodeURIComponent(location.hash)` inside a
    try/catch is the shape — and this engine has no fork at a C builtin boundary yet, which is the same gap
    JSON.parse still aborts on rather than hide. */
+/* A model run's completion as a derivation's example: a throw is no example, and is taken out of the context. */
+static JSValue js_concolic_real(JSContext *ctx, JSValue real)
+{
+    if (!JS_IsException(real)) return real;
+    DCHECK(JS_HasException(ctx), "a model run returned the exception marker with no exception pending — the "
+                                 "throw it names is not in the context and cannot be taken out of it");
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_UNDEFINED;
+}
+
 static JSValue js_concolic_derive(JSContext *ctx, JSValueConst v, const char *op, JSValue real)
 {
-    if (JS_IsException(real)) {
-        DCHECK(JS_HasException(ctx), "a model run returned the exception marker with no exception pending — the "
-                                     "throw it names is not in the context and cannot be taken out of it");
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        real = JS_UNDEFINED;
-    }
+    real = js_concolic_real(ctx, real);
     if (!g_concolic.is(v)) { JS_FreeValue(ctx, real); return JS_UNINITIALIZED; }
     return g_concolic.builtin(ctx, v, op, real);
 }
@@ -30854,6 +30859,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JSValue unk = h->unknown_operand;
                     const JSTrampStepDef *udef = h->def;
                     uint16_t ustage = h->unknown_stage;
+                    int uops_n = 0;
+                    JSValue *uops = JS_IsUninitialized(unk) ? NULL : js_step_unknown_operands(ctx, h, unk, &uops_n);
                     JSValue r;
 
                     DCHECK(st == 0 || !JS_IsUninitialized(unk),
@@ -30864,7 +30871,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     /* take_result is TRUE above because this is a NORMAL completion, not an abrupt one: nothing
                        threw, so the definition's `onerror` (IfAbruptCloseIterator and its kin) must not run. */
                     if (st == JS_STEP_UNKNOWN) { JS_FreeValue(ctx, r); r = JS_UNDEFINED; }
-                    if (!JS_IsUninitialized(unk)) r = js_step_unknown_result(ctx, udef, ustage, unk, r);
+                    if (!JS_IsUninitialized(unk)) r = js_step_unknown_result(ctx, udef, ustage, unk, uops, uops_n, r);
                     /* The completion's type where the definition declares one. An operand returned as itself
                        is of that type on this path only (thisNumberValue returns its argument or throws), so
                        it is left as it was. */
