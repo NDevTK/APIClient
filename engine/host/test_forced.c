@@ -21494,7 +21494,7 @@ TF_UNIT void probes_navrealm(const char *js, Probe *tab, int *n) {
 /* The row of the document's `_instanceGaps` that states a construct of this file and ends in `tail` (the row's
    bytes from its `"message"` key through its closing brace), or NULL. No message here holds a brace. */
 static const char *tf_gap_row(const char *js, const char *tail) {
-    static const char open[] = "{\"file\":\"" __FILE__ "\",\"line\":";
+    static const char open[] = "{\"siteFile\":\"" __FILE__ "\",\"siteLine\":";
     const char *g = strstr(js, "\"_instanceGaps\":["), *row;
 
     if (!g) return NULL;
