@@ -1998,6 +1998,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/gridtemplate.h"
 #include "fixture/inlineboxstatic.h"
 #include "fixture/shadowfloats.h"
+#include "fixture/shadowoffset.h"
 #include "fixture/calctree.h"
 #include "fixture/svgattr.h"
 #include "fixture/gridalign.h"
@@ -2827,6 +2828,7 @@ TF_DOCS[] = {
     { "gridrun", HTML_GRIDRUN },
     { "inlineboxstatic", HTML_INLINEBOXSTATIC },
     { "shadowfloats", HTML_SHADOWFLOATS },
+    { "shadowoffset", HTML_SHADOWOFFSET },
     { "gridtemplate", HTML_GRIDTEMPLATE },
     { "calctree", HTML_CALCTREE },
     { "svgattr", HTML_SVGATTR },
@@ -21969,6 +21971,41 @@ TF_UNIT void probes_inlineboxstatic(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `shadowoffset` document (fixture/shadowoffset.h); Chrome 157.0.8103.50, Firefox 160.0 and
+   Safari 27.2 pass every subtest of the WPT file it is taken from (wpt.fyi stable runs of 2026-11-11). */
+TF_UNIT void probes_shadowoffset(const char *js, Probe *tab, int *n) {
+    const char *slot_why = NULL, *in_why = NULL, *un_why = NULL;
+    int slot_tt = !!strstr(js, "\"/api/shadowoffset\""), in_tt = slot_tt, un_tt = slot_tt;
+
+    fold_row(&slot_tt, &slot_why, slot_tt,
+             "NOT REACHED: there is no /api/shadowoffset record at all, so the document aborted before its fetch");
+    fold_row(&slot_tt, &slot_why, param_value_is(js, "/api/shadowoffset", "p1", "c"),
+             "CSSOM VIEW §7: a slotted element's offsetParent is not its nearest positioned shadow-including "
+             "ancestor `c`");
+    fold_row(&slot_tt, &slot_why, param_value_is(js, "/api/shadowoffset", "l1", "85") &&
+                                  param_value_is(js, "/api/shadowoffset", "t1", "45"),
+             "CSSOM VIEW §7: a slotted element's offsetLeft/offsetTop are not 85/45 from `c`'s padding edge");
+    fold_row(&slot_tt, &slot_why, param_value_is(js, "/api/shadowoffset", "w1", "1195"),
+             "CSSOM VIEW §7: a slotted element's offsetWidth is not 1195 inside an 85px left padding");
+    fold_row(&in_tt, &in_why, in_tt,
+             "NOT REACHED: there is no /api/shadowoffset record at all, so the document aborted before its fetch");
+    fold_row(&in_tt, &in_why, param_value_is(js, "/api/shadowoffset", "p2", "rp") &&
+                              param_value_is(js, "/api/shadowoffset", "l2", "100") &&
+                              param_value_is(js, "/api/shadowoffset", "t2", "70"),
+             "CSSOM VIEW §7: an element in a closed shadow tree is not offset 100/70 from that tree's `rp`");
+    fold_row(&un_tt, &un_why, un_tt,
+             "NOT REACHED: there is no /api/shadowoffset record at all, so the document aborted before its fetch");
+    fold_row(&un_tt, &un_why, param_value_is(js, "/api/shadowoffset", "u", "true") &&
+                              param_value_is(js, "/api/shadowoffset", "ul", "0"),
+             "css-shadow-1 §4.1: a light child no slot takes has a box (offsetParent not null or offsetLeft not 0)");
+    const Probe rows[] = {
+        { "offset-parent-skips-shadow-tree", slot_tt, "/api/shadowoffset", SESS_EXPLORE, slot_why },
+        { "offset-parent-in-shadow-tree", in_tt, "/api/shadowoffset", SESS_EXPLORE, in_why },
+        { "offset-of-unassigned-light-child", un_tt, "/api/shadowoffset", SESS_EXPLORE, un_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `gridtemplate` document (fixture/gridtemplate.h); Chrome 155.0.8059.84 and Firefox 158.0.1
    give every value they expect. */
 TF_UNIT void probes_gridtemplate(const char *js, Probe *tab, int *n) {
@@ -33468,6 +33505,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_layoutnest(js, probes, &np);
     probes_gridtemplate(js, probes, &np);
     probes_inlineboxstatic(js, probes, &np);
+    probes_shadowoffset(js, probes, &np);
     probes_calctree(js, probes, &np);
     probes_svgattr(js, probes, &np);
     probes_gridalign(js, probes, &np);
