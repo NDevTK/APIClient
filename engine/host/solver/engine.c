@@ -13591,7 +13591,7 @@ static int engine_sched_slice(int resume) {
                 g_timer_stamp_hook(ctx);
             /* …and how many timers the stepped flow's world holds now, for the census's timer holders. */
             if (g_timer_active_hook && r != FLOW_STEP_DONE && r != FLOW_STEP_RETIRED)
-                flow_running()->timers_at_step_end = g_timer_active_hook(ctx);
+                cur->timers_at_step_end = g_timer_active_hook(ctx);
             /* The checkpoint's tail is the stepped flow's own work, HTML §8.1.7.3 "perform a microtask checkpoint"
                step 4 and the steps after it: notify about rejected promises (§8.1.4.7) captures the realm's list
                into this flow's delta and queues its task on this flow, so its allocations may sell the tail like
