@@ -222,6 +222,8 @@ function runMemcg(tag, capMiB) {
 
 const LINE = /^\[trusted\] \[([^\]]+)\] (@COLD|@WFQ|@RESULT)#(\d+) \2 (.*)$/;
 const PICK = /^\[trusted\] \[([^\]]+)\] (@PICKCOLS|@PICK) (.*)$/;
+/* The zone's fired-send record (engine/trusted.mjs's sayEgress): one line per URL a request was judged at. */
+const EGRESS = /^\[trusted\] \[([^\]]+)\] @EGRESS (\{.*\})$/;
 const ABORT = /^@(?:WHY|E) (?:\{"phase":"assert"|.*\([^()]*:\d+\)$)/;
 
 function runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir, runIx, wire = 'replay', ledger = true }) {
@@ -253,6 +255,9 @@ function runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir, runI
     const backstop = setTimeout(() => kill('backstop'), backstopS * 1000);
     const progress = join(logDir, `${tag}.progress.jsonl`);
     writeFileSync(progress, '');
+    /* Every fired-send entry, as `<who>\t<entry JSON>`, in the order the zone wrote them. */
+    const egressLog = join(logDir, `${tag}.egress.tsv`);
+    writeFileSync(egressLog, '');
     const census = createGzip();
     const censusDone = new Promise((ok, fail) =>
       census.pipe(createWriteStream(join(logDir, `${tag}.census.tsv.gz`))).on('finish', ok).on('error', fail));
@@ -279,6 +284,8 @@ function runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir, runI
     rl.on('line', (line) => {
       if (abort === null && ABORT.test(line)) abort = line.slice(0, 400);
       tail.push(line.slice(0, 400)); if (tail.length > 40) tail.shift();
+      const g = EGRESS.exec(line);
+      if (g !== null) { appendFileSync(egressLog, `${g[1]}\t${g[2]}\n`); return; }
       const p = PICK.exec(line);
       if (p !== null) { picks.write(`${p[1]}\t${p[2]}\t${p[3]}\n`); return; }
       const m = LINE.exec(line);
