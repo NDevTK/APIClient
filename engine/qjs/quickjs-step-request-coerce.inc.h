@@ -191,11 +191,7 @@ static JSValue *js_step_unknown_operands(JSContext *ctx, const JSStepHdr *h, JSV
    The algorithm alone would give `x.replace(x, x)`'s search coercion and its replacement coercion one identity;
    the unknown operand alone would give `/a/.test(x)` and `/b/.test(x)` one, and decide.c would let a branch over
    the first decide a branch over the second. An operand the host cannot name leaves the value no identity, and
-   its branches fork by code site. A stage is named by its label, which survives a build whose stages moved.
-   Named residual. Not covered: two RegExp objects of one pattern, flags and lastIndex are one question and are
-   named apart, by JS_CreationName's ordinal. Next diff builds: a RegExp operand's value name for the algorithms
-   that read only its matcher and lastIndex. Absence shows as: a function holding a regular expression literal,
-   called twice over one unknown, forking at each call. */
+   its branches fork by code site. A stage is named by its label, which survives a build whose stages moved. */
 static JSValue js_step_unknown_result(JSContext *ctx, const JSTrampStepDef *def, uint16_t stage, JSValue v,
                                       JSValue *ops, int n, JSValue real)
 {

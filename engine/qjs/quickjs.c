@@ -78213,16 +78213,15 @@ static bool js_concolic_call_forwards(JSValueConst fex)
     return tramp_step_def_of(fex)->forwards_unknown_receiver != 0;
 }
 
-/* Whether the RegExp protocol over `v` runs only this realm's builtins, so a String method handed it passes the
-   receiver's example to no page code. Every member §22.2.6's methods and String.prototype's RegExp arms Get
-   must be the original: `v` holds only its own `lastIndex` over this realm's %RegExp.prototype%, which holds
-   its own `exec`, `flags`, the eight flag getters, `source`, `constructor` (%RegExp%, whose @@species getter is
-   the original) and the five symbol methods. A sticky, non-global `v` is refused too: its exec writes
-   `lastIndex` from where the match ended, which the example's run would leave in the page's object. */
+/* Whether the RegExp protocol over `v` runs only this realm's builtins. Every member §22.2.6's methods and
+   String.prototype's RegExp arms Get must be the original: `v` is an initialized RegExp holding only its own
+   `lastIndex` over this realm's %RegExp.prototype%, which holds its own `exec`, `flags`, the eight flag getters,
+   `source`, `constructor` (%RegExp%, whose @@species getter is the original) and the five symbol methods. Reads
+   own slots only, so no page code runs. */
 static JSValue js_regexp_get_source(JSContext *ctx, JSValueConst this_val);
 static JSValue js_regexp_get_flag(JSContext *ctx, JSValueConst this_val, int mask);
 
-static bool js_concolic_call_regexp_builtin(JSContext *ctx, JSValueConst v)
+static bool js_regexp_protocol_builtin(JSContext *ctx, JSValueConst v)
 {
     static const struct { const char *name; int kind; int id; } MEMBER[] = {
         /* kind 0: a step method; 1: a step getter; 2: js_regexp_get_flag's getter; 3: js_regexp_get_source's */
@@ -78242,17 +78241,17 @@ static bool js_concolic_call_regexp_builtin(JSContext *ctx, JSValueConst v)
     JSPropertyDescriptor pd;
     JSShape *sh;
     JSObject *p;
-    int flags, has, ok;
+    int has, ok;
     size_t i;
 
     if (!JS_IsRegExp(v)) return false;
     p = JS_VALUE_GET_OBJ(v);
+    /* Its constructor attaches the pattern and the matcher after the allocation. */
+    if (!p->u.regexp.pattern || !p->u.regexp.bytecode) return false;
     sh = p->shape;
     if (sh->prop_count != 1 || get_shape_prop(sh)[0].atom != JS_ATOM_lastIndex ||
         (get_shape_prop(sh)[0].flags & JS_PROP_TMASK) != JS_PROP_NORMAL || sh->proto != JS_VALUE_GET_OBJ(proto))
         return false;
-    flags = lre_get_flags(str8(p->u.regexp.bytecode));
-    if ((flags & LRE_FLAG_STICKY) && !(flags & LRE_FLAG_GLOBAL)) return false;
     for (i = 0; i < countof(MEMBER) + countof(SYMBOL); i++) {
         JSAtom atom = i < countof(MEMBER) ? JS_NewAtom(ctx, MEMBER[i].name) : SYMBOL[i - countof(MEMBER)].atom;
         int kind = i < countof(MEMBER) ? MEMBER[i].kind : 0;
@@ -78280,6 +78279,47 @@ static bool js_concolic_call_regexp_builtin(JSContext *ctx, JSValueConst v)
     ok = has > 0 && (pd.flags & JS_PROP_GETSET) && JS_IsCFunction(ctx, pd.getter, (JSCFunction *)js_get_this, 0);
     if (has > 0) js_free_desc(ctx, &pd);
     return ok;
+}
+
+/* ...and so a String method handed `v` passes the receiver's example to no page code. A sticky, non-global `v`
+   is refused too: its exec writes `lastIndex` from where the match ended, which the example's run would leave in
+   the page's object. */
+static bool js_concolic_call_regexp_builtin(JSContext *ctx, JSValueConst v)
+{
+    int flags;
+
+    if (!js_regexp_protocol_builtin(ctx, v)) return false;
+    flags = lre_get_flags(str8(JS_VALUE_GET_OBJ(v)->u.regexp.bytecode));
+    return !((flags & LRE_FLAG_STICKY) && !(flags & LRE_FLAG_GLOBAL));
+}
+
+/* See quickjs.h. */
+JSValue JS_RegExpValueName(JSContext *ctx, JSValueConst v, int *stateful)
+{
+    static const struct { int mask; char c; } FLAG[] = {
+        { LRE_FLAG_INDICES, 'd' },   { LRE_FLAG_GLOBAL, 'g' }, { LRE_FLAG_IGNORECASE, 'i' },   { LRE_FLAG_MULTILINE, 'm' },
+        { LRE_FLAG_DOTALL, 's' },    { LRE_FLAG_UNICODE, 'u' }, { LRE_FLAG_UNICODE_SETS, 'v' }, { LRE_FLAG_STICKY, 'y' },
+    };
+    StringBuffer b;
+    JSRegExp *re;
+    int flags;
+    size_t i;
+
+    DCHECK(stateful != NULL, "a regular expression's value name was asked with nowhere to say whether lastIndex "
+                             "is part of the value");
+    *stateful = 0;
+    if (!js_regexp_protocol_builtin(ctx, v)) return JS_UNDEFINED;
+    re = &JS_VALUE_GET_OBJ(v)->u.regexp;
+    flags = lre_get_flags(str8(re->bytecode));
+    *stateful = (flags & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY)) != 0;
+    string_buffer_init(ctx, &b, (int)re->pattern->len + 2 + (int)countof(FLAG));
+    string_buffer_putc8(&b, '/');
+    string_buffer_concat(&b, re->pattern, 0, re->pattern->len);
+    /* The flags hold no `/`, so the last one ends the source whatever the source holds. */
+    string_buffer_putc8(&b, '/');
+    for (i = 0; i < countof(FLAG); i++)
+        if (flags & FLAG[i].mask) string_buffer_putc8(&b, FLAG[i].c);
+    return string_buffer_end(&b);
 }
 
 /* One operand's stand-in for the examples' run: a primitive as itself, an unknown by its example when that is

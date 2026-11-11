@@ -3645,6 +3645,16 @@ JS_EXTERN int      JS_CreationName(JSContext *ctx, JSValueConst v, char *buf, si
    TRUNCATED creation name is two values under one constraint key, which is the exact collision the ordinal
    exists to prevent. */
 #define JS_CREATION_NAME_MAX 40
+/* A RegExp's value as the algorithms that take one read it, where that is its two slots: the String
+   `/<[[OriginalSource]]>/<[[OriginalFlags]]>`, the flags in §22.2.6.4 get RegExp.prototype.flags' order. The
+   matcher is compiled from the two (§22.2.3.3 RegExpInitialize ( obj, pattern, flags )), so two objects of one
+   name are one question to every built-in of the RegExp protocol. `*stateful` is whether the flags hold `g` or
+   `y`: then lastIndex decides where the match starts (§22.2.7.2 RegExpBuiltinExec ( regexp, string ) steps 2 and
+   7) and is part of the value, which the name does not hold. JS_UNDEFINED where `v` is no initialized RegExp, or
+   one whose protocol reads more than the slots: an own property besides lastIndex, or anything but this realm's
+   original %RegExp.prototype% members above it. Owned; `v` is borrowed. Reads own slots only, so no page code
+   runs. */
+JS_EXTERN JSValue  JS_RegExpValueName(JSContext *ctx, JSValueConst v, int *stateful);
 /* A document's root module, in two entries. JS_FlowCompileModule is 16.2.1.7.1 ParseModule under
    JS_FlowCompileStep's contract (the same driver, budget hook and carrier slot, which JS_FlowCompileDrop
    releases): 1 with `*pmod` the module record, owned by the caller; 0 with the parse parked in `*pcompile`, so

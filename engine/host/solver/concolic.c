@@ -896,6 +896,60 @@ static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
     return r;
 }
 
+static uint32_t concolic_mint_ordinal_hook(JSContext *ctx);
+
+/* A RegExp operand named by the value an algorithm reads off it (QuickJS's JS_RegExpValueName), owned; NULL
+   where it has none, and its creation name stands. ECMAScript §13.2.7.3 Runtime Semantics: Evaluation makes a
+   new object each time a literal is evaluated, so a creation name asks one test over one unknown again at every
+   evaluation, and the second fork's arms can contradict the first's.
+   Named residual. Not covered: a global or sticky expression's lastIndex, which §22.2.7.2 RegExpBuiltinExec
+   ( regexp, string ) step 2 reads; the derivation is named after the example's run has written it, so each call
+   spends one of this flow's ordinals and is a name of its own. Next diff builds: the lastIndex each such operand
+   held where the machine met the unknown, kept on the step header and named in the ordinal's place. Absence
+   shows as: one `g` test repeated at one lastIndex over one unknown forking at each call. */
+static char *regexp_value_name(JSContext *ctx, JSValueConst v)
+{
+    int stateful = 0;
+    JSValue nm = JS_RegExpValueName(ctx, v, &stateful);
+    const char *s;
+    size_t len;
+    char *r;
+
+    if (JS_IsUndefined(nm)) return NULL;
+    CHECK(!JS_IsException(nm), "concolic: OOM spelling a regular expression's value name");
+    s = JS_ToCStringLen(ctx, &len, nm);
+    JS_FreeValue(ctx, nm);
+    CHECK(s != NULL, "concolic: OOM copying a regular expression's value name");
+    /* A source holding a NUL is page bytes a NUL-terminated copy would truncate onto another's name. */
+    if (len != strlen(s)) { JS_FreeCString(ctx, s); return NULL; }
+    r = stateful ? shapef("%s#%u", s, (unsigned)concolic_mint_ordinal_hook(ctx)) : shapef("%s", s);
+    JS_FreeCString(ctx, s);
+    return r;
+}
+
+/* An operand of a derivation or of a call over an unknown: `*ident` (NULL where unspellable) and `*shape`,
+   both owned. The result is a function of the operation and of what it reads off each operand, so a RegExp is
+   named by its value where it has a value name; a comparison's operand is an object's identity and takes
+   ident_of_operand. The two are composed from one name, since a stateful expression's spends an ordinal.
+   Named residual. Not covered: a plain object or an Array, named by its creation, so one written between two
+   calls is one name and two of equal content are two. Next diff builds: no name for an operand whose content the
+   algorithm reads and this file cannot spell, its branches forking by code site. Absence shows as: a member
+   taking an arm its example contradicts with no fork, on a key naming an `ob@` or `ar@` operand. */
+static void derived_operand_name(JSContext *ctx, JSValueConst v, char **ident, char **shape)
+{
+    char *vn = JS_IsRegExp(v) ? regexp_value_name(ctx, v) : NULL;
+
+    if (vn) {
+        const char *f[1] = { vn };
+
+        *ident = concolic_ident_compose("re", f, 1);
+        *shape = vn;
+        return;
+    }
+    *ident = ident_of_operand(ctx, v);
+    *shape = derived_operand_shape(ctx, v);
+}
+
 /* Mint a value derived from an unknown one. `ident` and `example` are consumed, and the candidate substitution
    applies as it does to a source read (see concolic_new). */
 static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *src, const char *root,
@@ -6364,11 +6418,18 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
        the true display: the page wrote the argument. An argument this engine cannot spell (a plain object)
        makes the whole identity absent and renders "?", the one pair this rule cannot separate (see the named
        residual at keyname_record). */
+    owned = reclaim_malloc((size_t)(argc + 1) * sizeof *owned);
+    f = reclaim_malloc((size_t)(argc + 2) * sizeof *f);
+    CHECK(owned && f, "concolic: OOM identifying a call over an unknown value");
+    f[0] = c->ident;
     {
         char *args = NULL;
         for (i = 0; i < argc; i++) {
-            char *a = derived_operand_shape(ctx, argv[i]);
-            char *next = args ? shapef("%s, %s", args, a) : shapef("%s", a);
+            char *a, *next;
+
+            derived_operand_name(ctx, argv[i], &owned[i], &a);
+            f[i + 1] = owned[i];
+            next = args ? shapef("%s, %s", args, a) : shapef("%s", a);
             free(a);
             free(args);
             args = next;
@@ -6376,11 +6437,6 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
         shape = shapef("%s(%s)", c->shape ? c->shape : "{}", args ? args : "");
         free(args);
     }
-    owned = reclaim_malloc((size_t)(argc + 1) * sizeof *owned);
-    f = reclaim_malloc((size_t)(argc + 2) * sizeof *f);
-    CHECK(owned && f, "concolic: OOM identifying a call over an unknown value");
-    f[0] = c->ident;
-    for (i = 0; i < argc; i++) { owned[i] = ident_of_operand(ctx, argv[i]); f[i + 1] = owned[i]; }
     ident = concolic_ident_compose("()", f, argc + 1);
     for (i = 0; i < argc; i++) free(owned[i]);
     free(owned); free(f);
@@ -7046,10 +7102,8 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
     parts = reclaim_malloc((size_t)n * sizeof *parts);
     fields = reclaim_malloc(((size_t)n + 1) * sizeof *fields);
     CHECK(parts != NULL && fields != NULL, "concolic: OOM composing a derivation over several operands");
-    for (i = 0; i < n; i++) {
-        parts[i] = derived_operand_shape(ctx, operands[i]);
-        fields[i] = ident_of_operand(ctx, operands[i]);   /* owned; NULL is an unspellable operand */
-    }
+    /* fields[i] is owned; NULL is an unspellable operand. */
+    for (i = 0; i < n; i++) derived_operand_name(ctx, operands[i], (char **)&fields[i], &parts[i]);
     /* The operation is the last field and the operands come first, so concolic_builtin_hook's n == 1 call
        composes `(ident, op)` and the two entries share one namespace. */
     fields[n] = op;
