@@ -1,17 +1,14 @@
 // The egress default and the fired-send record (extension/lib/safe-fetch.js) as engine/trusted.mjs's zone runs
 // them: every row is a safeFetch, or a firing question, through that zone against a loopback server that counts
 // what reached it. A row reads the reply record's `egress` list (one entry per send the request asked for: the
-// signal vector the zone judged, the arm that admitted it, and whether the wire was reached) beside the server's
-// own count. The control runs first: an unforced page request reaches the server, so a count of zero in a later
-// row is the policy and not a server that counts nothing.
+// signal vector judged, what admitted it, whether the wire was reached) beside the server's count. The control
+// runs first: an unforced page request reaches the server, so a later zero is the policy.
 //
-// The default the second group scores: a request leaves an unwidened origin only as the page's own act on its own
-// unforced run (provenance not forced, the asking document's reach not forced, witness unpinned, actor page),
-// whatever its destination; the seed is the one load this zone composes that leaves; and a refusal names the
-// fact that decided it.
-//
-// The third group: a refused request byte-identical to a send the same document's unforced run already made is
-// answered from that send's record, and the server's count does not move.
+// Second group, the default: a request leaves an unwidened origin only as the page's own act on its unforced run
+// (provenance and the asking document's reach not forced, witness unpinned, actor page), whatever its
+// destination; the seed is the one load this zone composes that leaves; a refusal names the fact that decided.
+// Third group: a refused request byte-identical to a send the same document's unforced run made is answered
+// from that send's record, and the server's count does not move.
 //
 //   node testing/egress_rows.mjs
 "use strict";
