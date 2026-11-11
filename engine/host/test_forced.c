@@ -26255,7 +26255,23 @@ TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
     fold_row(&uw_tt, &uw_why, emitted_record_has(js, "/api/uspa-body", "URLSearchParams.toString("),
              "Fetch §5.2's URLSearchParams arm: a list holding an unknown half was extracted as known bytes, so "
              "the body is the half's display shape and not the unknown the list's serialization derives");
+    /* A fetch() of a URL object whose record is unknown: the address is the unknown the URL serializes to. */
+    const char *ur_why = NULL; int ur_tt = 1;
+    fold_row(&ur_tt, &ur_why, param_value_is(js, "/api/uspa-done", "n", "1"),
+             "NOT REACHED: no world appended a pair of the query to the URL's searchParams and ran past its fetch");
+    fold_row(&ur_tt, &ur_why, !!strstr(js, "URLSearchParams.toString(URLSearchParams.pairName("),
+             "the fetch of a URL whose query is an unknown with no example left no record: a request that is not "
+             "sent is still a record, with the unknown's shape as its address");
+    const char *uh_why = NULL; int uh_tt = 1;
+    fold_row(&uh_tt, &uh_why, !!strstr(js, "uspa-hash"),
+             "NOT REACHED: no record names /api/uspa-hash, so the URL given the fragment was never fetched");
+    fold_row(&uh_tt, &uh_why, !!strstr(js, "\"attackerRooted\":{\"address\":\"location.hash\""),
+             "no record's address is rooted in location.hash: the fetch of a URL object ran on the example of "
+             "the URL's serialization, so the fragment appended to its query is recorded as bytes the run "
+             "determined");
     const Probe rows[] = {
+        { "usp-url-unaddressed-record", ur_tt, "uspUn++", SESS_EXPLORE, ur_why },
+        { "usp-url-attacker-root", uh_tt, "/api/uspa-hash", SESS_EXPLORE, uh_why },
         { "usp-url-append-unknown", uu_tt, "/api/uspa-url", SESS_EXPLORE, uu_why },
         { "usp-url-append-example", uv_tt, "/api/uspa-ex", SESS_EXPLORE, uv_why },
         { "usp-body-append-unknown", uw_tt, "/api/uspa-body", SESS_EXPLORE, uw_why },
