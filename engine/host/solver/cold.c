@@ -1399,8 +1399,9 @@ static void park_cross_val_none(JSValueConst v, void *arg) { (void)v; (void)arg;
      b<hex>                    objects born after the seal that members share, each written once per document and
                                named by document ordinal in written order (every object the graph builds by
                                content takes the next ordinal, so a later record names any of them);
-     h<id>,<base-id|->,<hex>   a frozen heap segment's slot entries, once per document, over the segment below it;
-     p<seg-id|->,<hex>         the parked member's own head's slot entries, a field of the flow record before it.
+     h<id>,<base-id|-|x>,<hex> a frozen heap segment's slot entries, once per document, over the segment below it
+                               (`x`: that one has a part no name reaches and is unwritten);
+     p<seg-id|-|x>,<hex>       the parked member's own head's slot entries, a field of the flow record before it.
    Each <hex> is a JS_FlowGraphCrossWrite over PARK_SLOT_ROOTS values per entry. The heap shows the baseline while
    they are written (cow_baseline_shown), so a shared object's body is the one every member's entries apply over. */
 enum { PARK_SLOT_ROOTS = 13 };
@@ -1590,15 +1591,34 @@ static uint8_t *park_slot_bytes(const ParkVals *pv, uint32_t floor, ParkCrossKin
     return ok ? JS_FlowGraphCrossWrite(ctx, pv->v, pv->n, floor, &x, len) : NULL;
 }
 
-/* Write `seg` and every unwritten heap segment below it, base first; answers its name, or PARK_SEG_UNWRITABLE when
-   it or one below it has a part no name reaches. A segment's entries reach only what was born before it froze, so
-   every object in it is an anchor (the floor is the top generation). */
+/* What a segment and its chain below it could not write: the gap kinds, owned, of every unwritten segment from
+   it down (index + 1 in g_park_chain_gaps; 0 for a chain written whole). */
+static ParkPtrMap g_park_chain_fail;
+static ParkCrossKinds *g_park_chain_gaps;
+static uint32_t g_park_chain_gaps_n;
+static void park_kinds_merge(ParkCrossKinds *into, const ParkCrossKinds *from)
+{
+    for (int i = 0; i < from->n; i++) park_cross_kind(into, from->kinds[i]);
+    if (from->more) into->more = 1;
+}
+static void park_kinds_free(ParkCrossKinds *k)
+{
+    for (int i = 0; i < k->n; i++) free(k->kinds[i]);
+    k->n = 0;
+}
+
+/* Write `seg` and every unwritten heap segment below it, base first, each on its own: a segment with a part no name
+   reaches is not written and the ones above it still are, so a record's codec is exercised wherever its own parts
+   are named. Answers `seg`'s name (0 when it is unwritten) and merges the gaps of its chain into `k`. A segment's
+   entries reach only what was born before it froze, so every object in it is an anchor (the floor is the top
+   generation). */
 static uint32_t park_heap_chain(const void *seg, ParkCrossKinds *k)
 {
     const void **walk = NULL;
     long n = 0, cap = 0;
-    uint32_t id = 0;
+    uint32_t id, fail;
 
+    if (!seg) return 0;
     for (const void *s = seg; s && !park_map_get(&g_park_heap_segs, s); s = cow_seg_below(s)) {
         if (n == cap) {
             cap = cap ? cap * 2 : 32;
@@ -1610,50 +1630,74 @@ static uint32_t park_heap_chain(const void *seg, ParkCrossKinds *k)
     while (n) {
         const void *s = walk[--n], *below = cow_seg_below(s);
         uint32_t bid = below ? park_map_get(&g_park_heap_segs, below) : 0;
+        uint32_t bfail = below ? park_map_get(&g_park_chain_fail, below) : 0;
+        ParkCrossKinds own = { .n = 0 };
         ParkVals pv = { 0 };
-        uint8_t *b = NULL;
+        uint8_t *b;
         size_t len = 0;
-        char head[64];
 
-        if (bid != PARK_SEG_UNWRITABLE) {
-            cow_slot_each(NULL, s, park_slot_roots, &pv);
-            b = park_slot_bytes(&pv, UINT32_MAX, k, &len);
-        }
+        cow_slot_each(NULL, s, park_slot_roots, &pv);
+        b = park_slot_bytes(&pv, UINT32_MAX, &own, &len);
         park_vals_free(&pv);
-        if (!b) { park_map_put(&g_park_heap_segs, s, PARK_SEG_UNWRITABLE); continue; }
-        park_map_put(&g_park_heap_segs, s, (uint32_t)++g_park_heap_seg_n);
-        if (bid) snprintf(head, sizeof head, "h%ld,%u,", g_park_heap_seg_n - 1, bid - 1);
-        else snprintf(head, sizeof head, "h%ld,-,", g_park_heap_seg_n - 1);
-        park_open_rec();
-        park_str(head);
-        park_hex_bytes(b, len);
-        free(b);
-        g_parked_census.heapsegs++;
+        if (b) {
+            char head[64];
+
+            park_map_put(&g_park_heap_segs, s, (uint32_t)++g_park_heap_seg_n);
+            if (bid && bid != PARK_SEG_UNWRITABLE)
+                snprintf(head, sizeof head, "h%ld,%u,", g_park_heap_seg_n - 1, bid - 1);
+            else if (bid) snprintf(head, sizeof head, "h%ld,x,", g_park_heap_seg_n - 1);
+            else snprintf(head, sizeof head, "h%ld,-,", g_park_heap_seg_n - 1);
+            park_open_rec();
+            park_str(head);
+            park_hex_bytes(b, len);
+            free(b);
+            g_parked_census.heapsegs++;
+        } else {
+            park_map_put(&g_park_heap_segs, s, PARK_SEG_UNWRITABLE);
+        }
+        if (own.n || own.more || bfail) {
+            ParkCrossKinds *grown = realloc(g_park_chain_gaps, sizeof *grown * (g_park_chain_gaps_n + 1));
+
+            CHECK(grown != NULL, "the cold tier could not grow its heap chain gap table");
+            g_park_chain_gaps = grown;
+            g_park_chain_gaps[g_park_chain_gaps_n] = (ParkCrossKinds){ .n = 0 };
+            if (!b) park_cross_kind(&own, "heap slot segment");
+            park_kinds_merge(&g_park_chain_gaps[g_park_chain_gaps_n], &own);
+            if (bfail) park_kinds_merge(&g_park_chain_gaps[g_park_chain_gaps_n], &g_park_chain_gaps[bfail - 1]);
+            park_map_put(&g_park_chain_fail, s, ++g_park_chain_gaps_n);
+        }
+        park_kinds_free(&own);
     }
     free(walk);
-    id = seg ? park_map_get(&g_park_heap_segs, seg) : 0;
-    if (id == PARK_SEG_UNWRITABLE) park_cross_kind(k, "heap slot segment");
-    return id;
+    id = park_map_get(&g_park_heap_segs, seg);
+    fail = park_map_get(&g_park_chain_fail, seg);
+    if (fail) park_kinds_merge(k, &g_park_chain_gaps[fail - 1]);
+    return id == PARK_SEG_UNWRITABLE ? 0 : id;
 }
 
-/* The member's heap slots: its chain's segments before its flow record, and its head after it ('p'). Answers
-   whether every slot entry it stands on is written; `head` is the head record's bytes, the caller's to emit. */
+/* The member's heap slots: its chain's segments before its flow record, and its head after it ('p', naming its
+   nearest segment, `x` when that one is unwritten). Answers whether every slot entry it stands on is written;
+   `head` is the head record's bytes, the caller's to emit. */
 static bool park_heap_slots(Flow *f, ParkCrossKinds *k, uint8_t **head, size_t *head_len, uint32_t *chain_id)
 {
     const CowDelta *d = f->delta;
     ParkVals pv = { 0 };
+    const void *top;
+    bool chain_ok;
 
     DCHECK(cow_baseline_shown(), "a member's heap slots were written while the heap shows a flow's writes — a "
                                  "shared object's body would carry them into every member that names it");
     *head = NULL;
     *chain_id = 0;
     if (!d) return true;
-    *chain_id = park_heap_chain(cow_delta_chain(d), k);
-    if (*chain_id == PARK_SEG_UNWRITABLE) return false;
+    top = cow_delta_chain(d);
+    *chain_id = park_heap_chain(top, k);
+    chain_ok = !top || !park_map_get(&g_park_chain_fail, top);
+    if (top && !*chain_id) *chain_id = PARK_SEG_UNWRITABLE;
     cow_slot_each(d, NULL, park_slot_roots, &pv);
     *head = park_slot_bytes(&pv, cow_delta_fork_gen(d), k, head_len);
     park_vals_free(&pv);
-    return *head != NULL;
+    return chain_ok && *head != NULL;
 }
 
 /* One member into the census: `k` holds the kinds its writers already found unwritten, `slots` whether its heap
@@ -1970,7 +2014,8 @@ void cold_park_flow(Flow *f)
     if (slot_head) {
         char head[32];
 
-        if (slot_chain) snprintf(head, sizeof head, "p%u,", slot_chain - 1);
+        if (slot_chain == PARK_SEG_UNWRITABLE) snprintf(head, sizeof head, "px,");
+        else if (slot_chain) snprintf(head, sizeof head, "p%u,", slot_chain - 1);
         else snprintf(head, sizeof head, "p-,");
         park_open_rec();
         park_str(head);
@@ -3249,6 +3294,9 @@ void cold_free(void)
     park_born_free(&g_park_born);   /* …and the cross-session form's names */
     park_map_free(&g_park_heap_segs);
     g_park_heap_seg_n = 0;
+    park_map_free(&g_park_chain_fail);
+    for (uint32_t i = 0; i < g_park_chain_gaps_n; i++) park_kinds_free(&g_park_chain_gaps[i]);
+    free(g_park_chain_gaps); g_park_chain_gaps = NULL; g_park_chain_gaps_n = 0;
     memset(&g_parked_census, 0, sizeof g_parked_census);   /* the census is OF the document; it dies with it */
     /* …AND SO IS THE ASK CENSUS BESIDE IT: the preview walks THIS document's frontier, so how often a host
        asked about it is a fact about the document and not about the process. The result document is
