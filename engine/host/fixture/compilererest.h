@@ -14,7 +14,7 @@ static const char HTML_COMPILERE_REST[] =
     "<!doctype html><html><body>"
     "<script>"
     "var crSrc = 'var crR = /' + 'a'.repeat(200000) + 'b/; crR.test(\"ab\")';"
-    "fetch('/api/cr-done?m=' + (0, eval)(crSrc));"
+    "fetch('/api/cmp-re?m=' + (0, eval)(crSrc));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

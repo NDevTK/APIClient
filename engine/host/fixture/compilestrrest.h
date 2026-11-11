@@ -14,7 +14,7 @@ static const char HTML_COMPILESTRREST[] =
     "<!doctype html><html><body>"
     "<script>"
     "var csSrc = 'var csS = \"' + 'a'.repeat(1000000) + '\"; csS.length';"
-    "fetch('/api/cs-done?n=' + (0, eval)(csSrc));"
+    "fetch('/api/cmp-str?n=' + (0, eval)(csSrc));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

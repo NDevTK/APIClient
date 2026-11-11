@@ -19695,16 +19695,16 @@ TF_UNIT void probes_htmlbytesrest(const char *js, Probe *tab, int *n) {
    document makes long. A row's key is its own document's record address, so each document selects one row. */
 TF_UNIT void probes_compilerest(const char *js, Probe *tab, int *n) {
     static const struct { const char *row, *url, *key, *val, *gapwhy; } R[] = {
-        { "compile-string-rest", "/api/cs-done", "n", "1000000",
+        { "compile-string-rest", "/api/cmp-str", "n", "1000000",
           "a turn held the thread for a quantum or more between two offers: the compile of a string literal of "
           "1,000,000 characters ran a stint that offered no suspend point" },
-        { "compile-regexp-rest", "/api/cr-done", "m", "false",
+        { "compile-regexp-rest", "/api/cmp-re", "m", "false",
           "a turn held the thread for a quantum or more between two offers: the compile of a regular expression "
           "literal of 200,001 characters ran a stint that offered no suspend point" },
-        { "compile-label-rest", "/api/cl-done", "r", "100001",
+        { "compile-label-rest", "/api/cmp-label", "r", "100001",
           "a turn held the thread for a quantum or more between two offers: the compile of a function body of "
           "100,000 conditional jumps ran a stint that offered no suspend point" },
-        { "compile-paren-rest", "/api/cp-done", "r", "50000",
+        { "compile-paren-rest", "/api/cmp-paren", "r", "50000",
           "a turn held the thread for a quantum or more between two offers: the compile of a parenthesized "
           "function of 50,000 statements ran a stint that offered no suspend point" },
     };

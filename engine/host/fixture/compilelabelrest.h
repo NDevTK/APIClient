@@ -15,7 +15,7 @@ static const char HTML_COMPILELABELREST[] =
     "<!doctype html><html><body>"
     "<script>"
     "var clSrc = 'function clF(x) {' + 'if (x) x++;'.repeat(100000) + 'return x; } clF(1)';"
-    "fetch('/api/cl-done?r=' + (0, eval)(clSrc));"
+    "fetch('/api/cmp-label?r=' + (0, eval)(clSrc));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

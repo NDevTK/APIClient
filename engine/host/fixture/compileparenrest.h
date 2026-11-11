@@ -15,7 +15,7 @@ static const char HTML_COMPILEPARENREST[] =
     "<!doctype html><html><body>"
     "<script>"
     "var cpSrc = '(function () { var cpX = 0;' + 'cpX++;'.repeat(50000) + 'return cpX; })()';"
-    "fetch('/api/cp-done?r=' + (0, eval)(cpSrc));"
+    "fetch('/api/cmp-paren?r=' + (0, eval)(cpSrc));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
