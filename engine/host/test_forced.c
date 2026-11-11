@@ -1212,8 +1212,28 @@ static int tf_replytwice_pay(JSContext *ctx) {
     return filled;
 }
 
+/* The sale documents' act (fixture/sale.h): `listed` once a bill has named an owed request, `gave` the members
+   the reclaim edge then gave back, `relisted` whether the bill still named the request after them. */
+static struct { int listed; long gave; int relisted; } g_tf_sale;
+
+/* At the payment whose bill first lists a sale document's owed request, sells every member but the one switched
+   in through the allocator's refusal edge (engine_reclaim_at_rest), before anything is paid, and answers the
+   bill as it stands after. */
+static const char *tf_sale_act(const char *urls) {
+    static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed" };
+
+    for (size_t i = 0; !g_tf_sale.listed && i < COUNTOF(owed); i++) {
+        if (!strstr(urls, owed[i])) continue;
+        g_tf_sale.listed = 1;
+        while (engine_reclaim_at_rest() > 0) g_tf_sale.gave++;
+        urls = engine_pending_fetches();
+        g_tf_sale.relisted = strstr(urls, owed[i]) != NULL;
+    }
+    return urls;
+}
+
 static int fixture_provide(JSContext *ctx) {
-    const char *urls = engine_pending_fetches();
+    const char *urls = tf_sale_act(engine_pending_fetches());
     int filled = 0;
 
     /* The zone's order: the notices since the last read, then the bill, then the payment. */
@@ -1562,6 +1582,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/htmlrest.h"
 #include "fixture/htmlclearrest.h"
 #include "fixture/rangerest.h"
+#include "fixture/sale.h"
 #include "fixture/rangeinsertrest.h"
 #include "fixture/rangedelrest.h"
 #include "fixture/splitunits.h"
@@ -2349,6 +2370,9 @@ TF_DOCS[] = {
     { "htmlrest", HTML_HTMLREST },
     { "htmlclearrest", HTML_HTMLCLEARREST },
     { "rangerest", HTML_RANGEREST },
+    { "sale", HTML_SALE },
+    { "saleown", HTML_SALEOWN },
+    { "salectl", HTML_SALECTL },
     { "rangeinsertrest", HTML_RANGEINSERTREST },
     { "rangedelrest", HTML_RANGEDELREST },
     { "splitunits", HTML_SPLITUNITS },
@@ -18248,6 +18272,39 @@ TF_UNIT void probes_rangerest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the three sale documents (fixture/sale.h). sale-forced-returns and sale-own-returns: the member
+   owing the request was sold at the act and its report is in the result, so it returned within the session.
+   sale-control-reaches: the same shape with no act reports with no member sold. */
+TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
+    const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *at = strstr(js, "\"sold\":");
+    long sold = at ? strtol(at + strlen("\"sold\":"), NULL, 10) : -1;
+    int ft = 1, ot = 1, ct = 1;
+
+    fold_row(&ft, &fwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
+             "the act sold nothing: no bill listed /api/sl-forced-owed with a member to sell beside the one "
+             "switched in, so the row's premise did not arise");
+    fold_row(&ft, &fwhy, param_value_is(js, "/api/sl-forced-done", "b", "22"),
+             "NOT REACHED: no /api/sl-forced-done?b=22 record, so the member sold while it owed "
+             "/api/sl-forced-owed did not return within the session");
+    fold_row(&ot, &owhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
+             "the act sold nothing: no bill listed /api/sl-own-owed with a member to sell beside the one "
+             "switched in, so the row's premise did not arise");
+    fold_row(&ot, &owhy, param_value_is(js, "/api/sl-own-done", "b", "22"),
+             "NOT REACHED: no /api/sl-own-done?b=22 record, so the page's own run, sold while it owed "
+             "/api/sl-own-owed, did not return within the session");
+    fold_row(&ct, &cwhy, !g_tf_sale.listed && sold == 0,
+             "the control document sold a member: it has no act, so a sale here is pressure from outside the row");
+    fold_row(&ct, &cwhy, param_value_is(js, "/api/sl-ctl-done", "b", "22"),
+             "NOT REACHED: no /api/sl-ctl-done?b=22 record with no member sold, so the shape itself does not "
+             "report and the armed rows say nothing about a sale");
+    const Probe rows[] = {
+        { "sale-forced-returns", ft, "slForced", SESS_EXPLORE, fwhy },
+        { "sale-own-returns", ot, "slOwn", SESS_EXPLORE, owhy },
+        { "sale-control-reaches", ct, "slCtl", SESS_EXPLORE, cwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `rangeinsertrest` document (fixture/rangeinsertrest.h). range-insertnode-rests: the inserting
    arm's insertNode of the box of 100,002 elements at offset 2 of the target's Text node rests inside the call
    (`sliceOverrunGapWork` under one quantum), and the arm then reads the box whole between the two halves of the
@@ -30976,6 +31033,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_htmlrest(js, probes, &np);
     probes_htmlclearrest(js, probes, &np);
     probes_rangerest(js, probes, &np);
+    probes_sale(js, probes, &np);
     probes_rangeinsertrest(js, probes, &np);
     probes_rangedelrest(js, probes, &np);
     probes_splitunits(js, probes, &np);
