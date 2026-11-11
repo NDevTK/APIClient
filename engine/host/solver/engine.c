@@ -12548,6 +12548,53 @@ char *engine_sale_census_json(void) {
     return b;
 }
 
+/* The sale's own working storage. A sale runs because the allocator refused, so what the sale itself allocates
+   (the census's roots and survey, the stand-in register) cannot be asked of the allocator as it stands: a block
+   taken while memory stood is given back for the length of the sale and taken again after it. A sale that finds
+   no block held runs without its census and is counted.
+   No bound on a sale's need is known before the sale: the survey's storage follows the member's reachable
+   graph, which only its walk counts. So the block is sized after the fact, at twice the most a sale's
+   allocations have asked for (the allocator's span across the sale), and SALE_RESERVE_FIRST, which stands until
+   a sale is measured, is a placeholder no run chose.
+   Named residual. Not covered: a sale that asks for more than the block given back. Next diff builds: the
+   survey's buffers laid in the block itself, whose end is a refusal the sale counts. Absence shows as: the
+   assert at the sale's exit naming the ask and the block, and where the allocator had nothing beyond the block,
+   the refused allocation's own CHECK inside the sale. */
+#define SALE_RESERVE_FIRST ((size_t)4 << 20)
+static void *g_sale_reserve;
+static size_t g_sale_reserve_bytes = SALE_RESERVE_FIRST, g_sale_need_max;
+static size_t g_sale_given;   /* the block the open sale gave back, in bytes */
+static long g_sale_unfunded;
+
+static void engine_sale_reserve_hold(void) {
+    if (g_sale_reserve == NULL) g_sale_reserve = malloc(g_sale_reserve_bytes);   /* a refusal leaves none held */
+}
+
+/* Gives the block back for a sale and opens the sale's span; 0 when none is held. */
+static int engine_sale_reserve_give(void) {
+    if (g_sale_reserve == NULL) return 0;
+    free(g_sale_reserve);
+    g_sale_reserve = NULL;
+    g_sale_given = g_sale_reserve_bytes;
+    if (c_alloc_span_measured()) c_alloc_span_open();
+    return 1;
+}
+
+/* Closes a funded sale's span, sizes the block by it and takes the block again. */
+static void engine_sale_reserve_retake(int funded) {
+    if (funded && c_alloc_span_measured()) {
+        size_t need = c_alloc_span_take();
+
+        if (need > g_sale_need_max) g_sale_need_max = need;
+        DCHECKF(need <= g_sale_given,
+                "a sale's allocations asked for %zu bytes and the sale gave back a reserve of %zu — the block is "
+                "sized by the sales before it, and this one is the first of its size; size the first block by it",
+                need, g_sale_given);
+        if (need > g_sale_reserve_bytes / 2) g_sale_reserve_bytes = need * 2;
+    }
+    engine_sale_reserve_hold();
+}
+
 /* A sale: the member stays in the registry as a cold-resident stub (flow.h's `cold`) and gives back everything
    its recipe re-derives. Nothing is written, since the session's park writes a stub from the fields it keeps
    (cold_park_flow), and no request is cancelled.
@@ -12557,9 +12604,11 @@ char *engine_sale_census_json(void) {
 static void engine_sale_release(Flow *tail) {
     /* Which population is sold, read before the sale: `cand_src` is the whole question (solver/engine.h). */
     const int was_cand = tail->cand_src != NULL;
+    const int funded = engine_sale_reserve_give();
     JSValue stand_ins;
 
-    engine_sale_census_take(tail);
+    if (funded) engine_sale_census_take(tail);
+    else g_sale_unfunded++;
     /* The synchronous requests leave with the flow, counted (see g_paged_reqs); an answered HOSTREQ entry still
        awaits answers from other peer timelines and stays counted. */
     g_paged_reqs += pending_count_kind(tail->pending, FLOW_PENDING_HOSTREQ);
@@ -12589,6 +12638,10 @@ static void engine_sale_release(Flow *tail) {
     flow_sale_end(tail, stand_ins);
     g_flows_sold++;
     if (was_cand) g_flows_sold_cands++; else g_flows_sold_flows++;
+    engine_sale_reserve_retake(funded);
+    DCHECKF(g_sale_census.n + g_sale_unfunded == g_flows_sold,
+            "%ld sales took their census and %ld ran unfunded, against %ld sold — a sale does one or the other",
+            g_sale_census.n, g_sale_unfunded, g_flows_sold);
 }
 
 static void engine_shed_standby(JSContext *ctx, Flow *s);
@@ -13013,6 +13066,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
            "baseline list, so this is an ownerless JS_EnqueueJob");
     g_sess_ctx = ctx;
     g_sess_cur = NULL; g_sess_live = 1;
+    engine_sale_reserve_hold();   /* before pressure: the first sale's working storage */
     /* The three arrays are one inventory, so a session opened with a length and two of them would have the seed
        read the third off the end. Asserted where the borrow is taken, while its builder is still on the stack. */
     DCHECK(n == 0 || (bodies != NULL && srcs != NULL && types != NULL),
@@ -14561,6 +14615,9 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->paged_floor        = g_reclaim_floor;
     out->paged_shed         = g_reclaim_shed;
     out->paged_sales        = g_reclaim_sales;
+    out->sale_unfunded = g_sale_unfunded;
+    out->sale_reserve_kib = g_sale_reserve ? (long)(g_sale_reserve_bytes / 1024) : 0;
+    out->sale_need_max_kib = (long)(g_sale_need_max / 1024);
     out->pressure_sold      = g_pressure_sold;
     out->pressure_collects  = g_pressure_collects;
     out->rest_compositions  = g_rest_compositions;

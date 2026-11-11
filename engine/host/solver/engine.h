@@ -1301,6 +1301,9 @@ typedef struct {
     long paged_floor;        /* …answered at the frontier's floor: no member but the flow that is running */
     long paged_shed;         /* …answered by shedding a held snapshot (solver/source_cut.h) */
     long paged_sales;        /* …answered by a sale of the frontier's tail */
+    long sale_unfunded;       /* sales that found no reserve held and ran without their census */
+    long sale_reserve_kib;    /* the sale reserve held now, 0 when the allocator refused it */
+    long sale_need_max_kib;   /* the most one sale's allocations asked for (c_alloc.h's span) */
     /* Whether a reply ever became a program, per door. The `fetch()` reply (FLOW_PENDING_RESOLVE delivery) and
      * core/xhr/xml_http_request.c's `xhr_take_reply` both end in engine_queue_fetched_script, so without these
      * a network chunk is indistinguishable from the page's own bundle in `progStartsOther`. Each `…_asks` is

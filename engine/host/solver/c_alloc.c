@@ -48,6 +48,7 @@ void c_alloc_census(CAllocCensus *out)
 }
 
 void c_alloc_span_open(void) { }
+int c_alloc_span_measured(void) { return 0; }
 
 size_t c_alloc_span_take(void)
 {
@@ -254,6 +255,8 @@ size_t c_alloc_live(void)
 {
     return __atomic_load_n(&g_heap_chunks, __ATOMIC_RELAXED) + __atomic_load_n(&g_mmap_chunks, __ATOMIC_RELAXED);
 }
+
+int c_alloc_span_measured(void) { return 1; }
 
 void c_alloc_span_open(void)
 {

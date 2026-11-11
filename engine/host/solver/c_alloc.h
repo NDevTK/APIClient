@@ -30,6 +30,8 @@ size_t c_alloc_footprint(void);
    malloc, the span is not measured and c_alloc_span_take is a DFAIL. */
 void   c_alloc_span_open(void);
 size_t c_alloc_span_take(void);
+/* Whether this build measures a span: not under a sanitizer. */
+int    c_alloc_span_measured(void);
 
 typedef struct CAllocCensus {
     size_t    arena;

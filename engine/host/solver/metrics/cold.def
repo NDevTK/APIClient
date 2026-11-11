@@ -99,6 +99,11 @@ METRIC(sold_flows, "soldFlows", LIFETIME, "member", PROCESS, "solver/engine.c", 
 METRIC(sold_cands, "soldCands", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 /* …and the sold members standing in the registry as stubs (solver/flow.h's `cold`), counted in `live`. */
 METRIC(cold, "cold", GAUGE, "member", AGENT, "solver/flow.c", INT)
+/* …and the sale's own working storage (solver/engine.c's sale reserve): the sales that found none held and ran
+   without their census, the block held now, and the most one sale's allocations asked for. */
+METRIC(sale_unfunded, "saleUnfunded", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+METRIC(sale_reserve_kib, "saleReserveKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
+METRIC(sale_need_max_kib, "saleNeedMaxKiB", GAUGE, "KiB", PROCESS, "solver/engine.c", INT)
 METRIC(forks, "forks", LIFETIME, "fork", AGENT, "solver/engine.c", INT)
 /* `resumed` is the positive statement that a rebuild ran, always present: `resumed: 0` says
    no residue was handed over, so zeroes beside it are not a verdict. `resumedSegs`/`Flows`/
