@@ -51204,6 +51204,18 @@ typedef struct JSToken {
 } JSToken;
 
 struct JSParseFrame;
+typedef struct JSParsePos {
+    int last_line_num;
+    int last_col_num;
+    int line_num;
+    int col_num;
+    bool got_lf;
+    const uint8_t *ptr;
+    const uint8_t *line_start;
+    const uint8_t *eol;
+    const uint8_t *mark;
+} JSParsePos;
+
 typedef struct JSParseState {
     JSContext *ctx;
     /* THE SCRIPT'S CONTENT DIGEST, FOLDED AS THE PARSE READS: `digest_at` is how far, and it only advances, so
@@ -51290,9 +51302,19 @@ typedef struct JSParseState {
         StringBuffer body, flags;
         bool live, in_class, in_flags;
     } pd_rx;
+    /* The bracket lookahead (js_parse_skip_step), held across the rests it takes: where it began, its bracket
+       stack (the inline array, or `heap` once grown; owned while `live`), and what it has read. */
+    struct {
+        JSParsePos pos;
+        char inline_state[64];
+        char *heap;
+        size_t size, level;
+        int last_tok, bits;
+        bool live, no_line_terminator;
+    } pd_skip;
     /* The retired-work count (g_flow_work_retired) at this compile stint's opening or its last offer of a
        suspend point: js_parse_want_yield offers one each budget period of work past it. Set where a stint
-       begins (js_eval_compile_begin, js_eval_compile_continue), since the scheduler banks the count between
+       begins (__JS_EvalInternal, js_eval_compile_continue), since the scheduler banks the count between
        stints. */
     uint64_t pd_offer_at;
     /* js_parse_program's CROSS-SUSPENSION STATE: the one break entry that is not on a descent frame (handle
@@ -54322,7 +54344,7 @@ enum {
     PDS_EXPORT, PDS_EXP_01, PDS_EXP_02, PDS_EXP_03, PDS_EXP_04,
     PDS_FDECL, PDS_FD_01, PDS_FD_02, PDS_FD_03, PDS_FD_04,
     /* the thirteen places a function body is descended into */
-    PDS_ASGN_ARROW1, PDS_ASGN_ARROW2, PDS_ASGN_ARROW3,
+    PDS_ASGN_ARROW1, PDS_ASGN_ARROW2, PDS_ASGN_ARROW3, PDS_ASGN_SKIP,
     PDS_PFX_FUNC, PDS_PFX_ASYNCFUNC, PDS_OBJ_METHOD, PDS_SOD_FUNCVAR,
     PDS_CLS_SINIT, PDS_CLS_ACCESSOR, PDS_CLS_METHOD,
     PDS_SE_FUNC, PDS_EXP_FUNC, PDS_EXP_DEFFUNC, PDS_CLS_KEY, PDS_DE_KEY,
@@ -54446,17 +54468,6 @@ static bool token_starts_property_name(int tok)
            tok == '[' || tok == TOK_PRIVATE_NAME;
 }
 
-typedef struct JSParsePos {
-    int last_line_num;
-    int last_col_num;
-    int line_num;
-    int col_num;
-    bool got_lf;
-    const uint8_t *ptr;
-    const uint8_t *line_start;
-    const uint8_t *eol;
-    const uint8_t *mark;
-} JSParsePos;
 
 static int js_parse_get_pos(JSParseState *s, JSParsePos *sp)
 {
@@ -54517,63 +54528,96 @@ static bool is_regexp_allowed(int tok)
 /* XXX: improve speed with early bailout */
 /* XXX: no longer works if regexps are present. Could use previous
    regexp parsing heuristics to handle most cases */
-/* THE BRACKET STACK IS UNBOUNDED. It used to be `char state[256]`, and overflowing it did not report anything
-   — it `goto done`d and returned whatever token had been reached, so the CALLER decided from a wrong answer.
-   `var {a:{a:…}} = …` nested past ~255 is valid source that this rejected with "variable name expected", and
-   the flat C stack at that failure is what proves it was never a recursion limit: a fixed array is a BOUND,
-   and a bound that answers wrongly instead of failing is the worst kind. It grows on demand instead, from a
-   stack buffer that covers ordinary source with no allocation at all; the heap copy is freed at the single
-   exit. This function never descends and never yields, so the buffer is a plain local with no owner to
-   register — putting it on JSParseState would have created a free obligation at every site one dies, and
-   JSON's step machine embeds a JSParseState BY VALUE. */
-static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_terminator)
+/* The lookahead that decides what a `(`, `[` or `{` opens by scanning to its matching close: a machine on the
+   parse (pd_skip), so that the arrow test at an AssignmentExpression can rest inside a scan as long as the
+   bundle it wraps. Its bracket stack is unbounded: it grows from the inline array on demand, so nesting at any
+   depth answers rather than truncating the scan. A scan that cannot park (can_rest false) begins and ends in
+   one call and leaves nothing owned; one that rests is released by js_parse_descent_abandon with the rest of a
+   dropped parse. The stack is indexed through js_parse_skip_stack, never held as a pointer into the state,
+   because JSON's step machine embeds a JSParseState by value. */
+static char *js_parse_skip_stack(JSParseState *s)
 {
-    char inline_state[256];
-    char *state = inline_state;
-    size_t state_size = sizeof(inline_state);
-    size_t level = 0;
-    JSParsePos pos;
-    int last_tok, tok = TOK_EOF;
-    int c, tok_len, bits = 0;
+    return s->pd_skip.heap ? s->pd_skip.heap : s->pd_skip.inline_state;
+}
 
+static void js_parse_skip_release(JSParseState *s)
+{
+    if (!s->pd_skip.live)
+        return;
+    if (s->pd_skip.heap)
+        js_free(s->ctx, s->pd_skip.heap);
+    s->pd_skip.heap = NULL;
+    s->pd_skip.live = false;
+}
+
+/* Pushes an opening bracket, or a template's `${`, growing the stack on demand. */
+static void js_parse_skip_push(JSParseState *s, char c)
+{
+    if (s->pd_skip.level >= s->pd_skip.size) {
+        size_t nsize = s->pd_skip.size * 2;
+        char *nstate;
+        if (s->pd_skip.heap == NULL) {
+            nstate = js_malloc(s->ctx, nsize);
+            if (nstate)
+                memcpy(nstate, s->pd_skip.inline_state, s->pd_skip.size);
+        } else {
+            nstate = js_realloc(s->ctx, s->pd_skip.heap, nsize);
+        }
+        /* A dropped allocation here would silently truncate the scan and hand the caller a wrong token. There
+           is no correct smaller answer, so it is fatal. */
+        CHECK(nstate != NULL, "out of memory growing the parser's bracket stack");
+        s->pd_skip.heap = nstate;
+        s->pd_skip.size = nsize;
+    }
+    js_parse_skip_stack(s)[s->pd_skip.level++] = c;
+}
+
+/* Begins a lookahead at the current token, which is the opening bracket; the scan is owned by the parse until
+   js_parse_skip_step answers. */
+static void js_parse_skip_begin(JSParseState *s, bool no_line_terminator)
+{
+    DCHECK(!s->pd_skip.live, "a bracket lookahead began while another was still held");
+    s->pd_skip.live = true;
+    s->pd_skip.heap = NULL;
+    s->pd_skip.size = sizeof(s->pd_skip.inline_state);
+    s->pd_skip.level = 0;
     /* protect from underflow */
-    state[level++] = 0;
+    s->pd_skip.inline_state[s->pd_skip.level++] = 0;
+    s->pd_skip.last_tok = 0;
+    s->pd_skip.bits = 0;
+    s->pd_skip.no_line_terminator = no_line_terminator;
+    js_parse_get_pos(s, &s->pd_skip.pos);
+}
 
-    js_parse_get_pos(s, &pos);
-    last_tok = 0;
+/* One stint of the lookahead. On an answer it restores the parse to the opening bracket, releases the scan and
+   returns the token after the matching close (`*pbits` its SKIP_HAS_* bits when asked), -1 if the restore
+   failed; with `can_rest` it asks the policy after each token it reads, and sets `*prested` (the answer is then
+   meaningless) when the policy took the thread with the scan parked at that token. */
+static int js_parse_skip_step(JSParseState *s, bool can_rest, int *pbits, bool *prested)
+{
+    int c, tok_len, tok = TOK_EOF;
+    char *state;
+
+    DCHECK(s->pd_skip.live, "a bracket lookahead was stepped with none held");
+    *prested = false;
     for (;;) {
+        state = js_parse_skip_stack(s);
         switch(s->token.val) {
         case '(':
         case '[':
         case '{':
-            if (level >= state_size) {
-                size_t nsize = state_size * 2;
-                char *nstate;
-                if (state == inline_state) {
-                    nstate = js_malloc(s->ctx, nsize);
-                    if (nstate)
-                        memcpy(nstate, state, state_size);
-                } else {
-                    nstate = js_realloc(s->ctx, state, nsize);
-                }
-                /* A dropped allocation here would silently truncate the scan and hand the caller a wrong
-                   token — the very defect this replaced. There is no correct smaller answer, so it is fatal. */
-                CHECK(nstate != NULL, "out of memory growing the parser's bracket stack");
-                state = nstate;
-                state_size = nsize;
-            }
-            state[level++] = s->token.val;
+            js_parse_skip_push(s, (char)s->token.val);
             break;
         case ')':
-            if (state[--level] != '(')
+            if (state[--s->pd_skip.level] != '(')
                 goto done;
             break;
         case ']':
-            if (state[--level] != '[')
+            if (state[--s->pd_skip.level] != '[')
                 goto done;
             break;
         case '}':
-            c = state[--level];
+            c = state[--s->pd_skip.level];
             if (c == '`') {
                 /* continue the parsing of the template */
                 free_token(s, &s->token);
@@ -54594,25 +54638,23 @@ static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_
             if (s->token.u.str.sep != '`') {
                 /* '${' inside the template : closing '}' and continue
                    parsing the template */
-                if (level >= sizeof(state))
-                    goto done;
-                state[level++] = '`';
+                js_parse_skip_push(s, '`');
             }
             break;
         case TOK_EOF:
             goto done;
         case ';':
-            if (level == 2) {
-                bits |= SKIP_HAS_SEMI;
+            if (s->pd_skip.level == 2) {
+                s->pd_skip.bits |= SKIP_HAS_SEMI;
             }
             break;
         case TOK_ELLIPSIS:
-            if (level == 2) {
-                bits |= SKIP_HAS_ELLIPSIS;
+            if (s->pd_skip.level == 2) {
+                s->pd_skip.bits |= SKIP_HAS_ELLIPSIS;
             }
             break;
         case '=':
-            bits |= SKIP_HAS_ASSIGNMENT;
+            s->pd_skip.bits |= SKIP_HAS_ASSIGNMENT;
             break;
 
         case TOK_DIV_ASSIGN:
@@ -54621,7 +54663,7 @@ static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_
         case '/':
             tok_len = 1;
         parse_regexp:
-            if (is_regexp_allowed(last_tok)) {
+            if (is_regexp_allowed(s->pd_skip.last_tok)) {
                 s->buf_ptr -= tok_len;
                 if (js_parse_regexp(s)) {
                     /* XXX: should clear the exception */
@@ -54634,32 +54676,48 @@ static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_
         if (s->token.val == TOK_IDENT &&
             (token_is_pseudo_keyword(s, JS_ATOM_of) ||
              token_is_pseudo_keyword(s, JS_ATOM_yield))) {
-            last_tok = TOK_OF;
+            s->pd_skip.last_tok = TOK_OF;
         } else {
-            last_tok = s->token.val;
+            s->pd_skip.last_tok = s->token.val;
         }
         if (next_token(s)) {
             /* XXX: should clear the exception generated by next_token() */
             break;
         }
-        if (level <= 1) {
+        if (s->pd_skip.level <= 1) {
             tok = s->token.val;
             if (token_is_pseudo_keyword(s, JS_ATOM_of))
                 tok = TOK_OF;
-            if (no_line_terminator && s->last_line_num != s->token.line_num)
+            if (s->pd_skip.no_line_terminator && s->last_line_num != s->token.line_num)
                 tok = '\n';
             break;
         }
+        if (can_rest && js_parse_want_yield(s)) {
+            *prested = true;
+            return 0;
+        }
     }
  done:
-    if (state != inline_state)
-        js_free(s->ctx, state);
     if (pbits) {
-        *pbits = bits;
+        *pbits = s->pd_skip.bits;
     }
-    if (js_parse_seek_token(s, &pos))
-        return -1;
+    {
+        JSParsePos pos = s->pd_skip.pos;
+
+        js_parse_skip_release(s);
+        if (js_parse_seek_token(s, &pos))
+            return -1;
+    }
     return tok;
+}
+
+/* The lookahead whole, for a site that cannot park inside it. */
+static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_terminator)
+{
+    bool rested;
+
+    js_parse_skip_begin(s, no_line_terminator);
+    return js_parse_skip_step(s, false, pbits, &rested);
 }
 
 static void set_object_name(JSParseState *s, JSAtom name)
@@ -55572,6 +55630,7 @@ static void js_parse_descent_abandon(JSContext *ctx, JSParseState *s)
         s->pd_re = NULL;
     }
     js_parse_regexp_release(s);
+    js_parse_skip_release(s);
     s->pd_rest_owed = false;
     pd_release(ctx, s);
     s->pd_suspended = false;
@@ -55833,6 +55892,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     case PDS_FD_03:           goto fd2_03;
     case PDS_FD_04:           goto fd2_04;
     case PDS_ASGN_ARROW1:     goto asgn_arrow1_done;
+    case PDS_ASGN_SKIP:       goto asgn_skip_step;
     case PDS_ASGN_ARROW2:     goto asgn_arrow2_done;
     case PDS_ASGN_ARROW3:     goto asgn_arrow3_done;
     case PDS_PFX_FUNC:        goto pfx_func_done;
@@ -56404,13 +56464,27 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
         emit_op(s, OP_undefined);
         goto assign_yield_emit;
     }
-    if (s->token.val == '(' &&
-        js_parse_skip_parens_token(s, NULL, true) == TOK_ARROW) {
-        PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_ARROW, f->flags, JS_FUNC_NORMAL,
-                  s->token.ptr, -1, s->token.line_num, s->token.col_num,
-                  JS_PARSE_EXPORT_NONE, PDS_ASGN_ARROW1);
+    if (s->token.val == '(') {
+        int arrow_tok;
+        bool rested;
+
+        /* Is this `(` an arrow function's parameters: the lookahead to its `)` rests inside the scan and
+           resumes here with it parked; until it answers, s->token is the lookahead's own. */
+        js_parse_skip_begin(s, true);
+ asgn_skip_step:
+        arrow_tok = js_parse_skip_step(s, s->pd_can_yield, NULL, &rested);
+        if (rested) {
+            s->pd_rest_owed = true;
+            f->state = PDS_ASGN_SKIP;
+            goto dispatch;
+        }
+        if (arrow_tok == TOK_ARROW) {
+            PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_ARROW, f->flags, JS_FUNC_NORMAL,
+                      s->token.ptr, -1, s->token.line_num, s->token.col_num,
+                      JS_PARSE_EXPORT_NONE, PDS_ASGN_ARROW1);
  asgn_arrow1_done:
-        PD_RET(s->pd_ret);
+            PD_RET(s->pd_ret);
+        }
     }
     if (token_is_pseudo_keyword(s, JS_ATOM_async)) {
         const uint8_t *source_ptr;
@@ -61580,6 +61654,8 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
            "the descent drained holding a regexp literal's compile — the literal's production ends it");
     DCHECK(s->pd_sp != 0 || !s->pd_rx.live,
            "the descent drained holding a regexp literal's scan, which the literal's production completes or fails");
+    DCHECK(s->pd_sp != 0 || !s->pd_skip.live,
+           "the descent drained holding a bracket lookahead, which the production that began it answers");
     if (s->pd_sp == 0)
         pd_release(ctx, s);   /* the whole descent drained — the parse owns nothing until the next one */
     return s->pd_ret;
