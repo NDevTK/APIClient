@@ -1,34 +1,21 @@
-// lib/merge.js — Engine-result -> doc-model merge. Takes the engine's @RESULT (fetch call-sites, computed
-// values, security sinks, param constraints) and merges it into a tab's Value-Driven-Discovery doc model
-// (methods, params, schemas, findings). Extracted from the offscreen-brain.js monolith (one problem per file);
-// loaded before it, resolves learnFromAstCallSite (lib/learn.js) + grouping/schema at call-time.
+// lib/merge.js — merges the engine's @RESULT (fetch call sites, computed values, security sinks, param
+// constraints) into a document's doc model (methods, params, schemas, findings), and a document's model into
+// the cumulative moat. Loaded before offscreen-brain.js; resolves learnFromAstCallSite (lib/learn.js) and the
+// grouping and schema helpers at call time.
 
-/* ONE POOL OF A METHOD'S TEMPLATED-HOLE EXAMPLES, PROJECTED ONTO THE FLAT ENDPOINT RECORD. Called once per
-   pool, with the METHOD PARAMETER'S OWN FIELD NAME, so the two projections cannot differ in anything but
-   which pool they read — a second hand-written loop is how one of them comes to skip a hole the other keeps,
-   and the difference would be invisible: both answers are well-formed lists of real values.
-   `undefined`-or-array IS THE METHOD PARAMETER'S VOCABULARY (lib/learn.js writes each pool's key only where
-   the pool is non-empty), and it is normalised HERE, at the one hop between that record and this one, rather
-   than by the fold — which is `foldValuePools`' own stated boundary: a record's spelling of an empty pool
-   belongs to the record.
-   A HOLE WITH AN EMPTY POOL IS SKIPPED RATHER THAN CARRIED AS `[]`, because lib/send.js requires every entry
-   to carry a value: an entry with none would surface a templated segment as if something had filled it, which
-   is the claim `pathParams: null` exists to be able to deny. */
+/* One pool of a method's templated-hole examples, projected onto the flat endpoint record. `poolField` is the
+   method parameter's own field name, so the two projections differ only in the pool they read. lib/learn.js
+   writes a pool's key only where the pool is non-empty, and that spelling is normalised here. A hole with an
+   empty pool is skipped, because lib/send.js requires every entry to carry a value. Returns null for no
+   entries. */
 function _astPathParamPool(method, poolField) {
   DCHECK(poolField === "_astValidValues" || poolField === "_astForcedValues",
          "a path-param pool was projected from `" + poolField + "`, which is neither of lib/learn.js's two " +
          "pools — the offerable/forced split is spelled as those two field names (lib/endpoint-record.js's " +
          "`provenanceOffersExample` states why it is a name and not a grade), so a third one reads a field " +
          "the method record does not have and every hole would project as empty");
-  /* THE COMMENT HERE READ "dynamic URL: no method, no path template" AND THAT CASE NO LONGER EXISTS: an
-     address whose origin is a shape now registers a method like any other, and the caller asserts that a
-     registered call site never answers with a null one. The GUARD stays, and is not merely defensive — it is
-     the one this walk owes whatever the caller proves, because `learnFromAstCallSite` may hand back a PROBED
-     discovery-document method rather than a learned one, and this file does not mint those and cannot state
-     their shape. (The probe's own mint writes `parameters: {}`; a discovery document fetched from a server is
-     a third party's bytes, which §whose-bytes-state-the-value says this zone reads and never assumes about.)
-     So the `!method` half is now unreachable by the caller's own assertion and the `!method.parameters` half
-     is about a record nobody here authored. */
+  /* A site learnFromAstCallSite refused has no method, and a probed discovery-document method, which is a
+     third party's bytes, may carry no `parameters`. Both project nothing. */
   if (!method || !method.parameters) return null;
   var out = [];
   for (var pn in method.parameters) {
@@ -57,21 +44,12 @@ function _astPathParamDrivenPool(method) {
   return out.length ? out : null;
 }
 
-/* ONE METHOD'S TEMPLATED-HOLE DOMAINS, PROJECTED ONTO THE FLAT ENDPOINT RECORD — the OTHER half of the shape
-   §@H says a report must carry, off the SAME objects `_astPathParamPool` already reads and takes only the
-   values from. lib/learn.js merges all four onto the method parameter beside the two pools; this walk was
-   copying the pools and leaving the domains on an object the Send panel cannot always reach, so a hole a
-   `>` gate had narrowed arrived at lib/send.js indistinguishable from one nothing ever tested.
-   IT IS A SEPARATE WALK FROM THE POOL ONE RATHER THAN A WIDENING OF IT, because the two have different
-   SKIP rules and folding them would need one loop to answer both: a hole with values and no domain belongs in
-   the pool and not here, and a hole with a domain and no value belongs here and not in the pool (lib/send.js
-   requires every pool entry to carry a value). Two lists, two rules, neither of which can quietly become the
-   other's.
-   EACH CLAIM IS COPIED ONLY WHERE IT SURVIVED, AND THE VOCABULARY IS THE METHOD PARAMETER'S. lib/learn.js
-   spells a disproved exclusion/predicate/loose-equality as the EMPTY ARRAY and a disproved interval as
-   `null`, and this record spells both by OMITTING the key — which is why the tests below are presence-and-
-   non-emptiness rather than truthiness, and why a parameter no engine run ever touched contributes no entry
-   at all instead of four disproofs it never observed. */
+/* One method's templated-hole domains (exclusions, bounds, predicates, loose equalities), projected onto the
+   flat endpoint record from the same method parameters `_astPathParamPool` reads. It is a separate walk
+   because the skip rules differ: a hole with values and no domain belongs in the pool only, and a hole with a
+   domain and no value belongs here only. Each claim is copied only where it survived: lib/learn.js spells a
+   disproved exclusion, predicate or loose equality as the empty array and a disproved interval as `null`, and
+   this record spells both by omitting the key, so the tests are presence and non-emptiness, not truthiness. */
 function _astPathParamDomains(method) {
   if (!method || !method.parameters) return null;
   var out = [];
@@ -90,115 +68,45 @@ function _astPathParamDomains(method) {
   return out.length ? out : null;
 }
 
-/* TWO PARAMETERS ARE GONE AND NEITHER WAS EVER READ. `tabId` was passed by every caller and used by no line
-   in this file — the DocView it merges into carries its own `tabId`, so the argument was a second copy of a
-   fact the first argument already states, and a caller passing the wrong one would have been believed by
-   nothing. `isPartial` was worse: the incremental merge passed `true` and this function had no idea what a
-   partial was, so the one caller that tried to label its record as a snapshot was talking to nobody. The
-   label is real now and travels ON the record, as `_run`, where every consumer can read it. */
+/* Merges each analysis in `results` into the document view `tab`: registers the @H call sites as methods and
+   flat endpoint records, and files the @S findings. */
 function mergeASTResultsIntoVDD(tab, results) {
   for (var r = 0; r < results.length; r++) {
     var analysis = results[r];
 
-    /* A RECORD WITH NO ENGINE DOCUMENT IS NOT A MERGEABLE OBSERVATION, AND ITS ABSENCE IS WHAT SAYS SO.
-       bridge.js writes `fetchCallSites`/`securitySinks`/`_park` exactly where an @RESULT document arrived and
-       was asserted field for field; a crashed instance and a page with nothing to run carry none of them, and
-       that absence is a POSITIVE statement ("this run observed nothing") rather than a hole to fill. Read as
-       one here: the two passes below would otherwise walk arrays that are not there — and before the record
-       became present-or-absent they walked bridge.js's fabricated empties instead, which is the same merge
-       with the fabrication one file upstream. The eviction sweep at the bottom still runs, because a run that
-       died is still a run that ENDED and this document's transient RAM view is still reclaimable. */
+    /* A record with no engine document (a crashed instance, a page with nothing to run) states that the run
+       observed nothing: bridge.js writes `fetchCallSites`, `securitySinks` and `_park` only where an @RESULT
+       document arrived. There is nothing to merge. */
     if (!analysisHasDocument(analysis)) continue;
 
-    /* NO probeResults RELAY OFF THE ENGINE RESULT. `tab.probeResults` is written by the two systems that
-       actually probe — lib/req2proto.js through lib/discovery-probe.js and lib/response-decode.js — and the
-       engine has no such record to relay: it never issues a request, so it never receives a rejection to read
-       a schema out of. The relay that stood here (and the DCHECK on the seam in bridge.js) asserted a field
-       the engine emitted, which made an engine that had learned nothing indistinguishable from a broken
-       bridge. */
+    /* `tab.probeResults` is written by the systems that probe (lib/req2proto.js through
+       lib/discovery-probe.js, and lib/response-decode.js). The engine issues no request, so its result
+       carries none to relay. */
 
-    /* WHAT AN ANALYSIS DOCUMENT ACTUALLY CONTAINS, AND WHY THREE MERGE PASSES ARE GONE. solver/result.c
-       composes the engine's one @RESULT document in ONE composition, and every name in it comes from that one
-       place — the finding arrays, the page-error arrays, the run counters and the nested censuses. Every OTHER
-       name on the object this function receives is a host-side constant written by bridge.js's
-       `linesToAnalysis` — its own comment calls them "sibling fields the brain reads unconditionally, present
-       + empty so it never throws". THE COUNT THAT STOOD HERE IS GONE RATHER THAN UPDATED: it said "TWELVE
-       fields: fetchCallSites, securitySinks, pageErrors, the eight cost counters, and _park" and the document
-       had long since passed thirty, so it was a census of a shape no revision still had — and a replacement
-       number would rot the same way on the next field. What is load-bearing is the ORIGIN of a name, which is
-       checkable by opening result.c; the tally never was.
+    /* Every engine-authored name on `analysis` comes from solver/result.c's one composition; the rest are
+       host-side fields bridge.js's `linesToAnalysis` writes. Parameter values reach the model per call site,
+       through learnFromAstCallSite and `callSite.params[i].validValues`; nothing is matched to a parameter
+       by name across the bundle. */
 
-       So `protoFieldMaps`, `protoEnums` and `sourceMapTypes` were three merge passes reading `[]` on every
-       run this project has ever done, and `domEndpoints` was a fourth. They are the defect class in its
-       purest form: not a wrong value but a plausible one — a `.length` of zero is what a page with no proto
-       schema and no source map ALSO looks like, so 170 lines of matching machinery reported "0 matched, 0
-       unmatched" forever and nothing could tell that apart from working. Deleted rather than DCHECK'd,
-       because a capability's absence belongs in the engine that does not have it, not in a consumer standing
-       ready for output that has no producer: field-number/enum/TypeScript enrichment and a DOM-attribute
-       endpoint scan are things `engine/host/solver/endpoint.c` would have to emit before anything here can
-       merge them, and when it does, the merge is written against what it emits.
-
-       Their one live consequence went with them: the discovery-doc lookup that opened this loop existed ONLY
-       to give those passes a `doc.schemas` to walk. Endpoint registration below never used it.
-
-       (Bundle-wide `valueConstraints` was already NOT merged, and for a second reason worth keeping: matching
-       constraints to params BY NAME is a heuristic — a switch on a variable named `q` anywhere in a bundle
-       attached its cases to every method's `q`. Per-call-site values reach the model through
-       learnFromAstCallSite ← `callSite.params[i].validValues`, which is structurally tied to the one site.) */
-
-    // Register AST-observed fetch call sites as methods on their services.
-    // Uses learnFromAstCallSite (direct fact-based registration), NOT the
-    // old "synthesize fake URL/body, launder through learnFromRequest"
-    // path — that conflated AST observations with real server traffic.
+    // Registers each observed fetch call site as a method on its service, through learnFromAstCallSite.
     var newEndpoints = 0;
     for (var fc = 0; fc < analysis.fetchCallSites.length; fc++) {
       var callSite = analysis.fetchCallSites[fc];
-      /* THE CALL-SITE CONTRACT, ASSERTED WHERE IT ARRIVES — STATED AS A RULE, BECAUSE THE ENUMERATION THAT
-         STOOD HERE HAD ALREADY DRIFTED FROM THE PRODUCER IT DESCRIBED. It said `endpoint_json_array` writes
-         "exactly five keys per record" and spelled a param as `{name, location, validValues[], excludes[],
-         bounds{}}`, and two further kinds of gate — `predicates` and `looselyEquals` — have been added to the
-         emission since, each with its reader in lib/learn.js and neither reaching this sentence. That is the
-         drift a restatement decays by: it was true when written, nothing falsified it, and it went on naming
-         the fields a reader "may read" while two of them were missing from it. The count was wrong in the
-         same breath that stated it: `headers` is written ONLY where a header was observed, so a record has
-         four keys or five and never "exactly five". Thirty lines above, this file already records deleting a
-         count rather than updating it, for the reason that applies here too — a replacement number rots on
-         the next field, while the ORIGIN of a name stays checkable by opening the producer.
-         SO THE RULE, WHICH IS WHAT DOES NOT ROT. A record states its verb, its address and what it is
-         evidence of unconditionally (`method`, `url`, `provenance`) plus its `params` array, always present
-         and possibly empty; `headers` is written ONLY where the run observed one. A param states `name`,
-         `location`, `validValues` and `valueClass` unconditionally, plus one key per KIND OF GATE that held on
-         every observed path to this request — an equality's false arm, an ordering's interval, a method call,
-         a loose equality — each OMITTED where that kind proved nothing.
-         AND `valueClass` IS THE ONE UNCONDITIONAL KEY THAT IS ABOUT THOSE OMISSIONS RATHER THAN BESIDE THEM,
-         which is why adding it to the rule above is not the same edit as adding a fifth gate. endpoint.c reads
-         all four gates through the param's HOLE KEY, so a param whose value the code COMPUTED had all four
-         skipped at the mint and their absence stops meaning "that kind proved nothing"; this key says which
-         of the two sentences a reader is holding. Its OWN absence is a third state rather than a fifth
-         omission — this zone is deployed on write and the engine is live only after a build — and the merge
-         at the foot of this file leaves an unstated one alone rather than answering for it.
-         THE AUTHORITY IS THE PRODUCER AND NOT THIS PARAGRAPH. solver/endpoint.h carries the record's own
-         sketch beside the emission, and lib/learn.js's `AST_PARAM_KEYS` is the consumer half — a list that
-         CRASHES on a param key no reader in that file asks for, which is the mechanism this comment used to
-         stand in for. A fifth kind of gate therefore cannot land here unasserted; before, it landed silently
-         and rendered as a parameter nothing had ever tested.
-         WHY NONE OF IT IS DEFAULTED. `params` absent would mean the serializer changed shape, and that must
-         crash rather than register every endpoint of the run as parameterless — which is why the `|| []` that
-         stood at each use is gone. Each optional key's ABSENCE is a POSITIVE statement (no gate of that kind
-         survived every observed path), so it is read with an `in` test and never with a `||`, which would
-         make "unconstrained" and "the engine stopped emitting the field" the same datum. */
+      /* The call-site contract, asserted where it arrives. A record states `method`, `url`, `provenance` and a
+         `params` array (possibly empty) unconditionally; `headers` is written only where the run observed
+         one. A param states `name`, `location`, `validValues` and `valueClass` unconditionally, plus one key
+         per kind of gate that held on every observed path to the request (an equality's false arm, an
+         ordering's interval, a method call, a loose equality), each omitted where that kind proved nothing.
+         `valueClass` says whether those omissions mean "proved nothing" or "the value named no hole to look
+         a gate up by". The authority is the producer: solver/endpoint.h sketches the record, and
+         lib/learn.js's `AST_PARAM_KEYS` crashes on a param key no reader there asks for. Nothing is
+         defaulted: an absent optional key is a positive statement, so it is read with an `in` test and never
+         with `||`. */
       DCHECK(callSite && typeof callSite === "object", "a fetchCallSites entry is not an object — endpoint.c emits one JSON object per deduped endpoint");
       DCHECK(typeof callSite.method === "string" && callSite.method, "a fetchCallSites entry carries no method — endpoint_record takes it as a required argument, so an absent one is the @H serializer broken");
       DCHECK(Array.isArray(callSite.params), "a fetchCallSites entry carries no params array — endpoint.c writes \"params\":[…] for every endpoint (empty when the request carried no templated path segment, no query and no readable body), so its absence is the whole parameter surface arriving as nothing");
-      /* AND WHAT THIS CALL SITE IS EVIDENCE OF, CHECKED IN BOTH DIRECTIONS OF THE SKEW: that the engine wrote
-         a word, and that the word is one this zone knows. It is NOT an optional key like `excludes` and
-         `bounds` — endpoint.c writes it on EVERY record, because the three words are exhaustive over the ways
-         the engine can come to know an address and there is therefore no absence for a reader to interpret.
-         WHAT A DEFAULT HERE WOULD COST is the whole point of the field: `callSite.provenance || "derived"`
-         renders an address that exists only because a gate was forced with bytes identical to one the app's
-         own code computes, and the reviewer reads the fabrication as a measurement — CLAUDE.md §@H's "one
-         invented field is the example that shapes the next endpoint", arriving as silence rather than as a
-         value. So it crashes here instead. */
+      /* What the call site is evidence of. endpoint.c writes the word on every record, so there is no absence
+         to interpret, and a default here would render a forced address at the grade of a computed one. */
       DCHECK(isCallSiteProvenance(callSite.provenance),
              "a fetchCallSites entry carries the provenance " + JSON.stringify(callSite.provenance) +
              ", which is none of " + CALLSITE_PROVENANCE.join("/") + " — endpoint.c writes one on every " +
@@ -220,18 +128,11 @@ function mergeASTResultsIntoVDD(tab, results) {
       // scheme as origin="null" and path starts mid-string).
       if (/^(data|blob|about|javascript):/i.test(callSite.url)) continue;
 
-      /* WHAT THE CODE DETERMINED ABOUT THIS ADDRESS — lib/callsite-url.js, over endpoint.c's own template
-         grammar rather than over a regex guessing at three spellings of "dynamic". A relative address resolves
-         against the PAGE's origin at runtime, NOT the script's host: `fetch('/svc/shreddit/graphql')` in a
-         bundle served from www.redditstatic.com hits www.reddit.com, so the base is the tab's page url and
-         only falls back to the analysis sourceUrl when this merge has no page url at all.
-         AN UNDETERMINED ORIGIN IS A POSITIVE STATEMENT AND IS REGISTERED LIKE ANY OTHER ENDPOINT. What stood
-         here read `csUrl.pathname` off the null the "dynamic" branch had just assigned, and the TypeError went
-         to the console.debug below: EVERY call site whose address begins with a shape was dropped between the
-         engine and the moat, which on a real corpus is most of them. §@H makes a domain-annotated shape a
-         first-class output — the engine must never INVENT a value it only knows the shape of — so a shape
-         standing where the origin would be is exactly the record this tool exists to emit. It is filed under
-         that shape, never under the script's host, which is a different address the code never computed. */
+      /* What the code determined about this address (lib/callsite-url.js, over endpoint.c's template grammar).
+         A relative address resolves against the page's origin and not the script's host, so the base is the
+         document's url, and the analysis sourceUrl only when the view has none. An address whose origin is a
+         shape is registered like any other, filed under that shape and never under the script's host: a
+         domain-annotated shape is a first-class output. */
       var _addr = astCallSiteAddress(callSite.url, (tab && tab.url) ? tab.url : analysis.sourceUrl);
       var interfaceName = _addr.originKnown ? extractInterfaceName(_addr.url) : _addr.host;
 
@@ -240,19 +141,9 @@ function mergeASTResultsIntoVDD(tab, results) {
              "learnFromAstCallSite did not answer with its {entry, method} pair — both halves are read " +
              "below and a missing one silently files this endpoint under the wrong service or drops the " +
              "path-param examples it just learned");
-      /* AND THAT THE PAIR IS ALL-OR-NOTHING, WHICH IS THE STATE THE SHAPE-ORIGIN REPAIR MADE IMPOSSIBLE AND
-         IS ASSERTED HERE SO IT CANNOT COME BACK QUIETLY. That function used to hand back a live `entry` with
-         a NULL METHOD for an address whose origin is a shape, and every parameter the forced execution had
-         computed for that address — its braced path segments, its query pairs, all four narrowed domains —
-         was dropped with the method, because the walk that reads `callSite.params` is the only reader of
-         that array in either realm and it sits past the return. The endpoint below was registered anyway, so
-         the address appeared on the surface with an empty parameter half and the run read as a solver that
-         had learned no values.
-         IT IS A DCHECK AND NOT A GUARD: a half-answer here is this zone's own two halves having parted, not
-         input, and §Offensive-programming's category (1). A `?:` past it is what the old arm effectively
-         was, and it cost the product's headline claim on most of a real corpus with nothing to say so —
-         `_astPathParamPool` below answers `null` for a null method and a null method was, until now, an
-         ordinary thing to be handed. */
+      /* The pair is all-or-nothing: a refused site answers null for both, and an accepted one registers a
+         method whatever its address's origin. A live entry with no method would drop every parameter the
+         call site computed, since the only walk over `callSite.params` is in learnFromAstCallSite. */
       DCHECK((_learned.entry === null) === (_learned.method === null),
              "learnFromAstCallSite answered with half a pair (entry " + (_learned.entry ? "present" : "null") +
              ", method " + (_learned.method ? "present" : "null") + ") — a site it refuses answers null for " +
@@ -268,39 +159,26 @@ function mergeASTResultsIntoVDD(tab, results) {
       // Register endpoint for popup display — separate concern from
       // method registration (endpoint list shows "what fetches exist
       // on this page," method list shows "what API endpoints we know").
-      /* ONE KEY SHAPE FOR BOTH KINDS OF ADDRESS: method + host + path, where `host` is the origin as far as
-         the code determined it. The "dynamic" arm keyed on the bundle id and the CALL-SITE INDEX `fc`, which
-         is not an identity at all — it renumbers whenever the engine's emission order moves, so the same
-         endpoint re-registered under a new key on every run and two runs never deduped. A shape is a stable
-         name, so the shape-origin records dedup exactly like the literal ones.
-         THE SHAPE IS NO LONGER SPELLED HERE. It was spelled here, again at the structural dedup key below,
-         once more in offscreen-brain.js's per-delivery sweep, and a fourth time — WRONG, without the prefix —
-         by a live-response consumer whose lookup therefore could never match. lib/endpoint-record.js mints
-         it now: the file that
-         owns the record's one description owns its one NAME, and a fifth spelling has nowhere to be written. */
+      /* One key shape for both kinds of address: method + host + path, where `host` is the origin as far as
+         the code determined it, so a shape-origin record dedups like a literal one. lib/endpoint-record.js
+         mints the key; it is not spelled here. */
       var epKey = endpointKeyFromParts(callSite.method, _addr.host, _addr.path,
                                        "lib/merge.js registering an @H call-site endpoint");
-      // DEDUP by STRUCTURAL identity: the SAME endpoint driven with opaque-POSITIONAL args ({arg0}, from
-      // __hostDrive's JS-side drive) and with NAMED args ({id}, from the grind's declared-name drive) yields
-      // TWO keys for ONE endpoint (verified: spa_gated 5 raw / 4 distinct). Collapse {..} path-param segments
-      // to a structural key; on collision keep the DECLARED-name record over the positional one. Only
-      // {placeholder} segments normalize, so genuinely-distinct endpoints (differing elsewhere) never merge.
-      // The stored KEY stays the raw path, so probe/replay of the surviving record are unaffected.
+      // Dedup by structural identity. One endpoint driven with positional args ({arg0}) and with declared
+      // names ({id}) yields two keys, so placeholder path segments collapse to a structural key and, on a
+      // collision, the declared-name record is kept over the positional one. Only placeholder segments
+      // normalize. The stored key stays the raw path, so probe and replay of the surviving record are
+      // unaffected.
       if (!tab._epNorm) tab._epNorm = new Map();
-      /* THE STRUCTURAL KEY IS THE SAME NAME OVER A HOLE-NORMALIZED PATH, so it is minted by the same function.
-         It names a different map (`tab._epNorm`), but it is the same NAME SPACE — its values are endpoint
-         keys and it is compared against them — so a shape that drifted in one and not the other would make
-         this dedup silently stop collapsing, which reads as two genuinely distinct endpoints. */
+      /* The structural key is the same name over a hole-normalized path, minted by the same function: its
+         values in `tab._epNorm` are endpoint keys and are compared against them. */
       var _structKey = endpointKeyFromParts(callSite.method, _addr.host,
                                             _addr.path.replace(/\{[^}]*\}/g, "{}"),
                                             "lib/merge.js building the structural dedup key");
       var _posRe = /\{arg\d+\}/;
       var _priorKey = tab._epNorm.get(_structKey);
-      /* WHAT THE UPGRADE BRANCH IS ABOUT TO DELETE, HELD SO ITS OBSERVATIONS CAN BE FOLDED FORWARD. The
-         positional record and the declared one are the SAME endpoint driven two ways — that is the premise
-         of this dedup — so the headers the positional drive observed are this endpoint's headers, and
-         `delete` alone states of them that nothing ever saw them. `null` MEANS this call site upgraded
-         nothing, which is the ordinary case and not an absence to interpret. */
+      /* The record the upgrade branch deletes, held so its observations fold forward: the positional and the
+         declared record are one endpoint driven two ways. `null` means this call site upgraded nothing. */
       var _upgradedFrom = null;
       if (_priorKey && _priorKey !== epKey && tab.endpoints.has(_priorKey)) {
         if (_posRe.test(_priorKey) && !_posRe.test(epKey)) {
@@ -312,254 +190,112 @@ function mergeASTResultsIntoVDD(tab, results) {
       } else {
         tab._epNorm.set(_structKey, epKey);
       }
-      /* THE RECORD'S NAME, CARRIED ONTO THE LEARNED METHOD, BECAUSE THIS LOOP IS THE ONE PLACE BOTH EXIST
-         AND THE SEND PANEL REACHES THE RECORD THROUGH THE METHOD OR NOT AT ALL. The panel's dropdown is
-         built from this document's learned methods and selects by (service, methodId), so the only thing
-         `resolveEndpointSchema` is ever handed is that pair — its `endpointKey` parameter has no producer,
-         its `ep` is therefore null, and everything the record states BEYOND an address reaches no surface:
-         the body the run observed this request sending, its templated holes, its probe answer. Each of
-         those three consumers is a live read of a field nothing populates, which is CLAUDE.md
-         §A-FIELD-A-CONSUMER-DEFAULTS with `schema.endpoint && …` in the place a `||` usually stands.
-         THE NAME IS CARRIED AND NOT RE-DERIVED. lib/endpoint-record.js states the rule for its own mint —
-         a key composed independently at two sites is a contract with nothing enforcing it — and the method
-         does carry `origin` and `path`, so recomposing from them is exactly that second composition: the
-         key's host is the HOSTNAME and its path keeps the leading slash, and neither is what those two
-         fields hold. Carrying `endpointKeyFromParts`' own answer leaves one spelling.
-         FIRST WRITER WINS, AND THAT IS REQUIRED RATHER THAN CONVENTIONAL. A learned method is created once,
-         by the first call site to reach its name, and `m.path` is THAT call site's; a later writer would
-         leave the key naming one record while the address the panel sends to named another — two records
-         rendered as one row with no line saying which half came from where. Where several records do share
-         one method name, the rest are unreachable from the panel whatever this line does; that is a defect
-         in the naming and not one this line can state. */
+      /* The record's key, carried onto the learned method: the Send panel selects by (service, methodId), so
+         it reaches the flat record through the method or not at all. The key is carried and not recomposed
+         from the method's `origin` and `path`, which do not hold the key's hostname and leading-slash path.
+         First writer wins, because a method is created by the first call site to reach its name and `m.path`
+         is that call site's. Where several records share one method name, the rest are unreachable from the
+         panel. */
       if (_learned.method && _learned.method._endpointKey === undefined) {
         _learned.method._endpointKey = epKey;
       }
-      /* THE RECORD IS BUILT FOR EVERY SIGHTING AND THE MAP DECIDES WHAT HAPPENS TO IT — it used to be built
-         only inside the `has()` miss, and that is where the observations of every later sighting went.
-         WHAT THE MISSING ARM WAS. The engine emits one @H row per (method, path, provenance, param-set)
-         — engine/host/solver/endpoint.c's `same_identity`, and endpoint.h states that the split is
-         deliberate rather than an artifact — while this key is `method + host + path`. So one address the
-         bundle calls at two grades, or once with a query and once without, arrives here as several rows and
-         the `if` had NO `else`: the first row's record was kept and every later row's `requiredHeaders`,
-         `bodySent`, `bodyShape` and `bodyExample` were read off the call site, DCHECKed on arrival, and
-         dropped.
-         HOW MUCH THAT COSTS IS NOT UNIFORM ACROSS THE FOUR, and this comment first said it was — that the
-         keys are read nowhere else, so everything dropped reached no surface. Re-derived over the whole
-         extension: `callSite.bodyBase64`, `callSite.bodyShape`, `callSite.bodyExampleBase64` and
-         `callSite.bodyMime` are read at these lines and NOWHERE ELSE in either realm, so a losing row's body
-         really does reach no surface — §What-the-tool-produces' "computed example KEYS and VALUES" and
-         §@S(d)'s reproduction envelope going missing with nothing to say so. `callSite.headers` has a SECOND
-         reader, lib/learn.js, which folds it onto the METHOD record before this gate runs, so a losing row's
-         headers were kept there and lost only from the FLAT record — which is still what `netdiff --unused`
-         counts, what crosses to the popup, and what lib/send.js reads when no method resolves.
-         BUILDING IT UNCONDITIONALLY IS WHAT MAKES THE FOLD A FOLD OF TWO RECORDS rather than of a record and
-         a raw call site: one law, one shape, at both of this file's endpoint seams. It also puts every
-         sighting through `makeEndpointRecord`'s assertions instead of only the first.
-         THE HOLE POOLS GAIN FROM IT TOO, AND THAT IS NOT INCIDENTAL. `_astPathParamPool` reads the METHOD,
-         which lib/learn.js has already merged this sighting's values into above — so the held record, built
-         when those pools were shorter, folds the longer ones forward instead of staying at whatever the
-         first call site happened to know.
-         THROUGH lib/endpoint-record.js, WHICH IS NOW THE ONLY DESCRIPTION OF THIS RECORD. This literal used
-           to BE the description, and it could only be consulted by reading it — which is why the field list
-           had been hand-copied into seven comments and one DCHECK elsewhere, and why five names no producer
-           writes had been projected onto it by readers with nothing to catch them. The constructor rejects a
-           name this record does not carry, so the next such projection crashes at the producer instead of
-           reading `undefined` for the life of the feature. */
+      /* The record is built for every sighting and the map decides what happens to it. The engine emits one
+         @H row per (method, path, provenance, param-set) (engine/host/solver/endpoint.c's `same_identity`)
+         and this key is method + host + path, so one address called at two grades, or with and without a
+         query, arrives as several rows; each later row folds into the held record by
+         `_foldEndpointRecordInto`. `_astPathParamPool` reads the method lib/learn.js has already merged this
+         sighting into, so the fold carries the longer pools forward. lib/endpoint-record.js is the only
+         description of the record: its constructor rejects a name the record does not carry. */
       var _rec = makeEndpointRecord({
-            /* THE ADDRESS THE PARSER RESOLVED, NOT THE ONE ITS `URL` OBJECT CAN SPELL. This read was
-               `_decHoles(_addr.url.href)` under a comment saying `new URL().href` percent-encodes a hole's
-               braces so the decode restores them — true, and true of the BRACES only. A hole's NAME is a
-               display shape carrying the page's own bytes, and lib/callsite-url.js measured that 172 of the
-               259 code points a name may legally hold do not survive `new URL`: `#` and `?` truncate it, `\`
-               splits it across two segments, and SPACE, `"`, `<`, `>`, backtick and every non-ASCII code
-               point come back percent-encoded. That file masks the name for the parse and unmasks it after,
-               so its `url` object is now parsed from a MASKED template and `url.href` is the one field of it
-               that is no longer the address — `href` on the record beside it is, and it is minted there
-               rather than recomposed here for the reason the banner below gives about a fifth spelling.
-               `_decHoles` goes with it: the decode belongs to the parser that did the encode. */
+            /* The address the parser resolved. lib/callsite-url.js masks a hole's name for the `new URL` parse,
+               which would otherwise truncate or percent-encode it, so its `url.href` is not the address; its
+               `href` is. */
             url: _addr.originKnown ? _addr.href : callSite.url,
             method: callSite.method,
             host: _addr.host,
             path: _addr.path,
             service: interfaceName,
             source: _addr.originKnown ? "ast_analysis" : "ast_shape_origin",
-            /* `null` IS THIS RECORD'S ONE SPELLING OF "no document address was known", so the translation
-               happens HERE, at the producer, rather than at each surface. What stood here tested a local
-               alias of `tab` that is unconditionally truthy at this point, so its `: null` arm was
-               unreachable and a doc view with no address wrote `undefined` — which chrome.runtime.
-               sendMessage then DROPS, delivering the popup a record whose `pageUrl` key does not exist. */
+            /* `null` is this record's one spelling of "no document address was known". An `undefined` would be
+               dropped by chrome.runtime.sendMessage and reach the popup as a missing key. */
             pageUrl: tab.url === undefined ? null : tab.url,
-            /* AST-captured required headers (the SET the bundle attached at the host edge, per-header
-               literal/opaque) — transport metadata the Send panel shows so the endpoint is actually usable.
-               ABSENCE IS THE POSITIVE STATEMENT, and endpoint.c states it in those words: it writes the
-               `headers` key ONLY when `e->nh`, because "an endpoint with no learned header must not claim an
-               empty requirement, which reads as 'needs nothing' rather than 'nothing was observed'". So a
-               missing key is "nothing was observed" and becomes null here, and a PRESENT one is asserted to
-               be the non-empty record it can only be. */
+            /* The headers the bundle attached, each a literal or opaque. endpoint.c writes the `headers` key only
+               where one was learned, so a missing key is "nothing was observed" and becomes null, and a
+               present one is asserted to be the non-empty record it can only be. */
             requiredHeaders: callSite.headers === undefined ? null : astHeaderRecord(callSite.headers),
-            /* THE REQUEST BODY, IN WHICHEVER OF ITS THREE KINDS THE RUN OBSERVED — and the KEY the engine chose
-               is what says which, so nothing here decides it. solver/endpoint.c writes `bodyBase64` only for
-               bytes the request SENDS and `bodyShape` only for the display spelling of a body built out of
-               unknown external input, never both, and asserts that exclusivity at its own emit.
-               ABSENCE IS THE POSITIVE STATEMENT on both, exactly as it is for `headers` one line up: the
-               engine omits the key rather than writing an empty one, so a missing key is "the run observed no
-               body of this kind" and becomes null here — never a `||` that would make a body the run could
-               not name indistinguishable from one it observed to be empty.
-               `bodyMime` IS CARRIED INTO WHICHEVER FIELD IS SET rather than kept beside them, because a type
-               with no body is not a fact this record has any use for: it is how the bytes are READ, so it
-               belongs to them. It is always present with `bodyBase64` (endpoint.c records that pair or
-               neither) and legitimately absent with a shape, where Fetch §5.2's string arm supplies a type
-               the page never chose. */
+            /* The request body, in whichever kind the run observed; the key the engine chose says which.
+               solver/endpoint.c writes `bodyBase64` only for bytes the request sends and `bodyShape` only for
+               the display spelling of a body built from unknown external input, never both. An omitted key
+               is "no body of this kind was observed" and becomes null. `bodyMime` is carried into whichever
+               field is set: it is always present with `bodyBase64` and may be absent with a shape, where
+               Fetch §5.2's string arm supplies a type the page never chose. These keys are recorded where
+               the engine could name no field of the body; named fields reach the doc model through
+               lib/learn.js. */
             bodySent: callSite.bodyBase64 === undefined ? null
                     : { mime: callSite.bodyMime, base64: callSite.bodyBase64 },
             bodyShape: callSite.bodyShape === undefined ? null
                      : { mime: callSite.bodyMime === undefined ? null : callSite.bodyMime,
                          shape: callSite.bodyShape },
-            /* AND THE THIRD KEY, WHICH IS THE ONE THAT ARRIVES BESIDE `params` RATHER THAN INSTEAD OF IT.
-               `bodyExampleBase64` is what a payload the page wrote BYTE BY BYTE currently looks like, at the
-               byte ranges the `body[off:end]` params of this same call site name — so this is not a third
-               spelling of the two above, it is the CONTENT whose ADDRESSES are already on `params`, and a
-               reader holding one without the other has half an answer either way.
-               ITS `bodyMime` IS LEGITIMATELY ABSENT, which is why it takes the shape arm's `undefined` test
-               rather than the sent arm's straight-through read: §5.2 BodyInit unions gives a BufferSource NO
-               Content-Type, so the protobuf payload this whole capability exists for arrives with no type at
-               all, and endpoint.c records the bytes anyway because the span params address them. */
+            /* `bodyExampleBase64` is what a payload the page wrote byte by byte currently holds, at the byte
+               ranges the `body[off:end]` params of this call site name, so it arrives beside `params` and
+               not instead of them. Its `bodyMime` may be absent: §5.2 BodyInit unions gives a BufferSource
+               no Content-Type. */
             bodyExample: callSite.bodyExampleBase64 === undefined ? null
                        : { mime: callSite.bodyMime === undefined ? null : callSite.bodyMime,
                            base64: callSite.bodyExampleBase64 },
-            /* THE PATH-PARAM EXAMPLES, FROM THE RECORD THAT ACTUALLY HOLDS THEM — BOTH POOLS, because the
-               flat record is the one that is READ where the method record is not. It reads the METHOD
-               lib/learn.js just registered, which has TWO producers of a `location:"path"` parameter:
-               endpoint.c emits one per `{hole}` the forced execution interpolated into the address, carrying
-               the segment its concolic example computed, and the templated reconcile below folds in the
-               concrete segment of a live request that matched the template — the "orgId=acme-42" case.
-               (Reading `callSite.params` for `p.location === "path"` directly would work now that the
-               producer states it, and is still the wrong source: the values a live request taught belong to
-               the method and never reach the call-site record.)
-               THE SENTENCE THAT STOOD HERE SAID THE METHOD SCHEMA IS "EVICTED AFTER REVIEW", AND IT IS A
-               SCAR. The review-completion reclaim it named is deleted (offscreen-brain.js records why: this
-               zone holds no document bytes any more), the DocData that dies with the session is not what
-               lib/send.js reads, and the moat's own `discoveryDocs` are serialized WITH their doc — so the
-               flat record and the method schema have the same lifetime today. The flat record is still the
-               one this field must be complete on, and for a reason that does not depend on a lifetime: it is
-               what `netdiff --unused` counts, what crosses to the popup, and what lib/send.js falls back to
-               whenever the resolved schema does not DECLARE the hole (a partial path match, an address
-               unioned here from a document whose method lives in another bucket). On every one of those the
-               flat record is the whole statement, and half a statement about a shape is §@H's wrong report.
-               WHICH IS WHY THE FORCED POOL IS ITS OWN FIELD AND NOT A MEMBER OF THIS ONE. `pathParams` is
-               read by lib/send.js, which unions these into the Send form's value list AND takes `values[0]`
-               as the prefilled `_exampleValue`, so a hole filled only on a forced arm must not appear here —
-               it would arrive as the address the reviewer sends, which is the exact failure the pool split
-               exists to stop. It appears in `pathParamsForced` instead, where lib/popup-form.js renders it on
-               its own row as the real observation it is. */
+            /* The path-param examples, read from the method lib/learn.js just registered. It has two producers
+               of a `location:"path"` parameter: endpoint.c's `{hole}` examples, and the templated
+               reconcile's concrete segment of a live request that matched the template, which never reaches
+               the call-site record. The flat record must be complete because it is what `netdiff --unused`
+               counts, what crosses to the popup, and what lib/send.js falls back to when the resolved schema
+               does not declare the hole. The forced pool is its own field: lib/send.js takes a `pathParams`
+               entry's `values[0]` as the prefilled example, so a hole filled only on a forced arm must not
+               appear there; lib/popup-form.js renders `pathParamsForced` on its own row. */
             pathParams: _astPathParamPool(_learned.method, "_astValidValues"),
             pathParamsForced: _astPathParamPool(_learned.method, "_astForcedValues"),
             /* …and the drive mark over the offerable pool, kept to the values that pool projected. */
             pathParamsDriven: _astPathParamDrivenPool(_learned.method),
-            /* AND THE OTHER HALF OF EVERY ONE OF THOSE HOLES, OFF THE SAME METHOD PARAMETERS. The two pools
-               above are what the code COMPUTED for a segment; this is what its own gates PROVED the segment
-               must satisfy, and §@H is explicit that a shape carrying one of the two is a WRONG report rather
-               than a thin one — a hole gated `> 5` reaching lib/send.js with its values and none of its
-               domain renders exactly as a hole nothing ever tested, which reads as "anything goes". It is ONE
-               field for both pools because a domain is a fact about the HOLE and a grade is a fact about a
-               VALUE; see lib/endpoint-record.js for why that makes it a third field and not a third pool. */
+            /* What the gates proved each of those holes must satisfy. A hole carrying its values and not its
+               domain reads as one nothing tested. It is one field for both pools because a domain is a fact
+               about the hole and a grade is a fact about a value (lib/endpoint-record.js). */
             pathParamDomains: _astPathParamDomains(_learned.method),
-            /* THE PARAGRAPH THAT STOOD HERE SAID "No request body on THIS record" AND IS A SCAR, KEPT IN ITS
-               OWN TERMS BECAUSE ITS ARGUMENT IS WHAT A READER RE-DERIVES. It said the body surface lands in
-               the doc model — endpoint.c reads the request's own payload, lib/learn.js files its fields as
-               `doc.schemas[…Request]` with `m.request.$ref` pointing at them, and lib/send.js's `requestBody`
-               and the OpenAPI export resolve that — so a flat copy here would need a reader in lib/send.js
-               first, "that file projects only the ten fields this `endpoints.set` writes".
-               BOTH HALVES WENT FALSE AND NEITHER SENTENCE MOVED. The three body keys are written eight lines
-               up, lib/send.js projects all three by name onto the Send-panel schema, and lib/popup-form.js
-               renders them as three claims. The FIELDS half of the argument still holds and is why they are
-               not a second spelling of each other: a named field is a better answer than a blob and the body
-               keys are recorded exactly where the engine could name no field (`bodySent`/`bodyShape`) or
-               named several ADDRESSES into these bytes (`bodyExample`). The count is gone rather than
-               corrected, for the reason this file already states thirty lines up about another one: a
-               replacement number rots on the next field, while the ORIGIN of a name stays checkable by
-               opening the producer, which is `makeEndpointRecord` immediately below. */
             firstSeen: Date.now(),
       }, "lib/merge.js registering an @H fetch call site");
-      /* THE UPGRADED RECORD'S OBSERVATIONS, FOLDED FORWARD BEFORE THE MAP SEES EITHER. The structural dedup
-         above deleted it as a worse NAME for this same endpoint, which is a statement about the key and not
-         about what that drive observed — and a `delete` alone says nothing was ever seen. Folding into the
-         fresh record rather than into whatever the map holds keeps ONE order here: this call site's record
-         is complete before the map decides whether it is the first. */
+      /* The upgraded record's observations fold into the fresh record before the map sees either, so this
+         call site's record is complete before the map decides whether it is the first. */
       if (_upgradedFrom !== null) _foldEndpointRecordInto(_rec, _upgradedFrom, epKey);
       if (!tab.endpoints.has(epKey)) {
         tab.endpoints.set(epKey, _rec);
         newEndpoints++;
       } else {
-        /* THE ARM THAT DID NOT EXIST. A second @H row for one key is a second SIGHTING of one address, not a
-           duplicate to skip: `newEndpoints` is deliberately NOT raised — it counts addresses this document
-           added to the moat and this is not one — but what the row OBSERVED is folded, because the record's
-           unit is the address and its `requiredHeaders: null` MEANS "nothing was observed" of every sighting
-           rather than of the first. */
+        /* A second @H row for one key is a second sighting of one address. `newEndpoints` is not raised,
+           since it counts addresses this document added, but what the row observed is folded. */
         _foldEndpointRecordInto(tab.endpoints.get(epKey), _rec, epKey);
       }
-      /* THE CATCH THAT STOOD HERE IS DELETED, AND IT IS WHY THIS DEFECT WAS INVISIBLE FOR A WHOLE CORPUS.
-         Its stated job was that one malformed call site must not cost the other N-1 their registration, and
-         RETHROW_FATAL already carried every DCHECK straight through it — so the ONLY throws it still swallowed
-         were the unanticipated ones, which is exactly the class that cost the moat every endpoint on 30 real
-         sites: a TypeError off a null the branch above had assigned, printed to console.debug, and the record
-         gone with nothing anywhere reporting it as gone. §Offensive programming has no "handled as merely
-         malformed" state — a call site is either a record this zone can build or an engine↔JS contract that
-         must crash where it breaks. There is no third answer to keep a catch for. */
+      /* No catch here: a call site this zone cannot build is a broken engine↔JS contract, and it crashes. */
     }
     if (analysis.fetchCallSites.length) {
       console.debug("[AST:merge] Fetch sites: %d call sites processed, %d endpoints registered",
         analysis.fetchCallSites.length, newEndpoints);
     }
 
-    /* THE DOM-ENDPOINT REGISTRATION IS GONE BECAUSE `analysis.domEndpoints` HAS NO PRODUCER. It read
-       `analysis.domEndpoints || []` and registered each entry as a `dom_<source>` endpoint keyed by the
-       resolved href — 35 lines with their own try/catch and their own comment about vendor-page regressions
-       being "visible instead of disappearing into an empty endpoint list", over an array bridge.js writes as
-       the constant `[]`. There is no `domEndpoints` and no `dom_` anything in engine/host: the href/src/
-       action/data-* scan the comment describes is a capability the engine does not have, and the `|| []` is
-       what made its absence look like a page with no such markup.
 
-       (The place to build it is the engine's Lexbor tree, where the attribute values are. This used to point
-       at two driver assertions as "the record that the scan was intended" — the drivers are deleted, and a
-       pointer to a file that is not there is worse than none, so the intent is stated here instead of being
-       filed against something a reader would have to find first.) */
-
-    /* THE ONE SECURITY MERGE. `!analysis._securityMerged` guarded this, and the flag's other writer was
-       lib/analyze.js pre-empting this block to do its own per-script split — a split over `sink.location`,
-       which solve.c does not emit, so it filed every finding under the page URL and produced exactly what
-       this block produces. That file is deleted and so is the flag: the replace-then-push below is already
-       idempotent for a repeated merge of one analysis, which is all the flag ever bought.
-
-       `dangerousPatterns` IS GONE FROM BOTH SIDES OF THIS SEAM. It was read off every analysis and carried onto
-       every finding record, while bridge.js wrote it as a host-side constant `[]` — the engine has no such
-       surface and no renderer has ever read the field. A `.length` of 0 on a finding was therefore
-       indistinguishable from "no dangerous patterns found on this page": a claim about the page made out of a
-       constant, and §RUN, DON'T MATCH forbids the pattern list it claimed to be. The record now carries only
-       what solve.c emits. */
+    /* The security merge. The replace-then-push below is idempotent for a repeated merge of one analysis, and
+       the finding record carries only what solve.c emits. */
     var secSinks = analysis.securitySinks;
     DCHECK(Array.isArray(secSinks),
            "an analysis reached the security merge without its securitySinks array — bridge.js builds it on " +
            "every result document, so an absent one is that relay broken and this page would merge as clean");
     if (secSinks.length) {
       if (!tab._securityFindings) tab._securityFindings = [];
-      // REPLACE any prior entry for this source, don't append — the deep grind
-      // streams partials each carrying the GROWING accumulated securitySinks for
-      // the same sourceUrl, so appending would pile up snapshots (mergeToGlobal
-      // set()s by sourceUrl so globalStore stays correct, but the tab array would
-      // leak). Keep the latest (most complete) per source.
+      // Replace any prior entry for this source: partial results each carry the accumulated securitySinks
+      // for the same sourceUrl, so appending would pile up snapshots.
       for (var _sfx = tab._securityFindings.length - 1; _sfx >= 0; _sfx--)
         if (tab._securityFindings[_sfx].sourceUrl === analysis.sourceUrl) tab._securityFindings.splice(_sfx, 1);
-      /* `pageUrl: _mfMeta ? _mfMeta.url : null` STOOD HERE OVER A `var _mfMeta = tab || null` FOUR LINES UP,
-         and the ternary was dead twice over: `tab` is dereferenced on the line above it, so the guard could
-         not fire — and what it could not stop is the case it looks like it is for. `getDoc` initialises a
-         DocView's `url` to the EMPTY STRING and CONTENT_SEED fills it in, so a finding merged before that
-         seed carried `pageUrl: ""`, which is not an address and is not this record's stated absence either:
-         it is a third spelling that offscreen-brain.js's live-verify reads as an address it has (`entry &&
-         entry.pageUrl` is false for it, so it silently probes nothing) and that lib/store-record.js names as
-         the RECIPE — a finding whose document cannot be re-visited is the only copy of itself. The record
-         states one of its two declared spellings, and `null` MEANS "no document address was known when these
-         sinks were observed". */
+      /* `null` means no document address was known when these sinks were observed. `getDoc` initialises a
+         view's `url` to the empty string until CONTENT_SEED fills it, and the empty string is not an
+         address: offscreen-brain.js's live-verify and lib/store-record.js both read `pageUrl` as the
+         document to re-visit. */
       tab._securityFindings.push({
         sourceUrl: analysis.sourceUrl,
         pageUrl: tab.url ? tab.url : null,
@@ -568,37 +304,20 @@ function mergeASTResultsIntoVDD(tab, results) {
       console.debug("[AST:merge] Security findings for %s: %d sinks", analysis.sourceUrl, secSinks.length);
     }
   }
-  /* NO EVICTION SWEEP AFTER THIS MERGE. It was scheduled here to drop a reviewed document's "transient RAM
-     view", which was the page source this zone used to hold — and this zone holds no document bytes any more:
-     a seed is an address, the custom browser loads the document itself, and those bytes live in and die with
-     that instance. What remained after the page source was identity, which a merge does not make stale. */
 }
 
-// ─── Message Handling ────────────────────────────────────────────────────────
 
-// ─── Form Metadata Processing ─────────────────────────────────────────────
 
-// ── Cross-tab / global aggregation (host-level per SECURITY.md: the brain aggregates results from the
-//    per-page engines into the ONE global moat) ──
-/* THE PER-PARAMETER UNION. Only `_astValidValues` needed naming when this merge did nothing else; now that
-   the whole record travels, the two example-bearing fields do too. A param the existing record does not have
-   is copied whole; a param both records have keeps the existing DECLARATION (type/location/description are a
-   function of the same URL and verb) and unions the OBSERVATIONS, because those are what differ per page. */
+// ── Cross-document aggregation: the brain merges each document's results into the one global moat
+//    (SECURITY.md) ──
+/* The per-parameter union, one document's parameter into the moat's. The caller copies whole a param the
+   existing record lacks; a param both have keeps the existing declaration (type, location and description are
+   functions of the same URL and verb) and merges the observations. */
 function _mergeParamInto(ep, np) {
-  /* THE UNION IS PER POOL, AND ACROSS DOCUMENTS THE POOLS STILL FOLD. lib/learn.js splits a parameter's
-     learned values by whether the sighting that computed each one stood on a forced arm, and this is the
-     OTHER merge — one document's parameter into the cumulative moat's — so the same law applies to it or the
-     split holds within a page and dissolves between two. The law is most-observed (lib/endpoint-record.js),
-     spelled here exactly as it is spelled there: a value the other document computed WITHOUT forcing anything
-     is promoted out of our forced pool, and one it could only force is added to ours only where no document
-     has computed it otherwise. Unioning the two pools independently would have re-created the defect the
-     split exists to remove, in the one place it is invisible from either page — the moat, which is what
-     `netdiff --unused` counts and what a reviewer reads without the per-document schema in front of it.
-     THE LAW IS NOT SPELLED HERE ANY MORE, AND THAT IS THE CHANGE. It was written out at this merge, again at
-     lib/learn.js's per-sighting merge, and a THIRD copy was about to be written at the flat endpoint records'
-     merge below — three private spellings of one rule, each correct on the day it was written and each free
-     to drift. `foldValuePools` is the one performance of it; what stays here is the one thing that IS this
-     record's own — how a method parameter spells an empty pool, which is an omitted key. */
+  /* The value pools fold by `foldValuePools` (most-observed, lib/endpoint-record.js): a value the other
+     document computed without forcing is promoted out of our forced pool, and one it could only force is
+     added only where no document computed it otherwise. A method parameter spells an empty pool as an omitted
+     key, which is the only part spelled here. */
   const _folded = foldValuePools(
     Array.isArray(ep._astValidValues) ? ep._astValidValues : [],
     Array.isArray(ep._astForcedValues) ? ep._astForcedValues : [],
@@ -607,75 +326,38 @@ function _mergeParamInto(ep, np) {
     Array.isArray(ep._astDrivenValues) ? ep._astDrivenValues : [],
     Array.isArray(np._astDrivenValues) ? np._astDrivenValues : []);
   if (_folded.valid.length) ep._astValidValues = _folded.valid;
-  /* AN EMPTIED FORCED POOL IS DELETED RATHER THAN LEFT AS `[]` — the last promotion out of it is exactly
-     where the key would otherwise survive as an empty list, which is a third statement no reader has. */
+  /* An emptied forced or driven pool is deleted, not left as `[]`. */
   if (_folded.forced.length) ep._astForcedValues = _folded.forced;
   else if (Array.isArray(ep._astForcedValues)) delete ep._astForcedValues;
   if (_folded.driven.length) ep._astDrivenValues = _folded.driven;
   else if (Array.isArray(ep._astDrivenValues)) delete ep._astDrivenValues;
-  /* THE EXAMPLE IS A COMPUTED VALUE AND ITS ABSENCE IS A STATEMENT (§RUN, DON'T MATCH: a param known only to
-     satisfy a range gate has a SHAPE and no example). So an existing example is never overwritten and an
-     absent one is filled from the other page — and the SOURCE label travels with it, because a value whose
-     provenance came from a different record is a value nobody can judge. */
+  /* An example is a computed value and its absence is a statement: a param known only to satisfy a range gate
+     has a shape and no example. An existing example is never overwritten, and one filled from the other
+     document brings its source label with it. */
   if (ep._exampleValue === undefined && np._exampleValue !== undefined) {
     ep._exampleValue = np._exampleValue;
     ep._exampleValueSource = np._exampleValueSource;
     ep._exampleConfidence = np._exampleConfidence;
   }
   if (np._astInferred) ep._astInferred = true;
-  /* THE DOMAIN HALF, WHICH THIS MERGE DID NOT CARRY AT ALL. `_excludedValues` and `_bounds` are what the
-     endpoint's own gates PROVED about this parameter, and lib/learn.js states their law where it applies it
-     to one call site: exclusions INTERSECT and an interval widens to the HULL, because a constraint is a
-     claim about the ENDPOINT and belongs on the record only where EVERY observed path obeyed it. This
-     function is the OTHER merge — one document's parameter into the cumulative moat's — and it is called
-     exactly when both sides already exist, which is to say when a SECOND document has reached the same
-     endpoint's same parameter. It carried `_astValidValues` by union (right: a value is knowledge that
-     accumulates) and neither of these, so the second document's domain observation was discarded and the
-     moat kept the first document's claim standing.
-     THE DIRECTION OF THAT ERROR IS WHY IT IS A WRONG REPORT RATHER THAN A THIN ONE. A page that reached the
-     request WITHOUT the constraint is a path that DISPROVES it, so what survived was `≠ admin` on a
-     parameter one observed path never tested — and §@H is explicit that a shape carrying the wrong half is
-     "a WRONG report, not a partial one", because a reviewer reads a surviving exclusion as a fact the run
-     established rather than as a claim nobody re-checked.
-     PRESENCE, NOT TRUTHINESS, IS WHAT IS TESTED — and the two fields are tested differently because their
-     vocabularies differ. A merged parameter may never have had an engine observation at all (a form scan or
-     a live request can create one), and that is a different fact from an observation that proved nothing:
-     the first must contribute NOTHING, and the second must erase. `_excludedValues` spells "proved nothing"
-     as the empty array, so its presence as an array is the whole test; `_bounds` spells it as `null`, so
-     `in` is the test and `null` is passed through to do the erasing. Collapsing either pair would let a
-     parameter no engine run ever touched wipe every domain the engine emits. */
+  /* The domains merge by the opposite law: a constraint is a claim about the endpoint and stays only where
+     every observed path obeyed it, so exclusions intersect and an interval widens to the hull (lib/learn.js's
+     rules). A document that reached the request without the constraint disproves it. Presence is tested, not
+     truthiness, because a parameter no engine run touched (a form scan or a live request can create one) must
+     contribute nothing while an observation that proved nothing must erase: `_excludedValues` spells "proved
+     nothing" as the empty array, so being an array is the test; `_bounds` spells it as `null`, so `in` is the
+     test and `null` is passed through. */
   if (Array.isArray(np._excludedValues)) intersectExcludedValues(ep, np._excludedValues);
   if ("_bounds" in np) widenBoundsInto(ep, np._bounds);
-  /* …AND THE CALL PREDICATES, WHICH ARE THE THIRD FACT OF THE SAME KIND AND MERGE BY THE SAME LAW. They spell
-     "proved nothing" the way `_excludedValues` does — as the empty array — so presence as an array is the
-     whole test here too, and a parameter no engine run ever touched contributes nothing rather than wiping
-     what the engine emitted. Leaving them out would repeat, one fact later, exactly the error the paragraph
-     above records: a second document that reached the request without testing `startsWith("/api")` is a path
-     that disproves the claim, and the moat would go on rendering it. */
+  /* The call predicates merge by the same law and spell "proved nothing" as the empty array. */
   if (Array.isArray(np._predicates)) intersectPredicates(ep, np._predicates);
-  /* …AND THE LOOSE EQUALITIES, WHICH ARE THE FOURTH FACT OF THE SAME KIND AND MERGE BY THE SAME LAW. They
-     spell "proved nothing" as the empty array, exactly as `_excludedValues` and `_predicates` do, so presence
-     as an array is the whole test here too. Omitting them would repeat, one fact later again, the error the
-     paragraph above records — and in the direction that matters most for this particular fact, because a
-     surviving `== 0` tells a reviewer to send a value that coerces to zero when a second document reached the
-     request without any such gate. */
+  /* So do the loose equalities. */
   if (Array.isArray(np._looselyEquals)) intersectLooselyEquals(ep, np._looselyEquals);
-  /* …AND THE FACT THAT SAYS WHICH OF TWO SENTENCES THOSE FOUR SILENCES ARE, WHICH IS NOT A FIFTH ONE OF THEM
-     AND MERGES BY THE OPPOSITE LAW. solver/endpoint.c reads all four domains through the param's HOLE KEY, so
-     a param whose value named no hole had all four skipped at the mint and their absence means "a literal
-     with nothing to look up" rather than "a hole every gate was lost on". `_astValueClass` is the engine's
-     statement of which, carried here for the reason the paragraph above records against itself: a domain fact
-     this merge does not carry is a second document's observation discarded, and the moat then renders the
-     first document's claim as one the run established.
-     IT UNIONS WHERE THEY INTERSECT, AND THAT IS solver/endpoint.h's rule rather than a choice made here. The
-     four are claims about the VALUE, so a document that reached the request without obeying one DISPROVES it;
-     this is a fact about whether the observation could ask anything at all, and a second document whose own
-     value was a literal cannot take back a hole the first one really had. So "unknown" is sticky and
-     "concrete" fills only an unstated slot.
-     PRESENCE, NOT TRUTHINESS, FOR THIS BLOCK'S OWN REASON — and here the third state is an ABSENT key rather
-     than an empty array, because this zone is deployed on WRITE while the engine is live only after a build
-     and the store outlives both. A record learned by an engine that predates the key states nothing, so it
-     must contribute nothing; writing "concrete" for it would be that silence read as an answer. */
+  /* `_astValueClass` says which of two things the four silences mean: solver/endpoint.c reads all four
+     domains through the param's hole key, so a value that named no hole had them skipped. It unions where
+     they intersect (solver/endpoint.h's rule): "unknown" is sticky and "concrete" fills only an unstated
+     slot, because a second document's literal cannot take back a hole the first one had. An absent key is a
+     third state, a record learned by an engine that predates the key, and it contributes nothing. */
   if (np._astValueClass === "unknown") ep._astValueClass = "unknown";
   else if (np._astValueClass === "concrete" && ep._astValueClass !== "unknown") ep._astValueClass = "concrete";
 }
@@ -697,18 +379,9 @@ function _sumStats(byDoc) {
     out.requestCount += s.requestCount;
     for (const pn in s.params) out.params[pn] = mergeParamStats(out.params[pn], s.params[pn]);
     for (const fn in s.bodyFields) out.bodyFields[fn] = mergeParamStats(out.bodyFields[fn], s.bodyFields[fn]);
-    /* THE REQUEST-BODY CENSUS IS SUMMED HERE BECAUSE THIS FUNCTION IS AN ALLOWLIST AND NOT A UNION.
-       `_mergeMethodInto` one screen down fills what is missing and copies what it has not heard of, by a
-       rule its own comment states; this one REBUILDS `out` from a fixed literal, so any name lib/learn.js
-       adds to `_stats` that the literal does not carry is dropped at every global merge — the endpoint the
-       popup renders for every page you are not standing on would carry the census the tab doc had, and no
-       reader anywhere would say it had gone. A write whose reader never sees it is the same broken contract
-       as a read with no writer.
-       AND A CONTRIBUTOR THAT STATES NO CENSUS IS COUNTED AS UNCOUNTED RATHER THAN AS ZERO. A document
-       restored from a store written before this census existed carries `_stats` and no `body`, and "this
-       document's requests were never asked this question" is not "it carried no bodies" — averaging the two
-       is exactly the absent-versus-zero conflation the census was added to end, and doing it HERE would
-       re-introduce it one level up, in the summed number a person actually reads. */
+    /* This function rebuilds `out` from a fixed literal, so a name lib/learn.js adds to `_stats` is dropped
+       at every global merge unless it is summed here. A contributor with no `body` census (a store written
+       before the census existed) is counted as uncounted, not as zero. */
     if (s.body) {
       out.body.present += s.body.present;
       out.body.decoded += s.body.decoded;
@@ -729,23 +402,13 @@ function _sumStats(byDoc) {
   return out;
 }
 
-/* A METHOD RECORD IS THE UNION OF WHAT TWO PRODUCERS LEARNED ABOUT ONE ENDPOINT, AND THIS MERGE COPIED ONE
-   NESTED ARRAY OF ONE SUB-OBJECT.
-   The two producers are the BUNDLE (lib/learn.js `learnFromAstCallSite`, off the engine's @H surface) and the
-   WIRE (`learnFromRequest`, off a real response), and which of them reaches `globalStore` first is decided by
-   page timing. Everything the second one knew that the first did not was dropped here: `_astInferred`,
-   `_astSourceScript`, `_stats`, `response`, `request`, `contentTypes`, `requiredHeaders`, `_responseKind`,
-   `_chains`. MEASURED in Chrome on the one-fetch probe page: the tab's own record carried
-   `_astInferred:true` and the global record — the one the popup renders for every page you are not standing
-   on — did not, so `_methodOrigin` tagged the endpoint the forced execution had just found in the bundle as
-   "fired only (no bundle origin)". The cumulative moat is where "what the bundle CAN do but didn't" is read,
-   and it was answering the opposite.
-   THE IDENTITY FIELDS ARE KEPT, THE LEARNED ONES ARE FILLED, AND THE ONES THAT ARE NOT FIRST-WRITER-WINS SAY
-   SO: `_astInferred` is MONOTONE (a call site found in the bundle by either page is a call site in the
-   bundle), and `_stats` is SUMMED PER CONTRIBUTING DOCUMENT (see `_sumStats`). Everything else the newer record carries and the older lacks is copied
-   as-is — a real discovery document's methods carry server-authored fields (scopes, parameterOrder, flatPath)
-   that this file must not have to enumerate, so the rule is "fill what is missing", never an allowlist that
-   would silently drop what it had not heard of. */
+/* Merges one document's method record into the moat's. A method record is the union of what two producers
+   learned about one endpoint, the bundle (lib/learn.js `learnFromAstCallSite`) and the wire
+   (`learnFromRequest`), and page timing decides which reaches `globalStore` first. Identity fields are kept,
+   and anything the newer record carries that the older lacks is copied as-is, never through an allowlist: a
+   real discovery document's methods carry server-authored fields (scopes, parameterOrder, flatPath) this file
+   does not enumerate. The exceptions: `_astInferred` is monotone, `_stats` is summed per contributing document
+   (`_sumStats`), and parameters, witnesses and record facts merge by their own rules below. */
 function _mergeMethodInto(em, nm) {
   DCHECK(!nm._stats || !!nm._statsByDoc,
          "a document's method reached the moat merge carrying summed statistics with no contributor records — " +
@@ -788,19 +451,11 @@ function _mergeDocInto(existingDoc, newDoc) {
   return existingDoc;
 }
 
-/* AND IT RECURSES, BECAUSE A DISCOVERY DOCUMENT'S RESOURCES NEST. `getDocMethods` (popup.js) walks
-   `r.resources` at every level, so a nested bucket's methods ARE rendered; this merge read only
-   `resources[bk].methods` and stopped, so for any service whose bucket already existed globally every nested
-   resource of every later page was read past in silence. The whole-bucket copy one line up hid it: the first
-   page's nested methods arrived (the bucket was absent, so it was taken entire) and no page's ever did
-   again. */
-/* BOTH LEVELS OF THIS WALK ARE KEYED BY A NAME THIS ZONE DID NOT CHOOSE — see lib/stranger-keyed.js. A
-   RESOURCE bucket is named by a fetched discovery document or by lib/openapi-import.js's lowercased TAG, and a
-   METHOD by lib/grouping.js's answer, which is a URL path segment or a GraphQL `operationName`. The maps
-   themselves are the MOAT's, restored out of IndexedDB by `JSON.parse`, so they carry `Object.prototype`
-   whatever this file mints — which is why the repair here is the READ and the WRITE rather than the mint.
-   `eres["constructor"]` was the `Object` CONSTRUCTOR, so `!eb` was false, `eb.methods = {}` assigned onto the
-   global constructor, and the whole bucket that page learned merged into it and was lost from the moat. */
+/* Merges resource buckets, recursing because a discovery document's resources nest and `getDocMethods`
+   (popup.js) renders every level. Both levels are keyed by a name this zone did not choose (see
+   lib/stranger-keyed.js): a bucket by a fetched discovery document or lib/openapi-import.js's lowercased tag,
+   a method by lib/grouping.js's answer. The maps are restored from IndexedDB by `JSON.parse` and so carry
+   `Object.prototype`, which is why every read and write goes through the stranger-key helpers. */
 function _mergeResourcesInto(eres, nres) {
   for (const bk in nres) {
     const nb = nres[bk];
@@ -811,11 +466,9 @@ function _mergeResourcesInto(eres, nres) {
       if (!eb.methods) eb.methods = strangerKeyedMap();
       for (const mk in nb.methods) {
         const nm = nb.methods[mk];
-        /* THE SAME NAME FOR TWO VERBS IS TWO ENDPOINTS, and merging them would OR one's bundle-origin onto
-           the other's. `learnFromAstCallSite`/`learnFromRequest` resolve this INSIDE one document by moving
-           the incumbent to `<verb>_<name>`; across documents neither page ever saw the other's, so both wrote
-           the bare name and this loop was the first place the collision existed. It is resolved the same way,
-           and the id — which the Send panel keys on — is re-derived rather than left naming the bare key. */
+        /* The same name for two verbs is two endpoints. Within one document lib/learn.js resolves it by
+           moving the incumbent to `<verb>_<name>`; across documents the collision first exists here, and
+           the incoming method is filed under `<verb>_<name>` with the id the Send panel keys on re-derived. */
         let key = mk, em = strangerKeyHeld(eb.methods, key) ? eb.methods[key] : null;
         if (em && em.httpMethod !== nm.httpMethod) {
           key = String(nm.httpMethod).toLowerCase() + "_" + mk;
@@ -833,87 +486,35 @@ function _mergeResourcesInto(eres, nres) {
     }
   }
 }
-/* THE FLAT RECORDS' OWN MERGE — two sightings of ONE address, met wherever they meet, folded by the ONE law
-   per field. IT IS CALLED AT BOTH SEAMS AND USED TO BE CALLED AT ONE, which is the whole of why it is no
-   longer named for holes. The engine's endpoint identity is (method, path, provenance, param-set) and
-   engine/host/solver/endpoint.h states that the split is deliberate — "two rows for one address, one graded
-   `derived` and one `forced`, are two TRUE statements". This zone's key is `method + host + path`, so those
-   rows meet HERE, inside one document as well as across two; the within-document seam had no `else` at all,
-   so every row after the first reached nothing whatever. Folding at the moat and dropping within the page is
-   one law with a hole in it.
-   WHICH FIELDS FOLD IS A PER-FIELD QUESTION WITH THREE ANSWERS, and lib/endpoint-record.js's
-   `mostObservedProvenance` carries the reasoning: the hole pools fold by `foldValuePools`, the required
-   headers fold by `foldHeaderRecords` (endpoint.c's own literal-supersedes-shape rule, which lib/learn.js has
-   always applied to the METHOD record built in the same loop), and the three body fields do NOT — see that
-   fold's named residual for what that leaves and what retires it.
-   THE HOLE HALF, WHICH IS WHAT THIS FUNCTION ORIGINALLY WAS:
-   THIS IS THE THIRD MERGE OF THE SAME PAIR AND IT USED TO BE A PLAIN UNION OF ONE POOL. That was sound only
-   while the record HELD one pool: the union ran over `pathParams`, the forced pool did not exist on this
-   record, and a hole the run could only force reached the moat as a hole nothing had filled. Carrying the
-   second field without carrying the FOLD would have been the worse half of that — `_mergeParamInto` states
-   why in its own words, one record down: "Unioning the two pools independently would have re-created the
-   defect the split exists to remove, in the one place it is invisible from either page". A value one document
-   computed unforced and another could only force would then sit in both lists, and the Send panel would offer
-   it as one the app computes AND label it as one no client sends.
-   NEITHER SIDE'S ABSENCE IS INTERPRETED HERE: `endpointHolePairs` is the one walk that reads what a record
-   says about its holes, and it refuses everything but `null` and a list — so a record an older store wrote
-   short of a field crashes at the door it came through, rather than contributing a silence that reads here
-   exactly like "this document forced nothing".
-   THE RESULT IS RE-CHECKED, because this function WRITES a record the constructor did not build: it is the
-   one place the two lists are composed from two sources, so it is the one place their disjointness can be
-   broken, and `checkEndpointRecord` asserts it where it can still name this merge. */
+/* The flat records' merge: two sightings of one address, folded by one law per field. It is called within one
+   document (a second @H row for a key, an upgraded positional record) and at the moat, because the engine's
+   identity is (method, path, provenance, param-set) (engine/host/solver/endpoint.h) and this zone's key is
+   method + host + path. The hole pools fold by `foldValuePools`, the hole domains by lib/learn.js's
+   intersection rules, and the required headers by `foldHeaderRecords`; the three body fields do not fold (the
+   residual stated at `foldHeaderRecords` says what that leaves). Neither side's absence is interpreted:
+   `endpointHolePairs` refuses everything but `null` and a list. The result is re-checked by `checkEndpointRecord`, since this function writes a
+   record the constructor did not build. `into` survives and `from` is only read. */
 function _foldEndpointRecordInto(into, from, key) {
-  /* BOTH RECORDS READ AS PER-NAME PAIRS THROUGH THE ONE WALK (lib/endpoint-record.js), so this merge is a
-     fold of two RECORDS and not of four lists. */
+  /* Both records are read as per-name pairs through the one walk (lib/endpoint-record.js). */
   const _a = endpointHolePairs(from, "lib/merge.js moat-folding the stored record for " + JSON.stringify(key));
   const _b = endpointHolePairs(into, "lib/merge.js moat-folding this document's record for " + JSON.stringify(key));
   const _folded = new Map();
-  /* A HOLE ONLY ONE SIDE HAS STILL GOES THROUGH THE FOLD, against an empty pair — one path, so there is no
-     shortcut in which a single-contributor hole skips the promotion the two-contributor one gets. A Map miss
-     here is not a field absence to interpret: the name came out of the UNION of the two key sets, so a miss
-     is the positive statement "the other record has no such hole", which is what an empty pair says. */
+  /* A hole only one side has still goes through the fold, against an empty pair, so it gets the same
+     promotion. */
   for (const name of new Set([..._a.keys(), ..._b.keys()])) {
     const x = _a.has(name) ? _a.get(name) : _NO_HOLE_POOLS;
     const y = _b.has(name) ? _b.get(name) : _NO_HOLE_POOLS;
     _folded.set(name, foldValuePools(x.valid, x.forced, y.valid, y.forced, x.driven, y.driven));
   }
-  /* THE FOLD DOES NOT TRUNCATE, AND `PATH_PARAM_EXAMPLE_CAP` DOES NOT BELONG HERE — the cap's own stated
-     defence has no instance at this seam. It reads, at its declaration, "a cap over what this record COPIES
-     per hole, never over work: the values themselves are the method parameter's, and dropping the tail of a
-     copy truncates no path the solver would have taken". That is exactly true at `_astPathParamPool`, whose
-     operand IS a live method parameter and whose record is being minted. It is true of NOTHING here: all
-     three callers of this function hand it two RECORDS — the upgraded-from row, a second @H row for one key,
-     and the moat's stored record — so the thing being sliced is the record's OWN ACCUMULATED STATE and there
-     is no method parameter behind it to still hold the tail.
-     WHAT THE SLICE ACTUALLY DID IS DELETE, AND THE LOOP AT THE BOTTOM OF THIS FILE DECLARES THE INVARIANT IT
-     BROKE: "the path-param union, so a later paramless re-emit never DROPS values a prior emit learned — the
-     moat is monotonic". `foldValuePools` promotes a value out of the forced pool by MOVING it: it splices the
-     value from `forced` and APPENDS it to `valid`. An append lands past the cap exactly when the offerable
-     pool is already full, so the projection then dropped it from `valid` having already lost it from
-     `forced`, and the record held the value in NEITHER pool afterwards. MEASURED on this function's own code
-     with `foldValuePools` verbatim: a stored record carrying 20 offerable values and a forced `f7`, met by a
-     document that computes `f7` UNFORCED, folds to `valid` 21 / `forced` 19 and projects to a record that
-     does not name `f7` at all — the promotion that judged it most-observed is what erased it. The same
-     ordering saturates: this fold's base is the STORED record and the incoming side is this document, so once
-     a hole reached 20 offerable values every value any later document learned for it was discarded, for that
-     address, permanently.
-     A CAP HERE IS THE SHAPE §NO BOUNDS NAMES, AND lib/persistence.js ALREADY RULES ON IT ONE MAP ALONG: "a
-     shed nobody can count is the silent truncation this whole section exists to end, and §NO BOUNDS is
-     explicit that discarding work 'with nothing to say so' is a cap however good the reason for discarding it
-     was". This had no count and no census, so neither this record nor any reader of it could tell a hole
-     whose pool RAN OUT from one that HAS NO MORE — the two questions the cap's own declaration says must not
-     share an appearance.
-     WHAT BOUNDS IT NOW IS THE ONE THING THAT MAY: a moat record is RE-DERIVABLE (`endpointRecordRecipe` is
-     its `pageUrl`), so its bytes are §OOM/paging's third category and their residency is the value-ordered
-     share, not a per-field slice nobody can see. The incoming side is still capped at 20 by
-     `_astPathParamPool`, so one document-visit adds at most that many values to a hole.
-     NAMED RESIDUAL — THE FOLD IS QUADRATIC IN THE POOL IT NO LONGER BOUNDS.
-       WHAT IS NOT COVERED: `foldValuePools` decides membership with `indexOf`, so folding a hole's pools is
-         O(n*m) in their lengths. The cap held n below 21 here and no longer does.
-       WHAT THE NEXT DIFF BUILDS: membership taken over a Set inside `foldValuePools`, which is that one
-         function and leaves its stated law — the one-way promotion, and the order it appends in — untouched.
-       HOW ITS ABSENCE WOULD SHOW: the moat-fold loop's own wall time rising with the square of a single
-         address's learned-value count, on a document that re-visits one templated address many times. */
+  /* The fold does not truncate: `PATH_PARAM_EXAMPLE_CAP` bounds what `_astPathParamPool` copies from a live
+     method parameter, and here the operands are records with no method parameter behind them, so a slice
+     would delete accumulated values (a promotion appends past a full pool). A moat record is re-derivable
+     from its `pageUrl` (`endpointRecordRecipe`), so its residency is the store's value-ordered share.
+     Named residual: not covered — `foldValuePools` decides membership with `indexOf`, so folding a hole's
+     pools is O(n*m) in their lengths, which nothing here bounds. Next diff — membership over a Set inside
+     `foldValuePools`, leaving its one-way promotion and append order untouched. Absence shows as — the
+     moat-fold loop's wall time rising with the square of one address's learned-value count, on a document
+     that re-visits one templated address many times. */
   const _project = (side) => {
     const out = [];
     for (const [name, p] of _folded)
@@ -923,32 +524,20 @@ function _foldEndpointRecordInto(into, from, key) {
   into.pathParams = _project("valid");
   into.pathParamsForced = _project("forced");
   into.pathParamsDriven = _project("driven");
-  /* THE DOMAIN HALF OF THE SAME HOLES, WHICH MERGES BY THE OPPOSITE LAW TO THE POOLS ABOVE AND ROUTES TO THE
-     RULES THAT ALREADY SPELL IT. A VALUE is knowledge that accumulates, so the pools UNION; a DOMAIN is a
-     claim about the address, so it belongs on the record only where EVERY observed path obeyed it and the four
-     facts INTERSECT (an interval to the weaker HULL). Those four rules are lib/learn.js's
-     `intersectExcludedValues` / `widenBoundsInto` / `intersectPredicates` / `intersectLooselyEquals`, which
-     `_mergeParamInto` in this same file already calls for the METHOD parameter — so this is that law ROUTED
-     rather than a fifth copy of it (CLAUDE.md §A-FIX-OF-THE-FORM-"X-IS-NOT-HOW-TO-ASK-Q": two right answers
-     to one question is the shape that drifts).
-     A HOLE ONLY ONE SIDE NAMES IS TAKEN WHOLE, AND THAT IS NOT THE POOLS' `_NO_HOLE_POOLS` SHORTCUT ONE FIELD
-     OVER. For a pool, a side with no such hole contributes an empty list and the union is unchanged either
-     way. For a domain the two absences are different facts: a record that does not NAME the hole observed no
-     path through that segment and disproves nothing, while a record that names it and carries no claim of a
-     kind reached the request without that gate and DISPROVES the other side's. Folding the first as the second
-     would let a document that never saw a segment erase a constraint another document proved, which is the
-     wrong report §@H forbids arriving through a merge.
-     THE TRANSLATION INTO `[]`/`null` IS THIS HOP'S AND NOT THE RULES'. lib/endpoint-record.js spells an absent
-     claim as `null` because lib/send.js writes these four straight onto a parameter record; lib/learn.js's
-     rules spell "this sighting proved nothing" as the empty array and, for the interval, as `null`. Both are
-     stated vocabularies and the conversion belongs at the seam between them. */
+  /* The domains of the same holes merge by the opposite law: a value accumulates, so the pools union; a
+     domain is a claim about the address, so the four facts intersect (an interval to the hull), through the
+     lib/learn.js rules `_mergeParamInto` calls. A hole only one side names is taken whole: a record that does
+     not name the hole observed no path through that segment and disproves nothing, while one that names it
+     without a claim reached the request without that gate. lib/endpoint-record.js spells an absent claim as
+     `null` and lib/learn.js's rules spell "proved nothing" as the empty array (`null` for the interval); the
+     conversion is done here. */
   const _da = endpointHoleDomains(from, "lib/merge.js moat-folding the stored record's hole domains for " +
                                         JSON.stringify(key));
   const _db = endpointHoleDomains(into, "lib/merge.js moat-folding this document's hole domains for " +
                                         JSON.stringify(key));
   const _domains = [];
   for (const name of new Set([..._da.keys(), ..._db.keys()])) {
-    /* ONE SIDE ONLY: nothing to intersect against, so the claim stands exactly as that record states it. */
+    /* One side only: nothing to intersect against, so the claim stands as that record states it. */
     if (!_da.has(name) || !_db.has(name)) {
       const only = _da.has(name) ? _da.get(name) : _db.get(name);
       const e = { name: name };
@@ -975,17 +564,13 @@ function _foldEndpointRecordInto(into, from, key) {
     if (t._bounds !== null && t._bounds !== undefined && Object.keys(t._bounds).length) e.bounds = t._bounds;
     if (Array.isArray(t._predicates) && t._predicates.length) e.predicates = t._predicates;
     if (Array.isArray(t._looselyEquals) && t._looselyEquals.length) e.looselyEquals = t._looselyEquals;
-    /* EVERY CLAIM DISPROVED IS A HOLE WITH NO ENTRY, which is this record's one spelling of it — the same
-       skip `_astPathParamDomains` performs at the mint, so the two producers of this list cannot disagree
-       about what an entry with only a name would mean. */
+    /* A hole whose every claim was disproved has no entry, the skip `_astPathParamDomains` makes at the
+       mint. */
     if (Object.keys(e).length > 1) _domains.push(e);
   }
   into.pathParamDomains = _domains.length ? _domains : null;
-  /* THE HEADER HALF. `into` is the record that SURVIVES, so it is the prior side of the fold and a header
-     both sightings attached keeps its value unless the incoming one is a LITERAL over an opaque — the
-     promotion, which is the whole reason this is a fold and not a union. Neither side's absence is
-     interpreted here either: `null` in is what the record already states, and `foldHeaderRecords` refuses
-     `{}` from either side because that would be the opposite claim. */
+  /* The headers: `into` is the prior side, so a header both sightings attached keeps its value unless the
+     incoming one is a literal over an opaque. `foldHeaderRecords` refuses `{}` from either side. */
   into.requiredHeaders = foldHeaderRecords(into.requiredHeaders, from.requiredHeaders,
                                            "lib/merge.js folding two sightings' required headers, key " +
                                            JSON.stringify(key));
@@ -994,26 +579,18 @@ function _foldEndpointRecordInto(into, from, key) {
 }
 
 function mergeToGlobal(tab) {
-  // Central merge — EVERY analysis result (hot tab + cold frontier) funnels here, so guard the DocView contract
-  // once: a malformed tab is a should-never-happen the callers must not construct, not a shape to defend against.
+  // Every analysis result funnels through here, so the DocView contract is asserted once.
   DCHECK(tab && typeof tab === "object", "mergeToGlobal: tab (DocView) must be an object");
   DCHECK(tab.apiKeys && typeof tab.apiKeys[Symbol.iterator] === "function", "mergeToGlobal: tab.apiKeys must be an iterable Map");
   DCHECK(globalStore && globalStore.apiKeys, "mergeToGlobal: globalStore must be initialized before a merge");
   for (const [k, v] of tab.apiKeys) {
-    /* THE KEY'S TYPE IS PART OF THE KEY, AND THIS LOOP USED TO DROP IT. lib/keys.js writes `name` — the
-       KEY_PATTERNS entry that matched, "GitHub Token" / "JWT" / "Stripe Key" — and both branches below
-       rebuilt the global entry field by field without it, so a key kept its type only while the tab that
-       found it was the one being rendered. Every key in the cumulative moat (another tab, an earlier
-       session) reached the popup with no type, where `info.name || "API Key"` turned that into a generic
-       label indistinguishable from a key whose pattern really was the generic one. Asserted here rather
-       than at the reader because THIS is the origin: the value in hand comes straight from lib/keys.js. */
+    /* lib/keys.js writes `name`, the KEY_PATTERNS entry that matched, and the moat keeps it. It is asserted
+       here, at the origin, because the popup would otherwise label the key generically. */
     DCHECK(typeof v.name === "string" && v.name,
            "a tab's API-key entry carries no `name` — lib/keys.js sets it from the KEY_PATTERNS entry that " +
            "matched, so an absent one means a key was recorded by something that does not know what kind of " +
            "key it is, and the moat would show it as a nameless secret");
-    /* THE TAB SIDE OF THE ENTRY, ASSERTED ONCE FOR BOTH ARMS BELOW — a fresh global entry is built out of
-       these values directly and a merge unions them into an existing one, so a wrong shape here is either a
-       key whose usage total resets to zero or a union that silently stops accumulating. */
+    /* The tab side of the entry, asserted once for both arms below. */
     DCHECK(typeof v.requestCount === "number", "a tab's API-key entry carries no numeric requestCount — lib/keys.js initialises it to 0");
     for (const _f of ["services", "hosts", "endpoints", "pageUrls"]) {
       DCHECK(v[_f] instanceof Set,
@@ -1027,8 +604,7 @@ function mergeToGlobal(tab) {
       for (const p of v.positions)
         if (!existing.positions.some((q) => q.in === p.in && q.name === p.name)) existing.positions.push(p);
       existing.lastSeen = v.lastSeen;
-      // The pattern that matched is a function of the key text, so the tab's answer is authoritative and
-      // an entry stored before this field travelled heals on the next sighting.
+      // The pattern that matched is a function of the key text, so the tab's answer replaces the stored one.
       existing.name = v.name;
       // Take the higher count — tab count is a running total, not a delta
       DCHECK(typeof existing.requestCount === "number",
@@ -1036,11 +612,8 @@ function mergeToGlobal(tab) {
              "_deserializeIntoGlobalStore are its only writers, and a `|| 0` here would silently reset a " +
              "key's usage total to zero");
       existing.requestCount = Math.max(existing.requestCount, v.requestCount);
-      /* ALL FOUR COLLECTIONS ARE SETS ON BOTH SIDES — lib/keys.js builds them, the arm below builds them,
-         and _deserializeIntoGlobalStore reconstructs them from the stored arrays. Each merge stood behind
-         its own `instanceof Set` test whose false arm did NOTHING, so a record that had somehow lost a Set
-         would have kept the key and silently stopped accumulating the services, hosts and endpoints it was
-         seen against — the union quietly frozen, with a full-looking entry to show for it. */
+      /* All four collections are Sets on both sides: lib/keys.js builds them, the arm below builds them, and
+         _deserializeIntoGlobalStore reconstructs them from the stored arrays. */
       for (const _f of ["services", "hosts", "endpoints", "pageUrls"]) {
         DCHECK(existing[_f] instanceof Set,
                "a stored API-key entry's `" + _f + "` is not a Set — the union of what this key was seen " +
@@ -1050,11 +623,6 @@ function mergeToGlobal(tab) {
     } else {
       globalStore.apiKeys.set(k, {
         name: v.name,
-        /* NO `origin` — see lib/keys.js, which minted it: a prefix of `referer`, computed from the same URL
-           in the same breath, copied across this seam and into IndexedDB on every save, and read by no
-           surface in either realm. A store written before this carries the name and nothing asks for it
-           (lib/store-record.js's door reads records rather than minting them, so an extra name is not an
-           error there). */
         referer: v.referer,
         source: v.source,
         firstSeen: v.firstSeen,
@@ -1068,24 +636,16 @@ function mergeToGlobal(tab) {
       });
     }
   }
-  /* THREE BOOKKEEPING FIELDS ARE GONE FROM THIS LOOP AND THE UNION IS WHAT IS LEFT. `_isNew`,
-     `_firstSeenGlobal` and `lastSeen` were written here and read NOWHERE — not by the popup, not by the
-     serializer, not by the harness — and `lastSeen` was worse than unread: its only writer
-     (lib/response-decode.js) built a key without the "AST " prefix every key in this map carries, so it
-     could never match, and the line here then set the tab entry's lastSeen to Date.now() because the global
-     entry had any, timing the MERGE rather than a sighting. What survives is the one thing this loop is
-     for: the path-param union, so a later paramless re-emit (a re-visit before the concolic reply re-run
-     landed) never DROPS values a prior emit learned — the moat is monotonic. */
+  /* The moat is monotonic: a stored record's path-param pools fold into this document's record, so a later
+     paramless re-emit never drops values a prior emit learned. */
   for (const [k, v] of tab.endpoints) {
     var ge = globalStore.endpoints.get(k);
     if (ge) _foldEndpointRecordInto(v, ge, k);
     globalStore.endpoints.set(k, v);
   }
   for (const [k, v] of tab.discoveryDocs) {
-    /* A TAB ENTRY REACHES THE MOAT WHEN IT CARRIES A DOC, whatever the published fetch answered — the same
-       split lib/serialize.js states. Keyed on `status === "found"`, a not_found record that had kept its
-       learned methods would have taken the arm below and been written to the global store as a bare
-       `{status}`, which is the drop this change exists to end, one layer up. */
+    /* A tab entry reaches the moat when it carries a doc, whatever the published fetch answered (the split
+       lib/serialize.js states), so a not_found record keeps its learned methods. */
     if (v.doc) {
       // Merge pageUrls and frameOrigins Sets with existing global entry
       var _existingGDoc = globalStore.discoveryDocs.get(k);
@@ -1093,15 +653,7 @@ function mergeToGlobal(tab) {
       if (v.pageUrls) for (var _pu of v.pageUrls) _mergedPageUrls.add(_pu);
       var _mergedFrameOrigins = new Set(_existingGDoc?.frameOrigins || []);
       if (v.frameOrigins) for (var _fo of v.frameOrigins) _mergedFrameOrigins.add(_fo);
-      /* NO `method` ON THE WAY UP EITHER. No tab-side producer has ever written one (lib/learn.js,
-         lib/grouping.js, lib/discovery-probe.js and lib/response-decode.js write none), so this copied
-         `undefined` on every merge into a field no surface reads. */
-      /* AND `grouping` IS READ, NOT ANSWERED FOR. `v.grouping || null` stood below and was the first of FIVE
-         copies of that line — the moat merge, the IDB serialize, lib/serialize.js's two projections — none of
-         which could tell a producer that stated no rule from a producer that stated nothing. Four of the five
-         were a `||` on a fresh object literal, which is why the field gate saw one of them and the contract
-         looked one fifth as broken as it was. Every producer now states it; this hop checks the statement it
-         is about to copy, so the copier cannot be the place it goes missing. */
+      /* `grouping` is copied as the producer stated it and is checked first, never defaulted. */
       checkDiscoveryGrouping(v, "lib/merge.js merging a tab's discovery doc into the moat, service " +
                                 JSON.stringify(k));
       globalStore.discoveryDocs.set(k, {
@@ -1109,7 +661,7 @@ function mergeToGlobal(tab) {
         url: v.url,
         apiKey: v.apiKey,
         fetchedAt: v.fetchedAt,
-        doc: _mergeDocInto(_existingGDoc && _existingGDoc.doc, v.doc) || null,   // UNION, not replace: keep every page's methods
+        doc: _mergeDocInto(_existingGDoc && _existingGDoc.doc, v.doc) || null,   // a union, not a replacement: every page's methods are kept
         grouping: v.grouping,
         pageUrls: _mergedPageUrls,
         frameOrigins: _mergedFrameOrigins,
@@ -1138,8 +690,7 @@ function mergeToGlobal(tab) {
       try {
         var _u = new URL(tab._securityFindings[_spi].sourceUrl);
         newBasePaths.add(_u.origin + _u.pathname);
-      } catch (_) { /* a source address `new URL` cannot parse — no base path to match. It is NOT the
-                       `"unknown_N"` this comment used to name: there is no such source (see the key below). */ }
+      } catch (_) { /* a source address `new URL` cannot parse has no base path to match */ }
     }
     var staleKeys = [];
     for (var _key of globalStore.securityFindings.keys()) {
@@ -1157,16 +708,9 @@ function mergeToGlobal(tab) {
       globalStore.securityFindings.delete(staleKeys[_ski]);
     }
 
-    /* THE KEY IS THE SOURCE ADDRESS, NOT A NAME THIS LOOP MAKES UP FOR IT. `finding.sourceUrl || ("unknown_" +
-       sf)` stood here, and bridge.js's own comment at the field it defaults says exactly what that cost when
-       it could fire: a message that had gone silent "would have produced findings filed under a made-up name
-       beside real ones, which is the FABRICATED half of the defaulted-field defect rather than the concealed
-       half". It cannot fire — `linesToAnalysis` DCHECKs `msg.sourceUrl` as a non-empty string before it builds
-       the analysis, and the finding is minted from that one field a few hundred lines up — so what the `||`
-       did was stand between a broken relay and the abort that would have named it, while an ordinal that is
-       meaningless across two merges of one tab (§AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-SET-IS-FIXED) went
-       into the key of the cumulative store. Asserted at the record instead, through the one shape
-       lib/store-record.js declares, which is the same statement the IndexedDB door asks of it a session later. */
+    /* The key is the source address. `linesToAnalysis` asserts `msg.sourceUrl` is a non-empty string and the
+       finding is minted from it, so nothing is defaulted here; the record is checked through the shape
+       lib/store-record.js declares. */
     for (var sf = 0; sf < tab._securityFindings.length; sf++) {
       var finding = tab._securityFindings[sf];
       checkStoreRecord("securityFindings", finding.sourceUrl, finding,
