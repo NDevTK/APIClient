@@ -28907,7 +28907,8 @@ TF_UNIT void probes_agenfork(const char *js, Probe *tab, int *n) {
 TF_UNIT void probes_agendefer(const char *js, Probe *tab, int *n) {
     /* Both arms of a branch in page code an async generator's queue runs while its drive is deferred, each read
        at the settle the deferred drive delivers in that arm's world. */
-    static const char *const arms[] = { "/api/ad/ret-a", "/api/ad/ret-b", "/api/ad/step-a", "/api/ad/step-b" };
+    static const char *const arms[] = { "/api/ad/ret-a", "/api/ad/ret-b", "/api/ad/body-a", "/api/ad/body-b",
+                                        "/api/ad/step-a", "/api/ad/step-b" };
     const char *ad_why = NULL; int ad_tt = 1;
     for (size_t i = 0; i < COUNTOF(arms); i++) {
         char q[64];
