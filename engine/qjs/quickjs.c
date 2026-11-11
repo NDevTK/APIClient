@@ -10237,28 +10237,35 @@ static void js_release_coro(JSRuntime *rt, JSGCObjectHeader *coro)
     }
 }
 
+/* A cell whose last reference is gone: its value or its frame slot, its GC-list membership, its memory. */
+static void free_var_ref0(JSRuntime *rt, JSVarRef *var_ref)
+{
+    DCHECK(JS_REF_COUNT(var_ref) == 0, "a cell was torn down while something still counts a reference on it");
+    if (var_ref->is_detached) {
+        JS_FreeValueRT(rt, var_ref->value);
+        remove_gc_object(rt, &var_ref->header);
+    } else {
+        JSStackFrame *sf = var_ref->stack_frame;
+        DCHECK(sf->var_refs[var_ref->var_ref_idx] == var_ref, "sf->var_refs[var_ref->var_ref_idx] == var_ref");
+        sf->var_refs[var_ref->var_ref_idx] = NULL;
+        /* AN OPEN CELL THAT ROOTED ITS FRAME'S OWNER DIES HERE WITHOUT EVER DETACHING, so its GC-list
+           membership and its root both come off here — the mirror of the mint, which took both. The
+           owner is read off the FRAME, which the slot above being cleared does not affect, and the
+           release is last because it can free that frame and nothing below reads it again. */
+        if (var_ref->is_coro) {
+            remove_gc_object(rt, &var_ref->header);
+            js_release_coro(rt, sf->cur_gc_obj);
+        }
+    }
+    js_free_rt(rt, var_ref);
+}
+
 static void free_var_ref(JSRuntime *rt, JSVarRef *var_ref)
 {
     if (var_ref) {
         DCHECK(JS_REF_COUNT(var_ref) > 0, "JS_REF_COUNT(var_ref) > 0");
         if (--JS_REF_COUNT(var_ref) == 0) {
-            if (var_ref->is_detached) {
-                JS_FreeValueRT(rt, var_ref->value);
-                remove_gc_object(rt, &var_ref->header);
-            } else {
-                JSStackFrame *sf = var_ref->stack_frame;
-                DCHECK(sf->var_refs[var_ref->var_ref_idx] == var_ref, "sf->var_refs[var_ref->var_ref_idx] == var_ref");
-                sf->var_refs[var_ref->var_ref_idx] = NULL;
-                /* AN OPEN CELL THAT ROOTED ITS FRAME'S OWNER DIES HERE WITHOUT EVER DETACHING, so its GC-list
-                   membership and its root both come off here — the mirror of the mint, which took both. The
-                   owner is read off the FRAME, which the slot above being cleared does not affect, and the
-                   release is last because it can free that frame and nothing below reads it again. */
-                if (var_ref->is_coro) {
-                    remove_gc_object(rt, &var_ref->header);
-                    js_release_coro(rt, sf->cur_gc_obj);
-                }
-            }
-            js_free_rt(rt, var_ref);
+            free_var_ref0(rt, var_ref);
         } else if (unlikely(rt->gc_cycle.scope_open) && var_ref_is_gc_object(var_ref)) {
             gc_release_note(rt, &var_ref->header);
         }
@@ -11533,8 +11540,15 @@ static bool gc_free_step(JSRuntime *rt, uint64_t budget)
 #endif
             free_gc_object(rt, p);
             break;
-        case JS_GC_OBJ_TYPE_SHAPE:
         case JS_GC_OBJ_TYPE_VAR_REF:
+            /* A cell whose only holders were the scopes given back above has no member left to free it. */
+            if (JS_REF_COUNT(p) == 0) {
+                free_var_ref0(rt, (JSVarRef *)p);
+                spent++;
+                break;
+            }
+            /* fall through */
+        case JS_GC_OBJ_TYPE_SHAPE:
         case JS_GC_OBJ_TYPE_JS_CONTEXT:
             /* Freed by the teardown of the member that holds it; off the cursor until then. */
             list_del(&p->link);
