@@ -747,6 +747,26 @@ static ColdParked g_parked_census;
 
 /* One 'o' record per member of `f`'s chain of drives, oldest first, which is the order a resumed claimant builds
    their calls in. */
+/* The path's counters (flow.h's FlowPathCounters), one 'k' record written immediately after the flow's own record
+   and bound to it by position as 'o' is: every counter in FLOW_PATH_COUNTERS' order, unsigned decimal. A rebuilt
+   flow replays its path from the baseline and re-derives them, so the reader hands them to flow_resume_arm as the
+   point the replay's stand series is compared against, never as the flow's own counters. */
+static void park_rec_counters(const Flow *f)
+{
+    char rec[32];
+    int first = 1;
+
+    park_open_rec();
+    park_str("k");
+#define PARK_COUNTER_WRITE(type, name)                                                       \
+    snprintf(rec, sizeof rec, "%s%llu", first ? "" : ",", (unsigned long long)(uint64_t)f->pc.name); \
+    park_str(rec);                                                                           \
+    first = 0;
+    FLOW_PATH_COUNTERS(PARK_COUNTER_WRITE)
+#undef PARK_COUNTER_WRITE
+    g_parked_census.counters++;
+}
+
 static void park_rec_orphan(const Flow *f)
 {
     char rec[17];
@@ -888,17 +908,18 @@ static void park_doc_agrees(void)
     long gen = g_park_gen_written ? 1 : 0;
     long sum = gen + g_parked_census.segs + g_parked_census.flows + g_parked_census.cands +
                g_parked_census.worlds + g_parked_census.orphans + g_parked_census.commits +
-               g_parked_census.delivers + g_parked_census.born + g_parked_census.heapsegs +
-               g_parked_census.heads;
+               g_parked_census.delivers + g_parked_census.counters + g_parked_census.born +
+               g_parked_census.heapsegs + g_parked_census.heads;
 
     DCHECKF(g_park_recs == sum,
             "the park document holds %ld record(s) and its census accounts for %ld — g %ld, s %ld, f %ld, "
-            "c %ld, w %ld, o %ld, r %ld, m %ld, b %ld, h %ld, p %ld. A record kind was written without counting "
-            "itself, so every host that asks what this residue carries is told a kind that ran did not, and a "
-            "census nobody can check is a census anybody can state",
+            "c %ld, w %ld, o %ld, r %ld, m %ld, k %ld, b %ld, h %ld, p %ld. A record kind was written without "
+            "counting itself, so every host that asks what this residue carries is told a kind that ran did not, "
+            "and a census nobody can check is a census anybody can state",
             g_park_recs, sum, gen, g_parked_census.segs, g_parked_census.flows, g_parked_census.cands,
             g_parked_census.worlds, g_parked_census.orphans, g_parked_census.commits,
-            g_parked_census.delivers, g_parked_census.born, g_parked_census.heapsegs, g_parked_census.heads);
+            g_parked_census.delivers, g_parked_census.counters, g_parked_census.born, g_parked_census.heapsegs,
+            g_parked_census.heads);
 }
 
 /* EMIT `seg` AND EVERY UNEMITTED SEGMENT BELOW IT, base first, and answer its ordinal. Iterative and not
@@ -1924,6 +1945,7 @@ void cold_park_flow(Flow *f)
         g_parked_census.flows++;
         break;
     }
+    park_rec_counters(f);
     /* …AND WHICH FUNCTION THIS FLOW IS DRIVING, if it is driving one. See park_rec_orphan for why this is a
        field bound by position and not a third arm of the choice above.
        THE LOCATOR NAMES THE FUNCTION THE FLOW ACTUALLY HOLDS, checked here rather than assumed from the stamp:
@@ -2826,6 +2848,27 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
             free(record);
             free(origin);
             c->delivers++;
+        } else if (kind == 'k') {
+            /* The counters the parked path had reached, for the flow written immediately before (park_rec_counters). */
+            FlowPathCounters pc;
+            int first = 1;
+
+            DCHECK(last_flow != NULL,
+                   "a park document holds path counters before any flow — a 'k' record belongs to the flow written "
+                   "immediately before it");
+#define PARK_COUNTER_READ(type, name)                                                        \
+            if (!first) q = park_comma(q);                                                   \
+            pc.name = (type)strtoull(q, &ep, 10);                                            \
+            DCHECK(ep != q, "a park document's 'k' record is missing the counter `" #name "`"); \
+            q = ep;                                                                          \
+            first = 0;
+            FLOW_PATH_COUNTERS(PARK_COUNTER_READ)
+#undef PARK_COUNTER_READ
+            DCHECK(q == end, "a park document's 'k' record holds more counters than FLOW_PATH_COUNTERS names");
+            /* A replay re-derives the counters by re-execution, so they are compared, never assigned; a member
+               restored from its serialized delta (cold.h's residual) would be armed as restored and asserted. */
+            flow_resume_arm(last_flow, &pc, false);
+            c->counters++;
         } else if (kind == 'o') {
             /* THE FUNCTION A DRIVEN ORPHAN WAS DRIVING, put back on the flow it belonged to — which is the flow
                written immediately before it, the same binding an unmade delivery uses and for the same reason.
@@ -3200,16 +3243,20 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
             c->born + c->heapsegs + c->heads,
             c->cross_identical + c->cross_differs + c->cross_refused + c->cross_skipped);
     DCHECKF(recs == c->segs + c->flows + c->cands + c->cands_withdrawn +
-                    c->worlds + c->orphans + c->commits + c->delivers + c->born + c->heapsegs + c->heads,
+                    c->worlds + c->orphans + c->commits + c->delivers + c->counters + c->born + c->heapsegs +
+                    c->heads,
             "the rebuild read %ld record(s) and its census accounts for %ld — s %ld, f %ld, c %ld "
-            "(+%ld withdrawn), w %ld, o %ld, r %ld, m %ld, b %ld, h %ld, p %ld. A record kind was parsed without "
-            "counting itself, so every host asking which arms of this grammar ran is told a kind that ran did "
-            "not, and a census nobody can check is a census anybody can state",
+            "(+%ld withdrawn), w %ld, o %ld, r %ld, m %ld, k %ld, b %ld, h %ld, p %ld. A record kind was parsed "
+            "without counting itself, so every host asking which arms of this grammar ran is told a kind that ran "
+            "did not, and a census nobody can check is a census anybody can state",
             recs,
             c->segs + c->flows + c->cands + c->cands_withdrawn +
-                c->worlds + c->orphans + c->commits + c->delivers + c->born + c->heapsegs + c->heads,
+                c->worlds + c->orphans + c->commits + c->delivers + c->counters + c->born + c->heapsegs + c->heads,
             c->segs, c->flows, c->cands, c->cands_withdrawn,
-            c->worlds, c->orphans, c->commits, c->delivers, c->born, c->heapsegs, c->heads);
+            c->worlds, c->orphans, c->commits, c->delivers, c->counters, c->born, c->heapsegs, c->heads);
+    DCHECK(c->counters == flows,
+           "the rebuild landed a flow without its path counters, or read counters for no flow — the park writes "
+           "one 'k' record after every flow's own record");
     return flows;
 }
 

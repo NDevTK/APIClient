@@ -2945,9 +2945,10 @@ function programCursorReading(b) {
    makes an absent name THROW (this file's own field contract) instead of being compared as undefined, which
    is the same refusal `store` gets one line down. */
 const COLDPARK_FIELDS = ["records", "segs", "flows", "cands", "orphans", "worlds", "commits", "delivers",
-                         "bytes"];
-const COLDRESUME_FIELDS = ["segs", "flows", "cands", "orphans", "worlds", "commits", "delivers",
-                           "orphansMet", "orphansUnmet"];
+                         "counters", "bytes"];
+const COLDRESUME_FIELDS = ["segs", "flows", "cands", "orphans", "worlds", "commits", "delivers", "counters",
+                           "orphansMet", "orphansUnmet", "standArmed", "standMet", "standLeft", "crossIdentical",
+                           "crossDiffers", "crossRefused", "crossSkipped"];
 /* THE ORPHAN-DRIVE CENSUS, SPELLED AS THE RESULT DOCUMENT SPELLS IT — the
    same two producers reach a reader twice (this line, and `result_json`'s `_orphansDriven`/`_orphansAsked`
    which bridge.js asserts and the popup renders), so a reader who learns the names off `@RESULT` reads them
@@ -3149,7 +3150,7 @@ function coldRoundTrip(v1, v2, store) {
   const kinds = [["segs", park.segs, res.segs], ["flows", park.flows, res.flows],
                  ["cands", park.cands, res.cands], ["orphans", park.orphans, res.orphans],
                  ["worlds", park.worlds, res.worlds], ["commits", park.commits, res.commits],
-                 ["delivers", park.delivers, res.delivers]];
+                 ["delivers", park.delivers, res.delivers], ["counters", park.counters, res.counters]];
   const lost = kinds.filter(([, p, r]) => p > 0 && r < p).map(([k]) => k);
   const never = kinds.filter(([, p]) => p === 0).map(([k]) => k);
   return `${park.records} record(s) / ${park.bytes} B parked into ` +
@@ -3159,6 +3160,7 @@ function coldRoundTrip(v1, v2, store) {
                       : `; every kind session ONE wrote came back`) +
          (never.length ? `; ${never.join(", ")} carried NOTHING to exercise (a zero the residue wrote, not a ` +
                          `rebuild that failed)` : ``) +
+         `; replays through their parked stand series: ${res.standMet} of ${res.standArmed}` +
          `; inherited drives: ${res.orphansMet} met, ${res.orphansUnmet} UNMET` +
          (res.orphansUnmet > 0
            ? ` — unmet is the round trip's loss, exactly: on a document whose bytes did not change between the ` +

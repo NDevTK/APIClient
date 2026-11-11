@@ -568,7 +568,7 @@ int64_t engine_service_work(void);
    request-to-response-end times in the Chromium captures of real target pages, converted at that rate. */
 #define ENGINE_REPLY_LATENCY_WORK 5000000
 struct Flow;
-/* A flow's reply clock (Flow.path_work plus Flow.reply_skip, plus what the open step has run for the running
+/* A flow's reply clock (its path counters' path_work plus reply_skip, plus what the open step has run for the running
    flow): where on its own path its network answers land, so a reply's arrival point does not depend on what its
    siblings run or how fast the wire answered. `engine_reply_due` is the due point of an answer asked now. */
 int64_t engine_reply_clock(const struct Flow *f);

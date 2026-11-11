@@ -165,6 +165,25 @@ typedef struct FlowAgent {
     uint8_t reporting;
 } FlowAgent;
 
+/* The counters a path carries, each a function of the path: inherited whole at a fork and at an arrival on a
+   snapshot, and written whole by the cold tier (cold.c's 'k' record), so a counter added here travels with the
+   rest. `X(type, name)` per counter.
+   path_work: the work retired on the path since the baseline, charged with every step (flow_age_running); an arm
+     takes its parent's at the branch, so a replay of the path reaches the same number at the same point.
+   framed_work: the part of it retired under a page frame (the service the path has given, wherever it stood).
+   stand_next: the `framed_work` at which the member next re-reads the code it is executing (engine.c's
+     engine_stand_rest), every ENGINE_QUANTUM_WORK of it.
+   stand_digest, stand_moves: the stand series, a digest folded at every move to a different code site over the
+     move's `framed_work` coordinate and the site's identity, and the number of such moves (flow_stand_at).
+   reply_skip: the work an idle flow's reply clock moved to reach its next due point (engine.h's
+     engine_reply_clock), the wait a browser spends while a request is in flight. */
+#define FLOW_PATH_COUNTERS(X) \
+    X(int64_t, path_work) X(int64_t, framed_work) X(int64_t, stand_next) X(uint64_t, stand_digest) \
+    X(int64_t, stand_moves) X(int64_t, reply_skip)
+#define FLOW_PATH_COUNTER_FIELD(type, name) type name;
+typedef struct { FLOW_PATH_COUNTERS(FLOW_PATH_COUNTER_FIELD) } FlowPathCounters;
+#undef FLOW_PATH_COUNTER_FIELD
+
 /* Every field and handle cold_park_flow reads off a flow, as its pointers and counts, zero-filled before
    assignment so two compare with memcmp. flow_release_bulk records it, and the sale asserts the flow still reads
    so once its bulk is back (flow_sale_end), which keeps a release moved into the bulk from freeing what a record
@@ -237,24 +256,14 @@ typedef struct Flow {
        step leaves the flow between units, holding neither a program nor a parked continuation (HTML §8.1.4.4
        "Calling scripts", clean up after running script). Inherited at a fork, zero at an arrival, never reset. */
     int64_t visits;
-    /* The flow's coordinate: the work retired on its path since the baseline. Charged with every step
-       (flow_age_running), and an arm takes its parent's coordinate at the branch, so it is a function of the
-       path and a replay of the path reaches the same number at the same point. Never a weight term. */
-    int64_t path_work;
-    /* The part of `path_work` retired under a page frame (the service the path has given, wherever it stood), and
-       the value of it at which the member next re-reads the code it is executing (engine.c's engine_stand_rest),
-       every ENGINE_QUANTUM_WORK of it. Both inherited at a fork with `path_work`, so both arms rest at the same
-       points of the prefix they share. */
-    int64_t framed_work, stand_next;
-    /* The work an idle flow's reply clock moved to reach its next due point (engine.h's engine_reply_clock): the
-       wait a browser spends while a request is in flight, a function of the path. Inherited at a fork. */
-    int64_t reply_skip;
-    /* The stand series: a digest folded at every move to a different code site, over the move's `framed_work`
-       coordinate and the site's identity, and the number of such moves. Both are inherited at a fork, so every
-       member's pair is a function of its path; flow.c's flow_stand_series sums them over the frontier. An
-       observation no term reads. */
-    uint64_t stand_digest;
-    int64_t stand_moves;
+    /* The path's counters (FlowPathCounters): its coordinate, its framed work and next rest, and its stand
+       series. Never a weight term. */
+    FlowPathCounters pc;
+    /* A member the cold tier rebuilt: the counters its parked path had reached (cold.c's 'k' record), which its
+       replay re-derives, and whether the replay's stand series has passed through the parked one
+       (flow_stand_at). `resume_armed` is 0 for every other member. */
+    FlowPathCounters resume_pc;
+    int resume_armed, resume_met, resume_restored;
     /* How many address parks the path has made: the next park's slot is this plus one (engine.c's
        pending_park_request). Inherited at a fork. */
     int64_t park_slots;
@@ -1956,6 +1965,13 @@ void  flow_stand_at(Flow *f, int kind, uint64_t key, int64_t coord);
    their move counts. Both are functions of the members' paths, so two runs of one document whose slices end at
    different points read the same pair. */
 void  flow_stand_series(uint64_t *digest, int64_t *moves);
+/* A member the cold tier rebuilt takes the counters its parked path had reached: a `restored` member's stand
+   series is asserted to pass through the parked one; a replaying member re-derives them, and its agreement is
+   counted. */
+void  flow_resume_arm(Flow *f, const FlowPathCounters *parked, bool restored);
+/* Members handed parked counters, and of those whose series reached the parked move count, the ones that agreed
+   and the ones that left it. Lifetime. */
+void  flow_resume_stand(long *armed, long *met, long *left);
 /* The member's optimism denominator in work, `Q*(1 + orphan_seen) + max(site_served, W*priced)` with
    Q = ENGINE_PULL_WORK and W = FLOW_PRICED_WORK: engine.c's rank assertions snapshot it. */
 int64_t flow_optimism_den(const Flow *f);

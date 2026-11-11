@@ -32705,6 +32705,14 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
        published as entailed rather than counted as a second finding. It changes no verdict: the state it
        turns from 1 to 0 is one in which `resumed-orphan` is already 0 and the run already fails there. */
     cold_res_orphan_all = g_sess == SESS_RESUME && g_cr.orphans > 0 && orphan_unmet == 0;
+    /* The path counters at both ends: every rebuilt member is handed its parked counters. A replaying member's
+       agreement with them is counted (standMet, standLeft) and asserted only of a restored member (flow.c's
+       flow_resume_meet), and no member is restored yet. */
+    long stand_armed = 0, stand_met = 0, stand_left = 0;
+    int cold_park_counters, cold_res_stand;
+    flow_resume_stand(&stand_armed, &stand_met, &stand_left);
+    cold_park_counters = g_sess == SESS_PARK && g_cp.counters > 0;
+    cold_res_stand     = g_sess == SESS_RESUME && g_cr.counters > 0 && stand_armed == g_cr.counters;
     /* AND THE QUESTION A PEER ASKED, HANDED BACK RATHER THAN CARRIED. `park-remoteop` is the row about the
        refusal that used to abort here: a park that MET a STARTED cross-agent operation — a program mid-run with
        the zone's rendezvous token on its row — and returned it. A 0 is not a flake and not a reason to soften
@@ -33153,6 +33161,8 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
           .gate = "resumed-orphan" },
         { "resumed-orphan-all", cold_res_orphan_all, "coldOrphan", SESS_RESUME,
           .gate = "resumed-orphan" },
+        { "park-counters", cold_park_counters, "state.code", SESS_PARK, .gate = "park-wrote" },
+        { "resumed-stand-series", cold_res_stand, "state.code", SESS_RESUME, .gate = "resumed" },
         /* KEYED ON THE FORK, because that is the program text these two statements are about. A peer's question
            is asked by the host and no document contains it — but what makes the hand-back a mechanism rather
            than a single free() is that ONE question is held by MANY timelines, and this is the line that makes
@@ -49068,9 +49078,9 @@ int main(int argc, char **argv) {
            ColdResumed counts both now, so @COLDRESUME carries the other end and build.mjs pairs them like
            every other kind instead of reporting them as records WRITTEN with nothing to compare against. */
         printf("@COLDPARK {\"records\":%ld,\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"orphans\":%ld,"
-               "\"worlds\":%ld,\"commits\":%ld,\"delivers\":%ld,\"bytes\":%zu,\"store\":\"%s\"}\n",
+               "\"worlds\":%ld,\"commits\":%ld,\"delivers\":%ld,\"counters\":%ld,\"bytes\":%zu,\"store\":\"%s\"}\n",
                cold_park_records(), g_cp.segs, g_cp.flows, g_cp.cands, g_cp.orphans, g_cp.worlds,
-               g_cp.commits, g_cp.delivers,
+               g_cp.commits, g_cp.delivers, g_cp.counters,
                cold_park_bytes(), cold_park_path ? cold_park_path : "-");
     }
     if (cold_resume_path) {
@@ -49091,10 +49101,18 @@ int main(int argc, char **argv) {
            every one it was handed were the same absent number here, and the park line above has been stating
            how many it WROTE with nothing on this line to compare them against. Both ends now say it, so
            build.mjs pairs all seven kinds instead of five and two. */
+        /* …and the path counters, with how many rebuilt members' replays reached their parked stand series' move
+           count and agreed with it or left it (flow.h's flow_resume_stand). */
+        long stand_armed = 0, stand_met = 0, stand_left = 0;
+
+        flow_resume_stand(&stand_armed, &stand_met, &stand_left);
         printf("@COLDRESUME {\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"orphans\":%ld,\"worlds\":%ld,"
-               "\"commits\":%ld,\"delivers\":%ld,\"orphansMet\":%ld,\"orphansUnmet\":%ld}\n",
+               "\"commits\":%ld,\"delivers\":%ld,\"counters\":%ld,\"orphansMet\":%ld,\"orphansUnmet\":%ld,"
+               "\"standArmed\":%ld,\"standMet\":%ld,\"standLeft\":%ld,\"crossIdentical\":%ld,"
+               "\"crossDiffers\":%ld,\"crossRefused\":%ld,\"crossSkipped\":%ld}\n",
                g_cr.segs, g_cr.flows, g_cr.cands, g_cr.orphans, g_cr.worlds,
-               g_cr.commits, g_cr.delivers, met, unmet);
+               g_cr.commits, g_cr.delivers, g_cr.counters, met, unmet, stand_armed, stand_met, stand_left,
+               g_cr.cross_identical, g_cr.cross_differs, g_cr.cross_refused, g_cr.cross_skipped);
     }
 
     /* One result document — both surfaces and the scheduler's interleave count — serialized directly from the

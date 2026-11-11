@@ -716,6 +716,8 @@ typedef struct {
        it is a row of ColdPreview below, so a host chooses a moment that does not contain one rather than
        discovering it at the abort. */
     long delivers;
+    /* 'k': the path counters, one per parked flow (park_rec_counters). */
+    long counters;
     /* 'b', 'h' and 'p': the heap slots in the cross-session form (cold.c's park_heap_slots) — shared born objects,
        frozen heap segments and members' heads. The first two are written once per document, so neither is
        bounded by the members; a 'p' is a field of the flow record before it, at most one per member. */
@@ -982,6 +984,7 @@ typedef struct {
        so a 0 that is a MISSING COUNTER cannot reach a reader as a 0 that is an ABSENT RECORD. */
     long commits;
     long delivers;
+    long counters;   /* 'k': path counters handed to the flow before each */
     /* 1 when the residue handed over was refused whole for an older name spelling or a missing session start
        (cold_resume), 0 otherwise. */
     long refused;

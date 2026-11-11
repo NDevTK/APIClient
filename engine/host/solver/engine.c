@@ -5604,13 +5604,13 @@ static int g_in_step;
 
 /* See engine.h. The open step's part is the fork's coordinate at a branch (engine_sibling_assemble). */
 int64_t engine_reply_clock(const Flow *f) {
-    int64_t at = f->path_work + f->reply_skip;
+    int64_t at = f->pc.path_work + f->pc.reply_skip;
 
     if (f == flow_running() && g_in_step > 0)
         at += g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
               - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile);
-    DCHECKF(at >= 0 && f->reply_skip >= 0, "a flow's reply clock is %lld (skip %lld) — both parts only climb",
-            (long long)at, (long long)f->reply_skip);
+    DCHECKF(at >= 0 && f->pc.reply_skip >= 0, "a flow's reply clock is %lld (skip %lld) — both parts only climb",
+            (long long)at, (long long)f->pc.reply_skip);
     return at;
 }
 
@@ -5643,7 +5643,7 @@ static void engine_bank_step(Flow *f) {
    and before it forks, so every arm the act mints stands at the act and reads one count. */
 static void engine_stand_running(Flow *f, int kind, uint64_t key) {
     engine_bank_step(f);
-    flow_stand_at(f, kind, key, f->framed_work + engine_step_framed());
+    flow_stand_at(f, kind, key, f->pc.framed_work + engine_step_framed());
 }
 
 /* JSFlowControlHooks.stand: the running member has given a quantum of service since its last rest, so it stands at
@@ -5664,7 +5664,7 @@ static void engine_stand_rest(JSContext *ctx) {
                                          "poll is its one caller, and it runs a bytecode frame");
     engine_stand_running(f, FLOW_SITE_CODE, site);
     do {
-        f->stand_next += ENGINE_QUANTUM_WORK;
+        f->pc.stand_next += ENGINE_QUANTUM_WORK;
         left += ENGINE_QUANTUM_WORK;
     } while (left <= 0);
     JS_FlowStandArm(left);
@@ -5730,9 +5730,9 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
        closing charge leaves it out (flow_age_running). A parent not holding the thread rests at its
        coordinate. */
     if (parent == flow_running() && g_in_step > 0) {
-        sib->path_work += g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
+        sib->pc.path_work += g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
                           - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile);
-        sib->framed_work += engine_step_framed();
+        sib->pc.framed_work += engine_step_framed();
     }
     sib->started = 1;                 /* hot: resume from the blobs (and the cloned frame, when there is one) */
     /* The clone is of the parent's selected agent's base, so the arm selects that agent; every other agent's
@@ -7395,7 +7395,7 @@ static int engine_orphan_redrive(JSContext *ctx, Flow *f) {
         char loc[17];
         const char *fields[1] = { loc };
         snprintf(loc, sizeof loc, "%016llx", (unsigned long long)hash);
-        flow_stand_at(sib, FLOW_SITE_DRIVE, hash, sib->framed_work);
+        flow_stand_at(sib, FLOW_SITE_DRIVE, hash, sib->pc.framed_work);
         flow_set_orphan_seen(sib, (int64_t)novelty_drive_note(novelty_id(NOVELTY_DRIVE, fields, 1), sib->visits));
     }
     return ORPHAN_STEP_SEEDED;
@@ -7569,7 +7569,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
         char loc[17];
         const char *fields[1] = { loc };
         snprintf(loc, sizeof loc, "%016llx", (unsigned long long)hash);
-        flow_stand_at(sib, FLOW_SITE_DRIVE, hash, sib->framed_work);
+        flow_stand_at(sib, FLOW_SITE_DRIVE, hash, sib->pc.framed_work);
         flow_set_orphan_seen(sib, (int64_t)novelty_drive_note(novelty_id(NOVELTY_DRIVE, fields, 1), sib->visits));
     }
     /* Where it enters the queue, asserted at the one entry that manufactures its own work: a drive entering at
@@ -8977,7 +8977,7 @@ static void engine_trail_arrivals(Flow *f) {
         }
         JS_FreeValue(pending_ctx(), e);
     }
-    for (int i = 0; i < n; i++) f->trail = reply_trail_push(f->trail, rows[i].slot, rows[i].id, f->path_work);
+    for (int i = 0; i < n; i++) f->trail = reply_trail_push(f->trail, rows[i].slot, rows[i].id, f->pc.path_work);
     free(rows);
     f->trail_seen = last;
 }
@@ -10971,7 +10971,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
             else if (pending_next_due(f->pending) > 0) {
                 int64_t due = pending_next_due(f->pending), now = engine_reply_clock(f);
 
-                if (due > now) f->reply_skip += due - now;
+                if (due > now) f->pc.reply_skip += due - now;
                 g_step_unit = STEP_UNIT_REPLY_CLOCK_MOVE;
                 return 0;
             }
@@ -12246,7 +12246,7 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
        duration into this flow's first `performance.now()`. */
     thread_work_note_discarded(JS_FlowDiscardRetiredWork());
     /* And its stand's next rest, counted from its coordinate (engine_stand_rest). */
-    JS_FlowStandArm(f->stand_next - f->framed_work);
+    JS_FlowStandArm(f->pc.stand_next - f->pc.framed_work);
     if (!f->delta) f->delta = cow_delta_new();
     cow_set_current((CowDelta *)f->delta);
     cow_apply(ctx, (CowDelta *)f->delta);
@@ -14500,7 +14500,7 @@ static int engine_sched_slice(void) {
             g_step_open_frameless = step_frameless0;
             /* The stand's count from the same opening: the step's charge reads everything banked from here, and
                what already stands in the interpreter is in it as framed work. */
-            JS_FlowStandArm(cur->stand_next - cur->framed_work - (int64_t)JS_FlowPeekRetiredWork());
+            JS_FlowStandArm(cur->pc.stand_next - cur->pc.framed_work - (int64_t)JS_FlowPeekRetiredWork());
             /* The same bracket in the other currency, opened on the clock's line so the two readings are of one
                span: the overrun test below compares `now - t_slice0`, and this counts the suspend points offered
                across that interval. From here rather than the turn's `t0`, because the pick, switch and delta swap
@@ -14797,10 +14797,10 @@ static int engine_sched_slice(void) {
             }
             /* The stand's count and the coordinate are one quantity read two ways: quickjs counts down what the
                path retired under a page frame and the charge above added it. */
-            DCHECKF(flow_running() != cur || JS_FlowStandLeft() == cur->stand_next - cur->framed_work,
+            DCHECKF(flow_running() != cur || JS_FlowStandLeft() == cur->pc.stand_next - cur->pc.framed_work,
                     "the running member's count to its next rest (%lld) is not its rest's coordinate less its own "
                     "(%lld - %lld) — a retire site counts down one and not the other", (long long)JS_FlowStandLeft(),
-                    (long long)cur->stand_next, (long long)cur->framed_work);
+                    (long long)cur->pc.stand_next, (long long)cur->pc.framed_work);
             /* The rung the member's next step takes, an observation: the member keeps its stand, since whether a
                step ended here is the slice's decision, and the unit it begins next stands it at its entry when it
                begins (engine_stand_unit). */

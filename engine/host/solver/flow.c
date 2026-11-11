@@ -1790,16 +1790,64 @@ static uint64_t stand_fold(uint64_t h, uint64_t v) {
     return h;
 }
 
+/* Members the cold tier rebuilt with their parked counters, and of those that reached the parked stand series'
+   move count, the ones whose series agreed and the ones whose series left it (flow.h's `resume_met`). Lifetime. */
+static long g_resume_armed, g_resume_met, g_resume_left;
+
+void flow_resume_arm(Flow *f, const FlowPathCounters *parked, bool restored) {
+    DCHECK(f != NULL && parked != NULL && !f->resume_armed && f->pc.stand_moves == 0 && f->pc.path_work == 0,
+           "a member was handed parked path counters twice, or after its replay had moved — the cold tier hands "
+           "them to the flow it has just rebuilt from the baseline");
+    f->resume_pc = *parked;
+    f->resume_armed = 1;
+    f->resume_restored = restored;
+    g_resume_armed++;
+}
+
+void flow_resume_stand(long *armed, long *met, long *left) {
+    DCHECK(armed != NULL && met != NULL && left != NULL, "the resumed stand census was asked for with nowhere to put it");
+    *armed = g_resume_armed;
+    *met = g_resume_met;
+    *left = g_resume_left;
+}
+
+/* A rebuilt member reaches its parked stand series' move count: it stands where its parked path stood when the
+   digests are equal and its next move (at `coord`, -1 at departure) is past the parked coordinate. Asserted of a
+   restored member, whose counters are its parked path's own; a replaying member re-derives the counters by
+   re-execution (a replay stands at no consumed decision and runs its framed coordinate behind the forked path's),
+   so its agreement is counted, not asserted. Asked once, on the way past the parked point. */
+static void flow_resume_meet(Flow *f, int64_t coord) {
+    bool same = f->pc.stand_digest == f->resume_pc.stand_digest && (coord < 0 || coord >= f->resume_pc.framed_work);
+
+    f->resume_met = 1;
+    if (!f->resume_restored) {
+        if (same) g_resume_met++; else g_resume_left++;
+        return;
+    }
+    DCHECKF(f->pc.stand_digest == f->resume_pc.stand_digest,
+            "a member the cold tier rebuilt reached its parked stand series' %lld moves on a different series "
+            "(digest %llx, parked %llx) — its replay moved its stand where the parked path did not, or skipped a "
+            "move it made", (long long)f->pc.stand_moves, (unsigned long long)f->pc.stand_digest,
+            (unsigned long long)f->resume_pc.stand_digest);
+    DCHECKF(coord < 0 || coord >= f->resume_pc.framed_work,
+            "a rebuilt member's replay made a move at framed work %lld, before the parked coordinate %lld, that "
+            "its parked path had not made — the two series share the parked one's moves and no other below it",
+            (long long)coord, (long long)f->resume_pc.framed_work);
+    g_resume_met++;
+}
+
 void flow_stand_at(Flow *f, int kind, uint64_t key, int64_t coord) {
     DCHECK(f != NULL && f->family != NULL && f->at != NULL &&
                (kind == FLOW_SITE_CODE || kind == FLOW_SITE_DRIVE || kind == FLOW_SITE_ACT),
            "a code site was stood at by a flow outside the frontier, or with a kind the ledger does not name");
-    DCHECKF(coord >= f->framed_work,
+    DCHECKF(coord >= f->pc.framed_work,
             "a member was stood at a code site at coordinate %lld, behind its own framed work %lld — the coordinate "
-            "is the member's framed work at the move", (long long)coord, (long long)f->framed_work);
+            "is the member's framed work at the move", (long long)coord, (long long)f->pc.framed_work);
     if (f->at->code->kind != kind || f->at->code->key != key) {
-        f->stand_digest = stand_fold(stand_fold(stand_fold(f->stand_digest, (uint64_t)coord), (uint64_t)kind), key);
-        f->stand_moves++;
+        if (f->resume_armed && !f->resume_met && f->pc.stand_moves == f->resume_pc.stand_moves)
+            flow_resume_meet(f, coord);
+        f->pc.stand_digest = stand_fold(stand_fold(stand_fold(f->pc.stand_digest, (uint64_t)coord), (uint64_t)kind), key);
+        f->pc.stand_moves++;
     }
     flow_site_move(f, flow_site_for(f, kind, key));
 }
@@ -1809,7 +1857,7 @@ void flow_stand_series(uint64_t *digest, int64_t *moves) {
     int64_t m = g_stand_moves_gone;
 
     DCHECK(digest != NULL && moves != NULL, "the stand series was asked for with nowhere to put it");
-    for (int i = 0; i < g_flows_n; i++) { d += g_flows[i]->stand_digest; m += g_flows[i]->stand_moves; }
+    for (int i = 0; i < g_flows_n; i++) { d += g_flows[i]->pc.stand_digest; m += g_flows[i]->pc.stand_moves; }
     *digest = d;
     *moves = m;
 }
@@ -2343,7 +2391,7 @@ void flow_age_running(int64_t us, int64_t compile, int64_t frameless) {
     /* And the flow's coordinate, which no emission restarts (flow.h's `path_work`). It counts what the step
        ran and no compile: a replay that finds the body's parse held compiles nothing, and its coordinate
        must still equal the original's. */
-    g_running->path_work += ran;
+    g_running->pc.path_work += ran;
     /* And the one transition a charge can make: `work` only rises here and the normalise fires only where
        flow_own_silence already answered zero, so base to away is the only direction and a member already away
        stays away. A zero-unit charge against a member at base moves nothing, and the test says so rather
@@ -2382,7 +2430,7 @@ void flow_age_running(int64_t us, int64_t compile, int64_t frameless) {
        standing there at once, so the site is re-filed and the order told. Service is all the step's work less what
        it banked mid-step to sites it moved off and to act sites; the stand's clock is its framed part. */
     const int64_t framed = ran - frameless;
-    g_running->framed_work += framed;
+    g_running->pc.framed_work += framed;
     DCHECKF(g_running->site_banked >= 0 && g_running->act_banked >= 0 && g_running->act_banked <= frameless &&
                 g_running->site_banked + g_running->act_banked <= us,
             "a step banked %lld units to sites it moved off and %lld to act sites, and ended having charged %lld, "
@@ -2630,15 +2678,10 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     /* And the path's coordinate, park count and reply trail, facts about the prefix both arms share. The
        coordinate is the parent's at its step's entry; the assembly adds what the open step ran before the
        branch (engine.c). */
-    DCHECK(sib->path_work == 0 && sib->reply_skip == 0 && sib->park_slots == 0 && sib->trail == NULL &&
+    DCHECK(sib->pc.path_work == 0 && sib->pc.reply_skip == 0 && sib->pc.stand_moves == 0 && sib->park_slots == 0 && sib->trail == NULL &&
                sib->trail_seen == 0,
            "a forked sibling ran, parked or took a reply before inheriting its parent's path");
-    sib->path_work = parent->path_work;
-    sib->framed_work = parent->framed_work;
-    sib->stand_next = parent->stand_next;
-    sib->reply_skip = parent->reply_skip;
-    sib->stand_digest = parent->stand_digest;
-    sib->stand_moves = parent->stand_moves;
+    sib->pc = parent->pc;
     sib->park_slots = parent->park_slots;
     sib->trail = reply_trail_share(parent->trail);
     sib->trail_seen = parent->trail_seen;
@@ -3318,9 +3361,10 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
        naming its window. Zero matches the fresh account minted below, whose `emit_gen` is also zero, so an
        uncharged flow reads a current window holding nothing. */
     f->val = 0.0; f->work = 0; f->work_gen = 0; f->visits = 0; f->orphan_seen = 0;
-    f->path_work = 0; f->reply_skip = 0; f->park_slots = 0; f->trail = NULL; f->trail_seen = 0;
-    f->framed_work = 0; f->stand_next = ENGINE_QUANTUM_WORK;
-    f->stand_digest = 14695981039346656037ULL; f->stand_moves = 0;
+    f->park_slots = 0; f->trail = NULL; f->trail_seen = 0;
+    f->pc = (FlowPathCounters){ .path_work = 0, .framed_work = 0, .stand_next = ENGINE_QUANTUM_WORK,
+                                .stand_digest = 14695981039346656037ULL, .stand_moves = 0, .reply_skip = 0 };
+    f->resume_armed = 0; f->resume_met = 0; f->resume_restored = 0;
     /* And the dispatch count, which nothing else writes to zero: a member arrives never-chosen and the number only
        rises. */
     f->picks = 0;
@@ -3477,12 +3521,7 @@ void flow_arrive_on_snapshot(Flow *sib, const Flow *snap, FlowPathMarks at_cut) 
        the units completed, the path's marks, and the priced decisions, under which it stands at the snapshot's
        code site in its own ledger. */
     sib->visits = snap->visits;
-    sib->path_work = snap->path_work;
-    sib->framed_work = snap->framed_work;
-    sib->stand_next = snap->stand_next;
-    sib->reply_skip = snap->reply_skip;
-    sib->stand_digest = snap->stand_digest;
-    sib->stand_moves = snap->stand_moves;
+    sib->pc = snap->pc;
     sib->park_slots = snap->park_slots;
     sib->trail = reply_trail_share(snap->trail);
     sib->trail_seen = snap->trail_seen;
@@ -7443,8 +7482,10 @@ void flow_remove(JSContext *ctx, Flow *f) {
            banner at `g_picks_departed`). */
         g_picks_departed += f->picks;
         /* …and its stand series, for the same reason. */
-        g_stand_digest_gone += f->stand_digest;
-        g_stand_moves_gone += f->stand_moves;
+        g_stand_digest_gone += f->pc.stand_digest;
+        g_stand_moves_gone += f->pc.stand_moves;
+        if (f->resume_armed && !f->resume_met && f->pc.stand_moves == f->resume_pc.stand_moves)
+            flow_resume_meet(f, -1);
         /* And out of the order: the index if it is runnable, the host-owed list if it is not, the two exactly
            partitioning the members. Before acct_depart, which clears the bucket and family the index reads. */
         DCHECK(!f->assembling, "a sibling was removed from the frontier before its assembly ended");
