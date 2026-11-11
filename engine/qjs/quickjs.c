@@ -24405,8 +24405,8 @@ static void step_request_check(JSContext *ctx, const JSStepHdr *h, int st, bool 
        a trapless proxy's target — so `Object.keys(new Proxy(x, {}))` walks x with the seam having asked its
        question about the PROXY, and a page reaches that with no help from this engine.
        An earlier form of this paragraph listed shape (1) alone, which is why the population is DERIVED rather
-       than enumerated here: `git grep -n 'gp_op = GP_OWNKEYS' engine/qjs/quickjs.c` names every writer of
-       gp_obj, `git grep -n 'gp_fwd =' engine/qjs/quickjs.c` names every writer of gp_fwd, and every one of
+       than enumerated here: `git grep -n 'gp_op = GP_OWNKEYS' -- engine/qjs` names every writer of
+       gp_obj, `git grep -n 'gp_fwd =' -- engine/qjs` names every writer of gp_fwd, and every one of
        those but step code 11's own reaches an exotic hook with nothing having asked it anything. */
     DCHECK(st != 11 || h->keys_phase == GET_PH_GOT,
            "a step machine issued [[OwnPropertyKeys]] (step code 11) without going through step_ownkeys_run — "
@@ -84067,8 +84067,8 @@ static JSValue js_string_iterator_create_fini(JSContext *ctx, void *st, bool tak
    the time-travel capture unmissable — the same shape for_in_reach has and for the same reason. THREE sites come
    through here and they are the whole population: js_array_iter_next_step's AIN_START and its AIN_INDEX (the
    record is read again after the length read, which is a REQUEST and therefore a place the flow can park), and
-   js_string_iterator_next. `grep -n 'array_iterator_data' quickjs.c` finds only those, the record's construction
-   and its finalizer/mark pair — and the finalizer and the mark go through the union directly and deliberately,
+   js_string_iterator_next. `git grep -n 'array_iterator_data' -- engine/qjs` finds no other code reaching it
+   but the capture's own save and restore and the finalizer/mark pair, which goes through the union deliberately,
    because a capture during collection would dup values on an object being torn down.
    A record a flow has reached is one it may write, and the delta dedups to one entry per iterator per flow, so
    capturing at the REACH rather than at each of the four writes leaves no write site to forget. It takes the
