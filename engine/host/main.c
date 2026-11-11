@@ -1236,13 +1236,13 @@ QJS_EXPORT void qjs_begin(const char *recipes)
     g_begun = 1;
 }
 
-/* One cooperative quantum of the one dispatch loop, answering the scheduler's four codes, which are four
+/* One cooperative quantum of the one dispatch loop, answering the scheduler's three codes, which are three
  * different things to do next. ENGINE_STEP_YIELD leaves every flow where it was and the frontier runnable: the
  * thread is asked for, so a host with nothing else to do steps straight back in. ENGINE_STEP_DONE means the frontier
  * is empty and the session's hooks are uninstalled. ENGINE_STEP_STALLED means every member is parked on something
  * only this host can supply: a yield asks to be outranked and a stall asks to be paid, and stepping again before
- * paying converts nothing into work (a driver that treats a stall as a yield spins). ENGINE_STEP_HOST is the
- * host's own turn (qjs_set_host_turn): the host takes it and steps again with no other entry in between. */
+ * paying converts nothing into work (a driver that treats a stall as a yield spins). The host's own turn is taken
+ * inside the step (qjs_set_host_turn), so this is a promising export the host awaits. */
 QJS_EXPORT int qjs_step(void)
 {
     int r;
@@ -1279,9 +1279,9 @@ QJS_EXPORT int qjs_step(void)
            "context switch deletes them, so the reply arrives at its delivery stripped to an empty object");
     /* Three values, and this entry is where that holds: the membership check stops a fourth from reaching a host
        whose branches are written against these three. */
-    DCHECK(r == ENGINE_STEP_DONE || r == ENGINE_STEP_YIELD || r == ENGINE_STEP_STALLED || r == ENGINE_STEP_HOST,
+    DCHECK(r == ENGINE_STEP_DONE || r == ENGINE_STEP_YIELD || r == ENGINE_STEP_STALLED,
            "the scheduler answered a step with a code this ABI does not carry — the host branches on DONE, "
-           "YIELD, STALLED and HOST, so a fifth value reaches it as whichever branch happens to be the fallback");
+           "YIELD and STALLED, so a fourth value reaches it as whichever branch happens to be the fallback");
     /* A stall is a bill, so it names what is owed: the two registers this ABI's host can read. There are two stall
        causes. engine_sched_step stalls for engine_host_owes (both registers' union; its dev walk asserts every
        outstanding entry is tellable through one) and for a referenced document, whose last timeline waits for a

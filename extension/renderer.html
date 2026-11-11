@@ -75,8 +75,8 @@
    (which is what the deleted map did) is a different fact wearing the answer's shape. */
 (function () {
   var M = null;        /* the instantiated renderer module — one per frame, one per agent cluster */
-  /* The calls in flight, one at a time in arrival order: a step that hands this frame its turn (`stepTurns`)
-     returns to the event loop with its slice still open, and no other entry may run inside a slice. */
+  /* The calls in flight, one at a time in arrival order: a step that suspends for this frame's turn returns to
+     the event loop with its slice still open, and no other entry may run inside a slice. */
   var abiQueue = Promise.resolve();
   var out = [];        /* the engine's stdout/stderr since the last reply; drained into every reply */
 
@@ -160,7 +160,7 @@
     join:             { fn: "qjs_join",               ret: "number", out: "rc" },
     getBundleId:      { fn: "qjs_bundle_id",          ret: "number", out: "bundleId" },
     begin:            { fn: "qjs_begin",              ret: null,     out: null },
-    step:             { fn: "qjs_step",               ret: "number", out: "code", turns: true, promising: true },
+    step:             { fn: "qjs_step",               ret: "number", out: "code", promising: true },
     getResult:        { fn: "qjs_result",             ret: "string", out: "result" },
     teardown:         { fn: "qjs_teardown",           ret: null,     out: null },
     getPending:       { fn: "qjs_pending",            ret: "string", out: "requests" },
@@ -253,25 +253,15 @@
     return rec;
   }
 
-  /* The host's turn (solver/engine.h's ENGINE_STEP_HOST): wall milliseconds a slice may hold this frame's thread
-     before qjs_step hands it over between two steps, stated once at boot (qjs_set_host_turn). This frame's event
-     loop runs only between two qjs_step calls, so it takes its turn here and re-enters the same slice; the
+  /* The host's turn (main.c's qjs_set_host_turn): wall milliseconds a slice may hold this frame's thread before
+     the step suspends at its next turn point and this frame's event loop runs one turn, stated once at boot. The
      trusted zone never sees the code, and the turn moves no rank, account or slice boundary. */
   var HOST_TURN_MS = 12;
-  var ENGINE_STEP_HOST = 4;
-  /* A macrotask, so the event loop runs a task before the slice resumes: HTML §8.7 Timers clamps a nested
+  /* A macrotask, so the event loop runs a task before the step resumes: HTML §8.7 Timers clamps a nested
      zero-delay timer to 4 ms, a third of the turn, so the turn is a MessageChannel message. */
   var turnChannel = new MessageChannel();
   function hostTurn() {
     return new Promise(function (res) { turnChannel.port1.onmessage = function () { res(); }; turnChannel.port2.postMessage(0); });
-  }
-  async function stepTurns(m, e, args) {
-    var rec = await callAbi(m, e, args);
-    while (rec.code === ENGINE_STEP_HOST) {
-      await hostTurn();
-      rec = await callAbi(m, e, args);
-    }
-    return rec;
   }
 
   /* THE IMPLEMENTATION, BUILT BY WALKING THE INTERFACE'S OWN METHOD LIST. Nothing here is written per method,
@@ -341,7 +331,7 @@
       bound++;
       impl[m.js] = function () {
         var args = Array.prototype.slice.call(arguments);
-        var p = abiQueue.then(function () { return e.turns ? stepTurns(m, e, args) : callAbi(m, e, args); });
+        var p = abiQueue.then(function () { return callAbi(m, e, args); });
         abiQueue = p.then(function () {}, function () {});
         return p;
       };

@@ -5214,7 +5214,7 @@ const STAGE_KIND = {
    already cost a brief. The RUN BUDGET is `RLIMIT_CPU` and the kernel's SIGXCPU, installed by CPU_BUDGET_SH
    around EVERY child this file spawns on BOTH hosts - identical here, and therefore not the discriminator.
    The ENGINE'S OWN cooperative SLICE (solver/quantum.h) is engine work on both hosts too, since a host turn
-   ends no slice (solver/engine.h's ENGINE_STEP_HOST). solver/quantum.c states it per run on its `@QUANTUM`
+   ends no slice (solver/quantum.h's quantum_step_turn_point). solver/quantum.c states it per run on its `@QUANTUM`
    line, `quantumDenomination` parses it, and `runDependenceText` already marks every verdict with it. What
    was missing was the word for WHOSE RUN the row was - and a host tag is NOT a second denomination claim
    beside the slice: the denomination stays the engine's own word for itself, read off the artifact, and this

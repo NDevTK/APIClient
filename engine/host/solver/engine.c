@@ -8958,20 +8958,16 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
    (2) Cooperative-quantum yield: a thread-sharing floor, so even a top-ranked flow breathes after a slice and the
        host loop can interleave, pump and snapshot. Not a step cap: no flow is dropped or reordered, and the flow
        resumes byte-identically. The slice is engine work (engine_quantum_spent), counted at dispatch, so where a
-       flow parks is a function of its path. The host's turn never parks a flow: engine_sched_slice answers it
-       between two steps (ENGINE_STEP_HOST), and a host's in-step entry takes it on the stack (solver/quantum.h). */
+       flow parks is a function of its path. The host's turn never parks a flow: a host's in-step entry takes it
+       on the stack (solver/quantum.h). */
 static int64_t engine_now_ms(void);   /* the wall clock, for the gap census below: reported, never a verdict */
 
 /* The engine's one currency: the work its flows retired (quickjs.h's JSFlowControlHooks.work), banked here and
    nowhere else. A lifetime count of this instance, never reset: the slice, a step's aging charge and Level 1's
    service are each a difference of this one counter, so they cannot disagree about what a unit is. */
 static int64_t g_service_work = 0;
-/* Where the open slice started on that counter, set at engine_sched_step's quantum_begin() and kept across a host
-   turn, which resumes the same slice. */
+/* Where the open slice started on that counter, set at engine_sched_step's quantum_begin(). */
 static int64_t g_slice_work0 = 0;
-/* The slice a host turn interrupted, which the next engine_sched_step resumes rather than opens: 0 none, 1 a
-   scheduler slice, 2 a collector slice. Set only where a slice answers ENGINE_STEP_HOST. */
-static int g_turn_resume = 0;
 
 /* Bank `units` the running flow retired: its event-loop clock moves (HTML §8.1.7.3's second mover, which
    asserts a running flow at its origin) and the instance's counter with it. */
@@ -14353,7 +14349,7 @@ static void excerpt(char *out, size_t cap, const char *src, size_t n)
 }
 #endif
 
-static int engine_sched_slice(int resume) {
+static int engine_sched_slice(void) {
     JSContext *ctx = g_sess_ctx;
     Flow *cur = g_sess_cur;
     /* One reading of the pricing clock per iteration, carried: it closes the turn just run and opens the next, so
@@ -14380,11 +14376,6 @@ static int engine_sched_slice(int resume) {
     DCHECK(cur == NULL || flow_is_member(cur),
            "the flow this quantum resumes is no longer in the frontier — it was removed while the host held the "
            "thread");
-    /* A host turn hands the thread over with nothing owed back: the host re-enters with no park request, payment
-       or other entry between, so the deferred finish and the park below cannot have been raised since. */
-    DCHECK(!resume || (!g_sess_finish_owed && !g_park_req),
-           "a slice resumed after a host turn finds a deferred finish or a park request — the turn was answered "
-           "between two steps with neither standing, so a host entry ran during its turn");
     /* The finish the previous slice deferred so the host could photograph this member's last moment (@PERWORLD;
        the argument is at `g_sess_finish_owed`). Above the park, the pick and every engine_session_close here, so
        the deferral is a split call rather than a second teardown path: whatever this slice does, the member that
@@ -15078,16 +15069,6 @@ static int engine_sched_slice(int resume) {
             g_sess_cur = cur;
             return ENGINE_STEP_YIELD;
         }
-        /* The host's turn (solver/quantum.h), answered between two steps, where no flow is mid-step: the slice
-           keeps its budget and its running flow, and the host re-enters with nothing in between, so the next
-           statement this engine runs is the pick it would have run here. No mark is discharged, since the host
-           sees nothing of the turn. A host that stated an in-step entry is also offered its turn inside a step
-           (quantum_step_turn_point), at the dispatch and at every host work charge. */
-        if (quantum_host_wants_thread()) {
-            g_sess_cur = cur;
-            g_turn_resume = 1;
-            return ENGINE_STEP_HOST;
-        }
     }
     g_sess_cur = cur;
     /* No member can run and none waits on the host or a peer: no flow will open or seed a search again, so every
@@ -15257,8 +15238,6 @@ long long engine_gc_slice_work_max(void) { return (long long)g_gc_slice_work_max
 unsigned long long engine_gc_sale_work(void) { return (unsigned long long)g_gc_sale_work; }
 long long engine_gc_sale_batches(void) { return g_gc_sale_batches; }
 long long engine_gc_sale_objects(void) { return g_gc_sale_objects; }
-static long long g_host_turns;
-long long engine_host_turns(void) { return g_host_turns; }
 void engine_turn_witness(EngineTurnWitness *out)
 {
     out->service_work = g_service_work;
@@ -15281,14 +15260,13 @@ int64_t engine_residency_work(void) { return g_residency_work + (int64_t)thread_
 
 /* A slice the collector holds: it begins an owed collection, then takes steps of rest_unit_items(REST_UNIT_GC_WORK)
    units until nothing is owed or the slice's collector work reaches the quantum, going on from one finished
-   collection to the next owed, and handing the host its turn between two steps (ENGINE_STEP_HOST, resumed as the
-   same slice). No flow runs in it, so nothing separates two steps but the host's own time between slices. Work is
+   collection to the next owed, offering the host its turn after each step (quantum_step_turn_point). No flow
+   runs in it. Work is
    priced at THREAD_WORK_UNITS_PER_KI_GC. A collection that answers the program's own crossing (a path one) is
    banked in the instance's currency at its price, a function of the path (JSGCCycleStats' `price`), rounded once
    at its finish, so Level 1 sees the same service whatever is resident; its work past the price, which the
-   resident population caused, is residency work (g_residency_work), as all of a collection residency owed is. It answers YIELD: every flow is where it was.
-   `resume` is a slice a host turn interrupted, which is not counted again. */
-static int engine_collect_slice(JSRuntime *rt, int resume) {
+   resident population caused, is residency work (g_residency_work), as all of a collection residency owed is. It answers YIELD: every flow is where it was. */
+static int engine_collect_slice(JSRuntime *rt) {
     const uint64_t budget = rest_unit_items(REST_UNIT_GC_WORK);
     int64_t t0 = quantum_thread_us();
     JSGCCycleStats st;
@@ -15296,10 +15274,8 @@ static int engine_collect_slice(JSRuntime *rt, int resume) {
     bool done;
 
     DCHECK(JS_GCOwed(rt), "a collector slice was opened with no collection owed or standing");
-    if (!resume) {
-        g_gc_slices++;
-        g_collect_slice_units = 0;
-    }
+    g_gc_slices++;
+    g_collect_slice_units = 0;
     JS_GCCycleStats(rt, &st);
     if (st.step == 0)
         JS_GCBegin(rt);
@@ -15342,11 +15318,7 @@ static int engine_collect_slice(JSRuntime *rt, int resume) {
             JS_GCBegin(rt);
             done = false;
         }
-        if (!done && g_collect_slice_units < ENGINE_QUANTUM_WORK && quantum_host_wants_thread()) {
-            g_gc_us += quantum_thread_us() - t0;
-            g_turn_resume = 2;
-            return ENGINE_STEP_HOST;
-        }
+        quantum_step_turn_point(QUANTUM_TURN_HOST_WORK, units);
     } while (!done && g_collect_slice_units < ENGINE_QUANTUM_WORK);
     g_gc_us += quantum_thread_us() - t0;
     if (g_collect_slice_units > g_gc_slice_work_max) g_gc_slice_work_max = g_collect_slice_units;
@@ -15354,8 +15326,7 @@ static int engine_collect_slice(JSRuntime *rt, int resume) {
 }
 
 /* One quantum. Returns ENGINE_STEP_DONE when the frontier is empty (the session is closed and its hooks are
- * uninstalled), ENGINE_STEP_YIELD when the slice's work was spent with the frontier intact, and ENGINE_STEP_HOST
- * when the host took its turn inside the slice, which the next call resumes. The slice is a
+ * uninstalled), and ENGINE_STEP_YIELD when the slice's work was spent with the frontier intact. The slice is a
  * budget of engine work (ENGINE_QUANTUM_WORK), not a cap: nothing is dropped, starved, reordered or forgotten
  * across it, and the next call resumes the same top flow on the same frontier.
  *
@@ -15365,7 +15336,7 @@ static int engine_collect_slice(JSRuntime *rt, int resume) {
  * missing; one bracket around one call cannot be, which is also why the slice-span
  * accumulators are here and not at those returns. */
 int engine_sched_step(void) {
-    int r, resume;
+    int r;
     JSRuntime *gc_rt;
     bool collecting;
     /* The earliest reading this engine takes on its own thread, the function's first statement: everything between
@@ -15398,33 +15369,22 @@ int engine_sched_step(void) {
        arms once here and the loop ends the slice on that expiry, so at most one turn per slice ends on the
        cooperative clause. Raised before the body because it counts slices entered, the population both spans are
        over. */
-    /* A slice a host turn interrupted (ENGINE_STEP_HOST) is resumed rather than opened: it is not counted, keeps
-       its kind, budget and dispatch countdown, and sells nothing, so the turn moves no rank, account or slice
-       boundary. */
-    resume = g_turn_resume;
-    g_turn_resume = 0;
-    if (!resume) g_slices++;
-    else g_host_turns++;
+    g_slices++;
     /* A collection owed or standing takes the slice (engine_collect_slice). RAM pressure waits for it: a sale frees
        objects, which would restart the trial at every step, and the collection is itself the cheapest relief. */
     DCHECK(g_sess_ctx != NULL, "a step was taken with no session context");
     gc_rt = JS_GetRuntime(g_sess_ctx);
-    collecting = resume ? resume == 2 : JS_GCOwed(gc_rt);
-    DCHECK(resume != 2 || JS_GCOwed(gc_rt),
-           "a collector slice resumed after a host turn with no collection standing — the turn is answered only "
-           "while one is unfinished");
+    collecting = JS_GCOwed(gc_rt);
     /* The host's time, with no flow stepping and no frontier walk open: where RAM pressure sells, as
        engine_reclaim_at_rest requires. */
-    if (!collecting && !resume)
+    if (!collecting)
         engine_relocate_under_pressure(gc_rt);
     quantum_begin();
     /* The slice's budget is counted from here: its work on the instance's counter, and the dispatch countdown
        that decides where the budget is asked, both of which a session resumed from the cold tier also starts
        from. */
-    if (!resume) {
-        g_slice_work0 = g_service_work;
-        JS_FlowBudgetArm();
-    }
+    g_slice_work0 = g_service_work;
+    JS_FlowBudgetArm();
     /* The flow stamp, the DOM capture and the capture route belong to the slice, not the session:
      * engine_sched_slice returns YIELD without switching the running flow out, so "the session is live" and "a
      * flow is running" differ by the host's own time. The three marks are one statement in three registers: the
@@ -15453,7 +15413,7 @@ int engine_sched_step(void) {
        session's live flag, separating before the session opened from between two slices. */
     ENGINE_NO_STRAY(g_sess_ctx, "slice-entry: the host's own time between slices (and the session setup before "
                                 "the first one)", g_sess_live);
-    r = collecting ? engine_collect_slice(gc_rt, resume) : engine_sched_slice(resume);
+    r = collecting ? engine_collect_slice(gc_rt) : engine_sched_slice();
     /* And the scheduler's tail: HTML §8.1.7.3's end-of-checkpoint hook, the aging charge and flow_finish run after
        the loop's post-step boundary, so only this line watches them. Asked before the marks are put back, so it
        reports the state the slice ended in. */
@@ -15910,9 +15870,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
            next step boundary with no flow switched in. */
         if (g_park_hook && g_park_hook())
             engine_request_park();
-        /* The host's turn is taken and the same slice resumed, with no park, payment or provider between
-           (ENGINE_STEP_HOST): this driver has no event loop to hand the thread to. */
-        do r = engine_sched_step(); while (r == ENGINE_STEP_HOST);
+        r = engine_sched_step();
         if (r == ENGINE_STEP_DONE)
             break;
         /* The host pays every slice, not only at a stall. ENGINE_STEP_STALLED is returned only when the run queue

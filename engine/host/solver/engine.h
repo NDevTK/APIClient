@@ -315,12 +315,6 @@ EngineRivalMiss engine_rival_miss(void);
    paying converts nothing into work, so a driver treats an unpaid stall as its terminator, never a step
    count. */
 #define ENGINE_STEP_STALLED 3
-/* ENGINE_STEP_HOST: the host asked for its thread inside a slice (solver/quantum.h's quantum_set_host_turn_us), and
-   the slice handed it over between two steps with nothing moved. The host takes its turn and calls
-   engine_sched_step again with no other entry in between (no payment, park request or ABI call), and the same
-   slice resumes with its budget and running flow, so a turn changes no rank, account or slice boundary. A host
-   that sets no turn never sees it. */
-#define ENGINE_STEP_HOST 4
 /* The cooperative slice, in engine work: retired opcodes and regexp back-edges plus host work charged in the
    opcode unit by its input (core/timing/thread_work.h). A thread-sharing floor, never a cap: nothing is dropped
    across it. 54000 units is about 12 ms of the native dev build at thread_work.h's 0.222 us per opcode, and it
@@ -1439,9 +1433,6 @@ long long engine_gc_slice_work_max(void);
 unsigned long long engine_gc_sale_work(void);
 long long engine_gc_sale_batches(void);
 long long engine_gc_sale_objects(void);
-/* The host turns this instance answered (ENGINE_STEP_HOST), lifetime. A function of elapsed time, so no census
-   carries it: a census row is a function of the paths. */
-long long engine_host_turns(void);
 /* What a host turn inside a step must leave as it found (solver/quantum.h's quantum_step_turn_point): the
    instance's banked work, the running flow and its standing count, the frontier generation and the residency
    work. Any difference is an entry the host made into the engine while a step waited on its stack. */

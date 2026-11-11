@@ -5,8 +5,8 @@
  * counted at dispatch, so it is a function of the flow's path and the same on every host and across a resume.
  * This component owns three things beside it:
  *   - the bracket: whether a slice is open, asserted by every entry that may run only inside or only outside one;
- *   - the host turn: whether the host wants its thread back on elapsed time, answered between two steps of a
- *     slice (solver/engine.h's ENGINE_STEP_HOST), which moves no rank, account or slice boundary;
+ *   - the host turn: the host's own turn on elapsed time, taken inside a step at the turn points
+ *     (quantum_step_turn_point), which moves no rank, account or slice boundary;
  *   - the pricing clock: this host's thread time, read by censuses that price work (core/timing/thread_work.c,
  *     solver/engine.c's step census) and by no scheduling, ranking, accounting or assert.
  * The slice is a floor on sharing, never a cap: a flow parks as a COW snapshot and resumes byte-identically. */
@@ -28,16 +28,13 @@ int quantum_slice_open(void);
 void quantum_set_slice_work(int64_t work);
 int64_t quantum_slice_work(void);
 /* The host's turn, in wall microseconds a slice may hold the thread (0, the default, is never), stated by the host
-   between steps: a renderer frame, whose event loop runs only between two qjs_step calls, states one; a native
-   driver is its own process and states none. */
+   between steps: a renderer frame, whose event loop would otherwise run only between two qjs_step calls, states
+   one; a native driver is its own process and states one only to show a turn moves nothing. */
 void quantum_set_host_turn_us(int64_t us);
-/* Whether the host wants its thread back now, on elapsed wall time since the slice opened or last resumed. Asked
-   only inside a slice (asserted), by the scheduler between two steps; it moves no rank and no account. */
-int quantum_host_wants_thread(void);
 /* The host's turn inside a step: an entry the host supplies that runs its own event loop for one turn and
    returns, while the engine's stack waits where the call was made (on a WASM host, an import that suspends the
-   instance). Stated between steps, after a turn duration; the native driver states one, and a host that states
-   none takes its turn only between steps. */
+   instance, main.c's qjs_set_host_turn). Stated between steps, after a turn duration; a host that states none
+   takes its turn between qjs_step calls. */
 void quantum_set_step_turn(void (*take)(void));
 /* Where a step offered the host its turn: the interpreter (every suspend point it offers, and every
    ENGINE_QUANTUM_ASK_EVERY dispatches), host work charged to the running flow, or a residency span's uncharged

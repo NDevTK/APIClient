@@ -12,8 +12,8 @@ static int g_slice_open;
 
 int quantum_slice_open(void) { return g_slice_open; }
 
-/* The host's turn: wall microseconds a slice may hold the thread before the host is handed it between two steps,
-   0 for never, and the wall reading the current hold began at (the slice's open or its last resume). */
+/* The host's turn: wall microseconds a slice may hold the thread before the host takes its turn inside a step,
+   0 for never, and the wall reading the current hold began at (the slice's open or the last turn's end). */
 static int64_t g_turn_us;
 static int64_t g_turn_open_us;
 
@@ -44,13 +44,6 @@ void quantum_set_host_turn_us(int64_t us)
     DCHECKF(us >= 0, "a host turn of %lld us was set — 0 is never, and a turn is a duration", (long long)us);
     DCHECK(!g_slice_open, "a host turn was set inside a slice — it is the host's policy, stated between steps");
     g_turn_us = us;
-}
-
-int quantum_host_wants_thread(void)
-{
-    DCHECK(g_slice_open, "the host's claim on the thread was asked outside an open slice — whoever is running "
-                         "this flow is not the scheduler");
-    return g_turn_us > 0 && quantum_wall_us() - g_turn_open_us >= g_turn_us;
 }
 
 /* The host's entry for a turn inside a step, the work offered since the clock was last read, whether the entry

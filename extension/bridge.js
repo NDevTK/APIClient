@@ -844,8 +844,8 @@ function linesToAnalysis(lines, msg, outcome, eng) {
         instanceGaps: result._instanceGaps,
         /* What the order above was denominated in, relayed whole: the slice in engine work and the clock the
            census's microsecond rows are priced on, a property of the host and build constant for the session.
-           No wall clock ends a slice (this frame's turns are taken between steps, solver/engine.h's
-           ENGINE_STEP_HOST), so the order is a function of the paths. */
+           No wall clock ends a slice (a renderer's turn is taken inside a step and moves nothing, main.c's
+           qjs_set_host_turn), so the order is a function of the paths. */
         quantum: result._quantum,
         /* What this zone's egress policy did, which the engine's counters cannot say: a page with no API
            surface is either one the engine never derived requests for or one whose requests this tool refused,

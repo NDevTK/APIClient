@@ -47923,8 +47923,7 @@ TF_UNIT int abi_main(int argc, char **argv)
     for (;;) {
         int step;
 
-        /* The host's turn is taken and the same slice resumed, with nothing of this host's between (engine.h). */
-        do step = qjs_step(); while (step == ENGINE_STEP_HOST);
+        step = qjs_step();
 
         /* THE NOTICES ARE DRAINED ON EVERY ROUND, including the one that ends the session: an emission the
            last step produced is exactly the one a drain placed before the terminator would lose. */
@@ -48477,8 +48476,7 @@ int main(int argc, char **argv) {
         if (site) concolic_set_attacker_site(site);
     }
     /* A host turn every N wall microseconds (solver/quantum.h), as a renderer frame states one: this process needs
-       no turn, so it is asked for only to show that answering one moves nothing. Each ENGINE_STEP_HOST is
-       re-entered at once by engine_run and by the ABI arm below, and the in-step entry returns at once. */
+       no turn, so it is asked for only to show that taking one moves nothing. The in-step entry returns at once. */
     {
         const char *turn = arg_val(argc, argv, "--host-turn-us");
         if (turn) {
@@ -49101,9 +49099,8 @@ int main(int argc, char **argv) {
        of a run that shows a turn changes nothing. Not a census row, since it is a function of elapsed time. */
     if (arg_val(argc, argv, "--host-turn-us")) {
         fflush(stdout);   /* the line is stderr's; a buffered @RESULT would otherwise be cut by it */
-        fprintf(stderr, "[test-forced] host turns taken: %lld between steps; in a step %lld at dispatch, %lld at "
-                        "host work, %lld in a residency span\n", engine_host_turns(),
-                quantum_step_turns(QUANTUM_TURN_DISPATCH), quantum_step_turns(QUANTUM_TURN_HOST_WORK),
+        fprintf(stderr, "[test-forced] host turns taken in a step: %lld at dispatch, %lld at host work, %lld in a "
+                        "residency span\n", quantum_step_turns(QUANTUM_TURN_DISPATCH), quantum_step_turns(QUANTUM_TURN_HOST_WORK),
                 quantum_step_turns(QUANTUM_TURN_RESIDENCY));
     }
     /* The verdict: the run is over, so a row still 0 will not be reached. */
