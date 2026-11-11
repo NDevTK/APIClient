@@ -979,6 +979,18 @@ static const TfServed TF_SERVED[] = {
      * THE ADDRESSES ARE THREE AND NONE IS A PREFIX OF ANOTHER, because `emitted_records` matches
      * `"url":"<addr>"` and a row that could be answered by a sibling statement's record is a row that cannot
      * fail. */
+    /* fixture/modpreload.h's chunks. Every token is a literal; `mp-a.js` also imports `mp-c.js`, so two importers
+       wait on one preload's fetch. */
+    { "https://x.test/chunk/mp-main.js", "text/javascript",
+      "import { a } from './mp-a.js'; import { b } from './mp-b.js'; import { c } from './mp-c.js';"
+      "fetch('/api/mpmark?w=' + a + b + c);"
+      "setTimeout(function(){ import('/chunk/mp-d.js').then(function(ns){ fetch('/api/mpdyn?w=' + ns.d); },"
+      " function(e){ fetch('/api/mpdyn?w=' + e.name); }); }, 0);" },
+    { "https://x.test/chunk/mp-a.js", "text/javascript",
+      "import { c } from './mp-c.js'; export const a = c === 'mpC' ? 'mpA' : 'mpAx';" },
+    { "https://x.test/chunk/mp-b.js", "text/javascript", "export const b = 'mpB';" },
+    { "https://x.test/chunk/mp-c.js", "text/javascript", "export const c = 'mpC';" },
+    { "https://x.test/chunk/mp-d.js", "text/javascript", "export const d = 'mpD';" },
     { "https://x.test/chunk/mdmod.js", "text/javascript",
       "const mmDeps = (i, m = mmDeps) => (m === mmDeps ? 'mmOK' : 'mmBAD');"
       "export default { tag: 'mmDEF' };"
@@ -2171,6 +2183,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/candslot.h"
 #include "fixture/modshare.h"
 #include "fixture/compilejoin.h"
+#include "fixture/modpreload.h"
 #include "fixture/slicelen.h"
 #include "fixture/strsearch.h"
 #include "fixture/rxsearch.h"
@@ -3000,6 +3013,7 @@ TF_DOCS[] = {
     { "modsharebig", HTML_MODSHAREBIG },
     { "compilejoin", HTML_COMPILEJOIN },
     { "compilejoinclassic", HTML_COMPILEJOINCLASSIC },
+    { "modpreload", HTML_MODPRELOAD },
     { "candcontra", HTML_CANDCONTRA },
     { "candweak", HTML_CANDWEAK },
     { "candarrive", HTML_CANDARRIVE },
@@ -23166,6 +23180,43 @@ TF_UNIT void probes_compilejoin(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `modpreload` document (fixture/modpreload.h): the graph evaluates, every preload fires `load`,
+   the chunk reached only by `import()` loads, and no chunk a preload names is fetched a second time by an import
+   (HTML §8.1.4.2 "Fetching scripts"' fetch a single module script keys one fetch per (url, module type)). An
+   import's own park is the record whose door is `module-import`; the preload's is `link-element`. */
+TF_UNIT void probes_modpreload(const char *js, Probe *tab, int *n) {
+    static const char *const chunks[] = { "https://x.test/chunk/mp-a.js", "https://x.test/chunk/mp-b.js",
+                                          "https://x.test/chunk/mp-c.js", "https://x.test/chunk/mp-d.js" };
+    static const char *const loads[] = { "mpLa", "mpLb", "mpLc", "mpLd" };
+    static char one_buf[256];
+    const char *g_why = NULL, *l_why = NULL, *d_why = NULL, *o_why = NULL;
+    int g_tt = 1, l_tt = 1, d_tt = 1, o_tt = 1;
+
+    fold_row(&g_tt, &g_why, param_value_is(js, "/api/mpmark", "w", "mpAmpBmpC"),
+             "the root module's graph did not evaluate with each imported binding: no `/api/mpmark` carrying "
+             "`mpAmpBmpC`");
+    for (size_t i = 0; i < COUNTOF(loads); i++)
+        fold_row(&l_tt, &l_why, param_value_is(js, "/api/mpload", "w", loads[i]),
+                 "a `<link rel=modulepreload>` did not fire `load` (HTML §4.6.8.12 Link type \"modulepreload\" "
+                 "step 14.2)");
+    fold_row(&d_tt, &d_why, param_value_is(js, "/api/mpdyn", "w", "mpD"),
+             "the `import()` of the chunk only a preload had fetched did not settle with its namespace");
+    for (size_t i = 0; i < COUNTOF(chunks) && o_tt; i++) {
+        snprintf(one_buf, sizeof one_buf, "`%s` was preloaded and also parked by an import: two fetches for one "
+                 "module map entry", chunks[i]);
+        fold_row(&o_tt, &o_why, emitted_record_has(js, chunks[i], "\"door\":\"link-element\""),
+                 "a preloaded chunk has no `link-element` record, so the import rows below it read nothing");
+        fold_row(&o_tt, &o_why, !emitted_record_has(js, chunks[i], "\"door\":\"module-import\""), one_buf);
+    }
+    const Probe rows[] = {
+        { "mp-graph", g_tt, "/chunk/mp-main.js", SESS_EXPLORE, g_why },
+        { "mp-preload-load", l_tt, "/chunk/mp-main.js", SESS_EXPLORE, l_why },
+        { "mp-dynamic", d_tt, "/chunk/mp-main.js", SESS_EXPLORE, d_why, .gate = "mp-graph" },
+        { "mp-one-fetch", o_tt, "/chunk/mp-main.js", SESS_EXPLORE, o_why, .gate = "mp-graph" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `rxtest` document (fixture/rxtest.h): `test` over an unknown subject is a predicate of the
    match, decided where the page's units decide the match and forked where the subject's domain allows both. */
 TF_UNIT void probes_rxtest(const char *js, Probe *tab, int *n) {
@@ -32938,6 +32989,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_candslot(js, probes, &np);
     probes_modshare(js, probes, &np);
     probes_compilejoin(js, probes, &np);
+    probes_modpreload(js, probes, &np);
     probes_slicelen(js, probes, &np);
     probes_strsearch(js, probes, &np);
     probes_rxsearch(js, probes, &np);
