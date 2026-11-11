@@ -289,17 +289,19 @@ void dom_cow_parse_release(lxb_html_tree_t *tree);
  * detached by the undo and freed by nobody. It cannot be folded into `insert_child` — §13.2.6.4.7's adoption
  * agency re-inserts one node several times, and two ownership records that each destroy it is a double free.
  *
- * IT DOES NOT FIRE THE TREE HOOK, and that is a statement about §4.2.3's insertion and removing steps rather
- * than about capture. The hook this file fires is THIS ENGINE's §4.2.3 steps and the chokepoint above is the
- * only thing that reaches it; the table a parsed node's insert does reach is lexbor's own per-document
- * `mutation`, whose members are lexbor's per-tag element steps and not the engine's. So a parser-inserted node
- * runs no §4.2.3 insertion steps here, and the members below leave that exactly where it was. Firing the hook
- * from HERE would close it for a SHARED parse and not for a private one — one parse behaving two ways
- * according to a declaration that is about isolation and says nothing about the DOM's steps. */
+ * It runs none of DOM §4.2.3's insertion steps, which is a statement about those steps and not about capture:
+ * tree construction is not §4.2.3 insert, and the table a parsed node's insert does reach is lexbor's own
+ * per-document `mutation`, whose members are lexbor's per-tag element steps. A shared parse and a private one
+ * agree in this, as the declaration is about isolation and says nothing about the DOM's steps. */
 void dom_cow_install_tree_construction(void);
 /* A parser's append of a parentless node into a SHARED tree (HTML §13.2.6's table above, and HTML §14.2's XML
-   tree builder): captured for the delta, and, as tree construction is not DOM §4.2.3 insert, no tree hook. */
+   tree builder): captured for the delta. Tree construction is not DOM §4.2.3 insert and runs none of its steps. */
 void dom_cow_parse_append_shared(lxb_dom_node_t *parent, lxb_dom_node_t *node);
+/* The inverse, for the partial tree a failed parse leaves (HTML §7.5.3's discard): one childless node the parse
+   declared under `kind` appended. A private tree's node, or a shared tree's built with capture off, is freed in
+   place; a shared tree's under capture is unlinked, captured, and stays its creation record's. It runs none of
+   DOM §4.2.3 remove's steps, as tree construction ran no insert for it. */
+void dom_cow_parse_discard(lxb_dom_node_t *node, DomParseRootKind kind);
 /* Whether that install has happened and still stands — asked by the parse entry on every parser it makes, and
    a POSITIVE statement rather than a hole: a §13.2.6 write reaching lexbor's own table is a write no delta
    can ever see, and there is no later point at which that becomes visible. */

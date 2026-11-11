@@ -52,19 +52,17 @@
 #include "core/loader/xml_document.h"
 #include "core/mime/mime_type.h"
 #include "core/xml/xml_parse.h"
-#include "solver/rest_unit.h"   /* how many items each of this loader's phases rests after */
+#include "core/dom/node.h"            /* HTML §4.12.3's template contents, which the discard empties first */
+#include "core/timing/thread_work.h"
+#include "solver/dom_cow.h"
+#include "solver/rest_unit.h"   /* how many items the parse phase rests after */
 #include "check.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
-/* THE THREE THINGS A §7.5.3 LOAD CAN BE DOING, in the order it can reach them. Two of them are a LOOP over
-   something the response controls, which is why each is a phase with a bounded step rather than a stretch of a
-   completing function: the constructs of [1] `document`, and the top-level children a failed parse left
-   behind. A phase list is what makes the loader's own state a thing a driver can stand in the middle of.
-   EACH PHASE'S REST UNIT IS solver/rest_unit.h's AND NOT A `1` HELD HERE, and it is 1 for both loops for a
-   reason worth reading there: both are counted in items whose SIZE the document picks — a [14] `CharData`
-   run, a subtree — so a multiplier on either would multiply an unbounded quantity, which is a bound wearing a
-   granularity's name. Nothing about that reasoning is decidable from inside this file, which is why the
-   numbers are not in it.
+/* The three things an HTML §7.5.3 load can be doing, in the order it can reach them. Two are a loop over
+   something the response controls, so each is a phase with a bounded step: the constructs of [1] `document`,
+   whose rest unit is solver/rest_unit.h's, and the nodes of the partial tree a failed parse left, one per
+   step. A phase list is what lets a driver stand in the middle of the loader's own state.
    §14.2's SCRIPT STEP IS NOT A PHASE OF ITS OWN AND MUST NOT BECOME ONE. It happens AT AN END TAG, in the
    middle of [1] `document`, which is precisely what distinguishes it from HTML §13.2's `script` handling and
    is the whole reason a post-parse walk over the finished tree was the wrong shape: a walk gets the document
@@ -73,7 +71,7 @@
    owes before it reads its next construct. */
 enum { XML_LOAD_PARSE = 0,   /* REST_UNIT_XML_CONSTRUCTS items of core/xml/xml_parse.h's walk, and §14.2's
                                 end-tag step for each `script` element that closes among them */
-       XML_LOAD_DISCARD,     /* REST_UNIT_SUBTREE_REMOVALS children of the partial tree a failed parse left */
+       XML_LOAD_DISCARD,     /* one node of the partial tree a failed parse left, per step */
        XML_LOAD_ERRDOC,      /* §7.5.3's inline report, which is one element and one text node — no unit */
        XML_LOAD_DONE };
 
@@ -94,6 +92,7 @@ struct XmlDocumentLoad {
     HtmlScriptingMode    scripting;
     XmlParse            *parse;
     lxb_dom_node_t      *script_pending;
+    lxb_dom_node_t      *discard;   /* XML_LOAD_DISCARD's cursor: a node of the partial tree, or its root */
     XmlParseReport       report;
     uint8_t              phase;
 };
@@ -125,6 +124,7 @@ XmlDocumentLoad *xml_document_load_begin(lxb_html_document_t *document, DomParse
     l->root_kind = root_kind;
     l->scripting = scripting;
     l->script_pending = NULL;
+    l->discard   = NULL;
     l->phase     = XML_LOAD_PARSE;
     memset(&l->report, 0, sizeof(l->report));
     l->parse = xml_parse_begin(lxb_dom_interface_document(document), l->root, root_kind,
@@ -228,26 +228,41 @@ void xml_document_load_step(XmlDocumentLoad *load)
             return;
         }
         load->parse = NULL;
+        load->discard = load->root;
         load->phase = XML_LOAD_DISCARD;
         return;
 
-    case XML_LOAD_DISCARD:
-        /* §7.5.3: "Error messages from the parse process (e.g., XML namespace well-formedness errors) may be
-           reported inline by mutating the Document." The partial tree the parse built is what a browser
-           discards before doing so — a REST UNIT's worth of top-level children per step, because [1]
-           `document`'s `Misc*` is as long as the response chooses to make it. That unit is one child today and
-           solver/rest_unit.h says why it stays one: removing a child removes its subtree, so a multiplier here
-           would multiply a size the document picked rather than a fixed cost. */
-        if (load->root->first_child != NULL) {
-            n = rest_unit_items(REST_UNIT_SUBTREE_REMOVALS);
-            rest_unit_begin(REST_UNIT_SUBTREE_REMOVALS);
-            while (n-- > 0 && load->root->first_child != NULL)
-                dom_cow_remove_child(load->root->first_child);
-            rest_unit_end();
+    case XML_LOAD_DISCARD: {
+        /* HTML §7.5.3 "Loading XML documents": "Error messages from the parse process (e.g., XML namespace
+           well-formedness errors) may be reported inline by mutating the Document." The partial tree is
+           discarded first, last descendant first: each step moves the cursor one link down or frees one
+           childless node, charged as one DOM-walk unit, so the walk rests at every node of a tree whose size
+           and depth the response chose. A `<template>`'s contents (HTML §14.2 appends there) go before it. */
+        lxb_dom_node_t *at = load->discard, *contents = node_template_content(at), *host;
+
+        thread_work_charge(THREAD_WORK_DOM_WALK, 1);
+        if (contents != NULL && contents->last_child != NULL) {
+            load->discard = contents->last_child;
             return;
         }
-        load->phase = XML_LOAD_ERRDOC;
+        if (at->last_child != NULL) {
+            load->discard = at->last_child;
+            return;
+        }
+        if (at == load->root) {
+            load->discard = NULL;
+            load->phase = XML_LOAD_ERRDOC;
+            return;
+        }
+        host = node_template_content_host(at);
+        if (host != NULL) {   /* emptied template contents: they die with their element */
+            load->discard = host;
+            return;
+        }
+        load->discard = at->parent;
+        dom_cow_parse_discard(at, load->root_kind);
         return;
+    }
 
     case XML_LOAD_ERRDOC:
         /* ONE ELEMENT AND ONE TEXT NODE — the description is the layer's own sentence, see

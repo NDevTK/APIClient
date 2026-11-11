@@ -50,9 +50,6 @@ typedef enum {
        reached from HTML §7.5.3 "Loading XML documents". Cost: one production instance, whose size the document
        chooses ([14] `CharData` is as long as the response makes it). */
     REST_UNIT_XML_CONSTRUCTS,
-    /* One top-level child removed from the partial tree a failed XML parse left, which §7.5.3 permits a user
-       agent to replace with an inline report. Cost: one subtree, whose size the document chooses. */
-    REST_UNIT_SUBTREE_REMOVALS,
     /* One box folded into a scrolling area, CSSOM View §2 "Terminology"'s extreme over "all of the element's
        descendants' boxes", walked by core/layout/scrolling_area.h's cursor: a descendant's margin edge, one
        inline formatting context, or one anonymous block box. core/dom/element_scrolling.c's scroll-into-view

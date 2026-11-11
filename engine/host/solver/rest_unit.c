@@ -21,10 +21,6 @@
    [14] scan must become a pull itself, not that this number is wrong. */
 #define REST_UNIT_XML_CONSTRUCTS_N   1u
 
-/* §7.5.3's discard of a failed parse's partial tree: one top-level child, for the construct's reason —
-   removing a child removes a subtree the document chose. */
-#define REST_UNIT_SUBTREE_REMOVALS_N   1u
-
 /* Boxes a resting drive lays out per rest point, 4. The floor is the cost of resting, which a body pays as one
    staged walk. The ceiling is bound (2), measured by the scrolling-area bracket the drive runs inside: a box's
    own work between its asks, with the fill of an inline formatting context it holds counted apart
@@ -109,7 +105,6 @@ size_t rest_unit_items(RestUnitKind kind)
     switch (kind) {
     case REST_UNIT_INPUT_BYTES:      n = REST_UNIT_INPUT_BYTES_N;      break;
     case REST_UNIT_XML_CONSTRUCTS:   n = REST_UNIT_XML_CONSTRUCTS_N;   break;
-    case REST_UNIT_SUBTREE_REMOVALS: n = REST_UNIT_SUBTREE_REMOVALS_N; break;
     case REST_UNIT_LAYOUT_BOXES:     n = REST_UNIT_LAYOUT_BOXES_N;     break;
     case REST_UNIT_LAYOUT_ELEMENT_SCAN: n = REST_UNIT_LAYOUT_ELEMENT_SCAN_N; break;
     case REST_UNIT_LAYOUT_DESCENDANTS: n = REST_UNIT_LAYOUT_DESCENDANTS_N; break;

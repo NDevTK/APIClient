@@ -36132,7 +36132,11 @@ TF_UNIT void xml_tree_selftest(void)
         CHECK(strcmp(xml_parse_report_message(&rep), xml_parse_report_message(&rep)) == 0
                   && xml_parse_report_message(&rep) != NULL,
               "a parse report has no message");
-        for (n = p3->first_child; n != NULL; n = p3->first_child) dom_cow_remove_child(n);
+        /* core/loader/xml_document.c's discard of the partial tree, last descendant first. */
+        for (n = p3->last_child; n != NULL; n = p3->last_child) {
+            while (n->last_child != NULL) n = n->last_child;
+            dom_cow_parse_discard(n, DOM_PARSE_ROOT_PRIVATE);
+        }
         xml_parse_error_document(lxb_dom_interface_document(d3), p3, DOM_PARSE_ROOT_PRIVATE, &rep);
         n = p3->first_child;
         CHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->next == NULL,

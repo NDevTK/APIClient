@@ -2425,6 +2425,20 @@ void dom_cow_parse_append_shared(lxb_dom_node_t *parent, lxb_dom_node_t *node)
     lxb_dom_node_insert_child(parent, node);
 }
 
+void dom_cow_parse_discard(lxb_dom_node_t *node, DomParseRootKind kind)
+{
+    DOM_WRITE_OUTSIDE_LAYOUT();
+    DCHECK(node != NULL && dom_is_attached(node) && node->first_child == NULL,
+           "a parse's discard was asked for no node, a node in no tree, or a node that still has children");
+    g_dom_version++;
+    if (kind == DOM_PARSE_ROOT_SHARED && g_dom_capture) {
+        dom_remove_capture(node, 0);
+        lxb_dom_node_remove(node);
+        return;
+    }
+    lxb_dom_node_destroy(node);
+}
+
 static void cow_tc_insert_before(lxb_html_tree_t *tree, lxb_dom_node_t *to, lxb_dom_node_t *node)
 {
     DomParseDecl *d = cow_tc_decl(tree);
