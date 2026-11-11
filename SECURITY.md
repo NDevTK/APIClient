@@ -216,12 +216,21 @@ request is answered from that send's record and nothing leaves (`lib/send-coales
 identity: method, URL, header list, the speak-as set with its Cookie, body, credentials mode and cache
 partition, so composing the key reads the identity's cookies only where the unforced run sent that method to
 that URL). The engine declines
-on the same grade a request whose address holds a value it has no bytes for (`pending_park_request`). A
+on the same grade a request whose address holds a value it has no bytes for (`pending_park_request`), and a
+record that states `address=unknown` to the zone is refused there too. A
 declined request's outcome is unobserved, so the engine runs both outcomes (`flow_decline_fork`): one arm stays
 parked on the request, a search that fires when the origin is widened or the address is grounded; the other
 takes Fetch §5.6's network error and runs the page's failure path with its path marked forced, so nothing it
 builds is graded `observed` or `derived`, and a page error raised only on forced paths is the engine's
 exploration rather than the page's own.
+
+Every request the chokepoint judges leaves an entry in its reply record's `egress` list: the address, the signal
+vector, the default arm or grant that admitted it, how it was answered (sent, answered locally, or not sent) and
+the refusal where there is one. The extension's zone takes a settled request's list into the log of the instance
+that asked (`egressTake` in `bridge.js`, a CHECK: a record with no list is refused, never read as an empty one),
+the instance's analysis states the log as `egressSends`, and its run row carries a census of it (`egressHow`).
+A load no instance asked (the seed load, a declared route, a cold re-derivation) is validated where it settles
+and stands on no instance's list.
 
 What the page may read of a reply is decided here from the request's Fetch §2.2.5 mode, which the engine states
 for every request (the pending line's `MODE` field, the XHR record's `mode`) and `_modeOf` CHECKs. A host-permission
@@ -529,7 +538,8 @@ signal → permitted values; `_firingRefusal` fires a request when a default arm
 signal's value is permitted at the request URL's own `.origin`, and otherwise names the signal that decided:
 the first condition of the page's-own-run arm the request fails (`provenance`, `doc-reach`, `actor`, `witness`,
 in that order) that the origin's table does not permit either, or else the first unpermitted signal in
-registry order. Nothing is refused at every setting.
+registry order. One value is refused at every setting: `address=unknown`, an address holding a value with
+no concrete example. No default arm admits it, the attacker-site arm included, and no grant can name it.
 
 | Signal | Values | Reliability |
 |--------|--------|-------------|
@@ -540,6 +550,7 @@ registry order. Nothing is refused at every setting.
 | `cookies` | `yes`, `no` | certain |
 | `header-authority` | `none`, `unknown` | certain |
 | `witness` | `pinned`, `unpinned`, `unstated` | stated (engine), floored at `pinned` by the document record |
+| `address` | `concrete`, `example`, `unknown`, `unstated` | stated (engine): `example` is the bytes the page computes from an unknown's example; `unknown` is never permitted; `unstated` is a record that carries no class, which every engine-named navigation is today |
 | `url-authority` | `present`, `unknown` | partial: a miss is `unknown`, never "none" |
 | `lineage` | `unknown` | undetermined |
 | `reaches` | `attacker-site`, `another-party` | certain: the URL parser's host against the attacker site the person configured (`lib/attacker-site.js`); `attacker-site` fires by default, since it is the person's own server |
@@ -651,7 +662,8 @@ included. The mark can only narrow `actor`, never widen it, and a `page` caller 
 - Signals added since grants were first stored, each narrowing every grant stored before it: `reaches`
   (`attacker-site`, `another-party`), with the attacker-site setting. A grant stored before it refuses
   `reaches=another-party` until the person permits it again. `actor` gained the value `drive`: a grant of
-  `actor=tool` stored before it does not cover a driven request.
+  `actor=tool` stored before it does not cover a driven request. `address` gates: a grant stored before it
+  names no value of it and permits nothing at that origin until the person permits it again.
 - The native host states its table synchronously, and `--explore <origin>` in `engine/trusted.mjs` is
   `safeFetchWiden`.
 
