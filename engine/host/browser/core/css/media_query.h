@@ -83,6 +83,34 @@ MediaQuerySet *media_query_parse_one(const char *text);
    second code path. */
 MediaQuerySet *media_query_parse_condition(const char *text);
 
+/* CSS Conditional 5 §5.4 "Container Queries: the @container rule"'s `<container-query>` with §6.1 "Size
+   Container Features"' features, "the same as for a media feature" in syntax. NULL where the text does not
+   parse with them, or does not consume the whole of it. OWNED: media_query_free. */
+MediaQuerySet *media_query_parse_container(const char *text);
+
+/* The axes a parsed `<container-query>`'s features read, into `*axes`: `width` the horizontal one, `height` the
+   vertical, `inline-size` and `block-size` the container's logical ones, `aspect-ratio` and `orientation` both
+   physical. False where it holds a `<general-enclosed>`, an unknown feature, for which §5.4 selects no
+   container. */
+enum {
+    MEDIA_QUERY_AXIS_HORIZONTAL = 1u << 0,
+    MEDIA_QUERY_AXIS_VERTICAL = 1u << 1,
+    MEDIA_QUERY_AXIS_INLINE = 1u << 2,
+    MEDIA_QUERY_AXIS_BLOCK = 1u << 3
+};
+bool media_query_container_axes(const MediaQuerySet *set, unsigned *axes);
+
+/* The selected query container a `<container-query>` is evaluated against: its content box (NaN on an axis it
+   does not accept), and `length`, which resolves a dimension on its computed values (§6.1). */
+typedef struct {
+    double width, height, inline_size, block_size;
+    bool (*length)(void *ctx, double n, const char *unit, double *px);
+    void  *length_ctx;
+} MediaQueryContainer;
+
+/* §5.4's evaluation against `c` in `ctx`'s realm: 1 true, 0 false, -1 unknown (MQ4 §3.1's Kleene logic). */
+int media_query_container_matches(JSContext *ctx, const MediaQuerySet *set, const MediaQueryContainer *c);
+
 /* MQ4 §4's `<length>` in CSS pixels, over a DIMENSION's own number and unit — css-values-4 §6.2's absolute
    units, §6.1.1's font-relative ones resolved against the INITIAL values §6.1.1 itself prescribes outside the
    context of an element, §6.1.2's viewport-percentage ones in all four of §6.1.2.1's spellings against THIS

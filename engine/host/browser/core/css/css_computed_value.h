@@ -131,6 +131,11 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name);
    and `content` are their expansions and `none` is the empty set. */
 unsigned css_computed_contain(lxb_dom_element_t *el);
 
+/* `n` of `unit` absolutized on `el`'s computed values, as in a property that affects no font: CSS Conditional 5
+   §6.1's "relative length units ... in container query conditions are evaluated based on the computed values
+   of the query container". False for a unit that is not a `<length>` unit. */
+bool css_computed_length_on(lxb_dom_element_t *el, double n, const char *unit, CssPx *out);
+
 /* CSS Conditional 5 §5.1's computed `container-type` of `el` as core/css/css_container.h's set; `normal` is the
    empty set. */
 unsigned css_computed_container_type(lxb_dom_element_t *el);

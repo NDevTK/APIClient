@@ -5,8 +5,11 @@
    and under an `inline-size` container read on the block axis, which that container does not accept; the
    nearest-container walk past an `inline-size` container to a `size` one and past an ineligible `display:
    inline` one (the expectations of WPT css/css-conditional/container-queries/container-units-selection.html and
-   container-units-ineligible-container.html); the size containment `container-type: size` applies; and the
-   computed values. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
+   container-units-ineligible-container.html); the size containment `container-type: size` applies; the
+   computed values; and §5.4's `@container` rules: a true and a false size query, a named one over `inline-size`,
+   one on an axis its container does not accept, one whose `em` is the container's own 20px font size, and one
+   over an element with no container. It ends with TF_CANVAS_INK, which test_forced.c defines before including
+   it. */
 #ifndef ENGINE_HOST_FIXTURE_CQUNITS_H
 #define ENGINE_HOST_FIXTURE_CQUNITS_H
 #ifndef TF_CANVAS_INK
@@ -14,8 +17,19 @@
 #endif
 
 static const char HTML_CQUNITS[] =
-    "<!doctype html><html>"
+    "<!doctype html><html><head><style>"
+    "#qa,#qb,#qn,#qh,#qe,#qo{width:5px}"
+    "@container (width > 200px){#qa{width:11px}}"
+    "@container (width > 400px){#qb{width:12px}}"
+    "@container card (inline-size >= 300px){#qn{width:13px}}"
+    "@container (height > 0px){#qh{width:14px}}"
+    "@container (width > 16em){#qe{width:16px}}"
+    "@container (width > 0px){#qo{width:15px}}"
+    "</style></head>"
     "<body>"
+    "<div id=qc style=\"container:card / inline-size;width:300px;font-size:20px\">"
+    "<div id=qa></div><div id=qb></div><div id=qn></div><div id=qh></div><div id=qe></div></div>"
+    "<div id=qo></div>"
     "<div id=sc style=\"container-type:size;width:300px;height:200px\">"
     "<div id=st style=\"width:10cqw;height:10cqh;margin-left:10cqmin;margin-top:10cqmax\"></div></div>"
     "<div id=nc style=\"width:10cqw;height:10cqh\"></div>"
@@ -38,7 +52,9 @@ static const char HTML_CQUNITS[] =
     "+'&itw='+R('it').width+'&ith='+R('it').height+'&ich='+R('ic').height"
     "+'&ntw='+R('nt').width+'&nth='+R('nt').height+'&iew='+R('ie').width+'&ieh='+R('ie').height"
     "+'&szh='+R('sz').height+'&cnn='+S('cn','container-name')+'&cnt='+S('cn','container-type')"
-    "+'&cst='+S('cs','container-type')+'&sct='+S('sc','container-type')+'&scn='+S('sc','container-name');"
+    "+'&cst='+S('cs','container-type')+'&sct='+S('sc','container-type')+'&scn='+S('sc','container-name')"
+    "+'&qa='+R('qa').width+'&qb='+R('qb').width+'&qn='+R('qn').width+'&qh='+R('qh').width+'&qe='+R('qe').width"
+    "+'&qo='+R('qo').width;"
     "fetch('/api/cqunits?'+q);"
     "</script>"
     TF_CANVAS_INK

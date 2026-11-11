@@ -163,7 +163,7 @@ bool css_author_sheets_run(CssAuthorSheets *s, bool rests)
         JS_FreeValue(ctx, len);
     }
     for (; s->at < ns; s->at++) {
-        CssRuleCascadeSheet view = { NULL, NULL, 0, NULL, 0, NULL, 0, NULL, 0 };
+        CssRuleCascadeSheet view = { 0 };
         CssRuleCascadeStep step;
 
         if (s->walk == NULL) {
@@ -248,6 +248,16 @@ uint32_t css_author_sheets_count(const CssAuthorSheets *s)
 {
     DCHECK(s != NULL && s->sealed, "the author origin's sheet count was read through no sheet set or an open one");
     return s->n;
+}
+
+bool css_author_sheets_container_queries(const CssAuthorSheets *s)
+{
+    uint32_t i;
+
+    DCHECK(s != NULL && s->sealed, "the author origin's container queries were asked of no set or an open one");
+    for (i = 0; i < s->n; i++)
+        if (s->v[i].view.ncq_owned > 0) return true;
+    return false;
 }
 
 bool css_author_sheets_registration(const CssAuthorSheets *s, const char *name, CssPropertyRegistration *out)

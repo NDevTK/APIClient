@@ -26,6 +26,7 @@
 #include "core/css/css_cascade_pass.h"   /* the layout job's record a cascade-input write may not land inside */
 #include "core/layout/layout_job.h"   /* the resting drive a sheet's walk takes its rules from */
 #include "core/css/css_at_rule_prelude.h"
+#include "core/css/container_query.h"
 #include "core/css/css_font_family.h"   /* CSS Fonts 4 §6.9.1's `<font-family-name>#` prelude */
 #include "core/css/css_font_feature_values.h"   /* CSS Fonts 4 §12.2's CSSFontFeatureValuesMap */
 #include "core/css/css_nesting.h"
@@ -4489,8 +4490,13 @@ void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text
 typedef struct {
     RBuf                 out;
     const CssLayerNode **layer;
+    /* beside `layer`, the innermost `@container` query each emitted rule sits in, NULL outside every one */
+    const ContainerQuery **cq;
     uint32_t             n, cap;
     CssLayerOrder       *order;
+    /* the `@container` queries the walk met, owned */
+    ContainerQuery     **cq_owned;
+    uint32_t             ncq_owned, cq_owned_cap;
     /* CSS Properties and Values API 1 §3's registrations the walk met, in document order, owned; a scratch
        emitter records none, since what it writes is discarded */
     CssPropertyRegistrationEntry *regs;
@@ -4515,19 +4521,64 @@ static void cascade_emit_font_face(JSContext *ctx, CascadeEmit *e, const CssRule
    and cleared at every return, so it is never kept across a rest. */
 static MediaQueryMemo *g_emit_memo;
 
-/* Record which cascade layer the rule just written into `e->out` belongs to. NULL is CSSOM §6.4's non-style rules —
-   see the header for why the caller reads that as a statement rather than as a hole. */
-static void cascade_emit_mark(CascadeEmit *e, const CssLayerNode *layer)
+/* Record which cascade layer the rule just written into `e->out` belongs to, and which `@container` query `cq`
+   it is nested in. NULL layer is CSSOM §6.4's non-style rules — see the header for why the caller reads that as
+   a statement rather than as a hole. */
+static void cascade_emit_mark(CascadeEmit *e, const CssLayerNode *layer, const ContainerQuery *cq)
 {
     if (e->n == e->cap) {
         uint32_t cap = e->cap ? e->cap * 2 : 16;
         const CssLayerNode **grown = lexbor_realloc(e->layer, (size_t)cap * sizeof(*grown));
+        const ContainerQuery **grown_cq = lexbor_realloc(e->cq, (size_t)cap * sizeof(*grown_cq));
 
-        CHECK(grown != NULL, "cssom: OOM recording a rule's cascade layer for the author cascade");
+        CHECK(grown != NULL && grown_cq != NULL, "cssom: OOM recording a rule's cascade layer for the author cascade");
         e->layer = grown;
+        e->cq = grown_cq;
         e->cap = cap;
     }
+    e->cq[e->n] = cq;
     e->layer[e->n++] = layer;
+}
+
+/* CSS Conditional 5 §5.4's condition of the `@container` rule `r`, nested in `up`, owned by `e`. */
+static const ContainerQuery *cascade_container_query(JSContext *ctx, CascadeEmit *e, CssRuleData *r,
+                                                     const ContainerQuery *up)
+{
+    CssContainerConditions conds;
+    uint32_t i;
+
+    conds.n = container_count(ctx, r);
+    conds.v = lexbor_calloc(conds.n, sizeof *conds.v);
+    CHECK(conds.v != NULL, "cssom: OOM reading an `@container` rule's conditions for the author cascade");
+    for (i = 0; i < conds.n; i++) {
+        conds.v[i].name = container_part(ctx, r, i, 0);
+        conds.v[i].query = container_part(ctx, r, i, 1);
+        CHECK(conds.v[i].name != NULL && conds.v[i].query != NULL,
+              "cssom: OOM reading an `@container` rule's conditions for the author cascade");
+    }
+    if (e->ncq_owned == e->cq_owned_cap) {
+        uint32_t cap = e->cq_owned_cap ? e->cq_owned_cap * 2 : 4;
+        ContainerQuery **grown = lexbor_realloc(e->cq_owned, (size_t)cap * sizeof(*grown));
+
+        CHECK(grown != NULL, "cssom: OOM holding an `@container` rule's condition for the author cascade");
+        e->cq_owned = grown;
+        e->cq_owned_cap = cap;
+    }
+    e->cq_owned[e->ncq_owned] = container_query_new(&conds, up);
+    css_container_conditions_free(&conds);
+    return e->cq_owned[e->ncq_owned++];
+}
+
+static void cascade_emit_queries_free(CascadeEmit *e)
+{
+    uint32_t i;
+
+    for (i = 0; i < e->ncq_owned; i++) container_query_free(e->cq_owned[i]);
+    free(e->cq_owned);
+    free((void *)e->cq);
+    e->cq_owned = NULL;
+    e->cq = NULL;
+    e->ncq_owned = e->cq_owned_cap = 0;
 }
 
 /* WHAT `&` NAMES WHERE THE WALK CURRENTLY IS — CSS Nesting §4's "the elements matched by the parent rule", as
@@ -4555,13 +4606,15 @@ struct CascadeFrame {
     CssLayerNode      *cur;
     const CascadeNest *nest;
     CascadeNest        own;
+    const ContainerQuery *cq;   /* the innermost `@container` query the list is in, owned by an emitter above */
 };
 
 /* A frame over `kids` (taken), writing into `e` or, for `scratch`, into a scratch emitter that shares only `e`'s
    layer order. `own_sel` (taken, `own_len` bytes) is the style rule whose nested rules these are; NULL keeps
    `nest`. */
 static CascadeFrame *cascade_frame_new(JSContext *ctx, JSValue kids, CascadeEmit *e, bool scratch,
-                                       CssLayerNode *cur, const CascadeNest *nest, char *own_sel, size_t own_len)
+                                       CssLayerNode *cur, const CascadeNest *nest, char *own_sel, size_t own_len,
+                                       const ContainerQuery *cq)
 {
     CascadeFrame *f = lexbor_calloc(1, sizeof *f);
 
@@ -4577,6 +4630,7 @@ static CascadeFrame *cascade_frame_new(JSContext *ctx, JSValue kids, CascadeEmit
         f->e = e;
     }
     f->cur = cur;
+    f->cq = cq;
     f->own.sel = own_sel;
     f->own.len = own_len;
     f->nest = own_sel ? &f->own : nest;
@@ -4593,6 +4647,7 @@ static void cascade_frame_free(JSContext *ctx, CascadeFrame *f)
     if (f->owns_scratch) {
         free(f->scratch.out.s);
         free(f->scratch.layer);
+        cascade_emit_queries_free(&f->scratch);
         cascade_emit_registrations_free(&f->scratch);
     }
     free((char *)f->own.sel);
@@ -4607,7 +4662,7 @@ static void cascade_frame_free(JSContext *ctx, CascadeFrame *f)
    a `@layer` block declares inside it. `nest` is what a nested rule's `&` resolves to; see above. A rule whose
    children are walked next hands back their frame in `*descend`. */
 static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, CssLayerNode *cur,
-                             const CascadeNest *nest, CascadeFrame **descend)
+                             const CascadeNest *nest, const ContainerQuery *cq, CascadeFrame **descend)
 {
     CssRuleData *r = rule_of(rule);
     size_t sl = 0, bl = 0;
@@ -4632,7 +4687,7 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
            arm is the element-sensitive conditional, which `@container` below is and which is why that rule cannot
            reach this shape however much its IDL resembles this one's. */
         if (!applies) return true;
-        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, false, cur, nest, NULL, 0);
+        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, false, cur, nest, NULL, 0, cq);
         return true;
     }
     /* CSS Conditional 3 §6's `@supports`, the OTHER conditional group rule, and CSS Conditional 3 §2's sentence covers
@@ -4643,69 +4698,20 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        walked. It is not the element-sensitive conditional that sentence's second arm is about. */
     if (r->type == RULE_TYPE_SUPPORTS) {
         if (!rule_supports_matches(ctx, r)) return true;
-        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, false, cur, nest, NULL, 0);
+        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, false, cur, nest, NULL, 0, cq);
         return true;
     }
-    /* CSS Conditional 5 §5.4 "Container Queries: the @container rule"'s `@container` IS THE ELEMENT-SENSITIVE
-       CONDITIONAL, and that is what makes it a different problem from the two arms above rather than a third copy
-       of them. A media query and a feature query are facts about the DOCUMENT, so each is asked once and its
-       children are walked or not. §5.4's condition is asked PER ELEMENT: "for each element, the query container to
-       be queried is selected from among the element's ancestor query containers", and two elements matching one
-       selector inside one `@container` can therefore get opposite answers. This cascade flattens the rules that
-       apply into TEXT that is re-parsed and matched by selector, so it has nowhere to put a condition that holds
-       for one matching element and not for its sibling.
-       THE LAYERS CONTRIBUTE UNCONDITIONALLY AND THAT IS NOT THE SAME QUESTION AS THE STYLE RULES.
-       CSS Cascade 5 §6.4.3 "Layer Ordering" writes its second arm for exactly this rule — "Layers that are defined
-       inside of a conditional group rule do not contribute to the layer order unless the condition is true or
-       unless the conditional group rule can evaluate differently for different elements in the document" — and its
-       Note says the consequence outright: "any layers defined inside an element-sensitive conditional group rule
-       need to be accommodated when establishing the global layer order, regardless of the rule's condition". So the
-       children are WALKED whatever the query says, and the `@media` arm's false branch is not the shape to copy.
-       AND EMITTING NO STYLE RULE IS THE RIGHT ANSWER IN THIS ENGINE RATHER THAN A GUESS BETWEEN TWO WRONG ONES.
-       §5.4 filters by TRUTH and not by falsity — "Style declarations within the @container rule are filtered by its
-       condition to only match when the container query is true for their element's query container" — and it states
-       what an element with no container gets: "If no ancestor is an eligible query container, then the container
-       query is unknown for that element." UNKNOWN IS NOT TRUE, so the declarations do not apply, and no `not` can
-       turn that around: selection failure makes the whole `<container-condition>` unknown rather than some feature
-       inside it, and §5.4's own combination rule ("true if any of its component <container-condition>s are true")
-       keeps a list of unknowns from ever being true. CSS Conditional 5 §5.1 "Creating Query Containers: the
-       container-type property" is the only thing that makes an element a query container, and this engine cascades
-       no such property, so that antecedent holds for EVERY element in every document it parses.
-       THE CRASH THIS REPLACED WAS RIGHT ABOUT THE SPEC AND WRONG ABOUT THE CONSEQUENCE, which is recorded here
-       because the next reader will otherwise re-derive it. It used to say that dropping the children
-       `makes it false for every element` while §5.4's own answer is UNKNOWN, `which is neither` — and unknown is
-       indeed neither, AS A VALUE. It is not a third CASCADE OUTCOME: §5.4's filter admits only TRUE, so unknown and
-       false are indistinguishable in what they apply, and the value distinction it turned on is real and does not
-       reach this walk. (Those two runs are this tree's own retired prose and are shown rather than claimed, which
-       is why they are backticked: a quoted run here would be read against the nearest citation above it — §5.1 —
-       and reported as a spec quotation that standard does not contain.)
-       THE SCRATCH EMITTER IS THE `@starting-style` ARM'S, and its banner holds the reasoning for why BOTH halves
-       are discarded rather than the style half suppressed — `cascade_emit_mark` writes one entry per rule written
-       into `out`, so stopping one without the other shifts every later rule into a neighbour's layer.
-       NAMED RESIDUAL — the code is CORRECT for the documents this engine can build and NARROWER than §5.4:
-         NOT COVERED: an element that IS a query container, whose descendants' container queries §5.4 then requires
-           to be EVALUATED against it rather than answered unknown. Every `@container` body is withheld here, so a
-           query that ought to be true is withheld with the rest.
-         THE NEXT DIFF BUILDS §5.1's `container-type` as a cascaded property and the ancestor walk that SELECTS a
-           query container for an element, which is a cascade result feeding a cascade input and is a component of
-           its own; then CSS Conditional 5 §6.2 "Style Container Features", which needs only the computed value of a
-           custom property on that container and is therefore the arm that can land without layout; then
-           CSS Conditional 5 §6.1 "Size Container Features", which needs core/browser/layout. Once a container can
-           be selected this arm can no longer withhold the body, because the text it emits is matched by selector
-           and cannot carry a per-element condition — so the diff that lands §5.1 is the diff that has to decide
-           where a per-element filter lives, and it must not reach this function for the answer.
-         ITS ABSENCE WOULD SHOW as a page whose `@container` bodies never style anything while its layer order is
-           the one a browser computes: read the text this walk emits for a sheet with an `@container` in it and the
-           declarations inside are absent, while the layers declared inside it hold their positions in
-           `css_layer_order`. A browser that had selected a container would have emitted those declarations for the
-           elements under it.
-         RETIREMENT: this note goes when `container-type` is a property this engine cascades. Grep
-           `"container-type"` across core/css: while that answers only prose, no element is a query container and
-           this arm is right. core/css/media_query.c's `mq_container_extent` rests on the SAME premise for
-           CSS Conditional 5 §7's `cq*` units and states the same grep, so the diff that retires one retires both
-           and neither may be drained alone. */
+    /* CSS Conditional 5 §5.4 "Container Queries: the @container rule" is the element-sensitive conditional: "for
+       each element, the query container to be queried is selected from among the element's ancestor query
+       containers", so two elements one selector matches can get opposite answers, and the condition cannot be
+       answered here. Its style rules are emitted, each marked with the rule's condition beside its layer, and the
+       match result asks that condition of the element the selector matched (core/css/container_query.h).
+       Layers declared inside it contribute whatever it answers: CSS Cascade 5 §6.4.3 "Layer Ordering", "unless
+       the conditional group rule can evaluate differently for different elements in the document". */
     if (r->type == RULE_TYPE_CONTAINER) {
-        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, true, cur, nest, NULL, 0);
+        const ContainerQuery *q = cascade_container_query(ctx, e, r, cq);
+
+        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, false, cur, nest, NULL, 0, q);
         return true;
     }
     /* AN `@namespace` IS EMITTED, and it is the one non-style rule that must be: it declares a prefix the
@@ -4721,7 +4727,7 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         if (!namespace_rule_serialize(ctx, r, &one)) { free(one.s); return false; }
         rbuf_add(&e->out, one.s);
         free(one.s);
-        cascade_emit_mark(e, NULL);
+        cascade_emit_mark(e, NULL, NULL);
         return true;
     }
     /* AN `@import` CONTRIBUTES NO STYLE RULE TO THIS SHEET AND STILL CONTRIBUTES TO THE LAYER ORDER. Its declarations
@@ -4839,7 +4845,7 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
                        "grammar is `<layer-name>?`, and its creator refuses a prelude carrying a list");
         node = css_layer_order_declare(e->order, cur, n ? names[0] : NULL);
         serialized_free(names, n);
-        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, false, node, nest, NULL, 0);
+        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, false, node, nest, NULL, 0, cq);
         return true;
     }
     /* A CSS Transitions 2 §3.3 `@starting-style` CONTRIBUTES NO STYLE RULE TO THE STYLE THIS WALK BUILDS, which
@@ -4873,7 +4879,7 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        deleted, while that band takes no declaration from any sheet. RETIREMENT: this note goes when that band has
        a producer. */
     if (r->type == RULE_TYPE_STARTING_STYLE) {
-        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, true, cur, nest, NULL, 0);
+        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, true, cur, nest, NULL, 0, cq);
         return true;
     }
     DCHECK(r->type == RULE_TYPE_STYLE, "the author cascade met a rule type it has no arm for");
@@ -4918,7 +4924,7 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
     if (block) rbuf_add_n(&e->out, block, bl);
     rbuf_add(&e->out, "}");
     free(block);
-    cascade_emit_mark(e, cur);
+    cascade_emit_mark(e, cur, cq);
     /* AND THEN ITS OWN NESTED RULES, AFTER IT, which CSS Nesting 1 §3.4 "Mixing Nesting Rules and Declarations"
        requires rather than merely permits: "For the purpose of determining the Order Of Appearance, nested style rules
        and nested group rules are considered to come after their parent rule." So the parent's declarations go in first
@@ -4927,7 +4933,7 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        rule's emitted selector, at the rule tree's own depth: CSS Nesting places no limit on it and neither does
        this walk, whose frames are on the heap. */
     if (array_len(ctx, r->child_rules) == 0) { free(sel); return true; }
-    *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, false, cur, nest, sel, sl);
+    *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, false, cur, nest, sel, sl, cq);
     return true;
 }
 
@@ -4953,7 +4959,7 @@ CssRuleCascadeWalk *css_rule_cascade_walk_open(JSContext *ctx, JSValueConst list
     w->e.order = order;
     w->ok = true;
     w->top = cascade_frame_new(ctx, JS_DupValue(ctx, list), &w->e, false, css_layer_order_root(order), NULL,
-                               NULL, 0);
+                               NULL, 0, NULL);
     return w;
 }
 
@@ -4976,7 +4982,7 @@ CssRuleCascadeStep css_rule_cascade_walk_run(JSContext *ctx, CssRuleCascadeWalk 
                 return CSS_RULE_CASCADE_PARKED;
             }
             rule = JS_GetPropertyUint32(ctx, w->top->kids, w->top->i++);
-            w->ok = cascade_emit_one(ctx, rule, w->top->e, w->top->cur, w->top->nest, &descend);
+            w->ok = cascade_emit_one(ctx, rule, w->top->e, w->top->cur, w->top->nest, w->top->cq, &descend);
             JS_FreeValue(ctx, rule);
             DCHECK(w->ok || descend == NULL, "a rule both failed and asked the author cascade to walk its children");
             if (descend != NULL) {
@@ -4993,6 +4999,9 @@ CssRuleCascadeStep css_rule_cascade_walk_run(JSContext *ctx, CssRuleCascadeWalk 
     if (!w->ok) return CSS_RULE_CASCADE_FAILED;
     out->text = w->e.out.s;
     out->layer = w->e.layer;
+    out->cq = w->e.cq;
+    out->cq_owned = w->e.cq_owned;
+    out->ncq_owned = w->e.ncq_owned;
     out->n = w->e.n;
     out->regs = w->e.regs;
     out->nregs = w->e.nregs;
@@ -5004,6 +5013,9 @@ CssRuleCascadeStep css_rule_cascade_walk_run(JSContext *ctx, CssRuleCascadeWalk 
     w->e.nfont_faces = w->e.font_faces_cap = 0;
     w->e.out.s = NULL;
     w->e.layer = NULL;
+    w->e.cq = NULL;
+    w->e.cq_owned = NULL;
+    w->e.ncq_owned = w->e.cq_owned_cap = 0;
     w->e.n = 0;
     w->e.regs = NULL;
     w->e.nregs = w->e.regs_cap = 0;
@@ -5027,6 +5039,7 @@ void css_rule_cascade_walk_free(JSContext *ctx, CssRuleCascadeWalk *w)
     }
     free(w->e.out.s);
     free(w->e.layer);
+    cascade_emit_queries_free(&w->e);
     cascade_emit_registrations_free(&w->e);
     free(w);
 }
@@ -5038,6 +5051,12 @@ void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s)
     DCHECK(s != NULL, "the author cascade's view of a sheet was freed through nothing");
     free(s->text);
     free((void *)s->layer);
+    free((void *)s->cq);
+    for (i = 0; i < s->ncq_owned; i++) container_query_free(s->cq_owned[i]);
+    free(s->cq_owned);
+    s->cq = NULL;
+    s->cq_owned = NULL;
+    s->ncq_owned = 0;
     for (i = 0; i < s->nregs; i++) css_property_registration_entry_free(&s->regs[i]);
     free(s->regs);
     for (i = 0; i < s->nkeyframes; i++) free(s->keyframes[i]);

@@ -1361,6 +1361,27 @@ static CssPx cv_clamp_px(const char *name, CssPx px)
     return px;
 }
 
+bool css_computed_length_on(lxb_dom_element_t *el, double n, const char *unit, CssPx *out)
+{
+    CssCvFontCtx slot;
+    CssFontMetrics font;
+    CssLength len;
+    char text[64];
+
+    DCHECK(el != NULL && unit != NULL && out != NULL, "a length was resolved on no element or into nowhere");
+    snprintf(text, sizeof text, "%.17g%s", n, unit);
+    slot.el = el;
+    slot.affecting = false;
+    slot.lh_affecting = false;
+    font.resolve = css_cv_font_metric;
+    font.ctx = &slot;
+    font.container = css_cv_container_extent;
+    if (!css_length_parse(css_cv_realm(el), &font, text, CSS_KEYWORDS_NONE, &len)) return false;
+    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE, "a dimension with no percentage parsed to something other than a length");
+    *out = len.px;
+    return true;
+}
+
 /* `spec` parsed against `name`'s grammar and absolutized. CONSUMES `spec`. FALSE when it does not match the
    grammar (css_length.h), with `*out` unwritten. */
 static bool computed_length(lxb_dom_element_t *el, const char *name, char *spec, CssLength *out)

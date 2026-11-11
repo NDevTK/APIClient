@@ -21612,6 +21612,7 @@ TF_UNIT void probes_cqunits(const char *js, Probe *tab, int *n) {
     const char *cq_ax_why = NULL; int cq_ax_tt = 1;
     const char *cq_ct_why = NULL; int cq_ct_tt = 1;
     const char *cq_cv_why = NULL; int cq_cv_tt = 1;
+    const char *cq_rule_why = NULL; int cq_rule_tt = 1;
     int reached = !!strstr(js, "\"/api/cqunits\"");
     const char *nr = "NOT REACHED: there is no /api/cqunits record at all, so the document aborted before its fetch";
 
@@ -21620,6 +21621,21 @@ TF_UNIT void probes_cqunits(const char *js, Probe *tab, int *n) {
     fold_row(&cq_ax_tt, &cq_ax_why, reached, nr);
     fold_row(&cq_ct_tt, &cq_ct_why, reached, nr);
     fold_row(&cq_cv_tt, &cq_cv_why, reached, nr);
+    fold_row(&cq_rule_tt, &cq_rule_why, reached, nr);
+    fold_row(&cq_rule_tt, &cq_rule_why, param_value_is(js, "/api/cqunits", "qa", "11"),
+             "CSS Conditional 5 §5.4: `@container (width > 200px)` under a 300px container did not apply");
+    fold_row(&cq_rule_tt, &cq_rule_why, param_value_is(js, "/api/cqunits", "qb", "5"),
+             "CSS Conditional 5 §5.4: `@container (width > 400px)` under a 300px container applied");
+    fold_row(&cq_rule_tt, &cq_rule_why, param_value_is(js, "/api/cqunits", "qn", "13"),
+             "CSS Conditional 5 §5.4: `@container card (inline-size >= 300px)` did not select the container named "
+             "`card` or did not read its inline size");
+    fold_row(&cq_rule_tt, &cq_rule_why, param_value_is(js, "/api/cqunits", "qh", "5"),
+             "CSS Conditional 5 §5.4: `@container (height > 0px)` applied under an `inline-size` container, which "
+             "accepts no block-axis query, so no container is selected and the query is unknown");
+    fold_row(&cq_rule_tt, &cq_rule_why, param_value_is(js, "/api/cqunits", "qe", "5"),
+             "CSS Conditional 5 §6.1: `16em` in a container query is not the container's 16 x 20px = 320px");
+    fold_row(&cq_rule_tt, &cq_rule_why, param_value_is(js, "/api/cqunits", "qo", "5"),
+             "CSS Conditional 5 §5.4: an `@container` rule applied to an element with no query container");
     fold_row(&cq_sz_tt, &cq_sz_why, param_value_is(js, "/api/cqunits", "stw", "30"),
              "CSS Conditional 5 §7: `10cqw` under a 300px `size` container is not 30px");
     fold_row(&cq_sz_tt, &cq_sz_why, param_value_is(js, "/api/cqunits", "sth", "20"),
@@ -21668,6 +21684,7 @@ TF_UNIT void probes_cqunits(const char *js, Probe *tab, int *n) {
         { "cq-axis-selection", cq_ax_tt, "/api/cqunits", SESS_EXPLORE, cq_ax_why },
         { "cq-container-type-containment", cq_ct_tt, "/api/cqunits", SESS_EXPLORE, cq_ct_why },
         { "cq-computed-value", cq_cv_tt, "/api/cqunits", SESS_EXPLORE, cq_cv_why },
+        { "cq-container-rule", cq_rule_tt, "/api/cqunits", SESS_EXPLORE, cq_rule_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

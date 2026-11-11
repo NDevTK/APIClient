@@ -392,9 +392,16 @@ typedef struct {
 
 void css_rule_font_face_free(CssRuleFontFace *f);
 
+struct ContainerQuery;
 typedef struct {
     char                *text;    /* the flattened sheet. OWNED. NULL when the sheet emitted nothing. */
     const CssLayerNode **layer;   /* one entry per emitted rule, in emission order. OWNED. */
+    /* one entry per emitted rule: the innermost CSS Conditional 5 §5.4 `@container` query it is nested in, which
+       the match result asks of the element its selector matched (core/css/container_query.h), or NULL. The
+       array is OWNED and its queries are `cq_owned`'s. */
+    const struct ContainerQuery **cq;
+    struct ContainerQuery **cq_owned;
+    uint32_t             ncq_owned;
     uint32_t             n;       /* how many rules were emitted, and how long `layer` is */
     CssPropertyRegistrationEntry *regs;   /* the sheet's `@property` registrations in document order. OWNED. */
     uint32_t             nregs;

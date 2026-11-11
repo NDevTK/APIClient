@@ -20,11 +20,17 @@
 
 #include "core/css/css_length.h"
 
-/* A set of physical axes a size query reads. The empty set is a query naming no size feature. */
+/* A set of axes a size query reads: physical ones, and the candidate container's own logical ones (§6.1.3's
+   `inline-size` is "in the query container's inline axis"). The empty set is a query naming no size feature. */
 enum {
     CONTAINER_AXIS_HORIZONTAL = 1u << 0,
-    CONTAINER_AXIS_VERTICAL = 1u << 1
+    CONTAINER_AXIS_VERTICAL = 1u << 1,
+    CONTAINER_AXIS_INLINE = 1u << 2,
+    CONTAINER_AXIS_BLOCK = 1u << 3
 };
+
+/* The physical axis `c`'s own inline (`inline_axis`) or block axis is: CONTAINER_AXIS_HORIZONTAL or _VERTICAL. */
+unsigned container_selector_physical(lxb_dom_element_t *c, bool inline_axis);
 
 /* The nearest flat tree ancestor of `el` (`el` excluded) that is an eligible size query container on every axis
    in `axes` and, where `name` is not NULL, whose computed `container-name` holds `name`; NULL when there is
@@ -37,6 +43,11 @@ lxb_dom_element_t *container_selector_find(lxb_dom_element_t *el, unsigned axes,
    §7 answers with "the small viewport size for that axis" — the caller's, since the viewport's facts are
    core/css/css_length.c's. */
 bool container_selector_unit_extent(lxb_dom_element_t *el, bool vertical, CssPx *out);
+
+/* The same layout read now, for a reader that cannot rest: the author match of an element under a sheet with a
+   CSS Conditional 5 §5.4 `@container` rule resolves its query containers before its collection begins, since
+   the collection may not nest another element's (core/css/css_style_declaration.c). */
+void container_selector_extents(lxb_dom_element_t *el);
 
 /* The layout every container query of `el` and of its ancestors can read, asked under a resting drive: the
    content box of each ancestor that is a size query container, on each axis it accepts. False ("not yet") with

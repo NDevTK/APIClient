@@ -28,10 +28,16 @@ static unsigned cs_accepted_axes(lxb_dom_element_t *c)
         return containment_size(c) ? (CONTAINER_AXIS_HORIZONTAL | CONTAINER_AXIS_VERTICAL) : 0;
     if (type & CSS_CONTAINER_TYPE_INLINE_SIZE) {
         if (!containment_inline_size(c)) return 0;
-        return css_logical_axis_is_vertical(c, CSS_LOGICAL_AXIS_INLINE) ? CONTAINER_AXIS_VERTICAL
-                                                                        : CONTAINER_AXIS_HORIZONTAL;
+        return container_selector_physical(c, true);
     }
     return 0;
+}
+
+unsigned container_selector_physical(lxb_dom_element_t *c, bool inline_axis)
+{
+    DCHECK(c != NULL, "a container's logical axis was mapped with no container");
+    return css_logical_axis_is_vertical(c, inline_axis ? CSS_LOGICAL_AXIS_INLINE : CSS_LOGICAL_AXIS_BLOCK)
+               ? CONTAINER_AXIS_VERTICAL : CONTAINER_AXIS_HORIZONTAL;
 }
 
 static bool cs_named(lxb_dom_element_t *c, const char *name)
@@ -51,10 +57,15 @@ lxb_dom_element_t *container_selector_find(lxb_dom_element_t *el, unsigned axes,
     lxb_dom_element_t *c;
 
     DCHECK(el != NULL, "a query container was selected for no element");
-    DCHECKF((axes & ~(CONTAINER_AXIS_HORIZONTAL | CONTAINER_AXIS_VERTICAL)) == 0,
-            "a query container was selected over axis set %u, which names an axis that is not physical", axes);
+    DCHECKF((axes & ~(CONTAINER_AXIS_HORIZONTAL | CONTAINER_AXIS_VERTICAL | CONTAINER_AXIS_INLINE |
+                      CONTAINER_AXIS_BLOCK)) == 0,
+            "a query container was selected over axis set %u, which names an axis that is none of the four", axes);
     for (c = css_parent_element(el); c != NULL; c = css_parent_element(c)) {
-        if ((cs_accepted_axes(c) & axes) != axes) continue;
+        unsigned need = axes & (CONTAINER_AXIS_HORIZONTAL | CONTAINER_AXIS_VERTICAL);
+
+        if (axes & CONTAINER_AXIS_INLINE) need |= container_selector_physical(c, true);
+        if (axes & CONTAINER_AXIS_BLOCK) need |= container_selector_physical(c, false);
+        if ((cs_accepted_axes(c) & need) != need) continue;
         if (name != NULL && !cs_named(c, name)) continue;
         return c;
     }
@@ -71,6 +82,19 @@ bool container_selector_unit_extent(lxb_dom_element_t *el, bool vertical, CssPx 
     /* §6.1.1 "Width: the width feature" and §6.1.2: the query container's content box. */
     *out = used_value_content_px(c, vertical);
     return true;
+}
+
+void container_selector_extents(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *c;
+
+    DCHECK(el != NULL, "a query container's extents were read for no element");
+    for (c = css_parent_element(el); c != NULL; c = css_parent_element(c)) {
+        unsigned axes = cs_accepted_axes(c);
+
+        if (axes & CONTAINER_AXIS_HORIZONTAL) (void)used_value_content_px(c, false);
+        if (axes & CONTAINER_AXIS_VERTICAL) (void)used_value_content_px(c, true);
+    }
 }
 
 bool container_selector_extents_ask(lxb_dom_element_t *el)

@@ -101,6 +101,8 @@
 #include "core/html/popover.h"   /* HTML §15.3.3's `:popover-open` display rules */
 #include "core/html/integer_microsyntax.h"   /* §4.3.11.1's `headingoffset` runs §2.3.4.2's rules for parsing non-negative integers */
 #include "core/css/css_author_sheets.h"   /* css-cascade-5 §6.2's author origin, one set per root */
+#include "core/css/container_query.h"
+#include "core/css/container_selector.h"
 #include "core/css/css_cascade.h"
 #include "core/css/css_cascade_pass.h"   /* the cascade's per-element answers, held by a layout job */
 #include "core/css/css_cascaded_style.h"   /* css-cascade-5 §4.2's values, one resolution per element */
@@ -1709,6 +1711,12 @@ static bool cssd_match_result_run(CssMatchResult *m, bool rests)
                 } else if (!selector_match_node(self, st->selector, &spec, NULL)) {
                     continue;
                 }
+                /* CSS Conditional 5 §5.4: "Style declarations within the @container rule are filtered by its
+                   condition to only match when the container query is true for their element's query
+                   container." */
+                if (view->cq[at->rule] != NULL &&
+                    !container_query_matches(view->cq[at->rule], css_match_result_element(m)))
+                    continue;
                 /* The rule's own §6.6 declarations, expanded to longhands and collapsed to one per property,
                    so every declaration of one rule shares `seq + rule` (css-cascade-5 §6.1's Order of
                    Appearance, and §7.3.6 `revert-rule`'s rule identity) and is ordered within it by its
@@ -3702,6 +3710,13 @@ static CssCascadedStyle *cssd_cascaded_style_build(lxb_dom_element_t *el)
            "after collection; a nested read added inside the collection is what this crash names");
     g_collecting_sheets = true;
     sheets = cssd_author_sheets(node_root(lxb_dom_interface_node(el)), false);
+    /* CSS Conditional 5 §5.4's conditions read the query containers' styles and layout, which are other
+       elements' collections, so they are resolved before this one begins. */
+    if (css_author_sheets_container_queries(sheets)) {
+        g_collecting_sheets = false;
+        container_selector_extents(el);
+        g_collecting_sheets = true;
+    }
     order = css_author_sheets_order(sheets);
     if (!css_cascade_pass_match_ask(el, sheets, &match) && match == NULL && css_cascade_pass_match_paid(el)) {
         cssd_match_rederive(el, sheets);
@@ -3761,6 +3776,12 @@ bool cssom_style_ask(lxb_dom_element_t *el)
     if (sheets == NULL) {
         g_collecting_sheets = false;
         return false;
+    }
+    /* The query containers a CSS Conditional 5 §5.4 condition reads, asked before this collection begins. */
+    if (css_author_sheets_container_queries(sheets)) {
+        g_collecting_sheets = false;
+        if (!container_selector_extents_ask(el)) return false;
+        g_collecting_sheets = true;
     }
     closed = css_cascade_pass_match_ask(el, sheets, &match);
     if (!closed && match == NULL && css_cascade_pass_match_paid(el)) {

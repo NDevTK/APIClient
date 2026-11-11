@@ -278,13 +278,34 @@ static const MfDef MQ_FEATURES[] = {
 };
 #define MQ_NFEATURES ((int)(sizeof(MQ_FEATURES) / sizeof(MQ_FEATURES[0])))
 
-static const MfDef *mf_lookup(const char *name)
+/* CSS Conditional 5 §6.1 "Size Container Features": "The syntax of a <size-feature> is the same as for a media
+   feature", over §6.1.1 through §6.1.6's six. `orientation` is "portrait" when the height is greater than or
+   equal to the width, as §4.4 computes it for the viewport. A name in both tables has one kind in both. */
+static const MfDef CQ_FEATURES[] = {
+    { "width",        MFK_LENGTH },
+    { "height",       MFK_LENGTH },
+    { "inline-size",  MFK_LENGTH },
+    { "block-size",   MFK_LENGTH },
+    { "aspect-ratio", MFK_RATIO },
+    { "orientation",  MFK_DISCRETE, NULL, "portrait landscape", 1 },
+};
+#define CQ_NFEATURES ((int)(sizeof(CQ_FEATURES) / sizeof(CQ_FEATURES[0])))
+
+static const MfDef *mf_lookup_in(const MfDef *table, int n, const char *name)
 {
     int i;
 
-    for (i = 0; i < MQ_NFEATURES; i++)
-        if (!strcmp(MQ_FEATURES[i].name, name)) return &MQ_FEATURES[i];
+    for (i = 0; i < n; i++)
+        if (!strcmp(table[i].name, name)) return &table[i];
     return NULL;
+}
+
+/* A parsed feature's row: the parse admitted it from one of the two tables, and a name both carry has one kind. */
+static const MfDef *mf_lookup(const char *name)
+{
+    const MfDef *d = mf_lookup_in(MQ_FEATURES, MQ_NFEATURES, name);
+
+    return d != NULL ? d : mf_lookup_in(CQ_FEATURES, CQ_NFEATURES, name);
 }
 
 static bool mf_legal_value(const MfDef *d, const char *ident)
@@ -315,6 +336,12 @@ typedef struct {
     FontFallbackList faces;    /* the initial `font-family`'s faces (core/fonts/font_matching.h) */
     double line_height;        /* §6.1.1's `lh` base — the same clause's "line-height" half, `normal` resolved */
     int    color_bits;
+    /* A container query's: `width`/`height` above are the query container's content box, these its inline and
+       block sizes, and every length resolves through `length` on the container's computed values (CSS
+       Conditional 5 §6.1). NULL `length` for a media query. */
+    double inline_size, block_size;
+    bool (*length)(void *ctx, double n, const char *unit, double *px);
+    void  *length_ctx;
 } MqEnv;
 
 /* THE ENVIRONMENT AS `double`s — THE EXAMPLE — AND THAT IS WHERE THE TWO PATHS AGREE. viewport.c answers the
@@ -380,6 +407,10 @@ static void mq_env(JSContext *ctx, MqEnv *e)
            "or an infinity here becomes a `100vh` this engine reports as a real measurement");
     /* §4.5: `color` is the bits per COLOUR COMPONENT of the output device. screen.c owns the depth. */
     e->color_bits = screen_color_depth() / 3;
+    /* No media feature is a logical size, and a media query's lengths resolve through the table below. */
+    e->inline_size = e->block_size = NAN;
+    e->length = NULL;
+    e->length_ctx = NULL;
 }
 
 /* The UA's value for a discrete feature, which for `orientation` is COMPUTED from the viewport rather than
@@ -408,6 +439,8 @@ typedef struct {
     int         kind;
     double      num;
     char        ident[MQ_IDENT_MAX];   /* TK_IDENT: lowercased; TK_DIM: the unit, lowercased */
+    const MfDef *features;             /* the feature table names are admitted from */
+    int          nfeatures;
 } MqLex;
 
 static bool mq_is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
@@ -496,6 +529,8 @@ static void mq_scan(MqLex *L)
 
 static void mq_lex_init(MqLex *L, const char *s)
 {
+    L->features = MQ_FEATURES;
+    L->nfeatures = MQ_NFEATURES;
     L->s = s;
     L->end = s + strlen(s);
     L->next = s;
@@ -614,7 +649,7 @@ static bool parse_feature_body(MqLex *L, MqFeature *f)
         if (!strncmp(n, "min-", 4)) { f->prefix = 1; n += 4; }
         else if (!strncmp(n, "max-", 4)) { f->prefix = 2; n += 4; }
         snprintf(f->name, sizeof f->name, "%s", n);
-        d = mf_lookup(f->name);
+        d = mf_lookup_in(L->features, L->nfeatures, f->name);
         if (!d) return false;                              /* not a feature: the caller retries as enclosed */
         /* A PREFIX IS A RANGE FEATURE’S SPELLING AND ONLY A RANGE FEATURE’S.
            MQ4 §2.4.1 "Media Feature Types: “range” and “discrete”" — "The only significant difference
@@ -665,7 +700,7 @@ static bool parse_feature_body(MqLex *L, MqFeature *f)
 
         if (cmp1 == MQ_CMP_NONE || cmp1 == MQ_CMP_EQ || L->kind != TK_IDENT) return false;
         snprintf(f->name, sizeof f->name, "%s", L->ident);
-        d = mf_lookup(f->name);
+        d = mf_lookup_in(L->features, L->nfeatures, f->name);
         if (!d || d->kind == MFK_DISCRETE) return false;
         if (!value_ok(d, &first)) return false;
         mq_scan(L);
@@ -1292,6 +1327,15 @@ static double mq_unit_px(const char *u, double n, const MqEnv *e, bool *ok)
 
     *ok = true;
     if (!strcmp(u, "px")) return n;
+    /* CSS Conditional 5 §6.1: "Relative length units (including container query length units) and custom
+       properties in container query conditions are evaluated based on the computed values of the query
+       container." */
+    if (e->length != NULL) {
+        double px = 0.0;
+
+        *ok = e->length(e->length_ctx, n, u, &px);
+        return px;
+    }
     if (!strcmp(u, "em") || !strcmp(u, "rem")) return n * e->font_size;
     if (!strcmp(u, "ex") || !strcmp(u, "rex"))
         return n * e->font_size * font_metrics_x_height_em();
@@ -1425,7 +1469,11 @@ static bool feature_numbers(const MfDef *d, const MqEnv *e, const MqValue *v, do
     case MFK_LENGTH:
         *pactual = !strcmp(d->name, "width") ? e->width
                  : !strcmp(d->name, "height") ? e->height
+                 : !strcmp(d->name, "inline-size") ? e->inline_size
+                 : !strcmp(d->name, "block-size") ? e->block_size
                  : !strcmp(d->name, "device-width") ? e->dev_width : e->dev_height;
+        DCHECKF(*pactual == *pactual, "the `%s` feature was evaluated on an axis its query container does not "
+                "accept, which selection (core/css/container_selector.h) rules out", d->name);
         *pwanted = length_px(v, e, &ok);
         return ok;
     case MFK_RATIO:
@@ -1559,6 +1607,89 @@ bool media_query_matches(JSContext *ctx, const MediaQuerySet *set)
     for (i = 0; i < set->n; i++)
         if (query_matches(&set->q[i], &e)) return true;
     return false;
+}
+
+/* ---- CSS Conditional 5 §5.4's `<container-query>` over §6.1's size features -------------------------------- */
+
+MediaQuerySet *media_query_parse_container(const char *text)
+{
+    MediaQuerySet *set;
+    MqCond *cond = NULL;
+    MqLex L;
+
+    DCHECK(text != NULL && text[0] != '\0',
+           "a `<container-query>` was parsed from no text — a condition that declares none selects by name alone "
+           "and is never parsed");
+    mq_lex_init(&L, text);
+    /* The first token is scanned; the table is first read at a feature name. */
+    L.features = CQ_FEATURES;
+    L.nfeatures = CQ_NFEATURES;
+    /* §5.4's `<container-query>` is `<media-condition>`'s grammar with `or` admitted, and it must consume the
+       whole text, as the `sizes` condition above must. */
+    if (!parse_condition(&L, true, &cond) || L.kind != TK_EOF) {
+        cond_free(cond);
+        return NULL;
+    }
+    set = lexbor_calloc(1, sizeof *set);
+    CHECK(set != NULL, "container queries: OOM holding a parsed container query");
+    set->q = lexbor_calloc(1, sizeof *set->q);
+    CHECK(set->q != NULL, "container queries: OOM holding a parsed container query");
+    set->n = 1;
+    set->q[0].cond = cond;
+    return set;
+}
+
+/* The axes one leaf reads, or 1 << 31 for a `<general-enclosed>`. */
+#define MQ_AXES_UNKNOWN (1u << 31)
+static unsigned axes_leaf(const MqCond *c, const void *ctx)
+{
+    const char *n = c->feat.name;
+
+    (void)ctx;
+    if (c->feat.unknown) return MQ_AXES_UNKNOWN;
+    if (!strcmp(n, "width")) return MEDIA_QUERY_AXIS_HORIZONTAL;
+    if (!strcmp(n, "height")) return MEDIA_QUERY_AXIS_VERTICAL;
+    if (!strcmp(n, "inline-size")) return MEDIA_QUERY_AXIS_INLINE;
+    if (!strcmp(n, "block-size")) return MEDIA_QUERY_AXIS_BLOCK;
+    DCHECKF(!strcmp(n, "aspect-ratio") || !strcmp(n, "orientation"),
+            "`%s` is not one of CSS Conditional 5 §6.1's six size features", n);
+    return MEDIA_QUERY_AXIS_HORIZONTAL | MEDIA_QUERY_AXIS_VERTICAL;
+}
+
+static unsigned axes_join(const MqCond *c, int i, unsigned acc, unsigned kid)
+{
+    (void)c;
+    return i ? acc | kid : kid;
+}
+
+bool media_query_container_axes(const MediaQuerySet *set, unsigned *axes)
+{
+    unsigned a;
+
+    DCHECK(set != NULL && set->n == 1 && set->q[0].cond != NULL && axes != NULL,
+           "the axes of something other than one parsed `<container-query>` were asked for");
+    a = cond_fold(set->q[0].cond, axes_leaf, axes_join, NULL);
+    if (a & MQ_AXES_UNKNOWN) return false;
+    *axes = a;
+    return true;
+}
+
+int media_query_container_matches(JSContext *ctx, const MediaQuerySet *set, const MediaQueryContainer *c)
+{
+    MqEnv e;
+    int r;
+
+    DCHECK(set != NULL && set->n == 1 && set->q[0].cond != NULL && c != NULL && c->length != NULL,
+           "a container query was evaluated that is not one parsed `<container-query>`, or with no container");
+    mq_env(ctx, &e);
+    e.width = c->width;
+    e.height = c->height;
+    e.inline_size = c->inline_size;
+    e.block_size = c->block_size;
+    e.length = c->length;
+    e.length_ctx = c->length_ctx;
+    r = eval_cond(set->q[0].cond, &e);
+    return r == MQ_TRUE ? 1 : r == MQ_FALSE ? 0 : -1;
 }
 
 /* Which of MQ4 §3.1 "Evaluating Media Queries"' three answers a condition can give over every environment,
