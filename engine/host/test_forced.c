@@ -1950,6 +1950,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/htmlclearrest.h"
 #include "fixture/rangerest.h"
 #include "fixture/sale.h"
+#include "fixture/layoutshed.h"
 #include "fixture/replyrecord.h"
 #include "fixture/rangeinsertrest.h"
 #include "fixture/rangedelrest.h"
@@ -2670,9 +2671,11 @@ static const char *HTML_POPOVER =
    as a host configures an instance; a row that omits it leaves the engine's default. */
 /* `frame`, when set, roots the document as a cross-origin child: its navigable's parent is a peer's (TF_FRAME_PARENT)
    and `frame` is HTML §15.3.2's container frame element margins that peer's container stated. `xfo`, when set, is
-   the `X-Frame-Options` value the document's response carries (HTML §7.7). */
+   the `X-Frame-Options` value the document's response carries (HTML §7.7). `shed`, when set, arms the forced
+   pressure act that sheds every resting layout job at each slice (engine_force_layout_shed), unless the run is
+   its no-pressure twin (`--pressure-act none`). */
 static const struct { const char *name; const char *src; OpenerPolicyValue coop; unsigned share; const char *frame;
-                      const char *xfo; }
+                      const char *xfo; int shed; }
 TF_DOCS[] = {
     { "css", HTML_CSS },
     { "timers", HTML_TIMERS },
@@ -2761,6 +2764,7 @@ TF_DOCS[] = {
     { "salectl", HTML_SALECTL },
     { "salefloor", HTML_SALEFLOOR },
     { "saleasync", HTML_SALEASYNC },
+    { "layoutshed", HTML_LAYOUTSHED, OPENER_POLICY_UNSAFE_NONE, 0, NULL, NULL, 1 },
     { "replyrec", HTML_REPLYREC },
     { "replynone", HTML_REPLYNONE },
     { "rangeinsertrest", HTML_RANGEINSERTREST },
@@ -3146,6 +3150,15 @@ static unsigned tf_doc_share(const char *name) {
 
     for (i = 0; name && i < COUNTOF(TF_DOCS); i++)
         if (!strcmp(TF_DOCS[i].name, name)) return TF_DOCS[i].share;
+    return 0;
+}
+
+/* Whether document `name`'s row arms the forced layout shed. */
+static int tf_doc_shed(const char *name) {
+    size_t i;
+
+    for (i = 0; name && i < COUNTOF(TF_DOCS); i++)
+        if (!strcmp(TF_DOCS[i].name, name)) return TF_DOCS[i].shed;
     return 0;
 }
 
@@ -19425,6 +19438,27 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the layout shed document (fixture/layoutshed.h). layout-shed-armed: the forced act shed a resting
+   job (`layoutSheds`), or, in the no-pressure twin, none was shed. layout-shed-reports: both arms reported the last
+   block's top, so a layout read returned after its job was shed; the twin's schedule and work are compared by
+   engine/build.mjs's pressure parity stage. */
+TF_UNIT void probes_layoutshed(const char *js, Probe *tab, int *n) {
+    const char *awhy = NULL, *rwhy = NULL, *at = strstr(js, "\"layoutSheds\":");
+    long sheds = at ? strtol(at + strlen("\"layoutSheds\":"), NULL, 10) : -1;
+    int a = 1, r = 1;
+
+    fold_row(&a, &awhy, g_tf_pressure_none ? sheds == 0 : sheds > 0,
+             g_tf_pressure_none ? "the no-pressure twin shed a layout job: a shed here is pressure from outside the row"
+                                : "NOT ARMED: the forced act shed no resting layout job (`layoutSheds` 0 or absent)");
+    fold_row(&r, &rwhy, param_value_is(js, "/api/ls-top", "arm", "a") && param_value_is(js, "/api/ls-top", "arm", "b"),
+             "NOT REACHED: no /api/ls-top record for one arm, so a layout read did not return");
+    const Probe rows[] = {
+        { "layout-shed-armed", a, "lsLast", SESS_EXPLORE, awhy },
+        { "layout-shed-reports", r, "lsLast", SESS_EXPLORE, rwhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the two reply-record documents (fixture/replyrecord.h), read off the census's `replyRecords` and
    `replyTrailRows`. reply-record-trailed: both of the page's requests were recorded and the flow's trail took a
    row. reply-record-none, the control: a document that asks for nothing records nothing, read once its
@@ -32989,6 +33023,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_htmlclearrest(js, probes, &np);
     probes_rangerest(js, probes, &np);
     probes_sale(js, probes, &np);
+    probes_layoutshed(js, probes, &np);
     probes_replyrecord(js, probes, &np);
     probes_rangeinsertrest(js, probes, &np);
     probes_rangedelrest(js, probes, &np);
@@ -47554,6 +47589,7 @@ int main(int argc, char **argv) {
                "`--ram-share` was given for a document whose TF_DOCS row states its own share");
         if (tf_ram_share_arg(argc, argv) != 0) engine_set_ram_share(tf_ram_share_arg(argc, argv));
         else if (tf_doc_share(doc_name) != 0) engine_set_ram_share(tf_doc_share(doc_name));
+        if (tf_doc_shed(doc_name) && !g_tf_pressure_none) engine_force_layout_shed();
         if (tf_doc_frame(doc_name) == NULL)
             root_proxy = navigable_root(ctx, world_local_doc(), NULL, tf_doc_coop(doc_name), "u",
                                         serialized_policy_container_none(), &root_embedder, 0);

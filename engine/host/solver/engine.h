@@ -500,6 +500,9 @@ int engine_reclaim_at_rest(void);
    `ramShare` 850. */
 #define ENGINE_RAM_SHARE_DEFAULT 850
 void engine_set_ram_share(unsigned permille);
+/* A host's forced pressure act: at every slice's pressure point every resting layout job pressure may shed is shed,
+   whatever the live bytes, so a fixture can compare a run that re-derives with its no-pressure twin. */
+void engine_force_layout_shed(void);
 /* Before a composition between steps, whose allocations cannot sell a flow: sell at rest (engine_reclaim_at_rest)
    until `bytes` can be allocated, or nothing is left to sell. Returns 1 once `bytes` fits, 0 at the floor. The
    caller holds no position in the frontier. */

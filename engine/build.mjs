@@ -7282,12 +7282,12 @@ function regimeParityStages(kind, regime, bin, runs) {
   });
 }
 
-/* The documents whose forced pressure act relocates members (fixture/sale.h), and the pressure parity stages of a
-   native build: each listed document this build ran, run again on the same program as its no-pressure twin
-   (`--pressure-act none`) and the two compared (engine/regimeparity.mjs's comparePressure). A difference is a
+/* The documents whose forced pressure act relocates members (fixture/sale.h) or sheds layout jobs
+   (fixture/layoutshed.h), and the pressure parity stages of a native build: each listed document this build ran,
+   run again on the same program as its no-pressure twin (`--pressure-act none`) and the two compared (engine/regimeparity.mjs's comparePressure). A difference is a
    DEFECT: memory reached whether or when a flow runs, or the work the residency system caused was banked as a
    flow's or a document's service. */
-const PRESSURE_PARITY_DOCS = ["sale", "saleown"];
+const PRESSURE_PARITY_DOCS = ["sale", "saleown", "layoutshed"];
 function pressureParityStages(bin, runs) {
   const mine = runs.filter((r) => r.doc && PRESSURE_PARITY_DOCS.includes(r.doc) && "captured" in r);
   if (bin === null) return [];

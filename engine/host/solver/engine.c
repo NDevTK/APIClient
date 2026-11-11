@@ -13273,6 +13273,9 @@ static long engine_shed_layout_jobs(uint64_t target) {
    (engine_sale_release) and pressure reads the live bytes again only once they have finished. A batch is sized in bytes: the excess over the last batch's measured
    yield per member, since what a sold member's frame chain and private objects hold is counted by no census row.
    With no yield to size it (the first batch, or one whose collection gave nothing back) it is twice the last. */
+static bool g_force_layout_shed;
+void engine_force_layout_shed(void) { g_force_layout_shed = true; }
+
 static void engine_relocate_under_pressure(JSRuntime *rt) {
     uint64_t line, ref, fp, live;
     /* `sold` counts members given back, a held snapshot shed or a sale; only the sales are `g_pressure_sold`, read
@@ -13281,6 +13284,7 @@ static void engine_relocate_under_pressure(JSRuntime *rt) {
     bool at_floor = false;
     JSGCCycleStats st;
 
+    if (g_force_layout_shed) engine_shed_layout_jobs(0);
     engine_ram_limit_read();
     if (g_ram_limit == 0) return;
     JS_GCCycleStats(rt, &st);
