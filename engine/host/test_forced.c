@@ -47745,6 +47745,9 @@ static void native_ceiling_arm(void) {
 #endif
 }
 
+/* This process's turn inside a step: it has no event loop, so the turn is over when it is taken. */
+static void tf_step_turn(void) {}
+
 int main(int argc, char **argv) {
     concolic_install_required();
     JSRuntime *rt;
@@ -47757,8 +47760,8 @@ int main(int argc, char **argv) {
         if (site) concolic_set_attacker_site(site);
     }
     /* A host turn every N wall microseconds (solver/quantum.h), as a renderer frame states one: this process needs
-       no turn, so it is asked for only to show that answering one moves nothing, and each ENGINE_STEP_HOST is
-       re-entered at once by engine_run and by the ABI arm below. */
+       no turn, so it is asked for only to show that answering one moves nothing. Each ENGINE_STEP_HOST is
+       re-entered at once by engine_run and by the ABI arm below, and the in-step entry returns at once. */
     {
         const char *turn = arg_val(argc, argv, "--host-turn-us");
         if (turn) {
@@ -47766,6 +47769,7 @@ int main(int argc, char **argv) {
             long long us = strtoll(turn, &end, 10);
             CHECK(*turn != '\0' && *end == '\0' && us > 0, "--host-turn-us takes a positive count of microseconds");
             quantum_set_host_turn_us((int64_t)us);
+            quantum_set_step_turn(tf_step_turn);
         }
     }
     /* THE ABI ARM IS TAKEN FIRST, BEFORE ANY OF THE FIXTURE'S OWN STATE EXISTS. `qjs_init` roots an agent —
@@ -48365,7 +48369,10 @@ int main(int argc, char **argv) {
        of a run that shows a turn changes nothing. Not a census row, since it is a function of elapsed time. */
     if (arg_val(argc, argv, "--host-turn-us")) {
         fflush(stdout);   /* the line is stderr's; a buffered @RESULT would otherwise be cut by it */
-        fprintf(stderr, "[test-forced] host turns taken: %lld\n", engine_host_turns());
+        fprintf(stderr, "[test-forced] host turns taken: %lld between steps; in a step %lld at dispatch, %lld at "
+                        "host work, %lld in a residency span\n", engine_host_turns(),
+                quantum_step_turns(QUANTUM_TURN_DISPATCH), quantum_step_turns(QUANTUM_TURN_HOST_WORK),
+                quantum_step_turns(QUANTUM_TURN_RESIDENCY));
     }
     /* The verdict: the run is over, so a row still 0 will not be reached. */
     char unanswered[PROBE_UNANSWERED_MAX], unasked[PROBE_UNANSWERED_MAX];

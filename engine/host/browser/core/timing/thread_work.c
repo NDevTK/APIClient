@@ -129,14 +129,18 @@ void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
        down would make every constraint probe under 171 bytes free, and a lookup is one probe per frozen segment. */
     if (APICLIENT_UNPRICED_OPEN()) return;
     units = (bytes * PER_KIB[kind] + 1023) / 1024;
+    /* Each charge offers the host its turn after the work it charges (solver/quantum.h): a residency span retires
+       nothing on the flow's clock, so the slice's budget never ends it and only the turn hands the thread back. */
     if (g_residency_depth != 0) {
         g_residency_units += units;
+        quantum_step_turn_point(QUANTUM_TURN_RESIDENCY, units);
         return;
     }
     g_charged += units;
     g_charged_input[kind] += bytes;
     if (units != 0) JS_FlowRetireWork(units);
     rest_unit_charged();
+    quantum_step_turn_point(QUANTUM_TURN_HOST_WORK, units);
 }
 
 void thread_work_note_discarded(uint64_t units) { g_discarded += units; }

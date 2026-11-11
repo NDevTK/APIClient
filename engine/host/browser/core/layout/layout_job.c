@@ -885,10 +885,8 @@ void layout_job_drive_end(LayoutJobDrive *d)
 
 /* Re-derives paid question `q`, whose answer a shed released, inside a residency span: a drive nested at the ask
    computes `q` and every question its body defers, takes no allowance (only the job's outermost drive spends) and
-   retires nothing on the flow's clock, so the asker goes on as its no-pressure twin did.
-   Named residual. Not covered: the span rests only where its drive ends, since a host turn inside a step is not
-   built (solver/engine.c's turn residual); next, the span parks its drive for the host's turn there. Absence shows
-   as: a renderer frame held for a shed job's whole re-derivation. */
+   retires nothing on the flow's clock, so the asker goes on as its no-pressure twin did. The span rests at the
+   host's turn its charges offer (thread_work_charge), with the drive on the stack. */
 static void lj_rederive(LayoutJob *job, LayoutQuestion q)
 {
     LayoutJobDrive d;

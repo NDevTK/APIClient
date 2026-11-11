@@ -8895,7 +8895,7 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
        host loop can interleave, pump and snapshot. Not a step cap: no flow is dropped or reordered, and the flow
        resumes byte-identically. The slice is engine work (engine_quantum_spent), counted at dispatch, so where a
        flow parks is a function of its path. The host's turn never parks a flow: engine_sched_slice answers it
-       between two steps (ENGINE_STEP_HOST). */
+       between two steps (ENGINE_STEP_HOST), and a host's in-step entry takes it on the stack (solver/quantum.h). */
 static int64_t engine_now_ms(void);   /* the wall clock, for the gap census below: reported, never a verdict */
 
 /* The engine's one currency: the work its flows retired (quickjs.h's JSFlowControlHooks.work), banked here and
@@ -12284,7 +12284,13 @@ static void engine_work_hook(JSContext *ctx, uint64_t units) { engine_work_bank(
    preempt_hook as a back-edge's is, with the rank comparison in front of it, so asking earlier drops, skips or
    reorders nothing. engine_quantum_spent asserts an open slice, so a host-time entry into the interpreter names
    itself there. */
-static int engine_budget_hook(void) { return engine_quantum_spent(); }
+static int engine_budget_hook(void)
+{
+    /* The dispatch's offer of the host's turn, after the dispatches since the last ask (the cadence is the
+       period); the turn returns here with nothing moved, so the budget is asked of the same state. */
+    quantum_step_turn_point(QUANTUM_TURN_DISPATCH, ENGINE_QUANTUM_ASK_EVERY);
+    return engine_quantum_spent();
+}
 static const JSFlowControlHooks FC_EXPLORE = { .branch = engine_branch_hook, .outcome = engine_outcome_hook,
                                                .outcome_settled = solver_outcome_settled,
                                                .fork = engine_fork_finalize, .preempt = preempt_hook,
@@ -14665,11 +14671,8 @@ static int engine_sched_slice(int resume) {
         /* The host's turn (solver/quantum.h), answered between two steps, where no flow is mid-step: the slice
            keeps its budget and its running flow, and the host re-enters with nothing in between, so the next
            statement this engine runs is the pick it would have run here. No mark is discharged, since the host
-           sees nothing of the turn.
-           Named residual. Not covered: a turn inside a step; the host waits for the running step's next park, at
-           most the rest of the quantum. Next diff builds: the turn taken at the preempt point by suspending the
-           instance's stack (JSPI) instead of parking the flow. Absence shows as: a renderer frame's event loop
-           held for a quantum's wall time on a page whose flow runs a whole quantum in one step. */
+           sees nothing of the turn. A host that stated an in-step entry is also offered its turn inside a step
+           (quantum_step_turn_point), at the dispatch and at every host work charge. */
         if (quantum_host_wants_thread()) {
             g_sess_cur = cur;
             g_turn_resume = 1;
@@ -14846,6 +14849,14 @@ long long engine_gc_sale_batches(void) { return g_gc_sale_batches; }
 long long engine_gc_sale_objects(void) { return g_gc_sale_objects; }
 static long long g_host_turns;
 long long engine_host_turns(void) { return g_host_turns; }
+void engine_turn_witness(EngineTurnWitness *out)
+{
+    out->service_work = g_service_work;
+    out->residency_work = engine_residency_work();
+    out->standing = JS_FlowPeekRetiredWork();
+    out->frontier_gen = flow_frontier_gen();
+    out->running = flow_running();
+}
 long long engine_gc_us(void) { return (long long)g_gc_us; }
 
 /* The collector work residency caused, in the instance's unit: the scoped collections a sale owes, the whole-heap

@@ -29,6 +29,22 @@ void quantum_set_host_turn_us(int64_t us);
 /* Whether the host wants its thread back now, on elapsed wall time since the slice opened or last resumed. Asked
    only inside a slice (asserted), by the scheduler between two steps; it moves no rank and no account. */
 int quantum_host_wants_thread(void);
+/* The host's turn inside a step: an entry the host supplies that runs its own event loop for one turn and
+   returns, while the engine's stack waits where the call was made (on a WASM host, an import that suspends the
+   instance). Stated between steps, after a turn duration; the native driver states one, and a host that states
+   none takes its turn only between steps. */
+void quantum_set_step_turn(void (*take)(void));
+/* Where a step offered the host its turn: the interpreter's dispatch (every ENGINE_QUANTUM_ASK_EVERY
+   dispatches), host work charged to the running flow, or a residency span's uncharged re-derivation. */
+typedef enum { QUANTUM_TURN_DISPATCH, QUANTUM_TURN_HOST_WORK, QUANTUM_TURN_RESIDENCY, QUANTUM_TURN_N } QuantumTurnSite;
+/* Offers the host its turn after `units` of work at `site`. The clock is read once per ENGINE_QUANTUM_ASK_EVERY
+   units offered, a cadence and nothing else; when the hold has lasted the turn, the stated entry runs and the
+   step goes on from the same statement. The turn moves no rank, account, work count or slice boundary
+   (engine_turn_witness, asserted around it). Outside a slice, or with no entry stated, it does nothing: the thread
+   is already the host's, or the host waits for the step's end. */
+void quantum_step_turn_point(QuantumTurnSite site, uint64_t units);
+/* The turns taken inside a step at `site`, lifetime. A function of elapsed time, so no census carries it. */
+long long quantum_step_turns(QuantumTurnSite site);
 /* The pricing clock: this thread's CPU in microseconds where the host has a thread CPU clock, its monotonic wall
    clock where it does not (quantum_measure says which). Censuses only. */
 int64_t quantum_thread_us(void);

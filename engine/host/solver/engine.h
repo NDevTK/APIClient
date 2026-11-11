@@ -1381,6 +1381,16 @@ long long engine_gc_sale_objects(void);
 /* The host turns this instance answered (ENGINE_STEP_HOST), lifetime. A function of elapsed time, so no census
    carries it: a census row is a function of the paths. */
 long long engine_host_turns(void);
+/* What a host turn inside a step must leave as it found (solver/quantum.h's quantum_step_turn_point): the
+   instance's banked work, the running flow and its standing count, the frontier generation and the residency
+   work. Any difference is an entry the host made into the engine while a step waited on its stack. */
+typedef struct {
+    int64_t     service_work, residency_work;
+    uint64_t    standing;
+    unsigned    frontier_gen;
+    const void *running;
+} EngineTurnWitness;
+void engine_turn_witness(EngineTurnWitness *out);
 
 /* What this instance's timelines did with the routed records handed to it. `delivered` counts tasks queued
    (each is HTML §9.3.3 step 8's one global task at the receiving Window; engine_routed_task_census says how

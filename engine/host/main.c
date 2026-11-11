@@ -2025,7 +2025,12 @@ QJS_EXPORT const char *qjs_level1_account(void)
 
 /* The host's turn: wall milliseconds a slice may hold this thread before qjs_step answers ENGINE_STEP_HOST between
    two steps, 0 for never (solver/quantum.h). The renderer frame states it once at boot, because its event loop runs
-   only between two qjs_step calls; the trusted zone never sees the code, since the frame re-enters on its own. */
+   only between two qjs_step calls; the trusted zone never sees the code, since the frame re-enters on its own.
+   Named residual. Not covered: the renderer states no in-step entry (quantum_set_step_turn), so its turn waits for
+   the running step to end. Next diff builds: the entry as an import wrapped in WebAssembly.Suspending (JSPI) over
+   the renderer's hostTurn, qjs_step exported as promising, the renderer holding every other ABI call while a step is
+   suspended, and ENGINE_STEP_HOST deleted with the between-step turn. Absence shows as: the renderer's event loop
+   held for a residency span's or a whole step's wall time. */
 QJS_EXPORT void qjs_set_host_turn(unsigned ms)
 {
     quantum_set_host_turn_us((int64_t)ms * 1000);

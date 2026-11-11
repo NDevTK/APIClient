@@ -40,6 +40,56 @@ int quantum_host_wants_thread(void)
     return g_turn_us > 0 && quantum_wall_us() - g_turn_open_us >= g_turn_us;
 }
 
+/* The host's entry for a turn inside a step, the work offered since the clock was last read, whether the entry
+   is running now, and the turns taken per site. */
+static void (*g_step_turn)(void);
+static uint64_t g_turn_offered;
+static int g_turn_taking;
+static long long g_step_turns[QUANTUM_TURN_N];
+
+void quantum_set_step_turn(void (*take)(void))
+{
+    DCHECK(take != NULL && g_turn_us > 0,
+           "a host stated an in-step turn with no entry or no turn duration — the entry is taken on elapsed time");
+    DCHECK(!g_slice_open, "an in-step turn was stated inside a slice — it is the host's policy, stated between steps");
+    g_step_turn = take;
+}
+
+void quantum_step_turn_point(QuantumTurnSite site, uint64_t units)
+{
+    EngineTurnWitness w0, w1;
+
+    DCHECKF(site < QUANTUM_TURN_N, "a turn was offered at site %d, which this component does not count", (int)site);
+    DCHECK(!g_turn_taking, "a turn was offered while the host's own turn runs — the host entered the engine while a "
+                           "step waited on its stack");
+    if (g_step_turn == NULL || !g_slice_open) return;
+    g_turn_offered += units;
+    if (g_turn_offered < (uint64_t)ENGINE_QUANTUM_ASK_EVERY) return;
+    g_turn_offered = 0;
+    if (quantum_wall_us() - g_turn_open_us < g_turn_us) return;
+    engine_turn_witness(&w0);
+    g_turn_taking = 1;
+    g_step_turn();
+    g_turn_taking = 0;
+    engine_turn_witness(&w1);
+    DCHECKF(w0.service_work == w1.service_work && w0.residency_work == w1.residency_work &&
+                w0.standing == w1.standing && w0.frontier_gen == w1.frontier_gen && w0.running == w1.running,
+            "the host's turn inside a step moved the engine (service %lld -> %lld, residency %lld -> %lld, standing "
+            "%llu -> %llu, generation %u -> %u, running flow %s) — the host made an entry while the step waited, "
+            "and the step would resume on a state its path did not reach",
+            (long long)w0.service_work, (long long)w1.service_work, (long long)w0.residency_work,
+            (long long)w1.residency_work, (unsigned long long)w0.standing, (unsigned long long)w1.standing,
+            w0.frontier_gen, w1.frontier_gen, w0.running == w1.running ? "kept" : "changed");
+    g_step_turns[site]++;
+    g_turn_open_us = quantum_wall_us();
+}
+
+long long quantum_step_turns(QuantumTurnSite site)
+{
+    DCHECKF(site < QUANTUM_TURN_N, "the turns at site %d were asked, which this component does not count", (int)site);
+    return g_step_turns[site];
+}
+
 /* ── Emscripten: the pricing clock is the wall clock ─────────────────────────────────────────────────────── */
 #if defined(__EMSCRIPTEN__)
 
