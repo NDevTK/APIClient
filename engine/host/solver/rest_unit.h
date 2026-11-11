@@ -109,7 +109,7 @@ typedef enum {
     /* One unit of the cycle collector's work (quickjs.h's JS_GCStep: an object or an edge visited, or an object
        freed) in one collector step. The slice the collector holds (solver/engine.c's engine_collect_slice) asks
        for the quantum and the host's claim after each step. Cost: a few loads and a compare per unit; the
-       scan and the freeing still run whole inside a collection's last step, which JSGCCycle's residual names. */
+       freeing still runs whole inside the scan's last step, which JSGCCycle's residual names. */
     REST_UNIT_GC_WORK,
     /* One offer of CSS 2.1 §E.2 "Painting order" painted by update the rendering step 22 (core/paint/
        document_paint.h): one (step, box) pair of core/paint/paint_order.h's cursor and the marks

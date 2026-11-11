@@ -670,10 +670,12 @@ typedef void JS_MarkFunc(JSRuntime *rt, JSGCObjectHeader *gp);
 JS_EXTERN void JS_MarkValue(JSRuntime *rt, JSValueConst val,
                             JS_MarkFunc *mark_func);
 JS_EXTERN void JS_RunGC(JSRuntime *rt);
-/* The cycle collection as steps. JS_GCBegin starts one; JS_GCStep advances it by at most `budget` units of
-   collector work (objects and edges visited) and returns true when it has finished and freed its cycles. A step
-   restarts a trial that any store into the graph, GC object birth or death, or WeakRef deref has followed since it
-   began; JS_MutatorEnter announces a store the engine cannot see (an embedder record its mark function walks).
+/* The cycle collection as steps. JS_GCBegin starts one; JS_GCStep advances its trial (the decref phase, then the
+   scan) by at most `budget` units of collector work (objects and edges visited, the object a step ends on visited
+   whole) and returns true when the trial has finished and its cycles are freed, which the scan's last step
+   does. A step restarts a trial that any store into the graph, GC object birth or death, or WeakRef deref has
+   followed since it began; JS_MutatorEnter announces a store the engine cannot see (an embedder record its mark
+   function walks).
    JS_SetGCDriven(rt, true) makes the allocation threshold owe a collection (JS_GCOwed) instead of running one,
    for an embedder whose scheduler drives the steps; JS_RunGC drives one to its end. */
 JS_EXTERN void JS_SetGCDriven(JSRuntime *rt, bool driven);
@@ -688,11 +690,13 @@ typedef struct JSGCCycleStats {
     int step;              /* where the current collection stands: 0 idle */
     bool owed;             /* a collection is owed and not begun */
     uint64_t work;         /* lifetime: collector work, every phase */
-    uint64_t steps;        /* lifetime: decref steps taken */
+    uint64_t steps;        /* lifetime: steps taken */
     uint64_t restarts;     /* lifetime: trials restarted */
     uint64_t collections;  /* lifetime: collections finished */
     uint64_t freed;        /* lifetime: GC objects freed as cycles */
-    uint64_t step_work_max; /* lifetime: the most work one JS_GCStep call did */
+    uint64_t decref_step_max, scan_step_max;   /* lifetime: the most work one step of each trial phase did */
+    uint64_t free_step_max;                    /* lifetime: the most work one collection's freeing did */
+    uint64_t object_work_max;                  /* lifetime: the most work one object's visit did */
 } JSGCCycleStats;
 JS_EXTERN void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out);
 JS_EXTERN bool JS_IsLiveObject(JSRuntime *rt, JSValueConst obj);

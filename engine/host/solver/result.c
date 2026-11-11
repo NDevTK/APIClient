@@ -1941,10 +1941,12 @@ char *result_heap_json(JSContext *ctx) {
                         "runtime, so a census with no runtime to walk is a reading of nothing");
     rt = JS_GetRuntime(ctx);
     JS_GetLiveCounts(rt, &live);
-    /* The cycle collector's rows (quickjs.h's JSGCCycleStats, engine.h's engine_gc_slices): work, decref steps,
+    /* The cycle collector's rows (quickjs.h's JSGCCycleStats, engine.h's engine_gc_slices): work, steps,
        restarted trials, finished collections, objects freed as cycles, the scheduler's collector slices and their
-       thread time on the pricing clock; `gcOwed` is 1 while a collection is owed or standing. `gcStepWorkMax` is
-       the largest single step in the collector's unit and `gcSliceWorkMax` the largest slice in engine work. */
+       thread time on the pricing clock; `gcOwed` is 1 while a collection is owed or standing. The three `StepMax`
+       rows are the largest step of each phase in the collector's unit, `gcObjectWorkMax` the largest visit of
+       one object, which a step can exceed its budget by, and `gcSliceWorkMax` the largest slice in
+       engine work. */
     JS_GCCycleStats(rt, &gc);
     navigable_realm_refs(NULL, &rmin, &rmax, &rtotal);   /* `live` is navigable_realm_count() one line down */
     if (!realm_holders_census(&hold))
@@ -1987,7 +1989,9 @@ char *result_heap_json(JSContext *ctx) {
                  "\"cLiveKiB\":%lld,\"arenaKiB\":%lld,\"cResidueBytes\":%s,"
                  "\"gcWork\":%llu,\"gcSteps\":%llu,\"gcRestarts\":%llu,\"gcCollections\":%llu,"
                  "\"gcFreed\":%llu,\"gcSlices\":%lld,\"gcUs\":%lld,\"gcOwed\":%d,"
-                 "\"gcStepWorkMax\":%llu,\"gcSliceWorkMax\":%lld}",
+                 "\"gcObjectWorkMax\":%llu,"
+                 "\"gcDecrefStepMax\":%llu,\"gcScanStepMax\":%llu,\"gcFreeStepMax\":%llu,"
+                 "\"gcSliceWorkMax\":%lld}",
                  (long long)live.malloc_count, (long long)live.malloc_size, (long long)live.atoms,
                  (long long)live.objects, (long long)live.hashed_shapes,
                  navigable_realm_count(), navigable_realm_made(), navigable_realm_peak(),
@@ -2000,7 +2004,9 @@ char *result_heap_json(JSContext *ctx) {
                  (unsigned long long)gc.work, (unsigned long long)gc.steps, (unsigned long long)gc.restarts,
                  (unsigned long long)gc.collections, (unsigned long long)gc.freed, engine_gc_slices(),
                  engine_gc_us(), (int)JS_GCOwed(rt),
-                 (unsigned long long)gc.step_work_max, engine_gc_slice_work_max());
+                 (unsigned long long)gc.object_work_max,
+                 (unsigned long long)gc.decref_step_max, (unsigned long long)gc.scan_step_max,
+                 (unsigned long long)gc.free_step_max, engine_gc_slice_work_max());
     free(rsites_json);
     return heap;
 }

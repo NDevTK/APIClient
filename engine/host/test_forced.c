@@ -27046,26 +27046,39 @@ static long tf_census_row(const char *js, const char *census, const char *key) {
 
 /* The rows of the `gccycle` document (fixture/gccycle.h). */
 TF_UNIT void probes_gccycle(const char *js, Probe *tab, int *n) {
-    /* The ring is collected, and no collector step or slice ran a phase whole. A step is its budget plus the
-       edges of the object it ends on, which in this document are fewer than a budget; a slice ends at the first
-       step boundary at or past the quantum. */
+    /* The ring is collected, and no step ran a phase whole. A step ends at the first object at or past its
+       budget, so it is under the budget plus the largest visit of one object (`gcObjectWorkMax`, which one
+       object's edges size); a slice ends at the first step boundary at or past the quantum. The trial's two
+       phases are one row and the freeing another. */
     const long budget = (long)rest_unit_items(REST_UNIT_GC_WORK);
-    const long step_units = (2 * budget * THREAD_WORK_UNITS_PER_KI_GC + 1023) / 1024;
-    const char *gy_why = NULL; int gy_tt = 1;
-    fold_row(&gy_tt, &gy_why, param_value_is(js, "/api/gccycle", "kept", "300000"),
+    const long obj_max = tf_census_row(js, "_heap", "gcObjectWorkMax");
+    const long step_units = ((budget + obj_max) * THREAD_WORK_UNITS_PER_KI_GC + 1023) / 1024;
+    const int reached = param_value_is(js, "/api/gccycle", "kept", "300000");
+    const int freed = tf_census_row(js, "_heap", "gcFreed") >= 300000 && obj_max >= 1;
+    const char *gt_why = NULL, *gf_why = NULL; int gt_tt = 1, gf_tt = 1;
+    fold_row(&gt_tt, &gt_why, reached,
              "NOT REACHED: there is no /api/gccycle record with the document's 300000 kept objects, so no "
              "collection freed the ring while the page kept running");
-    fold_row(&gy_tt, &gy_why, tf_census_row(js, "_heap", "gcFreed") >= 300000,
+    fold_row(&gt_tt, &gt_why, freed,
              "NOT REACHED: `_heap.gcFreed` is under the ring's 300000 nodes, so the census this row reads was "
              "composed before the ring's collection finished");
-    fold_row(&gy_tt, &gy_why, tf_census_row(js, "_heap", "gcStepWorkMax") <= 2 * budget,
-             "`_heap.gcStepWorkMax` is over two step budgets: one JS_GCStep call ran a phase of the collection "
-             "to its end, so its work is the heap's size and not the step's");
-    fold_row(&gy_tt, &gy_why, tf_census_row(js, "_heap", "gcSliceWorkMax") <= ENGINE_QUANTUM_WORK + step_units,
+    fold_row(&gt_tt, &gt_why, tf_census_row(js, "_heap", "gcDecrefStepMax") < budget + obj_max,
+             "`_heap.gcDecrefStepMax` reaches a budget plus the largest object: a decref step did not end at "
+             "the first object past its budget");
+    fold_row(&gt_tt, &gt_why, tf_census_row(js, "_heap", "gcScanStepMax") < budget + obj_max,
+             "`_heap.gcScanStepMax` reaches a budget plus the largest object: one step ran the scan to its "
+             "end, so its work is the live heap's size and not the step's");
+    fold_row(&gf_tt, &gf_why, reached && freed,
+             "NOT REACHED: no census after the ring's collection, which the trial row reports");
+    fold_row(&gf_tt, &gf_why, tf_census_row(js, "_heap", "gcFreeStepMax") < budget + obj_max,
+             "`_heap.gcFreeStepMax` reaches a budget plus the largest object: one step freed a collection's "
+             "cycles to the last, so its work is the garbage's size and not the step's");
+    fold_row(&gf_tt, &gf_why, tf_census_row(js, "_heap", "gcSliceWorkMax") <= ENGINE_QUANTUM_WORK + step_units,
              "`_heap.gcSliceWorkMax` is more than one step past the quantum: a collector slice held the thread "
              "for a phase that does not rest");
     const Probe rows[] = {
-        { "cycle-collection-rests-in-every-phase", gy_tt, "/api/gccycle", SESS_EXPLORE, gy_why },
+        { "cycle-trial-rests-in-both-phases", gt_tt, "/api/gccycle", SESS_EXPLORE, gt_why },
+        { "cycle-freeing-rests", gf_tt, "/api/gccycle", SESS_EXPLORE, gf_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
