@@ -2092,6 +2092,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/sale.h"
 #include "fixture/layoutshed.h"
 #include "fixture/cssparsetwin.h"
+#include "fixture/compiletwin.h"
 #include "fixture/replyrecord.h"
 #include "fixture/rangeinsertrest.h"
 #include "fixture/rangedelrest.h"
@@ -2935,6 +2936,8 @@ TF_DOCS[] = {
     { "saleasyncfn", HTML_SALEASYNCFN },
     { "layoutshed", HTML_LAYOUTSHED, OPENER_POLICY_UNSAFE_NONE, 0, NULL, NULL, 1 },
     { "cssparsetwin", HTML_CSSPARSETWIN },
+    { "compiletwin", HTML_COMPILETWIN },
+    { "compiletwinmod", HTML_COMPILETWINMOD },
     { "replyrec", HTML_REPLYREC },
     { "replynone", HTML_REPLYNONE },
     { "rangeinsertrest", HTML_RANGEINSERTREST },
@@ -19917,6 +19920,47 @@ TF_UNIT void probes_cssparsetwin(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the compile twin documents (fixture/compiletwin.h), one pair per document. -armed: a flow was charged
+   compile work another flow's stints ran (`compilePaidWork`). -equal: each arm reported on a record of its own
+   and the two durations (in tenths of a millisecond) are within one grid step of
+   each other, so the arm that found the parse held was charged what the arm that ran it was. */
+TF_UNIT void probes_compiletwin(const char *js, Probe *tab, int *n) {
+    static const struct { const char *armed, *equal, *path, *key; } D[] = {
+        { "compile-twin-armed", "compile-twin-equal", "/api/ctw-cls", "ctw-cls" },
+        { "compile-twin-module-armed", "compile-twin-module-equal", "/api/ctw-mod", "ctw-mod" },
+    };
+    const char *ra = strstr(js, "\"compilePaidWork\":");
+    long paid = ra ? strtol(ra + strlen("\"compilePaidWork\":"), NULL, 10) : -1;
+
+    for (int k = 0; k < (int)COUNTOF(D); k++) {
+        const char *awhy = NULL, *ewhy = NULL;
+        EmittedRec r[EMITTED_REC_MAX];
+        int cnt = emitted_records(js, D[k].path, r, EMITTED_REC_MAX), i, a = 1, e = 1;
+        long da = -1, db = -1;
+
+        for (i = 0; i < cnt; i++) {
+            char arm[8], d[24];
+
+            if (!tf_cpt_value(&r[i], "arm", arm, sizeof arm) || !tf_cpt_value(&r[i], "d", d, sizeof d)) continue;
+            if (strcmp(arm, "a") == 0) da = strtol(d, NULL, 10);
+            if (strcmp(arm, "b") == 0) db = strtol(d, NULL, 10);
+        }
+        fold_row(&a, &awhy, paid > 0,
+                 "NOT ARMED: no flow was charged compile work another flow's stints ran (`compilePaidWork` 0 or "
+                 "absent)");
+        fold_row(&e, &ewhy, da >= 0 && db >= 0,
+                 "NOT REACHED: no record carrying one arm and one duration for each arm");
+        fold_row(&e, &ewhy, da >= 0 && db >= 0 && labs(da - db) <= 1,
+                 "the two arms' spans across the program's compile moved their clocks by more than one grid step "
+                 "apart, so one arm's path was charged a compile the other's was not");
+        const Probe rows[] = {
+            { D[k].armed, a, D[k].key, SESS_EXPLORE, awhy },
+            { D[k].equal, e, D[k].key, SESS_EXPLORE, ewhy },
+        };
+        probes_append(tab, n, rows, (int)COUNTOF(rows));
+    }
+}
+
 /* The rows of the two reply-record documents (fixture/replyrecord.h), read off the census's `replyRecords` and
    `replyTrailRows`. reply-record-trailed: both of the page's requests were recorded and the flow's trail took a
    row. reply-record-none, the control: a document that asks for nothing records nothing, read once its
@@ -34038,6 +34082,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_sale(js, probes, &np);
     probes_layoutshed(js, probes, &np);
     probes_cssparsetwin(js, probes, &np);
+    probes_compiletwin(js, probes, &np);
     probes_replyrecord(js, probes, &np);
     probes_rangeinsertrest(js, probes, &np);
     probes_rangedelrest(js, probes, &np);
