@@ -55033,7 +55033,7 @@ enum {
     PDS_EXPORT, PDS_EXP_01, PDS_EXP_02, PDS_EXP_03, PDS_EXP_04,
     PDS_FDECL, PDS_FD_01, PDS_FD_02, PDS_FD_03, PDS_FD_04,
     /* the thirteen places a function body is descended into */
-    PDS_ASGN_ARROW1, PDS_ASGN_ARROW2, PDS_ASGN_ARROW3, PDS_ASGN_SKIP, PDS_ASGN_PATTERN,
+    PDS_ASGN_ARROW1, PDS_ASGN_ARROW2, PDS_ASGN_ARROW3, PDS_ASGN_SKIP, PDS_ASGN_PATTERN, PDS_ASGN_ASYNC_SKIP,
     PDS_PFX_FUNC, PDS_PFX_ASYNCFUNC, PDS_OBJ_METHOD, PDS_SOD_FUNCVAR,
     PDS_CLS_SINIT, PDS_CLS_ACCESSOR, PDS_CLS_METHOD,
     PDS_SE_FUNC, PDS_EXP_FUNC, PDS_EXP_DEFFUNC, PDS_CLS_KEY, PDS_DE_KEY,
@@ -55413,8 +55413,8 @@ static int js_parse_skip_step(JSParseState *s, bool can_rest, int *pbits, bool *
 }
 
 /* The lookahead whole, for a site that cannot park inside it. Named residual. Not covered: every caller but
-   AssignmentExpression's arrow and pattern tests (the async arrow head, declaration and nested destructuring
-   targets, a for statement's head, a function's parameter list) runs the scan to its answer inside one
+   AssignmentExpression's arrow, async arrow and pattern tests (declaration and nested destructuring targets, a
+   for statement's head, a function's parameter list) runs the scan to its answer inside one
    production step. Next diff builds: each such site begun and stepped as assign_entry does, with a resume
    state of its own. Absence shows as: `sliceOverrunGapWork` near the bytes between a bracket and its match, at
    a declaration's pattern or a parameter list spanning a body. */
@@ -56609,6 +56609,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     case PDS_FD_04:           goto fd2_04;
     case PDS_ASGN_ARROW1:     goto asgn_arrow1_done;
     case PDS_ASGN_SKIP:       goto asgn_skip_step;
+    case PDS_ASGN_ASYNC_SKIP: goto asgn_async_skip_step;
     case PDS_ASGN_PATTERN:    goto asgn_pattern_step;
     case PDS_ASGN_ARROW2:     goto asgn_arrow2_done;
     case PDS_ASGN_ARROW3:     goto asgn_arrow3_done;
@@ -57204,8 +57205,8 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
         }
     }
     if (token_is_pseudo_keyword(s, JS_ATOM_async)) {
-        const uint8_t *source_ptr;
-        int atok, source_line_num, source_col_num;
+        int atok;
+        bool rested;
         JSParsePos pos;
 
         /* fast test */
@@ -57213,18 +57214,39 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
         if (atok == TOK_FUNCTION || atok == '\n')
             goto assign_next;
 
-        source_ptr = s->token.ptr;
-        source_line_num = s->token.line_num;
-        source_col_num = s->token.col_num;
+        /* The async arrow's source position, on the frame for the descent below. */
+        f->st_ptr = s->token.ptr;
+        f->st_line = s->token.line_num;
+        f->st_col = s->token.col_num;
         js_parse_get_pos(s, &pos);
         if (next_token(s))
             PD_RET(-1);
-        if ((s->token.val == '(' &&
-             js_parse_skip_parens_token(s, NULL, true) == TOK_ARROW) ||
-            (s->token.val == TOK_IDENT && !s->token.u.ident.is_reserved &&
-             peek_token(s, true) == TOK_ARROW)) {
+        if (s->token.val == '(') {
+            /* Is `async (…)` an arrow's head or a call: the lookahead to the `)` rests inside the scan as the
+               arrow test above does, and its answer restores the parse to `async` rather than to the `(`. */
+            js_parse_skip_begin(s, true);
+            s->pd_skip.pos = pos;
+ asgn_async_skip_step:
+            atok = js_parse_skip_step(s, s->pd_can_yield, NULL, &rested);
+            if (rested) {
+                s->pd_rest_owed = true;
+                f->state = PDS_ASGN_ASYNC_SKIP;
+                goto dispatch;
+            }
+            if (atok < 0)
+                PD_RET(-1);   /* the restore's re-scan threw */
+            if (atok != TOK_ARROW)
+                goto assign_next;
+            /* past `async` to the parameters' `(` */
+            if (next_token(s))
+                PD_RET(-1);
+            goto asgn_async_arrow;
+        }
+        if (s->token.val == TOK_IDENT && !s->token.u.ident.is_reserved &&
+            peek_token(s, true) == TOK_ARROW) {
+ asgn_async_arrow:
             PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_ARROW, f->flags, JS_FUNC_ASYNC,
-                      source_ptr, -1, source_line_num, source_col_num,
+                      f->st_ptr, -1, f->st_line, f->st_col,
                       JS_PARSE_EXPORT_NONE, PDS_ASGN_ARROW2);
  asgn_arrow2_done:
             PD_RET(s->pd_ret);
