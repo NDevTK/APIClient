@@ -11101,7 +11101,11 @@ static inline uint64_t gc_mut_reading(JSRuntime *rt)
 /* A trial's first state, at its begin and at each restart, with every object on gc_obj_list: a serial no
    object's trial count carries, nothing subtracted, and a whole-heap trial's cursor holding every object. When
    the serial wraps, a count an object kept from the trial that last used the number would read as this one's,
-   so every header is cleared: one walk of the heap per 2^32 trials. */
+   so every header is cleared.
+   Named residual. Not covered: that clearing is one walk of the whole heap inside the step that wraps the
+   serial, once per 2^32 trials. Next diff builds: the clearing as a phase of budgeted steps ahead of the trial,
+   its cursor the `pending` list. Absence shows as: one trial step at the heap's size (@HEAP gcDecrefStepMax)
+   where collections and restarts together cross a multiple of 2^32. */
 static void gc_trial_seed(JSRuntime *rt)
 {
     JSGCCycle *c = &rt->gc_cycle;
