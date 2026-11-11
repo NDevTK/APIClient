@@ -14968,11 +14968,12 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "the census's sale rows do not partition its sale total (%ld exploration + %ld candidate against %ld "
             "sold) — the label is read at the sale",
             out->sold_flows, out->sold_cands, out->sold);
-    /* A sold member is a stub standing or a stub that left the registry: a sale is no departure. */
-    DCHECKF((long)flow_cold_count() + (long)flow_cold_departed() == out->sold,
-            "the stubs standing (%d) and departed (%lld) do not account for the members sold (%ld) — a sale left "
-            "the registry without flow_remove, or a member went cold outside engine_sale_release",
-            flow_cold_count(), (long long)flow_cold_departed(), out->sold);
+    /* A sold member is a stub standing, a stub that left the registry, or a stub a pick restored: a sale is no
+       departure. A member sold again after its restore is counted once per sale, as each restore is. */
+    DCHECKF((long)flow_cold_count() + (long)flow_cold_departed() + out->restored == out->sold,
+            "the stubs standing (%d), departed (%lld) and restored (%ld) do not account for the members sold (%ld) "
+            "— a sale left the registry without flow_remove, or a member went cold outside engine_sale_release",
+            flow_cold_count(), (long long)flow_cold_departed(), out->restored, out->sold);
     /* And the two totals partition the frontier's departures, one level up: without this, the frontier's departure
        count and this file's retirement totals are three numbers in two censuses with no identity between them, and
        "this engine retires nothing" is a subtraction across them. Exact by construction: solver/flow.c's
