@@ -12902,23 +12902,18 @@ char *engine_sale_census_json(void) {
     return b;
 }
 
-/* The sale's own working storage. A sale runs because the allocator refused, so what the sale itself allocates
-   (the census's roots and survey, the stand-in register) cannot be asked of the allocator as it stands: a block
-   taken while memory stood is given back for the length of the sale and taken again after it. A sale that finds
-   no block held runs without its census and is counted.
-   No bound on a sale's need is known before the sale: the survey's storage follows the member's reachable
-   graph, which only its walk counts. So the block follows the sales as they are measured: twice what the last
-   funded sale's allocations asked for (the allocator's span across the sale), so one large member does not size
-   every later block; SALE_RESERVE_FIRST, which stands until a sale is measured, is a placeholder no run chose.
-   A block the allocator refuses is asked again at half, down to the last sale's need, so a reserve is held
-   whenever one that funds a sale like the last fits. At the floor, with nothing left to sell, the block is given
-   to the allocation that asked (`pagedReserve`).
-   Named residual. Not covered: a sale that asks for more than the block given back, and a block the allocator
-   refuses even at the last sale's need, what the sale freed having gone to the heap's free lists in pieces;
-   a block given at the floor is asked again only after the next sale, which runs unfunded. Next diff builds:
-   the write's graph bytes streamed to their stub's storage, so the block funds only the walk's identity tables
-   and the head bytes. Absence shows as: the refused allocation's own CHECK inside a sale, `saleOverReserve`
-   above zero, and `saleUnfunded` climbing with `sold`. */
+/* The sale's own working storage. A sale runs because the allocator refused, so what it allocates (the census's
+   roots and survey, the stand-in register) cannot be asked of the allocator as it stands: a block taken while
+   memory stood is given back for the sale and taken again after it; a sale finding none runs without its census.
+   No bound on a sale's need is known before it (the survey follows the member's graph), so the block is twice
+   the last funded sale's span (c_alloc.h), not the largest, and a refused block is asked again at half down to
+   that need. SALE_RESERVE_FIRST, standing until a sale is measured, is a placeholder no run chose. With nothing
+   left to sell, the block funds the asker (`pagedReserve`).
+   Named residual. Not covered: a sale asking more than the block given back; a block refused even at the last
+   need (what the sale freed lies in the free lists in pieces); a block given at the floor is asked again only
+   after the next sale, which runs unfunded. Next diff builds: the write's graph bytes streamed to the stub's
+   storage, so the block funds only the walk's identity tables and the head bytes. Absence shows as:
+   `saleOverReserve` above zero and `saleUnfunded` climbing with `sold`. */
 #define SALE_RESERVE_FIRST ((size_t)4 << 20)
 static void *g_sale_reserve;
 static size_t g_sale_reserve_bytes = SALE_RESERVE_FIRST, g_sale_need_max, g_sale_need_last;

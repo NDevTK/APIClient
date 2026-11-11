@@ -19625,8 +19625,7 @@ static long tf_hist_above(const char *js, const char *key, int from) {
    sale-floor-sells: with every allocation refused at the act, the members were sold, a sale took its census on
    storage it funded, and the bill after the sale still lists the request the sold member owes.
    sale-chain-spill-returns: there, asked on after the sales, the floor moved a frozen segment to the disk tier,
-   a restore read one back, and the owing member reported. sale-floor-funds-next: there, a second sale took its
-   census, on the block the first gave back and took again.
+   a restore read one back, and the owing member reported.
    sale-async-returns: as sale-forced-returns, for a member whose delta holds a pre-fork promise's settlement,
    and its report reads the value the restored settlement carries.
    sale-keep-same-record: a member whose owed record a holder outside it names (g_tf_keep) gets that record back
