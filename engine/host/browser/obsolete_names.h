@@ -2,16 +2,20 @@
  * Every interface name a standard's own removed-interface text names, minus every name a live vocabulary
  * (browser/platform_names.h, language_names.h, i18n_names.h) holds. solver/absent.c answers a global read of
  * one of these as a browser does, absent, and neither as a component this engine owes nor as app state.
- * DOM §11 Historical, https://dom.spec.whatwg.org/, 16 October 2026: 17
+ * DOM §11 Historical, https://dom.spec.whatwg.org/, 10 November 2026: 17
  * SVG 2 Appendix K Changes from SVG 1.1, https://svgwg.org/svg2-draft/changes.html, Last-Modified Sun, 14 Sep 2025 00:27:32 GMT: 32 (SVGPathSeg* expanded against https://www.w3.org/TR/SVG11/idl.html)
  * CSSOM §11 Change History, https://drafts.csswg.org/cssom/, 13 October 2026: 2
- * CSSOM View §17 Changes, https://drafts.csswg.org/cssom-view/, 8 October 2026: 1
- * Still defined by a live standard, so not here: DOMRectList */
+ * CSSOM View §17 Changes, https://drafts.csswg.org/cssom-view/, 5 November 2026: 1
+ * HTML5, W3C Recommendation 28 October 2014, https://www.w3.org/TR/2014/REC-html5-20141028/single-page.html: 117 not named by a source above
+ * Web Cryptography API, W3C Working Draft 8 January 2013, https://www.w3.org/TR/2013/WD-WebCryptoAPI-20130108/: 7 not named by a source above
+ * Still defined by a live standard, so not here: AudioTrack, AudioTrackList, BarProp, BeforeUnloadEvent, Crypto, DOMRectList, DOMStringMap, Document, ErrorEvent, External, HTMLAllCollection, HTMLAnchorElement, HTMLAreaElement, HTMLAudioElement, HTMLBRElement, HTMLBaseElement, HTMLBodyElement, HTMLButtonElement, HTMLCanvasElement, HTMLDListElement, HTMLDataElement, HTMLDataListElement, HTMLDirectoryElement, HTMLDivElement, HTMLElement, HTMLEmbedElement, HTMLFieldSetElement, HTMLFontElement, HTMLFormControlsCollection, HTMLFormElement, HTMLFrameElement, HTMLFrameSetElement, HTMLHRElement, HTMLHeadElement, HTMLHeadingElement, HTMLHtmlElement, HTMLIFrameElement, HTMLImageElement, HTMLInputElement, HTMLLIElement, HTMLLabelElement, HTMLLegendElement, HTMLLinkElement, HTMLMapElement, HTMLMarqueeElement, HTMLMediaElement, HTMLMetaElement, HTMLMeterElement, HTMLModElement, HTMLOListElement, HTMLObjectElement, HTMLOptGroupElement, HTMLOptionElement, HTMLOptionsCollection, HTMLOutputElement, HTMLParagraphElement, HTMLParamElement, HTMLPreElement, HTMLProgressElement, HTMLQuoteElement, HTMLScriptElement, HTMLSelectElement, HTMLSourceElement, HTMLSpanElement, HTMLStyleElement, HTMLTableCaptionElement, HTMLTableCellElement, HTMLTableColElement, HTMLTableElement, HTMLTableRowElement, HTMLTableSectionElement, HTMLTemplateElement, HTMLTextAreaElement, HTMLTimeElement, HTMLTitleElement, HTMLTrackElement, HTMLUListElement, HTMLUnknownElement, HTMLVideoElement, HashChangeEvent, History, Location, MediaError, MimeType, MimeTypeArray, Navigator, PageTransitionEvent, Plugin, PluginArray, PopStateEvent, RadioNodeList, TextTrack, TextTrackCue, TextTrackCueList, TextTrackList, TimeRanges, TrackEvent, ValidityState, VideoTrack, VideoTrackList, Window */
 #ifndef APICLIENT_OBSOLETE_NAMES_H
 #define APICLIENT_OBSOLETE_NAMES_H
 
 static const char *const OBSOLETE_NAMES[] = {
+    "ApplicationCache",   /* html5-rec */
     "CSSCharsetRule",   /* cssom */
+    "CryptoOperation",   /* webcrypto-wd-2013 */
     "DOMConfiguration",   /* dom */
     "DOMError",   /* dom */
     "DOMErrorHandler",   /* dom */
@@ -22,11 +26,28 @@ static const char *const OBSOLETE_NAMES[] = {
     "DOMUserData",   /* dom */
     "Entity",   /* dom */
     "EntityReference",   /* dom */
+    "GlobalEventHandlers",   /* html5-rec */
+    "HTMLAppletElement",   /* html5-rec */
+    "HTMLBaseFontElement",   /* html5-rec */
+    "HTMLKeygenElement",   /* html5-rec */
+    "HTMLTableDataCellElement",   /* html5-rec */
+    "HTMLTableHeaderCellElement",   /* html5-rec */
+    "Key",   /* webcrypto-wd-2013 */
+    "KeyOperation",   /* webcrypto-wd-2013 */
+    "KeyPair",   /* webcrypto-wd-2013 */
+    "MediaController",   /* html5-rec */
     "MutationEvent",   /* dom */
     "MutationNameEvent",   /* dom */
     "NameList",   /* dom */
+    "NavigatorContentUtils",   /* html5-rec */
+    "NavigatorID",   /* html5-rec */
+    "NavigatorLanguage",   /* html5-rec */
+    "NavigatorOnLine",   /* html5-rec */
+    "NavigatorPlugins",   /* html5-rec */
+    "NavigatorStorageUtils",   /* html5-rec */
     "Notation",   /* dom */
     "PseudoElement",   /* cssom */
+    "RandomSource",   /* webcrypto-wd-2013 */
     "RangeException",   /* dom */
     "SVGAnimatedPathData",   /* svg2 */
     "SVGColor",   /* svg2 */
@@ -60,8 +81,13 @@ static const char *const OBSOLETE_NAMES[] = {
     "SVGPathSegMovetoRel",   /* svg11-idl */
     "SVGStylable",   /* svg2 */
     "SVGViewSpec",   /* svg2 */
+    "Transferable",   /* html5-rec */
     "TypeInfo",   /* dom */
     "UserDataHandler",   /* dom */
+    "WindowBase64",   /* html5-rec */
+    "WindowEventHandlers",   /* html5-rec */
+    "WindowTimers",   /* html5-rec */
+    "WorkerCrypto",   /* webcrypto-wd-2013 */
 };
 
 #endif

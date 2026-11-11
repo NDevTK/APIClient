@@ -115,6 +115,29 @@ for (const [key, url, id, title, label] of [
   sources.push(`${label}, ${url}, ${dtUpdated(url, html)}: ${n}`);
 }
 
+/* Dated editions: every interface a W3C publication at a fixed address defined. The publication is immutable,
+   so it carries its own edition; a name it defines that no live vocabulary holds has been removed from the
+   platform since (HTML5's ApplicationCache and MediaController, the 2013 Web Cryptography draft's
+   CryptoOperation and KeyOperation), and a mixin it names was never a global. Each row is read by one rule:
+   the identifier an `interface` declaration marks as its definition with <dfn>, outside HTML5's
+   `<pre class="idl extract">` blocks, which illustrate the document's conventions. A linked name is another
+   publication's interface the declaration extends. */
+for (const [key, url, title, label] of [
+  ["html5-rec", "https://www.w3.org/TR/2014/REC-html5-20141028/single-page.html", "HTML5",
+   "HTML5, W3C Recommendation 28 October 2014"],
+  ["webcrypto-wd-2013", "https://www.w3.org/TR/2013/WD-WebCryptoAPI-20130108/", "Web Cryptography API",
+   "Web Cryptography API, W3C Working Draft 8 January 2013"],
+]) {
+  const html = curl(url);
+  const got = /<title>\s*([^<]*?)\s*<\/title>/.exec(html);
+  if (!got || got[1] !== title) throw new Error(`${url} is titled "${got && got[1]}", not "${title}"`);
+  const n0 = found.size;
+  const idl = html.replace(/<pre class="idl extract">[\s\S]*?<\/pre>/g, " ");
+  for (const m of idl.matchAll(/interface\s+<dfn[^>]*>\s*([A-Z][A-Za-z0-9]*)\s*<\/dfn>/g)) add(m[1], key);
+  if (found.size === n0) throw new Error(`${url} yielded no interface — its IDL markup is not what this rule reads`);
+  sources.push(`${label}, ${url}: ${found.size - n0} not named by a source above`);
+}
+
 /* Minus every live vocabulary: the three generated tables absent.c already reads. */
 const live = new Set();
 for (const f of ["platform_names.h", "language_names.h", "i18n_names.h"])
