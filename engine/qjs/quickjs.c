@@ -49073,6 +49073,10 @@ static void *fg_rlinks(FGReader *r, uint8_t kind)
         } else first = st;
         prev = st; prev_kind = kind; prev_off = off;
         kind = fg_r8(r);
+        if (kind != CONT_NONE && !cont_kind_recordless(kind) && !fg_r8(r)) {
+            cont_outer_set(prev, prev_kind, NULL, kind);
+            break;
+        }
     }
     CHECK(prev_off < 0, "flow graph: a record's descriptor answer names a requester its chain does not hold");
     return first;
@@ -86331,6 +86335,10 @@ static void fg_links(FGWriter *w, FGBuf *out, void *st, uint8_t kind)
         if (machine) fg_machine(w, out, st);
         else fg_rec_fields(kind, st, &fg_recw, &o);
         fg_u8(out, next_kind);
+        /* a recorded kind can stand beside no requester (tramp_cont_relink_outer and the collector's walk stop
+           there): whether one follows */
+        if (next_kind != CONT_NONE && !cont_kind_recordless(next_kind)) fg_u8(out, next != NULL);
+        if (!next) return;
         st = next; kind = next_kind;
     }
 }
