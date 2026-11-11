@@ -5,13 +5,43 @@
    and engine/lexbor (all three are this project's own code) and reports each DCHECK, DCHECKF, DCHECK_* or
    DCHECKF_* whose condition or arguments hold an assignment, an increment or decrement, or an address handed
    to a parameter its callee may write through, unless the variable is the assert's own scratch. A finding is
-   fixed by making the call a statement and asserting its result. Usage: node engine/dcheckgate.mjs [root…].
+   fixed by making the call a statement and asserting its result. Usage: node engine/dcheckgate.mjs [root…], or
+   node engine/dcheckgate.mjs --rev <revision> to read the three roots as that commit holds them.
    Exit 0 with no finding, 1 with findings. */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { execFileSync } from "node:child_process";
 
-const ROOTS = process.argv.length > 2 ? process.argv.slice(2)
-                                      : ["host", "qjs", "lexbor"].map((d) => join(import.meta.dirname, d));
+const REV = process.argv[2] === "--rev" ? process.argv[3] : null;
+if (process.argv[2] === "--rev" && (!REV || process.argv.length !== 4)) {
+  console.error("usage: node engine/dcheckgate.mjs [root…] | --rev <revision>");
+  process.exit(2);
+}
+const REPO = join(import.meta.dirname, "..");
+const ROOTS = REV !== null ? ["host", "qjs", "lexbor"].map((d) => "engine/" + d)
+            : process.argv.length > 2 ? process.argv.slice(2)
+            : ["host", "qjs", "lexbor"].map((d) => join(import.meta.dirname, d));
+
+/* A revision's sources, read through git in two spawns: the paths, then every blob in one `cat-file --batch`,
+   whose reply is a `<object> blob <bytes>` line, the bytes and a newline per path. */
+function revisionSources(rev, roots) {
+  const git = (args, input) => execFileSync("git", ["-C", REPO, ...args], { input, maxBuffer: 1 << 30 });
+  const paths = git(["ls-tree", "-r", "--name-only", rev, "--", ...roots]).toString("utf8").split("\n")
+    .filter((p) => /\.(c|h)$/.test(p) && !/(^|\/)(test262|out|node_modules)\//.test(p));
+  const out = git(["cat-file", "--batch"], paths.map((p) => `${rev}:${p}\n`).join(""));
+  const texts = new Map();
+  let at = 0;
+  for (const p of paths) {
+    const nl = out.indexOf(10, at), head = out.toString("utf8", at, nl).split(" ");
+    if (head[1] !== "blob") throw new Error(`[dcheckgate] ${rev}:${p} is ${head.slice(1).join(" ")}, not a blob`);
+    const n = Number(head[2]);
+    texts.set(p, out.toString("utf8", nl + 1, nl + 1 + n));
+    at = nl + 1 + n + 1;
+  }
+  return texts;
+}
+const AT_REV = REV !== null ? revisionSources(REV, ROOTS) : null;
+const read = (file) => AT_REV !== null ? AT_REV.get(file) : readFileSync(file, "utf8");
 
 function sources(dir, out) {
   for (const name of readdirSync(dir)) {
@@ -140,10 +170,10 @@ function functionRest(text, at, depth) {
   return rest;
 }
 let findings = 0, sites = 0;
-const FILES = ROOTS.flatMap((root) => sources(root, []));
+const FILES = AT_REV !== null ? [...AT_REV.keys()] : ROOTS.flatMap((root) => sources(root, []));
 const DECLARED = FILES;
 for (const file of DECLARED) {
-  const text = blank(readFileSync(file, "utf8"));
+  const text = blank(read(file));
   let m;
   DECL.lastIndex = 0;
   while ((m = DECL.exec(text)) !== null) {
@@ -153,7 +183,7 @@ for (const file of DECLARED) {
   }
 }
 for (const file of FILES) {
-  const src = readFileSync(file, "utf8"), text = blank(src);
+  const src = read(file), text = blank(src);
   let m, depth = 0, scanned = 0;
   MACRO.lastIndex = 0;
   while ((m = MACRO.exec(text)) !== null) {
@@ -166,11 +196,11 @@ for (const file of FILES) {
     const w = writes(a, functionRest(text, scanned, depth));
     if (w.length === 0) continue;
     const line = src.slice(0, m.index).split("\n").length;
-    console.log(`${relative(process.cwd(), file)}:${line}: ${m[0].replace(/\s*\($/, "")} condition or arguments ` +
+    console.log(`${AT_REV !== null ? file : relative(process.cwd(), file)}:${line}: ${m[0].replace(/\s*\($/, "")} condition or arguments ` +
                 `contain ${w.join(" and ")}, which a release build does not evaluate`);
     findings++;
   }
 }
 console.log(`[dcheckgate] ${findings} finding(s) over ${sites} DCHECK site(s) in ${FILES.length} file(s) under ` +
-            ROOTS.map((r) => relative(process.cwd(), r)).join(", "));
+            (AT_REV !== null ? ROOTS.join(", ") + " at " + REV : ROOTS.map((r) => relative(process.cwd(), r)).join(", ")));
 process.exit(findings === 0 ? 0 : 1);
