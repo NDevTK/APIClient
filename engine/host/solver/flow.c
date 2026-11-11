@@ -327,7 +327,7 @@ struct FlowCodeSite {
     struct FlowCodeSite *hnext;     /* its chain in `fam->codes` */
     int kind;
     uint64_t key;
-    int64_t served;                 /* lifetime: work charged to members while they were dispatched from here */
+    int64_t served;                 /* lifetime: work members ran while dispatched from here, compiles left out */
     FlowSite *classes;              /* its standing classes that hold a member, linked through `cnext`/`cprev` */
 };
 
@@ -2166,6 +2166,10 @@ void flow_age_running(int64_t us, int64_t compile) {
     DCHECK(compile >= 0 && compile <= us,
            "a step's compile work is negative or exceeds the step's work — both are differences of counters the "
            "one step bracket reads");
+    /* What the step ran, apart from what it compiled. A compile is banked to the family's work alone: it reads as
+       no service at the code site the member stands at and moves no member's turn, since parsing a body is not
+       running the code there and every world that reaches the body owes the same parse. */
+    const int64_t ran = us - compile;
     /* The scheduler's clock is monotonic, asserted where its reading arrives. A negative charge raises the flow's
        weight, so a flow burning the thread would climb to the top and stay; only a non-monotonic or wrapping clock
        at the call site produces one. */
@@ -2190,7 +2194,7 @@ void flow_age_running(int64_t us, int64_t compile) {
         g_running->work = 0;
         g_running->work_gen = g_running->family->emit_gen;
     }
-    g_running->work += us;
+    g_running->work += ran;
     /* And the one transition a charge can make: `work` only rises here and the normalise fires only where
        flow_own_silence already answered zero, so base to away is the only direction and a member already away
        stays away. A zero-unit charge against a member at base moves nothing, and the test says so rather
@@ -2226,18 +2230,18 @@ void flow_age_running(int64_t us, int64_t compile) {
     /* And the site the member stands at: Level 2's UCB count is the service its code site has received, in pulls of
        one quantum (Level 1's unit, a real number). Any charge reprices the site, which re-ranks every member
        standing there at once, so the site is re-filed and the order told. */
-    DCHECKF(g_running->site_banked >= 0 && g_running->site_banked <= us,
-            "a step banked %lld units to sites it moved off and ended having retired %lld — the bank reads the same "
-            "counter the step's charge is a difference of", (long long)g_running->site_banked, (long long)us);
-    if (us - g_running->site_banked > 0) {
+    DCHECKF(g_running->site_banked >= 0 && g_running->site_banked <= ran,
+            "a step banked %lld units to sites it moved off and ended having run %lld — the bank reads the same "
+            "counters the step's charge is a difference of", (long long)g_running->site_banked, (long long)ran);
+    if (ran - g_running->site_banked > 0) {
         FlowSite *st = g_running->at;
         DCHECK(st != NULL && st->fam == g_running->family,
                "the running flow stands at no site, or at one in another family's ledger — flow_new, the fork and "
                "flow_stand_at keep `at` in the member's own family");
-        flow_code_charge(st->code, us - g_running->site_banked);
+        flow_code_charge(st->code, ran - g_running->site_banked);
     }
-    /* The same units went to the turn and to the family's work. This is the only site that adds to either, so the
-       only one that could add to one alone; a charge reaching `work` and missing `fam_work` would make a turn
+    /* The units the step ran went to the turn and to the family's work, and its compile to the family's alone. This
+       is the only site that adds to either, so a charge reaching `work` and missing `fam_work` would make a turn
        outgrow the family's work. */
     g_running->site_banked = 0;
     DCHECK_AGING_ONE_WINDOW(g_running, "a slice of the thread was charged to this flow and its family");
@@ -6805,6 +6809,11 @@ void flow_wfq_census(WfqCensus *out) {
     DCHECK(out->br_held_work + out->br_empty_work == out->br_work_sum,
            "the work of live and empty branch buckets does not sum to the time attributed to buckets — "
            "branch_take raises the two in the two arms of one condition");
+    DCHECKF(out->site_work - (g_running ? g_running->site_banked : 0) + out->compile_work == out->charged_work,
+            "the work charged to code sites (%lld, less what the open step banked) and the compile work (%lld) do not "
+            "make up the work charged (%lld) — a charge reached a site with a compile in it, or bypassed "
+            "flow_age_running", (long long)out->site_work, (long long)out->compile_work,
+            (long long)out->charged_work);
     DCHECK(out->br_work_sum + out->br_retired_work == out->charged_work,
            "the work attributed to branch buckets plus the retired term does not equal the time charged — "
            "every unit lands on one bucket, and a freed bucket's total is folded into the retired term");

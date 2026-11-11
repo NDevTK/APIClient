@@ -5260,6 +5260,7 @@ static int engine_reclaim_set(int v);
    the running member mid-step (engine_sibling_assemble), and the step bracket that says one is open. */
 static int64_t g_service_work;
 static int64_t g_step_open_work;
+static int64_t g_step_open_compile;   /* …and on quickjs's compile-work counter */
 static int g_in_step;
 
 /* Which account an assembled arm takes: its parent's (a fork, flow_fork_inherit), or a new one at the frontier's
@@ -5306,11 +5307,12 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
         if (parent == flow_running() && JS_RunningSiteHash(ctx, &site)) {
             /* The work this step ran from the site the parent is leaving is that site's, banked before the move;
                the rest of the step is charged at its end to wherever the parent then stands. */
-            int64_t ran = g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work;
+            int64_t ran = g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
+                          - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile);
 
             DCHECK(g_in_step > 0 && ran >= parent->site_banked,
-                   "a fork moved the running member outside a step, or the step's work so far fell below what it "
-                   "already banked — both read the one work counter");
+                   "a fork moved the running member outside a step, or what the step has run so far, its compile "
+                   "work left out, fell below what it already banked — both read the step's two counters");
             flow_site_bank_running(ran - parent->site_banked);
             flow_stand_at(parent, FLOW_SITE_CODE, site);
         }
@@ -13233,6 +13235,7 @@ static int engine_sched_slice(int resume) {
             const int64_t step_work0 = g_service_work;
             const int64_t step_compile0 = (int64_t)JS_FlowCompileWorkLife();
             g_step_open_work = step_work0;
+            g_step_open_compile = step_compile0;
             /* The same bracket in the other currency, opened on the clock's line so the two readings are of one
                span: the overrun test below compares `now - t_slice0`, and this counts the suspend points offered
                across that interval. From here rather than the turn's `t0`, because the pick, switch and delta swap

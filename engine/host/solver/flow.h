@@ -1995,9 +1995,9 @@ int   flow_attacker_acts_only(const Flow *f);
    delivery from a driven peer reads 0, since the peer's acts are held in its own instance. */
 int   flow_path_victim_act(const Flow *f);
 /* Charge the running flow for the work a step just burned, in units of work (the reward's currency), after
-   the step and by the scheduler alone, which holds both ends of the interval. Never a step count (see `work`). A
-   flow that leaves the frontier also hands what it burned to the flow that forked it, which prices a fork
-   chain. */
+   the step and by the scheduler alone, which holds both ends of the interval. Never a step count (see `work`).
+   `compile` is the part of `us` that was a compile's (JS_FlowCompileWorkLife's rise over the step, asserted
+   within `us`): it ages the family and is charged to no code site and no member's turn. */
 void  flow_age_running(int64_t us, int64_t compile);
 /* Lifetime: the work charged to code sites, the compile work charged, and all work charged (flow_age_running). */
 int64_t flow_site_work_lifetime(void);
