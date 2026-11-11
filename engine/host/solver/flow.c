@@ -5814,19 +5814,17 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, FlowScan why) {
         flow_count_plateau(seed, &a, &g_ix_entries);
     }
     /* A written stub keeps its rank (its order key stood still across its sale), so it is weighed beside the
-       index's answer and wins only strictly, as any rival of the seed does; its pick restores it (engine.c).
+       index's answer by the order the index keeps, as if it stood there: above an answer by the whole order, and
+       above the seed only birth order aside, the tie an incumbent keeps. So a sale moves no pick; its pick
+       restores it (engine.c).
        Named residual. Not covered: the written stubs are weighed one by one, O(written stubs not host-owed) per
        ask. Next diff builds: a written stub in the order's index as a class of its own, out of the tail query.
        Absence shows as: `scanOtherWeights` and the dispatch scans' weights per ask rising with `cold`. */
-    {
-        double bw = a.best ? flow_weight(a.best) : 0.0;
-        for (Flow *m = g_rest_head; m; m = m->rest_next) {
-            double w;
-            if (m == exclude || flow_host_owed(m)) continue;
-            DCHECK(m->cold && m->sold != NULL, "a member on the written list is not a written stub");
-            w = flow_weight(m); g_scan_weights[why]++;
-            if (!a.best || w > bw) { a.best = m; bw = w; }
-        }
+    for (Flow *m = g_rest_head; m; m = m->rest_next) {
+        if (m == exclude || flow_host_owed(m)) continue;
+        DCHECK(m->cold && m->sold != NULL, "a member on the written list is not a written stub");
+        g_scan_weights[why]++;
+        if (!a.best || (a.best == seed ? flow_order_unseats(m, seed) : flow_order_above(m, a.best))) a.best = m;
     }
     return a.best;
 }
