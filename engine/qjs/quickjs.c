@@ -61,8 +61,8 @@
 
 #include "quickjs-check.h"
 
-/* The backing allocator's bookkeeping per block, as one estimate on every host: `malloc_size` decides when a
-   collection is owed, so it is a function of the program's requests and never of the allocator under it. */
+/* The backing allocator's bookkeeping per block, as one estimate on every host, so `malloc_size` is a function of
+   the program's requests and never of the allocator under it. */
 #define MALLOC_OVERHEAD  8
 
 #if defined(__NEWLIB__)
@@ -604,7 +604,8 @@ struct JSRuntime {
     /* How many drains are on the C stack (JS_FREE_DRAIN_DEPTH_MAX). */
     uint8_t gc_drain_depth;
     JSGCPhaseEnum gc_phase : 8;
-    size_t malloc_gc_threshold;
+    /* A whole-heap collection is owed when `js_obj_live` reaches this (js_trigger_gc). */
+    uint64_t gc_obj_threshold;
 #ifdef ENABLE_DUMPS // JS_DUMP_LEAKS
     struct list_head string_list; /* list of JSString.link */
 #endif
@@ -3256,19 +3257,25 @@ JSValue JS_DupValueRT(JSRuntime *rt, JSValueConst v)
     return js_dup(v);
 }
 
-static void js_trigger_gc(JSRuntime *rt, size_t size)
+/* The fewest live JS objects a whole-heap collection is owed at. A heuristic placeholder, not a measured value:
+   upstream QuickJS's first threshold of 256 KiB, read at 64 bytes an object. */
+#define JS_GC_OBJ_THRESHOLD_MIN 4096
+
+/* Asked before a JS object is born. Whether a collection is owed is a function of the flow's path: it counts the JS
+   objects the program holds (`js_obj_live`), never the allocator's bytes, which differ between builds whose
+   structures differ and between hosts. Memory pressure is the embedder's other signal (JS_GCOwe). */
+static void js_trigger_gc(JSRuntime *rt)
 {
     bool force_gc;
 #ifdef FORCE_GC_AT_MALLOC
     force_gc = true;
 #else
-    force_gc = ((rt->malloc_state.malloc_size + size) >
-                rt->malloc_gc_threshold);
+    force_gc = (uint64_t)rt->js_obj_live >= rt->gc_obj_threshold;
 #endif
     if (force_gc) {
 #ifdef ENABLE_DUMPS // JS_DUMP_GC
         if (check_dump_flag(rt, JS_DUMP_GC)) {
-            printf("GC: size=%zd\n", rt->malloc_state.malloc_size);
+            printf("GC: objects=%lld\n", (long long)rt->js_obj_live);
         }
 #endif
         /* Crossed by a finalizer of the collection that is freeing its cycles: that collection answers it,
@@ -3286,13 +3293,16 @@ static void js_trigger_gc(JSRuntime *rt, size_t size)
     }
 }
 
-/* A collection finished: the next one is owed past half again the memory that survived it, and a crossing the
+/* A collection finished: the next one is owed at half again the JS objects that survived it, and a crossing the
    host made while this one stood is answered by it. */
 static void gc_cycle_finished(JSRuntime *rt)
 {
+    uint64_t live = (uint64_t)rt->js_obj_live;
+
+    DCHECKF(rt->js_obj_live >= 0, "a collection finished with %lld live JS objects", (long long)rt->js_obj_live);
     rt->gc_cycle.collections++;
     rt->gc_cycle.owed = false;
-    rt->malloc_gc_threshold = rt->malloc_state.malloc_size + (rt->malloc_state.malloc_size >> 1);
+    rt->gc_obj_threshold = live + (live >> 1) > JS_GC_OBJ_THRESHOLD_MIN ? live + (live >> 1) : JS_GC_OBJ_THRESHOLD_MIN;
 }
 
 /* max overhead for size >= 64: 12.5% */
@@ -4035,7 +4045,7 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     ms.malloc_size += sizeof(JSRuntime) + MALLOC_OVERHEAD;
     rt->malloc_state = ms;
     js_arena_init(rt);
-    rt->malloc_gc_threshold = 256 * 1024;
+    rt->gc_obj_threshold = JS_GC_OBJ_THRESHOLD_MIN;
 
     init_list_head(&rt->context_list);
     init_list_head(&rt->agent_list);
@@ -4175,13 +4185,13 @@ uint64_t JS_GetDumpFlags(JSRuntime *rt)
 }
 
 size_t JS_GetGCThreshold(JSRuntime *rt) {
-    return rt->malloc_gc_threshold;
+    return (size_t)rt->gc_obj_threshold;
 }
 
 /* use -1 to disable automatic GC */
 void JS_SetGCThreshold(JSRuntime *rt, size_t gc_threshold)
 {
-    rt->malloc_gc_threshold = gc_threshold;
+    rt->gc_obj_threshold = gc_threshold;
 }
 
 #define malloc(s) malloc_is_forbidden(s)
@@ -9153,7 +9163,7 @@ static JSValue JS_NewObjectFromShape(JSContext *ctx, JSShape *sh, JSClassID clas
     JSObject *p;
     int i;
 
-    js_trigger_gc(ctx->rt, sizeof(JSObject));
+    js_trigger_gc(ctx->rt);
     p = js_malloc(ctx, sizeof(JSObject));
     if (unlikely(!p))
         goto fail;

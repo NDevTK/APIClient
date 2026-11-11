@@ -653,6 +653,7 @@ JS_EXTERN void JS_SetRuntimeInfo(JSRuntime *rt, const char *info);
 JS_EXTERN void JS_SetMemoryLimit(JSRuntime *rt, size_t limit);
 JS_EXTERN void JS_SetDumpFlags(JSRuntime *rt, uint64_t flags);
 JS_EXTERN uint64_t JS_GetDumpFlags(JSRuntime *rt);
+/* The live JS object count at which a whole-heap collection is owed; (size_t)-1 owes none. */
 JS_EXTERN size_t JS_GetGCThreshold(JSRuntime *rt);
 JS_EXTERN void JS_SetGCThreshold(JSRuntime *rt, size_t gc_threshold);
 /* use 0 to disable maximum stack size check */

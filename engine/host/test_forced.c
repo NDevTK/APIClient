@@ -4093,8 +4093,8 @@ TF_UNIT void policy_container_selftest(void)
 
 /* @MALLOCACCT: the runtime's accounting of a block it serves from the backing allocator. A large block's usable size
    is its request rounded to the arena's alignment, and each block adds that plus one constant overhead to
-   `malloc_size`, whatever the allocator under it rounded the block to: `malloc_size` decides when a collection is
-   owed, so it must be a function of the program on every host. 1000 bytes is a glibc chunk with slack and 200000
+   `malloc_size`, whatever the allocator under it rounded the block to, so both are functions of the program on
+   every host. 1000 bytes is a glibc chunk with slack and 200000
    is above glibc's default mmap threshold, whose blocks are page-rounded; emscripten's dlmalloc rounds neither the
    same way. */
 TF_UNIT void malloc_accounting_selftest(void)
