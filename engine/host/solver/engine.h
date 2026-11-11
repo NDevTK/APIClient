@@ -613,8 +613,6 @@ long    engine_module_parse_shared(void);
 long    engine_module_rows_reached(void);
 long    engine_module_starts(void);
 int64_t engine_module_parse_bytes(void);
-/* Lifetime: compile stints run by a world other than the one whose stint last left that body's compile parked. */
-long    engine_compile_handovers(void);
 /* The same counter plus the running flow's standing, unbanked count: the instance's whole retired work at this
    instant, so a bracket's two readings differ by exactly the work done between them. */
 int64_t engine_work_retired(void);

@@ -1,7 +1,7 @@
 /* The compile-join documents: a classic script writes the decoded fragment to innerHTML, so each @S candidate for
    that sink founds a family of its own beside the page's, and the program that follows is longer than many quanta
-   of compile. A compile ages only the family whose member ran the stint, so the families take the thread in turn
-   and every one stands at the long row before any has finished it. `compilejoin` holds a root module there;
+   of compile. Every family that reaches the long row pays the compile's work whoever ran its stints, so the
+   families take the thread in turn and the later ones pay what the first ran. `compilejoin` holds a root module there;
    `compilejoinclassic` a classic script. The long body opens with a regular expression literal, a tagged template
    and a class with computed keys, whose values its request carries. test_forced.c's exploring documents (its
    TF_DOCS table); each ends with TF_CANVAS_INK, which test_forced.c defines before including this. */

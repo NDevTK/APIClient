@@ -9779,19 +9779,6 @@ static int64_t g_module_parse_bytes;
 long    engine_module_rows_reached(void) { return g_module_rows_reached; }
 long    engine_module_starts(void)       { return g_module_starts; }
 int64_t engine_module_parse_bytes(void)  { return g_module_parse_bytes; }
-/* Compile stints run by a world other than the one whose stint last left that body's compile parked: the
-   witness that two worlds stood inside one row's compile at once. Lifetime; a report. */
-static const DynBody *g_stint_parked_body;
-static uint64_t g_stint_parked_by;
-static long     g_compile_handovers;
-long engine_compile_handovers(void) { return g_compile_handovers; }
-static void compile_stint_begins(const Flow *f, const DynBody *pb) {
-    if (g_stint_parked_body == pb && g_stint_parked_by != flow_birth_seq(f)) g_compile_handovers++;
-}
-static void compile_stint_ended(const Flow *f, const DynBody *pb, int parked) {
-    g_stint_parked_body = parked ? pb : NULL;
-    g_stint_parked_by = parked ? flow_birth_seq(f) : 0;
-}
 /* Compile work charged from a body's record rather than run, and stints run in a residency span to re-run an
    ended record nothing holds the result of (a SyntaxError is each world's own completion). Lifetime; a report. */
 static int64_t g_compile_paid_work;
@@ -11294,10 +11281,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     /* The compile rests on the body (solver/rest_unit.h's bound (1)); a parked stint leaves the
                        row and the cursor as they are, and the ladder re-enters here. */
                     uint64_t parsed0 = JS_FlowParseBytesLife();
-                    compile_stint_begins(f, pb);
                     int mr = compile_paid_stint(pb, prog_ctx, prog_name, src_flags, /*module*/1, &rec);
                     g_module_parse_bytes += (int64_t)(JS_FlowParseBytesLife() - parsed0);
-                    compile_stint_ended(f, pb, mr == 0);
                     if (mr == 0) {
                         DCHECK(dyn_body_compile_parked(pb) && JS_IsUndefined(rec),
                                "a module compile answered suspended and left neither a parked compile nor a record");
@@ -11385,9 +11370,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     ThreadWorkSpan tw;
                     uint64_t parsed0 = JS_FlowParseBytesLife();
                     thread_work_begin(&tw);
-                    compile_stint_begins(f, pb);
                     int cr = compile_paid_stint(pb, prog_ctx, prog_name, src_flags, /*module*/0, &fn);
-                    compile_stint_ended(f, pb, cr == 0);
                     thread_work_end(&tw, THREAD_WORK_SCRIPT_PARSE, JS_FlowParseBytesLife() - parsed0);
                     if ((int64_t)((JS_FlowParseBytesLife() - parsed0) * THREAD_WORK_UNITS_PER_BYTE_SCRIPT) >=
                         ENGINE_QUANTUM_WORK)
