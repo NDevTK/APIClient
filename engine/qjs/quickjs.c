@@ -48209,6 +48209,8 @@ static uint32_t fg_cross_shape(JSValueConst a)
          : 0x80000000u | (uint32_t)((JSFunctionBytecode *)JS_VALUE_GET_PTR(a))->byte_code_len;
 }
 
+static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue **frames);
+
 /* The thing the seal named `name`, if it is alive and of GC type `type`. */
 static JSGCObjectHeader *bl_thing_at(JSRuntime *rt, uint32_t name, int type)
 {
