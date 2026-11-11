@@ -1958,6 +1958,10 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/openrest.h"
 #include "fixture/shadowattachrest.h"
 #include "fixture/htmlbytesrest.h"
+#include "fixture/compilestrrest.h"
+#include "fixture/compilererest.h"
+#include "fixture/compilelabelrest.h"
+#include "fixture/compileparenrest.h"
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
@@ -2777,6 +2781,10 @@ TF_DOCS[] = {
     { "openrest", HTML_OPENREST },
     { "shadowattachrest", HTML_SHADOWATTACHREST },
     { "htmlbytesrest", HTML_HTMLBYTESREST },
+    { "compilestrrest", HTML_COMPILESTRREST },
+    { "compilererest", HTML_COMPILERE_REST },
+    { "compilelabelrest", HTML_COMPILELABELREST },
+    { "compileparenrest", HTML_COMPILEPARENREST },
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
@@ -19681,6 +19689,45 @@ TF_UNIT void probes_htmlbytesrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the four compile-rest documents (fixture/compilestrrest.h, compilererest.h, compilelabelrest.h,
+   compileparenrest.h): the indirect eval's answer reached its record, and no turn of the document held the
+   thread for a quantum between two offers (`sliceOverrunGapWork`), so the compile rested inside the stint the
+   document makes long. A row's key is its own document's record address, so each document selects one row. */
+TF_UNIT void probes_compilerest(const char *js, Probe *tab, int *n) {
+    static const struct { const char *row, *url, *key, *val, *gapwhy; } R[] = {
+        { "compile-string-rest", "/api/cs-done", "n", "1000000",
+          "a turn held the thread for a quantum or more between two offers: the compile of a string literal of "
+          "1,000,000 characters ran a stint that offered no suspend point" },
+        { "compile-regexp-rest", "/api/cr-done", "m", "false",
+          "a turn held the thread for a quantum or more between two offers: the compile of a regular expression "
+          "literal of 200,001 characters ran a stint that offered no suspend point" },
+        { "compile-label-rest", "/api/cl-done", "r", "100001",
+          "a turn held the thread for a quantum or more between two offers: the compile of a function body of "
+          "100,000 conditional jumps ran a stint that offered no suspend point" },
+        { "compile-paren-rest", "/api/cp-done", "r", "50000",
+          "a turn held the thread for a quantum or more between two offers: the compile of a parenthesized "
+          "function of 50,000 statements ran a stint that offered no suspend point" },
+    };
+    const char *at = strstr(js, "\"sliceOverrunGapWork\":");
+    long gap = at ? strtol(at + strlen("\"sliceOverrunGapWork\":"), NULL, 10) : -1;
+    int i;
+
+    for (i = 0; i < (int)COUNTOF(R); i++) {
+        char reach[64];
+        const char *why = NULL;
+        int tt = 1;
+
+        snprintf(reach, sizeof reach, "\"%s\"", R[i].url);
+        fold_row(&tt, &why, !!strstr(js, reach), "NOT REACHED: the eval's record is absent");
+        fold_row(&tt, &why, param_value_is(js, R[i].url, R[i].key, R[i].val),
+                 "the eval's answer is not the program's: the compile did not finish with the source it began");
+        fold_row(&tt, &why, gap >= 0, "the result document carries no `sliceOverrunGapWork`");
+        fold_row(&tt, &why, gap >= 0 && gap < ENGINE_QUANTUM_WORK, R[i].gapwhy);
+        const Probe row[] = { { R[i].row, tt, R[i].url, SESS_EXPLORE, why } };
+        probes_append(tab, n, row, 1);
+    }
+}
+
 /* The rows of the `mixinrest` document (fixture/mixinrest.h). mixin-<k>-rests, for append (ap), replaceWith (rw)
    and replaceChildren (rc): the arm's call with the box of 100,002 elements and a string rests inside itself
    (`sliceOverrunGapWork` under one quantum, a fact of the whole document), and the arm then reads the box in the
@@ -33144,6 +33191,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_openrest(js, probes, &np);
     probes_shadowattachrest(js, probes, &np);
     probes_htmlbytesrest(js, probes, &np);
+    probes_compilerest(js, probes, &np);
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
