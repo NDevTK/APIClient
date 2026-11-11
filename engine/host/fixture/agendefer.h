@@ -1,4 +1,4 @@
-/* THE ASYNC-GENERATOR DEFERRAL FORK DOCUMENT: a branch on an unknown (an injected global the document does not
+/* The async-generator deferral fork document: a branch on an unknown (an injected global the document does not
    spell, which solver/absent.c mints) inside page code an async generator's queue runs while its drive is
    deferred: a promise's `constructor` getter read by §27.9.3.9 AsyncGeneratorAwaitReturn's PromiseResolve, and
    an iterator result's inherited `then` getter read by the resolve of §27.9.3.5 AsyncGeneratorCompleteStep. Each
