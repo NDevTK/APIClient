@@ -374,7 +374,7 @@ static int js_date_set_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     return JS_IsException(s->result) ? (s->result = JS_UNDEFINED, -1) : 0;
 }
 
-/* WHAT THIS MACHINE OWNS (JSTrampStepDef.visit): the result and an unknown t. The captured date fields are doubles
+/* What this machine owns (JSTrampStepDef.visit): the result and an unknown t. The captured date fields are doubles
    read before any argument was coerced, and the argument coercions run on the header's own captures. */
 static void js_date_set_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
