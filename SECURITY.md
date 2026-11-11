@@ -210,7 +210,12 @@ Which extension context can open a connection at all is enforced by CSP in all b
 | a request or provisioning notice is judged by a document of the instance that sent it (the zones, before `safeFetch`) | `docRecordOfAsker`, `docRecordAskerRefusal` | `blocked-asker:<role>-<reason>`, `blocked-asker:child-not-minted`, `blocked-asker:document-not-minted` |
 
 Each refusal is graded by `_refused`: `network` where a real browser would also fail the request, so the reply
-is that failure; `decline` where only this tool declines, so the request parks unanswered. The engine declines
+is that failure; `decline` where only this tool declines, so the request parks unanswered — unless the same
+document's unforced run already sent the identical request under a default arm, in which case the refused
+request is answered from that send's record and nothing leaves (`lib/send-coalesce.js`; identical is the wire
+identity: method, URL, header list, the speak-as set with its Cookie, body, credentials mode and cache
+partition, so composing the key reads the identity's cookies only where the unforced run sent that method to
+that URL). The engine declines
 on the same grade a request whose address holds a value it has no bytes for (`pending_park_request`). A
 declined request's outcome is unobserved, so the engine runs both outcomes (`flow_decline_fork`): one arm stays
 parked on the request, a search that fires when the origin is widened or the address is grounded; the other
@@ -521,13 +526,15 @@ string for a person to copy; and `content.js`'s `submit` listener, which observe
 
 Whether a request fires is a per-origin decision in `lib/safe-fetch.js`. The table `_EXPLORED` maps origin →
 signal → permitted values; `_firingRefusal` fires a request when a default arm matches or when every gating
-signal's value is permitted at the request URL's own `.origin`, and otherwise names the first signal that is
-not. Nothing is refused at every setting.
+signal's value is permitted at the request URL's own `.origin`, and otherwise names the signal that decided:
+the first condition of the page's-own-run arm the request fails (`provenance`, `doc-reach`, `actor`, `witness`,
+in that order) that the origin's table does not permit either, or else the first unpermitted signal in
+registry order. Nothing is refused at every setting.
 
 | Signal | Values | Reliability |
 |--------|--------|-------------|
 | `destination` | `program`, `subresource`, `value` | stated (engine) |
-| `actor` | `page`, `tool` | certain: a literal in trusted-zone source at every caller, narrowed to `tool` by the engine's drive mark or the document record's |
+| `actor` | `page`, `tool`, `drive` | certain: a literal in trusted-zone source at every caller; a `page` request reads `drive` under the engine's drive mark or the document record's |
 | `provenance` | `observed`, `derived`, `forced` | stated (engine) |
 | `doc-reach` | `observed`, `derived`, `forced` | the zone's document record (`lib/document-record.js`) |
 | `cookies` | `yes`, `no` | certain |
@@ -550,7 +557,7 @@ rules carry. A record is frozen, minted only by `docRecord`, and written once pe
 (a second write is a `CHECK` in the zone). `docRecordJoin`, the one function that derives a record from
 others, `CHECK`s that the result clears no mark and strengthens no reach, so nothing a document does relaxes
 what its navigation carried. The chokepoint reads the record as a floor under the engine's per-request words:
-`doc-reach` is its grade, a `page` request from a driven document reads `actor=tool`, and one from a pinned
+`doc-reach` is its grade, a `page` request from a driven document reads `actor=drive`, and one from a pinned
 document reads `witness=pinned`, whatever the engine's record states. The engine's words can narrow these rows
 and never widen them, so an engine that states `undriven` or `unpinned` for a driven or pinned peer's requests
 does not launder them into the page's own.
@@ -595,15 +602,23 @@ cannot determine is shown as `unknown` rather than left out, because an absent r
 answered. `_signalRegistryCheck` refuses a duplicate signal, an unknown reliability grade, a non-gating signal
 with more than one value, and a default arm naming a value the registry does not have.
 
-The four default arms (`_DEFAULT_ARMS`, shown to the person by `safeFetchDefaultArms`) are the page loading
-itself as a browser would: a program load; any other subresource; a request with `provenance` and `doc-reach`
-both `observed` (this is also what fires the seeded document load); and the analysed page's own request whose
-address no fork pinned (`destination=value`, `witness=unpinned`, `actor=page`). A navigation reads
-`destination=value`: a new navigable, like a postMessage, is judged by the same rows as a `fetch()`. Probes,
-discovery and tool-composed requests fire only at an origin a person widened. The load of a route a document
-declared is discovery and states `actor=tool`: HTML §7.4.4's URL and history update steps fetch nothing, so the
-page sent no request for that address. The witness mark is independent
-of the provenance: a forced path that pinned nothing fires, and a `derived` path that pinned a value does not.
+The default arms (`_DEFAULT_ARMS`, shown to the person by `safeFetchDefaultArms`) are the engine loading the
+seed address as a spec-compliant browser would, and nothing else. Three arms: a request to the attacker site
+the person configured as their own server; the seed load itself (`actor=tool`, `provenance` and `doc-reach`
+both `observed`); and the page's own unforced run — `provenance` `observed` or `derived`, `doc-reach`
+`observed` or `derived`, `actor=page`, `witness=unpinned`. That last arm is one rule for every kind of act:
+a program load, a subresource load, a `fetch()`, a navigation and a post to another document are judged by
+the same four rows, and `destination` is shown and decides nothing. A request on a forced path, a request of
+a document reached on a forced path, a driven request, a probe and any tool-composed request fire only at an
+origin a person widened; each is still recorded with everything computed about it. The load of a route a
+document declared is discovery and states `actor=tool`: HTML §7.4.4's URL and history update steps fetch
+nothing, so the page sent no request for that address. The witness mark is independent of the provenance: a
+`derived` path that pinned a value does not fire, and neither does a forced path that pinned nothing.
+
+This is the owner's rule in their words — "Egress policy considers if code paths are default (always allowed)
+or forced"; "recording only sends what the page itself would send"; the engine "should act as a spec
+compliant browser using provided seed url" — and it replaces arms that fired a program or subresource load
+on its destination alone and an unpinned request on a forced path.
 
 Beside the provenance, every engine record of a request states a drive mark, `driven` or `undriven`
 (`PENDING_DRIVEN_*`, read off `flow_path_driven` and asserted at `endpoint_record`): `driven` means the request
@@ -611,9 +626,9 @@ was minted inside a flow driven by this tool: a drive of a function the page nev
 that re-executes the page with a payload the engine chose (an @S breakout, or a witness value under
 verification). It is a separate fact from the provenance, because a drive that forced no branch computes its
 values from real inputs and stays `derived`; a candidate's path is marked forced and pinned at the substitution. The
-`actor` row reads it alone: a `page` request that is `driven` reads `tool`, so the page-request arm does not
-admit it, while a program or subresource load a drive reaches still fires by its destination
-arm. The mark can only narrow `actor`, never widen it, and a `page` caller must relay it (`_drivenOf`).
+`actor` row reads it alone: a `page` request that is `driven` reads `drive`, which neither the page's-own-run
+arm nor the seed arm admits, so nothing a drive reaches fires by default, a program or subresource load
+included. The mark can only narrow `actor`, never widen it, and a `page` caller must relay it (`_drivenOf`).
 
 - A person widens an origin through the popup's `EGRESS_POLICY` command (`renderEgressPolicy` in `popup.js`,
   which states `initiator: "user-initiated"`). The router admits it only on the document→document rule,
@@ -635,7 +650,8 @@ arm. The mark can only narrow `actor`, never widen it, and a `page` caller must 
   one-click allow stays enabled until it does.
 - Signals added since grants were first stored, each narrowing every grant stored before it: `reaches`
   (`attacker-site`, `another-party`), with the attacker-site setting. A grant stored before it refuses
-  `reaches=another-party` until the person permits it again.
+  `reaches=another-party` until the person permits it again. `actor` gained the value `drive`: a grant of
+  `actor=tool` stored before it does not cover a driven request.
 - The native host states its table synchronously, and `--explore <origin>` in `engine/trusted.mjs` is
   `safeFetchWiden`.
 
