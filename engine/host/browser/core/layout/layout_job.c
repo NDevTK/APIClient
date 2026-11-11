@@ -625,6 +625,13 @@ static bool lj_quota_spent(const LayoutJob *job)
     return job->resting && job->drives == 1 && lj_allowance_spent(job);
 }
 
+/* An allowance is about to be taken from the innermost resting drive. A take is engine work: no assert's
+   condition and no dev-only region makes one, since its count would move a dev build's rests alone. A dev
+   region that lays out (a second derivation) opens a nested drive, under which nothing is taken. */
+#define LJ_TAKE_PRICED() \
+    DCHECK_PRICED("a resting drive's allowance was taken inside an unpriced span — an assert's condition or a " \
+                  "dev-only region that lays out without a nested drive of its own")
+
 bool layout_job_rests_innermost(void)
 {
     LayoutJob *job = lj_current();
@@ -636,7 +643,7 @@ bool layout_job_line_items_left(void)
 {
     LayoutJob *job = lj_current();
 
-    if (APICLIENT_UNPRICED_OPEN() || !(job->resting && job->drives == 1)) return true;
+    if (!(job->resting && job->drives == 1)) return true;
     return !lj_quota_spent(job);
 }
 
@@ -645,7 +652,8 @@ void layout_job_line_items_spend(size_t n)
     LayoutJob *job = lj_current();
 
     thread_work_charge(THREAD_WORK_LAYOUT_LINE, n);
-    if (APICLIENT_UNPRICED_OPEN() || !(job->resting && job->drives == 1)) return;
+    if (!(job->resting && job->drives == 1)) return;
+    LJ_TAKE_PRICED();
     job->line_items = n < job->line_items ? job->line_items - n : 0;
     METRIC_ADD(line_items, n);
 }
@@ -655,7 +663,8 @@ void layout_job_line_metrics_spend(size_t n)
     LayoutJob *job = lj_current();
 
     thread_work_charge(THREAD_WORK_LAYOUT_LINE, n * THREAD_WORK_LINE_ITEMS_PER_METRIC);
-    if (APICLIENT_UNPRICED_OPEN() || !(job->resting && job->drives == 1)) return;
+    if (!(job->resting && job->drives == 1)) return;
+    LJ_TAKE_PRICED();
     job->line_metrics = n < job->line_metrics ? job->line_metrics - n : 0;
 }
 
@@ -665,6 +674,7 @@ bool layout_job_scan_take(void)
 
     if (!(job->resting && job->drives == 1)) return true;
     if (lj_quota_spent(job)) return false;
+    LJ_TAKE_PRICED();
     job->scan--;
     return true;
 }
@@ -712,6 +722,7 @@ bool layout_job_rule_take(void)
            "an author match's rule was taken from a resting drive's allowance with no resting drive innermost "
            "— only a resting build asks, and a build under any other drive runs to completion");
     if (lj_quota_spent(job)) return false;
+    LJ_TAKE_PRICED();
     job->rules--;
     return true;
 }
@@ -779,13 +790,16 @@ bool layout_job_emit_take(void)
            "a rule of the author origin's emission was taken from a resting drive's allowance with no resting "
            "drive innermost — only a resting build asks, and a build under any other drive runs to completion");
     if (lj_quota_spent(job)) return false;
+    LJ_TAKE_PRICED();
     job->emits--;
     return true;
 }
 
 static void lj_quota_take(LayoutJob *job)
 {
-    if (job->resting && job->drives == 1) job->quota--;
+    if (!(job->resting && job->drives == 1)) return;
+    LJ_TAKE_PRICED();
+    job->quota--;
 }
 
 bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at)

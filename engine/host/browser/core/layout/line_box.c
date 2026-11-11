@@ -1657,13 +1657,17 @@ static bool lb_fill_lines_pull(LbFill *f)
     }
 #if APICLIENT_DEV
     if (f->phase == LB_FILL_CHECK) {
+        LayoutJobDrive d;
         bool done;
 
         DCHECK(f->check == NULL, "a fill reached its second derivation holding one");
         f->check = lexbor_malloc(sizeof *f->check);
         CHECK(f->check != NULL, "out of memory re-deriving one inline formatting context's line boxes");
         lb_fill_init(f->check, f->style, f->run, f->avail, false);
+        /* Unpriced, and under a nested drive so it neither rests nor takes from the resting drive's allowance. */
+        layout_job_drive_begin(&d);
         APICLIENT_UNPRICED_BLOCK { done = lb_fill_lines_pull(f->check); }
+        layout_job_drive_end(&d);
         DCHECK(done, "a fill's second derivation deferred a question its first derivation, over the same key in "
                       "the same job, had answered; a rest here is one a release build does not take");
         lb_fill_compare_lines(f, f->check);
@@ -1711,9 +1715,12 @@ static bool lb_fill_extents_pull(LbFill *f)
     }
 #if APICLIENT_DEV
     if (f->check != NULL) {
+        LayoutJobDrive d;
         bool done;
 
+        layout_job_drive_begin(&d);
         APICLIENT_UNPRICED_BLOCK { done = lb_fill_extents_pull(f->check); }
+        layout_job_drive_end(&d);
         DCHECK(done, "a fill's second derivation of its extents deferred a question the first had answered; a "
                       "rest here is one a release build does not take");
         lb_fill_compare_facts(f, f->check);
