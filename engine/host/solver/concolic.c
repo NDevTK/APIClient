@@ -1123,10 +1123,12 @@ typedef struct ConsSeg { Cons *e; int n; int *hash; int hash_cap; struct ConsSeg
 /* The frozen constraint chain's own census, the twin of cow.c's and dom_cow.c's, counted where a segment's
    lifetime begins and ends. */
 static long g_cons_seg_live, g_cons_seg_entries_live, g_cons_seg_bytes_live;
+/* …and the heads parked flows hold in their blobs (concolic_pins_park), counted with the segments' entries. */
+static long g_cons_parked_entries_live, g_cons_parked_bytes_live;
 void concolic_chain_stats(long *segs, long *entries, long *bytes) {
     if (segs) *segs = g_cons_seg_live;
-    if (entries) *entries = g_cons_seg_entries_live;
-    if (bytes) *bytes = g_cons_seg_bytes_live;
+    if (entries) *entries = g_cons_seg_entries_live + g_cons_parked_entries_live;
+    if (bytes) *bytes = g_cons_seg_bytes_live + g_cons_parked_bytes_live;
 }
 
 static Cons    *g_pins = NULL;  static int g_pins_n = 0, g_pins_cap = 0;   /* the running flow's head */
@@ -1885,24 +1887,27 @@ void concolic_clear_pins(void) {
 }
 
 /* Per-flow constraint state is swappable so interleaved flows keep their own narrowing: suspend freezes the
-   live head onto the chain and returns a reference to it, resume installs a parked chain as the live one. A
-   blob is one flow's state parked while another runs, and the blob a fork takes is the sibling's whole
-   starting knowledge, so one function serves both.
+   live head onto the chain and returns a reference to it, the sibling's whole starting knowledge at a fork;
+   park moves a switched-out flow's head into its blob; resume installs either as the live state.
    It carries every per-flow fact this component holds: the chain (`seg`), `delivered`, and `mint_ord`, so the
    sibling inherits the parent's count at the branch and the two arms mint forward independently. The struct
-   is named after flow.h's `pin_blob` slot; its content is this component's. */
-typedef struct { ConsSeg *seg; int delivered; uint32_t mint_ord; } PinBlob;
+   is named after flow.h's `pin_blob` slot; its content is this component's. `head` is a parked flow's head
+   (NULL in a fork's blob), with its `head_bytes` as the census counts them. */
+typedef struct {
+    ConsSeg *seg; int delivered; uint32_t mint_ord;
+    Cons *head; int head_n, head_cap; int *head_hash; int head_hash_cap; long head_bytes;
+} PinBlob;
 void *concolic_pins_suspend(void) {
     PinBlob *b = reclaim_malloc(sizeof *b);
     CHECK(b, "concolic: the path constraint could not be parked — the frontier never drops a work item, and a "
              "flow whose constraint is lost would re-fork every branch it has already decided");
-    /* Taken, not moved: this serves a fork as well as a park, so the parent keeps holding what it had. */
+    /* Taken, not moved: the parent keeps holding what it had. */
+    b->head = NULL; b->head_n = b->head_cap = b->head_hash_cap = 0; b->head_hash = NULL; b->head_bytes = 0;
     b->delivered = g_cand_delivered;
     b->mint_ord = g_mint_ord;   /* taken, not moved, for the same reason */
     if (g_pins_n == 0) {
         /* Nothing learned since the last freeze: the blob is one more reference on the chain the flow
-           already stands on. Otherwise a park/resume pair with no writes between would push an empty segment
-           per switch and the chain's depth would count switches rather than forks. */
+           already stands on, so two forks with no write between push no empty segment. */
         b->seg = g_pins_base;
         if (b->seg) b->seg->refcount++;
         return b;
@@ -1929,6 +1934,28 @@ void *concolic_pins_suspend(void) {
     }
     return b;
 }
+/* A park: the flow stands still while others run and nothing else reads its head, so the head moves into the
+   blob whole and is not frozen. The chain's depth stays the fork depth, a function of the path, and so does what
+   a lookup probes and a write copies up; a freeze here would put a segment wherever a slice happened to end. */
+void *concolic_pins_park(void) {
+    PinBlob *b = reclaim_malloc(sizeof *b);
+    CHECK(b, "concolic: the path constraint could not be parked — the frontier never drops a work item, and a "
+             "flow whose constraint is lost would re-fork every branch it has already decided");
+    b->delivered = g_cand_delivered;
+    b->mint_ord = g_mint_ord;
+    DCHECK(g_pins != NULL || (g_pins_n == 0 && g_pins_hash == NULL),
+           "the running flow's constraint head holds entries or an index with no entry array");
+    b->seg = g_pins_base;                      /* the flow's reference on its chain, moved */
+    b->head = g_pins; b->head_n = g_pins_n; b->head_cap = g_pins_cap;
+    b->head_hash = g_pins_hash; b->head_hash_cap = g_pins_hash_cap;
+    b->head_bytes = 0;
+    for (int k = 0; k < g_pins_n; k++) b->head_bytes += cons_entry_bytes(&g_pins[k]);
+    g_cons_parked_entries_live += g_pins_n; g_cons_parked_bytes_live += b->head_bytes;
+    g_pins = NULL; g_pins_n = g_pins_cap = 0;
+    g_pins_hash = NULL; g_pins_hash_cap = 0;
+    g_pins_base = NULL;
+    return b;
+}
 void concolic_pins_resume(void *blob) {
     PinBlob *b = blob;
     DCHECK(b != NULL, "a flow was resumed with no parked path constraint — it would re-fork every branch it "
@@ -1936,6 +1963,11 @@ void concolic_pins_resume(void *blob) {
     concolic_clear_pins();                 /* the live head and chain belong to the flow that just parked */
     g_pins_base = b->seg;
     if (g_pins_base) g_pins_base->refcount++;   /* the blob keeps its own reference until it is freed */
+    /* A parked head comes back whole; a fork's blob holds none, and its empty head installs as one. */
+    g_pins = b->head; g_pins_n = b->head_n; g_pins_cap = b->head_cap;
+    g_pins_hash = b->head_hash; g_pins_hash_cap = b->head_hash_cap;
+    g_cons_parked_entries_live -= b->head_n; g_cons_parked_bytes_live -= b->head_bytes;
+    b->head = NULL; b->head_n = b->head_cap = b->head_hash_cap = 0; b->head_hash = NULL; b->head_bytes = 0;
     /* After the clear, which resets every per-flow fact this component holds and would erase a restore made
        before it. */
     g_cand_delivered = b->delivered;
@@ -1949,6 +1981,7 @@ void *concolic_pins_blob_empty(void) {
     PinBlob *b = reclaim_malloc(sizeof *b);
     CHECK(b, "concolic: a resumed flow's empty path constraint could not be allocated");
     b->seg = NULL;
+    b->head = NULL; b->head_n = b->head_cap = b->head_hash_cap = 0; b->head_hash = NULL; b->head_bytes = 0;
     /* Nothing delivered either: the flow replays from the baseline and the substitution happens again in this
        session. */
     b->delivered = 0;
@@ -1960,6 +1993,9 @@ void *concolic_pins_blob_empty(void) {
 
 void concolic_pins_blob_free(void *blob) {
     PinBlob *b = blob; if (!b) return;
+    for (int k = 0; k < b->head_n; k++) cons_entry_free(&b->head[k]);   /* a flow torn down while parked */
+    g_cons_parked_entries_live -= b->head_n; g_cons_parked_bytes_live -= b->head_bytes;
+    free(b->head); free(b->head_hash);
     cons_seg_unref(b->seg);
     free(b);
 }

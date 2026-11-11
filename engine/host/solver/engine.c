@@ -12225,7 +12225,7 @@ static void flow_switch_out(JSContext *ctx, Flow *f) {   /* pause f: snapshot it
        against the wrong delta. The whole set moves, since a step reaches as many bases as it reaches. */
     f->parked = JS_TakeParkedFlows(JS_GetRuntime(ctx));
     f->dec_blob = decide_suspend();
-    f->pin_blob = concolic_pins_suspend();
+    f->pin_blob = concolic_pins_park();
     cow_unapply(ctx, (CowDelta *)f->delta);
     cow_set_current(NULL);
     dom_unapply();                                  /* DOM twin of cow_unapply: restore the baseline document */

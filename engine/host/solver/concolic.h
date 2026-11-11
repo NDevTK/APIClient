@@ -1760,8 +1760,10 @@ int         concolic_branch_decided(const char *key);
    on the path is then a second value under one name. An entailed or unobserved truth is filed unseen. */
 int         concolic_branch_seen(const char *key);
 void        concolic_clear_pins(void);                        /* per-flow: clear the whole constraint */
-/* Swap the per-flow pin map when the scheduler interleaves flows: suspend snapshots it, resume restores it. */
+/* Swap the per-flow pin map when the scheduler interleaves flows: suspend freezes the head for a fork, which both
+   arms then share; park moves it into the blob for a switch-out, unfrozen; resume restores either. */
 void       *concolic_pins_suspend(void);
+void       *concolic_pins_park(void);
 void        concolic_pins_resume(void *blob);
 void        concolic_pins_blob_free(void *blob);
 /* The empty one, for a flow the COLD TIER resumed: it stands on a recorded decision chain (so the scheduler
@@ -1771,8 +1773,8 @@ void       *concolic_pins_blob_empty(void);
 /* WHAT THE FROZEN CONSTRAINT CHAIN IS HOLDING — the third of the three chains built on cow.c's refcounted
    immutable segment, reported beside the other two for the reason they are reported beside each other: a
    per-flow allocation nobody released looks identical from any one of them, and only the number that CLIMBS
-   names which. A blob is one pointer at a segment, so a parked flow's own constraint cost is here and not in
-   its per-flow rows. */
+   names which. A fork's blob is one pointer at a segment and a parked flow's blob holds its head, and both costs
+   are here (the head's in `entries` and `bytes`), not in its per-flow rows. */
 void        concolic_chain_stats(long *segs, long *entries, long *bytes);
 
 #endif
