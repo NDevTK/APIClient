@@ -48018,11 +48018,15 @@ static void tf_step_turn(void) {}
 /* The native host's disk tier (solver/engine.h's EngineSpillStore): one file, unlinked as soon as it is made so
    the system reclaims it with the process however it ends, appended with system calls (a write runs at the
    allocator's floor, so it allocates nothing). An entry's key is its offset plus one; a dropped entry's blocks
-   are given back by punching them out. */
-static struct { int fd; uint64_t end; } g_tf_spill = { -1, 0 };
+   are given back by punching them out. `APICLIENT_SPILL_MAX_BYTES`, when set, is the disk share the live entries
+   may take, and a write past it is refused as the disk's floor. */
+static struct { int fd; uint64_t end, live, max; } g_tf_spill = { -1, 0, 0, 0 };
 
 static int tf_spill_write(const EngineSpillPart *parts, int n, uint64_t *key) {
-    uint64_t at = g_tf_spill.end;
+    uint64_t at = g_tf_spill.end, size = 0;
+
+    for (int i = 0; i < n; i++) size += parts[i].n;
+    if (g_tf_spill.max && g_tf_spill.live + size > g_tf_spill.max) return -1;
 
     if (g_tf_spill.fd < 0) {
         const char *tmp = getenv("TMPDIR");
@@ -48042,6 +48046,7 @@ static int tf_spill_write(const EngineSpillPart *parts, int n, uint64_t *key) {
         }
     *key = g_tf_spill.end + 1;
     g_tf_spill.end = at;
+    g_tf_spill.live += size;
     return 0;
 }
 
@@ -48066,6 +48071,8 @@ static void tf_spill_drop(uint64_t key, size_t len) {
     CHECKF(len == 0 || fallocate(g_tf_spill.fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, (off_t)(key - 1),
                                  (off_t)len) == 0,
            "the native host could not give a dropped disk tier entry's blocks back (errno %d)", errno);
+    DCHECK(len <= g_tf_spill.live, "the disk tier dropped more bytes than its live entries hold");
+    g_tf_spill.live -= len;
 }
 
 static const EngineSpillStore TF_SPILL = { tf_spill_write, tf_spill_read, tf_spill_drop };
@@ -48074,7 +48081,17 @@ static const EngineSpillStore TF_SPILL = { tf_spill_write, tf_spill_read, tf_spi
 int main(int argc, char **argv) {
     concolic_install_required();
 #if !defined(__EMSCRIPTEN__)
-    engine_set_spill_store(&TF_SPILL);
+    {
+        const char *max = getenv("APICLIENT_SPILL_MAX_BYTES");
+        char *end;
+
+        if (max) {
+            g_tf_spill.max = strtoull(max, &end, 10);
+            CHECK(*max != '\0' && *end == '\0' && g_tf_spill.max > 0,
+                  "APICLIENT_SPILL_MAX_BYTES takes a positive count of bytes");
+        }
+        engine_set_spill_store(&TF_SPILL);
+    }
 #endif
     JSRuntime *rt;
     native_ceiling_arm();
