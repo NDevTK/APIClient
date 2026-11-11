@@ -259,11 +259,22 @@ const FLIGHT = [
   '',
 ].join('\n');
 
+/* A request's body as text, once it has all arrived. */
+const requestBody = (req) => new Promise((done) => {
+  const chunks = [];
+  req.on('data', (c) => chunks.push(c));
+  req.on('end', () => done(Buffer.concat(chunks).toString('utf8')));
+});
+
 let bound = 0;
 DOCS.forEach(([doc, name], i) => {
   const port = BASE + i;
-  createServer((req, res) => {
+  createServer(async (req, res) => {
     const p = new URL(req.url, 'http://x').pathname;
+    /* A request with a method other than GET or HEAD is logged once its body has arrived, with its
+       `x-control` header and the body appended to the line: method-park.html's row reads whether a non-GET
+       left as the page composed it. */
+    const body = req.method === 'GET' || req.method === 'HEAD' ? null : await requestBody(req);
     /* THE ACCESS LOG, AND IT IS THE ONLY ORACLE IN THIS DIRECTORY THAT IS NOT THE ENGINE REPORTING ON
        ITSELF. What a row's census columns say is what the engine LEARNED; this line is what the engine
        ASKED FOR, and for any question of the form "which of these addresses did it choose" the two are not
@@ -287,7 +298,8 @@ DOCS.forEach(([doc, name], i) => {
        `sec-fetch-dest` separates them with no heuristic in it: a browser subresource load states `image` and
        its navigation `document`, and every request the engine makes arrives `empty`. It is APPENDED, so a
        grep for the old prefix still matches every line it used to. */
-    console.log(`REQ ${name} ${req.method} ${p} dest=${req.headers['sec-fetch-dest'] || '-'}`);
+    console.log(`REQ ${name} ${req.method} ${p} dest=${req.headers['sec-fetch-dest'] || '-'}` +
+                (body === null ? '' : ` x-control=${req.headers['x-control'] || '-'} body=${body}`));
     if (p.startsWith('/api/')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end('{"ok":true}');

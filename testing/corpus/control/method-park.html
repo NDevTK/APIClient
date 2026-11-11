@@ -1,96 +1,36 @@
 <!doctype html><html><head><title>instrument control — request METHOD</title></head><body>
 <script>
-  // INSTRUMENT CONTROL, THE REQUEST *METHOD* AXIS. Every other endpoint rung in this directory issues a GET
-  // — `grep -rnoE "'(POST|PUT|DELETE|PATCH)'" testing/corpus/control/` answered ZERO for the whole control
-  // before this document — so the column that certifies the endpoint half had only ever exercised the one
-  // arm of Fetch §2.2.1 "Methods" that works. A control blind to an axis is not weak evidence on that axis;
-  // it is the absence of a question, and it is why the state below went unseen while nine rows read green.
+  // Instrument control, the request method axis (Fetch §2.2.1 "Methods"). Every address is a string literal
+  // except the one rung that reads a reply. It is its own document because a regression here has been an
+  // engine abort, which blinds every column of the document it happens in (serve.mjs).
   //
-  // IT IS ITS OWN DOCUMENT BECAUSE ITS REGRESSION MODE IS AN ABORT, which is serve.mjs's own stated rule for
-  // url-operands.html: "a rung whose REGRESSION MODE IS AN ABORT cannot share a document with columns a
-  // census reads, or one defect is published as `we measured nothing`". That rule is not a precaution here,
-  // it is a MEASUREMENT of this rung — see the floors.
-  //
-  // ONE VARIABLE AGAINST index.html's `/api/inline-top`: same inline top-level `fetch`, same origin, same
-  // literal-only address, differing ONLY in `method`. The GET below is the in-document positive control: it
-  // is issued FIRST, so a row reporting neither address has not merely failed to record a POST — it has lost
-  // a record the same run had already made.
-  //
-  // EVERY ADDRESS HERE IS A STRING LITERAL. CLAUDE.md §A-WITNESS-CARRIES-CONSTANTS-ONLY: a path composed from
-  // anything the engine computed can itself become unknown, the request never goes out, and the arm reads as
-  // one that did not run — which is the reading this document exists to make impossible.
+  // Rung 1, the in-document positive control: an inline top-level GET, issued first.
   fetch('/api/method-get');
-  fetch('/api/method-post', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"a":1}' });
+  // Rung 2, the page's own non-GET on its unforced run: the egress default sends it as the page composed it
+  // (method, its own header, its body), and the page reads the reply. The address of the GET that follows is
+  // computed from the reply's `ok` member, so it exists only where the POST was answered.
+  fetch('/api/method-post', { method: 'POST',
+                              headers: { 'content-type': 'application/json', 'x-control': 'method-park' },
+                              body: '{"a":1}' })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { fetch('/api/method-post-read?ok=' + j.ok); });
+  // Rung 3, a non-GET on a forced path: `__FLAGS` is absent, so only an arm that takes it as present reaches
+  // this request. It is recorded with everything computed about it and is not sent.
+  if (window.__FLAGS && window.__FLAGS.admin)
+    fetch('/api/method-forced', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"b":2}' });
 
-  // WHAT THIS DOCUMENT MUST PRODUCE, in BOTH directions, so a run can be scored without anyone remembering a
-  // number from a message.
-  //
-  // WHAT IT PRODUCES TODAY, AND THE READING IS `DEFECT` RATHER THAN `UNSUPPORTED`:
-  //     run: crashed, endpoints: null, distinctEndpoints 0, and a `@WHY` at engine/host/main.c:1349 —
-  //     "the scheduler asked this host to PAY and named nothing owed".
-  //   MEASURED, one artifact (head 6e32c9f5, dirty []), one virgin browser per case, FOUR runs at that
-  //   signature and never any other: this document's two rungs twice, a POST carrying NO body twice. The
-  //   discriminating pair is in this directory's own vocabulary — a GET carrying the same custom headers
-  //   RECORDS AND COMPLETES, and two GETs in one document record and complete, so the variable is the
-  //   METHOD and neither the body nor the header list.
-  //   AND THE ZERO IS SCORED BECAUSE THE INSTRUMENT WAS SHOWN TO SPEAK FIRST, which is the only thing that
-  //   makes a silence readable: the `control` row of THIS server, same artifact, same browser policy, one
-  //   virgin browser each, back to back — 6 records, every one graded `derived`, `run: complete`, no abort.
-  //   A control that has never produced a finding is not a control, and a row reporting zero beside one that
-  //   has not spoken is reporting on its own probe.
-  //   THE CHAIN, READ RATHER THAN INFERRED: core/fetch/fetch.c records the endpoint and parks; bridge.js
-  //   asks `safeFetchMethodRefusal`, which declines every non-GET because safe-fetch.js is GET-ONLY BY
-  //   ABSENCE (it hardcodes `method:"GET"`), and its own transcript line says "this zone DECLINED to make
-  //   the request: the flow stays PARKED rather than being told the server was unreachable". The flow is
-  //   then parked on a bill nothing will ever answer, the scheduler stalls, and main.c fires on a host
-  //   asked to pay with both registers empty. The DECLINE is deliberate and correct — CLAUDE.md
-  //   §A-REQUEST-CARRIES-THE-PROVENANCE forbids firing a non-GET.
-  //
-  //   AND THE CLAUSE THAT FOLLOWED WAS WRONG WHEN IT WAS WRITTEN, WHICH IS THE PART WORTH KEEPING. It read
-  //   "so what is unbuilt is the SETTLEMENT of a park the zone has refused, not the refusal", and the
-  //   settlement was BUILT AT THE VERY ARTIFACT THIS ROW MEASURED. Established by content and not by
-  //   ancestry, one command, at the revision the measurement names:
-  //       git show 6e32c9f5:engine/host/solver/engine.c | grep -c flow_decline_fork   ->   5
-  //   `engine_decline` records the refusal and unlists it; `flow_decline_fork` forks the pair the refusal
-  //   owes — a WAITING arm that keeps the unanswered record, fabricating no reply and no example, and a
-  //   FAILURE arm that takes Fetch §5.6's network error as JS_NULL, runs the page's `catch` and has its path
-  //   marked FORCED. Both halves were landed and both ran. A next-diff clause is a claim about THIS TREE and
-  //   is read once, by somebody who has already decided to do the work; this one would have sent them to
-  //   build what was already there.
-  //
-  //   WHAT IS ACTUALLY UNBUILT IS A RESTING STATE FOR THE WAITING ARM, and it is one bit wide. The arm is
-  //   OUTSTANDING (`pend_owed`: the flow is parked at the line that asked, and pending.h says a predicate
-  //   answering otherwise would let it read as FINISHED and tear its timeline down) and owed by NOBODY
-  //   (`pend_host_owed`: no reply is coming, and `engine_pending_fetches`/`engine_host_requests` both skip a
-  //   declined record deliberately, so a refusal is a fork rather than a spin). FLOW_STEP_OWED is the only
-  //   resting verdict the scheduler has and it means "the host owes me", so the arm is marked host-owed, the
-  //   frontier reports STALLED, and both joins answer the empty string. That is the bill with no record on
-  //   it. In RELEASE, where the asserts are compiled out, the host pays nothing and steps again — a livelock,
-  //   and the analysis promise for the document never resolves.
-  //   AND THE COST IS NOT THE MISSING POST RECORD. The abort destroys the whole result document, so
-  //   `/api/method-get` — already recorded — is lost with it. On a real bundle, which POSTs constantly, that
-  //   is every endpoint the run had learned before the first non-GET.
-  //
-  // WHAT IT MUST PRODUCE WHEN THAT IS BUILT — FLOORS, never equalities, so a solver that learns MORE cannot
-  // fail its own control:
-  //     distinctEndpoints >= 2, and the two addresses NAMED rather than counted, so a miss is attributable:
-  //         GET  /api/method-get    — the in-document positive control
-  //         POST /api/method-post   — the axis under test, recorded though never fired
-  //     run: complete, and NO `@WHY` for a host asked to pay with nothing owed.
-  //   THE COORDINATE IS DELIBERATELY NOT A FILE AND A LINE. It was `engine/host/main.c:1349`, and the fix for
-  //   the predicate half moved the abort UPSTREAM to the site that MAKES the bad state — the host-owed mark
-  //   in solver/engine.c, whose assert now asks whether the host can still be ASKED rather than whether the
-  //   flow is still WAITING. A line number in a floor is a claim about a tree that moves; the assert's own
-  //   IDENTITY is what compares across revisions, and reach columns do not compare at all across a diff that
-  //   moves a terminal event in either direction.
-  //   THE POST RECORD IS OWED EVEN THOUGH THE REQUEST IS REFUSED, and that is the whole point of the rung
-  //   rather than a nicety: CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE says a derived-and-unfired request
-  //   "is not a gap in the report, it IS the report — that surface is precisely what forced execution can
-  //   find and a sniffer cannot", and core/fetch/fetch.c's own comment at the park says the same in its own
-  //   words: "Nothing fires it … so what this reaches is the RECORD".
-  //
-  // HOW A FUTURE REGRESSION WOULD SHOW: this row reporting ONE address instead of two, with `run: complete`.
-  // That is a silent loss of the non-GET surface and is invisible to every other row in this directory,
-  // because every other row's rungs are GETs.
+  // What a run must produce (floors, never equalities), read from the shipped path and from serve.mjs's log:
+  //   run: complete, with no abort.
+  //   The surface names all four addresses: GET /api/method-get, POST /api/method-post,
+  //   GET /api/method-post-read?ok=true and POST /api/method-forced.
+  //   The instance's fired-send list (`egressSends`) holds POST /api/method-post as `sent`, admitted by the
+  //   default arm for the page's own unforced run, and POST /api/method-forced as `not-sent` with the refusal
+  //   `provenance=forced`; the run row's `egressDeclined` counts `blocked-signal:provenance=forced`.
+  //   serve.mjs's log: real Chrome runs this page too and a send speaks as its document, so the two clients'
+  //   lines are read as a count, in arrival order (Chrome's page first, then the zone's run of it). Two lines
+  //   of `POST /api/method-post … x-control=method-park body={"a":1}`, two of `GET /api/method-post-read`,
+  //   and no line for `/api/method-forced`, which neither client sends.
+  // How a regression shows: one `POST /api/method-post` line instead of two (the page's own non-GET was
+  // declined), or any `/api/method-forced` line (a forced path's request left).
 </script>
 </body></html>
