@@ -8561,6 +8561,14 @@ STAGES.push(onHost(runProgram("send coalesce rows", [join(ROOT, "testing", "send
                        "a row's server count or answer is not what one send per identity per document predicts: " +
                        "read the row's own line. Exit 2 means a row's first send never reached the server."),
   STAGE_HOST.SOURCE));
+/* The egress default, the fired-send record and the served-from-record path (extension/lib/safe-fetch.js)
+   through engine/trusted.mjs's own zone, against a loopback server that counts what reached it. A source stage,
+   as the coalescing rows are. Exit 2 is a failed control, 1 a row whose server count or record disagreed. */
+STAGES.push(onHost(runProgram("egress rows", [join(ROOT, "testing", "egress_rows.mjs")],
+                       "a row's server count, refusal or fired-send record is not what the unforced-run default " +
+                       "predicts: read the row's own line. A row that must refuse and was sent is the default " +
+                       "widened; exit 2 means the control's send never reached the server."),
+  STAGE_HOST.SOURCE));
 /* THE FIFTH AREA: IS EVERY FILE IN THE TEST CORPUS COLLECTED BY SOMEBODY. §Testing — "A TEST FILE THE GATE
    DOES NOT COLLECT IS AN EXCLUDED TEST, AND AN EXCLUDED TEST IS A FAILURE … worse, because the total LOOKS
    complete." engine/gate_collect.mjs is the walk that answers it: a file under engine/tests is either a
