@@ -160,7 +160,7 @@
     join:             { fn: "qjs_join",               ret: "number", out: "rc" },
     getBundleId:      { fn: "qjs_bundle_id",          ret: "number", out: "bundleId" },
     begin:            { fn: "qjs_begin",              ret: null,     out: null },
-    step:             { fn: "qjs_step",               ret: "number", out: "code", turns: true },
+    step:             { fn: "qjs_step",               ret: "number", out: "code", turns: true, promising: true },
     getResult:        { fn: "qjs_result",             ret: "string", out: "result" },
     teardown:         { fn: "qjs_teardown",           ret: null,     out: null },
     getPending:       { fn: "qjs_pending",            ret: "string", out: "requests" },
@@ -233,10 +233,21 @@
          read one slot early, which is a wrong call rather than a missing one. */
       throw new TypeError("unperformable ABI placement form: " + pl.form);
     }
+    /* A promising entry (the ABI link's JSPI exports) answers a promise, and the call is not over until it
+       settles, so it may take no transient operand freed at the return. */
+    if (e.promising) {
+      DCHECK(transient.length === 0, m.name + " is a promising entry with a transient operand, which would be " +
+             "freed while the call it was placed for is still suspended");
+      return M.ccall(e.fn, e.ret, types, vals, { async: true }).then(function (r) { return abiReply(e, r); });
+    }
     try { v = M.ccall(e.fn, e.ret, types, vals); }
     finally { for (i = 0; i < transient.length; i++) M._free(transient[i]); }
-    /* THE WORKING SET IS READ AFTER THE CALL, because the call is the only thing that can have grown it. Every
-       reply carries it; a method that also answers a value carries that beside it. */
+    return abiReply(e, v);
+  }
+
+  /* THE WORKING SET IS READ AFTER THE CALL, because the call is the only thing that can have grown it. Every
+     reply carries it; a method that also answers a value carries that beside it. */
+  function abiReply(e, v) {
     var rec = { workingSetBytes: heapBytes() };
     if (e.out !== null) rec[e.out] = v;
     return rec;
@@ -255,10 +266,10 @@
     return new Promise(function (res) { turnChannel.port1.onmessage = function () { res(); }; turnChannel.port2.postMessage(0); });
   }
   async function stepTurns(m, e, args) {
-    var rec = callAbi(m, e, args);
+    var rec = await callAbi(m, e, args);
     while (rec.code === ENGINE_STEP_HOST) {
       await hostTurn();
-      rec = callAbi(m, e, args);
+      rec = await callAbi(m, e, args);
     }
     return rec;
   }

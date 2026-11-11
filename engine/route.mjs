@@ -382,7 +382,7 @@ const STEP_DONE = 0, STEP_YIELD = 2, STEP_STALLED = 3;
 
 /* ONE STEP of `e`, then everything the host owes it. Answers the engine's own code. */
 async function service(e) {
-  const r = e.M.ccall('qjs_step', 'number', [], []);
+  const r = await e.M.ccall('qjs_step', 'number', [], [], { async: true });
   /* THE CODE IS CHECKED FOR MEMBERSHIP AND NEVER DEFAULTED. A value outside the three is an ABI that moved
      under a driver still speaking the old one, which is exactly what this file was the casualty of. */
   if (r !== STEP_DONE && r !== STEP_YIELD && r !== STEP_STALLED)
@@ -862,7 +862,7 @@ console.log(`phase 3: \`a\` took ${heldRead()[0]}'s first answer and ${heldOf(he
 const parked = engines[0];
 const postsAtPark = posts.length;
 parked.M.ccall('qjs_request_park', 'void', [], []);
-const parkStep = parked.M.ccall('qjs_step', 'number', [], []);
+const parkStep = await parked.M.ccall('qjs_step', 'number', [], [], { async: true });
 const residue = JSON.parse(parked.str('qjs_result'))._park.join(';');
 console.log(`\nphase 4: park step answered ${parkStep}, residue ${residue.length} bytes: ${residue}`);
 /* THE PARK'S OWN NOTICES, TAKEN BEFORE THE INSTANCE GOES: every world this session sent is dead from here on,
@@ -1145,7 +1145,7 @@ if (process.argv[2] === 'park-probe') {
   peer.M.ccall('qjs_perform', 'void', ['number','number'], [peer.cs('park-probe'), peer.cs(sample.op)]);
   /* NOT PUMPED. The record is in `perform_q` and no flow has stepped it, which is disjunct (1) exactly. */
   peer.M.ccall('qjs_request_park', 'void', [], []);
-  const st = peer.M.ccall('qjs_step', 'number', [], []);
+  const st = await peer.M.ccall('qjs_step', 'number', [], [], { async: true });
   const res = JSON.parse(peer.str('qjs_result'))._park.join(';');
   console.log(`park-probe: the peer parked holding an unstepped record — step ${st}, residue ${res.length} bytes`);
   console.log('park-probe: NO ABORT. cold.c now carries the record across a park, or the DCHECK it was ' +

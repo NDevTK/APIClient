@@ -400,7 +400,7 @@ const censusOf = (d) => Object.fromEntries(Object.entries(d).filter(([k]) => !SU
 let n = 0, lastSample = 0, filledTotal = 0, quantum = null;
 const t0 = Date.now();
 for (;;) {
-  const r = M.ccall("qjs_step", "number", [], []);
+  const r = await M.ccall("qjs_step", "number", [], [], { async: true });
   if (r === 0) break;                 /* ENGINE_STEP_DONE — the frontier is empty (or was written out) */
   if (r !== 2 && r !== 3)
     fail(`qjs_step answered ${r}, which is none of DONE(0)/YIELD(2)/STALLED(3) — the ABI carries three codes ` +

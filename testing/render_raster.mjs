@@ -451,7 +451,7 @@ async function drive(opts) {
   paintNow('pre-step (no flow running — the document as no flow has written it)');
 
   for (let i = 0; i < opts.steps; i++) {
-    code = M.ccall('qjs_step', 'number', [], []);
+    code = await M.ccall('qjs_step', 'number', [], [], { async: true });
     /* THE PAINT STANDS BEFORE THE PAYMENT, for test_forced.c's reason: the walk is over the world the
        scheduler has just handed back, and answering a request first would step the engine past it. */
     paintNow('round ' + i + ' (qjs_step=' + code + ')');
@@ -476,7 +476,7 @@ async function drive(opts) {
      flag of this file's own. */
   if (code !== 0) {
     M.ccall('qjs_request_park', 'void', [], []);
-    M.ccall('qjs_step', 'number', [], []);
+    await M.ccall('qjs_step', 'number', [], [], { async: true });
   }
   M.ccall('qjs_teardown', 'void', [], []);
   return { code, frames, served, result, errors, painted };

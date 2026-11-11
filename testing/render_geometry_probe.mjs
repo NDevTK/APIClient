@@ -206,7 +206,7 @@ async function drive(gluePath, html, steps) {
   const seen = new Map();
   let code = -1;
   for (let i = 0; i < steps; i++) {
-    code = M.ccall('qjs_step', 'number', [], []);
+    code = await M.ccall('qjs_step', 'number', [], [], { async: true });
     for (const line of str('qjs_pending').split('\n').filter(Boolean)) {
       const t = line.split('\t');
       if (t.length !== 15) fail('a pending line is not the ABI\'s fifteen tab-separated fields: ' + line);
@@ -224,7 +224,7 @@ async function drive(gluePath, html, steps) {
      it. Of the three exits the assert names, the park is the one that matches what this driver is: a zone
      that will not spend the act. The step after it is what performs the park. */
   M.ccall('qjs_request_park', 'void', [], []);
-  M.ccall('qjs_step', 'number', [], []);
+  await M.ccall('qjs_step', 'number', [], [], { async: true });
   M.ccall('qjs_teardown', 'void', [], []);
   return { code, requests: [...seen].map(([u, m]) => m + ' ' + u), result: res };
 }

@@ -8006,7 +8006,14 @@ const LDFLAGS_ABI = [
   "-sEXPORTED_RUNTIME_METHODS=" + JSON.stringify(["ccall", "lengthBytesUTF8", "stringToUTF8", "HEAPU8"]),
   "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sEXPORT_NAME=createQJS", "-sINVOKE_RUN=0",
   "-sSIGNATURE_CONVERSIONS=" + abiSignatureConversions(),
+  /* qjs_step is a promising export (JS Promise Integration): a step can wait on the host inside itself, so every
+     driver awaits it (`ccall(..., { async: true })`) and every node that loads this module runs with
+     ABI_NODE_FLAGS. Chrome ships JSPI unflagged from the extension's minimum version; emsdk's node needs the
+     flag. */
+  "-sJSPI=1", "-sJSPI_EXPORTS=" + JSON.stringify(["qjs_step"]),
 ];
+/* The node flags every spawn that loads the ABI module passes (LDFLAGS_ABI's JSPI). */
+const ABI_NODE_FLAGS = ["--experimental-wasm-jspi"];
 /* Every ABI entry that takes or returns a pointer, as `name:sig` for emscripten's SIGNATURE_CONVERSIONS: under
    Memory64 a pointer is an i64, which JS holds as a BigInt, and the wrapper emscripten generates from this
    converts a number in and out, so every caller of the ABI passes and receives plain numbers on both
@@ -8468,7 +8475,7 @@ for (const [logs, artifact, host, why] of [
    revision — which is worse than not running it, and is why this is a SKIP rather than an attempt. */
 STAGES.push(onHost(ABI_LINK.code
   ? skipped("two-instance ABI drive", "the production ABI program did not link")
-  : runChild("two-instance ABI drive", wasmNode(), [join(ENGINE, "route.mjs")],
+  : runChild("two-instance ABI drive", wasmNode(), [...ABI_NODE_FLAGS, join(ENGINE, "route.mjs")],
                "this is the cross-instance seam: the world registry, the nearest-first ancestry fork, the " +
                "synchronous cross-origin read, and the park on an outstanding one. Nothing else in this tree " +
                "provisions a second instance, so a failure here is unobserved by every other gate."),
@@ -8489,7 +8496,7 @@ STAGES.push(onHost(ABI_LINK.code
    `extension/lib/qjs/` and report that number under this revision. */
 STAGES.push(onHost(ABI_LINK.code
   ? skipped("browser-process layer", "the production ABI program did not link")
-  : runChild("browser-process layer", wasmNode(), [join(ENGINE, "renderer_host_gate.mjs")],
+  : runChild("browser-process layer", wasmNode(), [...ABI_NODE_FLAGS, join(ENGINE, "renderer_host_gate.mjs")],
                "this is the renderer registry and the RenderFrameHost, driven by their own bytes: two " +
                "cross-origin renderers provisioned into one browsing-context group, the duplicate-cluster " +
                "refusal that is SECURITY.md's one-instance-per-cluster rule, and the routing-id accounting. " +

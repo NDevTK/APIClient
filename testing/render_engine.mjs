@@ -124,7 +124,7 @@ async function drive(gluePath, html, steps) {
   const records = [];
   let code = -1;
   for (let i = 0; i < steps; i++) {
-    code = M.ccall('qjs_step', 'number', [], []);
+    code = await M.ccall('qjs_step', 'number', [], [], { async: true });
     for (const line of str('qjs_dumps').split('\n').filter(Boolean)) records.push(line);
     if (code === 0) break;
   }
@@ -135,7 +135,7 @@ async function drive(gluePath, html, steps) {
      together with its continuation, which `qjs_teardown` asserts against by name. Of the three exits that
      assert names, the park is the one that matches what this driver is. The step after it performs it. */
   M.ccall('qjs_request_park', 'void', [], []);
-  M.ccall('qjs_step', 'number', [], []);
+  await M.ccall('qjs_step', 'number', [], [], { async: true });
   M.ccall('qjs_teardown', 'void', [], []);
   return { code, records, result: res };
 }

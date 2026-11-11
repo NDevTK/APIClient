@@ -751,7 +751,7 @@ async function child(docPath, schedName) {
        terminator at all. */
     let snapshots = 0;
     for (;;) {
-      const r = e.M.ccall("qjs_step", "number", [], []);
+      const r = await e.M.ccall("qjs_step", "number", [], [], { async: true });
       if (r === 0) break;   /* ENGINE_STEP_DONE — the frontier is empty (or was written out) */
       if (r !== 2 && r !== 3)
         gateFail(`qjs_step answered ${r}, which is none of DONE(0)/YIELD(2)/STALLED(3) — the ABI carries three ` +
