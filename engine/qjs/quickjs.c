@@ -51282,15 +51282,19 @@ typedef struct JSParseState {
        next poll hands the thread back without asking again. */
     REParseState *pd_re;
     bool pd_rest_owed;
-    /* HOW MANY PRODUCTION STEPS UNTIL THE COOPERATIVE BUDGET IS NEXT ASKED. The parse is the one span in this
-       engine with no raise source at all: quickjs.h declares four kinds and the first three are raised from
-       the INTERPRETER's dispatch, which a parse never reaches, so a parse raised nothing and polled nothing
-       for its whole length however many bytes the page chose. The parse's own dispatch is the raise source,
-       exactly as g_flow_budget_countdown makes the interpreter's dispatch one — same hook, same period, same
-       park decision. A COUNTDOWN AND NOT A BUDGET (§NO BOUNDS): its exhaustion decides when the host is
-       ASKED and is no part of the answer, and no value of it makes any parse cover less ground — delete it
-       and the budget is asked at every production, which can only hand the thread back SOONER. */
-    int32_t pd_budget_ctr;
+    /* A regexp literal's scan (js_parse_regexp_step), held across the rests it takes inside the token: its
+       cursor, whether it stands in a class or in the flags, and the body and flags built so far (owned while
+       `rx_live`). */
+    struct {
+        const uint8_t *p;
+        StringBuffer body, flags;
+        bool live, in_class, in_flags;
+    } pd_rx;
+    /* The retired-work count (g_flow_work_retired) at this compile stint's opening or its last offer of a
+       suspend point: js_parse_want_yield offers one each budget period of work past it. Set where a stint
+       begins (js_eval_compile_begin, js_eval_compile_continue), since the scheduler banks the count between
+       stints. */
+    uint64_t pd_offer_at;
     /* js_parse_program's CROSS-SUSPENSION STATE: the one break entry that is not on a descent frame (handle
        PD_BE_PGM). push_break_entry links it into JSFunctionDef.top_break for the whole source-element loop, a
        span that suspends, so the PARSE owns it, never an activation. */
@@ -52233,23 +52237,51 @@ static inline bool token_is_pseudo_keyword(JSParseState *s, JSAtom atom) {
         !s->token.u.ident.has_escape;
 }
 
-static __exception int js_parse_regexp(JSParseState *s)
+static bool js_parse_want_yield(JSParseState *s);
+static uint64_t js_parse_count_bytes_to(JSParseState *s, const uint8_t *to);
+
+/* Releases a regexp literal's scan that did not complete: an error, or a parse dropped while it rested. */
+static void js_parse_regexp_release(JSParseState *s)
 {
-    const uint8_t *p, *p_next;
-    bool in_class;
-    StringBuffer b_s, *b = &b_s;
-    StringBuffer b2_s, *b2 = &b2_s;
+    if (!s->pd_rx.live)
+        return;
+    string_buffer_free(&s->pd_rx.body);
+    string_buffer_free(&s->pd_rx.flags);
+    s->pd_rx.live = false;
+}
+
+/* Starts the scan of the regexp literal whose `/` is at s->buf_ptr (ECMA-262 §12.9.5 Regular Expression
+   Literals). The scan is owned by the parse until js_parse_regexp_step completes or fails it. */
+static __exception int js_parse_regexp_begin(JSParseState *s)
+{
+    DCHECK(!s->pd_rx.live, "a regexp literal's scan began while another literal's was still held");
+    DCHECK(*s->buf_ptr == '/', "a regexp literal's scan began at a byte that is not its opening slash");
+    if (string_buffer_init(s->ctx, &s->pd_rx.body, 32))
+        return -1;
+    if (string_buffer_init(s->ctx, &s->pd_rx.flags, 1)) {
+        string_buffer_free(&s->pd_rx.body);
+        return -1;
+    }
+    s->pd_rx.p = s->buf_ptr + 1;
+    s->pd_rx.live = true;
+    s->pd_rx.in_class = false;
+    s->pd_rx.in_flags = false;
+    return 0;
+}
+
+/* One stint of the scan: 0 when the literal is s->token (TOK_REGEXP, buf_ptr past its flags), -1 on a
+   SyntaxError, 1 when the policy took the thread with the cursor parked. Each code point is charged as it is
+   consumed, and with `can_rest` the policy is asked after it, so the scan's indivisible unit is one code point
+   (or an escape's two). A lookahead passes false: it cannot park, and its scan is its caller's stint. */
+static int js_parse_regexp_step(JSParseState *s, bool can_rest)
+{
+    const uint8_t *p = s->pd_rx.p, *p_next;
+    StringBuffer *b = &s->pd_rx.body, *b2 = &s->pd_rx.flags;
     uint32_t c;
     JSValue body_str, flags_str;
 
-    p = s->buf_ptr;
-    p++;
-    in_class = false;
-    if (string_buffer_init(s->ctx, b, 32))
-        return -1;
-    if (string_buffer_init(s->ctx, b2, 1))
-        goto fail;
-    for(;;) {
+    DCHECK(s->pd_rx.live, "a regexp literal's scan was stepped with no scan held");
+    while (!s->pd_rx.in_flags) {
         if (p >= s->buf_end) {
         eof_error:
             js_parse_error(s, "unexpected end of regexp");
@@ -52259,13 +52291,16 @@ static __exception int js_parse_regexp(JSParseState *s)
         if (c == '\n' || c == '\r') {
             goto eol_error;
         } else if (c == '/') {
-            if (!in_class)
+            if (!s->pd_rx.in_class) {
+                s->pd_rx.in_flags = true;
+                s->pd_rx.p = p;
                 break;
+            }
         } else if (c == '[') {
-            in_class = true;
+            s->pd_rx.in_class = true;
         } else if (c == ']') {
             /* XXX: incorrect as the first character in a class */
-            in_class = false;
+            s->pd_rx.in_class = false;
         } else if (c == '\\') {
             if (string_buffer_putc8(b, c))
                 goto fail;
@@ -52300,6 +52335,10 @@ static __exception int js_parse_regexp(JSParseState *s)
         }
         if (string_buffer_putc(b, c))
             goto fail;
+        s->pd_rx.p = p;
+        g_flow_compile_work += js_parse_count_bytes_to(s, p);
+        if (can_rest && js_parse_want_yield(s))
+            return 1;
     }
 
     /* flags */
@@ -52311,8 +52350,13 @@ static __exception int js_parse_regexp(JSParseState *s)
         if (string_buffer_putc(b2, c))
             goto fail;
         p = p_next;
+        s->pd_rx.p = p;
+        g_flow_compile_work += js_parse_count_bytes_to(s, p);
+        if (can_rest && js_parse_want_yield(s))
+            return 1;
     }
 
+    s->pd_rx.live = false;
     body_str = string_buffer_end(b);
     flags_str = string_buffer_end(b2);
     if (JS_IsException(body_str) ||
@@ -52327,9 +52371,16 @@ static __exception int js_parse_regexp(JSParseState *s)
     s->buf_ptr = p;
     return 0;
  fail:
-    string_buffer_free(b);
-    string_buffer_free(b2);
+    js_parse_regexp_release(s);
     return -1;
+}
+
+/* The scan whole, for a lookahead (js_parse_skip_parens_token), which cannot park. */
+static __exception int js_parse_regexp(JSParseState *s)
+{
+    if (js_parse_regexp_begin(s))
+        return -1;
+    return js_parse_regexp_step(s, false);
 }
 
 #endif // QJS_DISABLE_PARSER
@@ -52481,21 +52532,28 @@ static JSAtom parse_ident(JSParseState *s, const uint8_t **pp,
    Deleting the guard is what makes that claim falsifiable rather than decorative: if some path still reaches
    here through C recursion, it now overflows the stack and CRASHES LOUD at the point that recursed, instead of
    being laundered into a RangeError the caller reports as if the source were at fault. */
-static uint64_t js_parse_count_bytes(JSParseState *s)
+/* Charges the source bytes from the counted mark up to `to` (a scan cursor, or buf_ptr) as retired work, once
+   each: a rescan behind the mark adds nothing. */
+static uint64_t js_parse_count_bytes_to(JSParseState *s, const uint8_t *to)
 {
     uint64_t units = 0;
 
-    if (s->buf_ptr > s->counted_ptr) {
-        uint64_t n = (uint64_t)(s->buf_ptr - s->counted_ptr);
+    if (to > s->counted_ptr) {
+        uint64_t n = (uint64_t)(to - s->counted_ptr);
 
         DCHECK_PRICED("an assert's condition or a dev build's second derivation tokenized script — the bytes are "
                       "work a release build does not retire. Check the compile's result, not a second compile");
         units = n * g_flow_control.parse_units_per_byte;
         g_flow_parse_bytes += n;
         g_flow_work_retired += units;
-        s->counted_ptr = s->buf_ptr;
+        s->counted_ptr = to;
     }
     return units;
+}
+
+static uint64_t js_parse_count_bytes(JSParseState *s)
+{
+    return js_parse_count_bytes_to(s, s->buf_ptr);
 }
 
 static __exception int next_token(JSParseState *s)
@@ -54253,6 +54311,7 @@ enum {
     PDS_PFX_ARG, PDS_PFX_SPREAD_ELL, PDS_PFX_SPREAD_ITEM, PDS_PFX_INDEX,
     PDS_UNA_POSTFIX,
     PDS_ARR, PDS_ARR_E1, PDS_ARR_E2, PDS_ARR_SPREAD, PDS_ARR_E3, PDS_PFX_ARRAY, PDS_PFX_REGEXP,
+    PDS_PFX_REGEXP_SCAN,
     PDS_OBJ, PDS_OBJ_SPREAD, PDS_OBJ_VALUE, PDS_PFX_OBJECT,
     PDS_PROPNAME, PDS_PN_COMPUTED, PDS_OBJ_KEY,
     PDS_TEMPLATE, PDS_TPL_SUB, PDS_PFX_TEMPLATE, PDS_PFX_TAGGED,
@@ -55512,6 +55571,7 @@ static void js_parse_descent_abandon(JSContext *ctx, JSParseState *s)
         lre_compile_end(s->pd_re);
         s->pd_re = NULL;
     }
+    js_parse_regexp_release(s);
     s->pd_rest_owed = false;
     pd_release(ctx, s);
     s->pd_suspended = false;
@@ -55742,6 +55802,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     case PDS_ARR_E3:          goto arr_e3_done;
     case PDS_PFX_ARRAY:       goto pfx_array_done;
     case PDS_PFX_REGEXP:      goto pfx_regexp_step;
+    case PDS_PFX_REGEXP_SCAN: goto pfx_regexp_scan;
     case PDS_OBJ:             goto obj_entry;
     case PDS_OBJ_SPREAD:      goto obj_spread_done;
     case PDS_OBJ_VALUE:       goto obj_value_done;
@@ -56694,8 +56755,22 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
         if (!s->ctx->compile_regexp)
             PD_RET_ERR(s, "RegExp are not supported");
         /* the previous token is '/' or '/=', so no need to free */
-        if (js_parse_regexp(s))
+        if (js_parse_regexp_begin(s))
             PD_RET(-1);
+        /* The literal's scan rests inside the token as its compile does below, and resumes here with the
+           cursor it parked; until it completes, s->token is still the slash no other production has read. */
+ pfx_regexp_scan:
+        {
+            int r = js_parse_regexp_step(s, s->pd_can_yield);
+
+            if (r > 0) {
+                s->pd_rest_owed = true;
+                f->state = PDS_PFX_REGEXP_SCAN;
+                goto dispatch;
+            }
+            if (r < 0)
+                PD_RET(-1);
+        }
         if (emit_push_const(s, s->token.u.regexp.body, 0))
             PD_RET(-1);
         DCHECK(s->pd_re == NULL, "a regexp literal's compile began while another literal's was still held");
@@ -61503,6 +61578,8 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     DCHECK(s->pd_sp == s->pd_base, "the descent returned at a depth that is not its own pd_base");
     DCHECK(s->pd_sp != 0 || s->pd_re == NULL,
            "the descent drained holding a regexp literal's compile — the literal's production ends it");
+    DCHECK(s->pd_sp != 0 || !s->pd_rx.live,
+           "the descent drained holding a regexp literal's scan, which the literal's production completes or fails");
     if (s->pd_sp == 0)
         pd_release(ctx, s);   /* the whole descent drained — the parse owns nothing until the next one */
     return s->pd_ret;
@@ -61517,42 +61594,40 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
 #undef PD_SELF
 }
 
-/* DOES THE PARSE GIVE THE THREAD BACK AT THIS PRODUCTION BOUNDARY — the same question the interpreter's
-   dispatch asks at an opcode boundary, asked from the one other span in this engine whose length the PAGE
-   chooses. lre_want_yield is the precedent and the shape is identical: a span that is not the interpreter
-   consults the scheduler's own policy rather than acquiring one of its own.
-   TWO HALVES, AND THEY ARE THE INTERPRETER'S TWO HALVES. The RAISE half is the budget hook behind a countdown,
-   which is FLOW_BUDGET_TICK's arrangement re-derived here rather than called: flow_budget_poll's own gate is
-   `g_flow_base_gen != NULL`, and a COMPILE runs before its flow exists (JS_FlowNew compiles and only then
-   async_func_init's the frame), so that gate is false for exactly this span. The ANSWER half is the yield
-   request BYTE and `preempt` — the same byte, so a HOST request already standing from the dispatch-counted
-   budget or a rank change parks the parse too, and the same policy, so this engine still makes every park decision in one place.
-   NOTHING HERE BOUNDS ANYTHING (§NO BOUNDS). A `true` hands the parse to a caller that asked to hold it and
-   the parse resumes from the exact production it stopped at; no value of the countdown, the budget or the
-   policy makes any parse cover less ground, which is the test g_flow_work_retired's declaration states. */
+/* Does the compile give the thread back at this boundary: a production step of the parse, or a unit of a
+   code generation pass. It offers the scheduler's policy a suspend point once a budget period of work has
+   been retired since the stint opened or last offered, as a loop back-edge offers one in the interpreter, and
+   whenever a request stands (a host request or a rank change). The period is counted in work, not in steps,
+   because a step's work is its input's length: one production charges a whole token. So the stretch between
+   two offers is at most a period plus the work of one step, which is that step's indivisible unit.
+   At the period the budget is asked first, so a spent slice raises the host's kind, as the interpreter's
+   budget tick does; a compile runs before its flow's base exists, which is why flow_budget_poll is not
+   called. A `true` parks the compile at this boundary and it resumes from it; no answer makes it cover less. */
 static bool js_parse_want_yield(JSParseState *s)
 {
     int ykind;
+    uint32_t period = g_flow_control.budget_period;
+
     if (!s->pd_can_yield)
         return false;
+    DCHECK(g_flow_work_retired >= s->pd_offer_at,
+           "the retired-work count fell inside a compile stint: something banked or discarded it between two "
+           "steps of one stint, so the compile's offer period is measured from a mark the count no longer holds");
     if (s->pd_rest_owed) {
         s->pd_rest_owed = false;
+        s->pd_offer_at = g_flow_work_retired;
         return true;
     }
-    if (g_flow_control.budget != NULL && g_flow_control.budget_period > 0) {
-        if (--s->pd_budget_ctr <= 0) {
-            s->pd_budget_ctr = (int32_t)g_flow_control.budget_period;
-            if (g_flow_control.budget())
-                FLOW_YIELD_REQUEST(JS_PREEMPT_HOST);
-        }
-    }
+    if (period > 0 && !FLOW_YIELD_READ() && g_flow_work_retired - s->pd_offer_at >= period)
+        FLOW_YIELD_REQUEST(g_flow_control.budget != NULL && g_flow_control.budget() ? JS_PREEMPT_HOST
+                                                                                      : JS_PREEMPT_BACKEDGE);
     if (likely(!FLOW_YIELD_READ()))
         return false;
     ykind = (int)FLOW_YIELD_READ() - 1;
-    /* ANSWERED HERE, WHICH IS WHY IT IS CLEARED HERE — the interpreter's own poll does exactly this. A request
-       left standing after a policy said "no" would be re-asked at every production for the rest of the parse,
-       and a request answered `yes` is consumed by the suspension it caused. */
+    /* Answered here, so cleared here, as the interpreter's poll does: a request left standing after a "no"
+       would be re-asked at every step, and one answered "yes" is consumed by the suspension it caused. */
     FLOW_YIELD_SET(0);
+    s->pd_offer_at = g_flow_work_retired;
     return g_flow_control.preempt != NULL && g_flow_control.preempt(ykind);
 }
 
@@ -68083,6 +68158,7 @@ static JSValue js_eval_compile_continue(JSContext *ctx, JSEvalCompile **slot)
     int err;
     DCHECK(ec != NULL, "a compile was continued with nothing parked");
     *slot = NULL;
+    ec->s.pd_offer_at = g_flow_work_retired;
     if (ec->codegen)
         return js_eval_compile_codegen(ctx, ec, slot);
     g_eval_compile_slot = NULL;
@@ -68146,6 +68222,7 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
     /* THE CALLER'S OWN STATEMENT THAT IT CAN HOLD A PARKED PARSE, and the only thing that decides whether the
        seam in js_parse_want_yield is armed at all. */
     s->pd_can_yield = (slot != NULL);
+    s->pd_offer_at = g_flow_work_retired;
     skip_shebang(&s->buf_ptr, s->buf_end);
 
     eval_type = flags & JS_EVAL_TYPE_MASK;
