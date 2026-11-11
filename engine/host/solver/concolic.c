@@ -7732,7 +7732,10 @@ static const char *keyname_atom(JSContext *ctx, JSValueConst key, const char *sh
    it is the real access at that key. Owned.
    Named residual. Not covered: the worlds where the key is another member's. Next diff builds: the access as a
    fork over the base's own keys, each arm against the example priced as a departure from it. Absence shows as:
-   a page that indexes by Math.random() reporting only the example's member's requests. */
+   a page that indexes by Math.random() reporting only the example's member's requests.
+   Named residual. Not covered: a member the example's key reaches through the prototype chain or an accessor,
+   which the read's own-slot arm does not see. Next diff builds: the read substituting the key and taking the
+   ordinary [[Get]]. Absence shows as: a method looked up by such a key being called as an unknown. */
 static JSValue key_of_example(JSContext *ctx, JSValueConst key)
 {
     JSValue name;
