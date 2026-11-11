@@ -443,6 +443,11 @@ METRIC(classic_compile_own_decode, "classicCompileOwnDecode", LIFETIME, "compile
    failing (a flow mid-parse of a row someone finished resumes its own parse). See
    solver/engine.h's `classic_parse_shared` and solver/dyn_body.h. */
 METRIC(classic_parse_shared, "classicParseShared", LIFETIME, "parse", PROCESS, "solver/engine.c", INT)
+/* …and the same for a document's root module rows: parses finished, the source bytes of those bodies, and
+   modules evaluated from a record another timeline's parse produced. */
+METRIC(module_compiles, "moduleCompiles", LIFETIME, "compile", PROCESS, "solver/engine.c", INT)
+METRIC(module_compile_bytes, "moduleCompileBytes", LIFETIME, "byte", PROCESS, "solver/engine.c", INT)
+METRIC(module_parse_shared, "moduleParseShared", LIFETIME, "parse", PROCESS, "solver/engine.c", INT)
 /* …and whether a parse handed back was carried forward:
    `stepUnitRuns[compile-handed-the-thread-back]` minus this is the parses begun and not ended.
    Not a subset of `classicCompiles`, and not a rate against it: one is raised per continued

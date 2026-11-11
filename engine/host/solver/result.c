@@ -1810,6 +1810,9 @@ char *result_cold_json(void) {
     METRIC_SET(classic_compile_again_bytes, r.classic_compile_again_bytes);
     METRIC_SET(classic_compile_own_decode, r.classic_compile_own_decode);
     METRIC_SET(classic_parse_shared, r.classic_parse_shared);
+    METRIC_SET(module_compiles, r.module_compiles);
+    METRIC_SET(module_compile_bytes, r.module_compile_bytes);
+    METRIC_SET(module_parse_shared, r.module_parse_shared);
     METRIC_SET(classic_compile_resumed, r.classic_compile_resumed);
     METRIC_SET(unit_mid_program, r.unit_mid_program);
     METRIC_SET(unit_parked, r.unit_parked);

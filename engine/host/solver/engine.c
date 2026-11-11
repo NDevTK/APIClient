@@ -9210,6 +9210,14 @@ static long    g_classic_compile_own_decode;   /* parses of a body one flow deco
    above. The copy-out asserts that a shared parse implies some finished parse and that the gauge of bodies holding
    one does not exceed the lifetime count of finished parses. A report only (solver/dyn_body.h owns the mechanism). */
 static long    g_classic_parse_shared;         /* classic programs started from a parse another flow finished */
+/* The same three for a document's root module rows: parses finished, the source bytes of those bodies, and
+   modules evaluated from a record another flow's parse produced. Lifetime; a report. */
+static long    g_module_compiles;
+static int64_t g_module_compile_bytes;
+static long    g_module_parse_shared;
+long    engine_module_compiles(void)      { return g_module_compiles; }
+int64_t engine_module_compile_bytes(void) { return g_module_compile_bytes; }
+long    engine_module_parse_shared(void)  { return g_module_parse_shared; }
 /* The width of the byte total as a build failure: the runtime check in engine_step_unit_runs is a DCHECKF, compiled
    out in release, the build real pages are measured on. Both the accumulator and the field it is copied into, since
    narrowing either loses the run. */
@@ -10565,6 +10573,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 /* `started` is asked of the entry's one answer: it folds an abrupt evaluation into -1 rather than
                    returning a status beside a value. */
                 started = (mr > 0);
+                if (started) { g_module_compiles++; g_module_compile_bytes += (int64_t)body_n; }
                 if (started) module_report_rejection(prog_ctx, ev);   /* §8.1.4.4 step 8 */
                 JS_FreeValue(prog_ctx, ev);
             } else {
@@ -11260,6 +11269,9 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     /* The shared-parse row: `classic_compiles + classic_parse_shared` is what a reader compares against a
        pre-sharing revision's compile count. */
     out->classic_parse_shared        = g_classic_parse_shared;
+    out->module_compiles             = g_module_compiles;
+    out->module_compile_bytes        = g_module_compile_bytes;
+    out->module_parse_shared         = g_module_parse_shared;
     /* The stint partition. A reader wants `arms[STEP_UNIT_COMPILE_YIELDED] - classic_compile_resumed`, the parses
        currently suspended (see g_classic_compile_resumed), a small number, so a skew of one stint between the two
        copies would be the whole of it; both are taken here, before the loop that copies the histogram. */

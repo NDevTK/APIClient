@@ -2582,6 +2582,8 @@ TF_DOCS[] = {
     { "uriclass", HTML_URICLASS },
     { "candslot", HTML_CANDSLOT },
     { "modshare", HTML_MODSHARE },
+    { "modshare2", HTML_MODSHARE2 },
+    { "modsharebig", HTML_MODSHAREBIG },
     { "candcontra", HTML_CANDCONTRA },
     { "candweak", HTML_CANDWEAK },
     { "candarrive", HTML_CANDARRIVE },
@@ -21463,13 +21465,25 @@ TF_UNIT void probes_candslot(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `modshare` document (fixture/modshare.h): both worlds run the module, and no code site's
-   service holds a compile's work, so the work charged to sites and the compile work charged partition within
-   all the work charged. */
+/* The source bytes of the first root module body in `html`: what one parse of it consumes. */
+static int64_t ms_body_bytes(const char *html) {
+    const char *open = strstr(html, MS_MODULE_OPEN), *close = open ? strstr(open, "</script>") : NULL;
+
+    DCHECK(open != NULL && close != NULL, "a shared-module document holds no module script");
+    return (int64_t)(close - (open + strlen(MS_MODULE_OPEN)));
+}
+
+/* The rows of the `modshare` documents (fixture/modshare.h). In each, both worlds run every module. `modshare`:
+   no code site's service holds a compile's work, so the work charged to sites and the compile work charged
+   partition within all the work charged; and the two worlds, reaching the one module one after the other, parse
+   its body once. `modshare2`, the control: two bodies of equal length are two parses. `modsharebig`: both worlds
+   complete a module whose parse outlasts several quanta. */
 TF_UNIT void probes_modshare(const char *js, Probe *tab, int *n) {
-    const char *r_why = NULL, *c_why = NULL;
-    int r_tt = 1, c_tt = 1;
-    static char c_buf[256];
+    const char *r_why = NULL, *c_why = NULL, *p_why = NULL, *r2_why = NULL, *p2_why = NULL, *rb_why = NULL;
+    int r_tt = 1, c_tt = 1, p_tt = 1, r2_tt = 1, p2_tt = 1, rb_tt = 1;
+    static char c_buf[256], p_buf[256], p2_buf[256];
+    int64_t parsed = engine_module_compile_bytes();
+    int64_t one = ms_body_bytes(HTML_MODSHARE), two = 2 * ms_body_bytes(HTML_MODSHARE2);
     int64_t site = flow_site_work_lifetime(), compile = flow_compile_work_lifetime();
     int64_t charged = flow_charged_work_lifetime();
 
@@ -21480,9 +21494,27 @@ TF_UNIT void probes_modshare(const char *js, Probe *tab, int *n) {
              "site's service holds compile work, or no compile was charged", (long long)site, (long long)compile,
              (long long)charged);
     fold_row(&c_tt, &c_why, compile > 0 && site + compile <= charged, c_buf);
+    snprintf(p_buf, sizeof p_buf, "root module parses finished over %lld source byte(s) where the one body is %lld: "
+             "the second world parsed the body the first had parsed", (long long)parsed, (long long)one);
+    fold_row(&p_tt, &p_why, parsed == one, p_buf);
+    fold_row(&r2_tt, &r2_why,
+             param_value_is(js, "/api/m2-one", "w", "A") && param_value_is(js, "/api/m2-one", "w", "P") &&
+                 param_value_is(js, "/api/m2-two", "w", "A") && param_value_is(js, "/api/m2-two", "w", "P"),
+             "a world did not run one of the two modules");
+    snprintf(p2_buf, sizeof p2_buf, "root module parses finished over %lld source byte(s) where the two bodies are "
+             "%lld: two bodies of equal length were taken for one, or a body was parsed per world",
+             (long long)parsed, (long long)two);
+    fold_row(&p2_tt, &p2_why, parsed == two, p2_buf);
+    fold_row(&rb_tt, &rb_why,
+             param_value_is(js, "/api/mb-mod", "w", "A") && param_value_is(js, "/api/mb-mod", "w", "P"),
+             "no /api/mb-mod record for one of the two arms, so a world did not complete the long module");
     const Probe rows[] = {
         { "ms-ran", r_tt, "/api/ms-mod", SESS_EXPLORE, r_why },
         { "ms-site-excludes-compile", c_tt, "/api/ms-mod", SESS_EXPLORE, c_why, .gate = "ms-ran" },
+        { "ms-one-parse", p_tt, "/api/ms-mod", SESS_EXPLORE, p_why, .gate = "ms-ran" },
+        { "m2-ran", r2_tt, "/api/m2-two", SESS_EXPLORE, r2_why },
+        { "m2-two-parses", p2_tt, "/api/m2-two", SESS_EXPLORE, p2_why, .gate = "m2-ran" },
+        { "mb-ran", rb_tt, "/api/mb-mod", SESS_EXPLORE, rb_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

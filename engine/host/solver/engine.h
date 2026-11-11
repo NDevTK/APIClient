@@ -563,6 +563,11 @@ int engine_runnable(void);
 /* The engine work this instance's flows have retired over every slice: the service Level 1 divides a
    document's novel value by. A lifetime counter, never reset at a session boundary. */
 int64_t engine_service_work(void);
+/* Lifetime: root module rows whose parse finished, the source bytes of those bodies, and root modules evaluated
+   from a record another flow's parse produced. */
+long    engine_module_compiles(void);
+int64_t engine_module_compile_bytes(void);
+long    engine_module_parse_shared(void);
 /* The same counter plus the running flow's standing, unbanked count: the instance's whole retired work at this
    instant, so a bracket's two readings differ by exactly the work done between them. */
 int64_t engine_work_retired(void);
@@ -1128,6 +1133,11 @@ typedef struct {
      * `classic_compile_again` stays nonzero by design: a failed parse holds nothing, and a flow mid-parse when
      * another finishes completes its own. */
     long classic_parse_shared;       /* classic programs started from a parse another flow had finished */
+    /* The same for root module rows: parses finished, their bodies' source bytes, and modules evaluated from a
+       record another flow's parse produced. */
+    long module_compiles;
+    int64_t module_compile_bytes;
+    long module_parse_shared;
     /* Compile stints that continued a parse rather than beginning one; contained in
      * arms[STEP_UNIT_COMPILE_YIELDED] (asserted), and that arm minus this is the parses begun and not ended. Near
      * zero means the seam carries every parse forward; large means parses handed back and not picked up. Raised
