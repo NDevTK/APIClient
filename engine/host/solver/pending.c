@@ -686,6 +686,28 @@ int pending_declined_outstanding(JSValueConst reg)
     return hit_any;
 }
 
+int pending_entry_decline_fork_owed(JSValueConst e)
+{
+    return pending_entry_declined(e) && !pending_get_int(e, PEND_DECLINE_TAKEN);
+}
+
+int pending_arrival_outstanding(JSValueConst reg)
+{
+    int n = pend_len(reg), i, hit = 0;
+
+    for (i = 0; i < n && !hit; i++) {
+        JSValue e = pending_entry(reg, i);
+
+        hit = pending_entry_host_owed(e) || pending_entry_decline_fork_owed(e);
+        JS_FreeValue(pend_ctx(), e);
+    }
+    DCHECK(!hit || pending_outstanding(reg),
+           "an arrival is outstanding on a register whose flow waits on nothing — an entry the host can still "
+           "answer and a refusal whose arms are not forked both carry no value, so a refused record took a "
+           "reply before flow_decline_fork marked its copy");
+    return hit;
+}
+
 /* ---- writes -----------------------------------------------------------------------------------------------
    EVERY ONE OF THEM IS BRACKETED, and that is the invariant this file exists to hold — see pending.h. */
 

@@ -229,12 +229,12 @@ uint64_t event_loop_work_banked_life(void);
  * the same way: a virtual deadline of any size is reached instantly and therefore beats every real event
  * deterministically, however long the deadline and however near the event.
  *
- * WHAT FALSIFIES IT IS A DEBT AND NOT A REACHABILITY. The premise is false exactly while the host still owes
- * this flow something (solver/pending.h's `pending_outstanding`): a reply in flight is an event that HAS
- * happened or will, whose continuation enqueues a job into THIS flow's queue, and the clock cannot order it
- * because it has no moment on this clock at all. A peer merely HOLDING a reference to this document is not
- * that — nothing is in flight, so there is nothing for the jump to step over — which is why this asks the
- * register and not `engine_set_referenced`.
+ * What falsifies it is an answer still to arrive on the running flow's register (solver/pending.h's
+ * `pending_arrival_outstanding`): a reply in flight, or a refusal whose arms are not forked, queues a task
+ * into this flow at a moment this clock cannot order. A refused record in its waiting arm is not that: no
+ * reply is coming, so the clock moves and timers and frames run, as HTML §8.7 Timers and HTML §8.1.7.3
+ * Processing model run them in a browser whose request never settles. Nor is a peer holding a reference to
+ * this document, which is why this asks the register and not `engine_set_referenced`.
  *
  * IT IS THE RUNNING FLOW'S DEBT, because it is the running flow's CLOCK: both fields of this record ride the
  * per-flow COW delta, so an advance lands in that flow's timeline and a SIBLING's outstanding reply is
@@ -257,8 +257,8 @@ uint64_t event_loop_work_banked_life(void);
  * source's frame, a deadline of the same kind, asks the same predicate (core/rendering/rendering.c). */
 int event_loop_may_advance(void);
 
-/* DOES THE DEADLINE `when`, AHEAD OF THE CLOCK, COME BEFORE THE REPLIES THIS FLOW IS OWED? 1 when nothing is owed
-   (event_loop_may_advance); otherwise the predicate `when` < the replies' arrival, asked through event_loop_before
+/* Does the deadline `when`, ahead of the clock, come before the answers still to arrive on this flow? 1 when
+   none can (event_loop_may_advance); otherwise the predicate `when` < their arrival, asked through event_loop_before
    (a restartable fork, so only between a flow's tasks), and a 1 licenses the one forward move to `when` that
    follows. The arrival is the timeline's next one, one unknown per arrival (named by flow.h's `replies_taken`),
    so a request issued after an arrival is raced again, and the earliest timer is always the one asked, so a

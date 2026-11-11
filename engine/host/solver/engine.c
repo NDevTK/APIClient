@@ -4197,7 +4197,9 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
     /* Named residual. Not covered: a streamed reply, a rendezvous answer (engine_host_answer) and a decline
        (engine_decline) leave no record, so a replay of a path that took one would send or ask again. Next diff
        builds: the streamed record at the body's end (solver/reply_body.c), then the other two. Absence shows
-       as: a returning member whose path took a streamed fetch lists that request to the host again. */
+       as: a returning member whose path took a streamed fetch lists that request to the host again; and a
+       returning waiting arm whose refusal lands after its recorded slot races a deadline against the request
+       in flight again, where its record asked nothing, and leaves its path there (`replayLeft`). */
     if (!reply_body_streamed(ctx, value)) {
         rec_id = reply_record_last_id() + 1;
         rec_askers_cap = 64;
@@ -6228,7 +6230,7 @@ static int flow_decline_fork_at(JSContext *ctx, const Flow *f) {
     if (decide_completion_recorded_later(DECLINE_WAITS)) return -1;
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(f->pending, i);
-        int owed = pending_entry_declined(e) && !pending_get_int(e, PEND_DECLINE_TAKEN);
+        int owed = pending_entry_decline_fork_owed(e);
 
         JS_FreeValue(ctx, e);
         if (owed) return i;
@@ -6244,7 +6246,7 @@ static void flow_decline_fork(JSContext *ctx, Flow *f, int i) {
         int in_program, in_job, kind, cross;
         Flow *sib, *arm_flow;
 
-        DCHECK(pending_entry_declined(e) && !pending_get_int(e, PEND_DECLINE_TAKEN),
+        DCHECK(pending_entry_decline_fork_owed(e),
                "a decline fork was performed over an entry flow_decline_fork_at did not name");
         DCHECK(flow_running() == f,
                "a decline fork was taken while another flow was switched in — the arm would clone that flow's delta "

@@ -710,6 +710,14 @@ int  pending_host_outstanding(JSValueConst reg);
    there is nothing here for a caller to get wrong. */
 int  pending_declined_outstanding(JSValueConst reg);
 
+/* Can anything still arrive on this register in its flow's own timeline: an entry the host can still be asked
+   about (pending_entry_host_owed), or a refusal whose arms this register has not forked
+   (pending_entry_decline_fork_owed). The event loop's clock asks it (core/timing/event_loop.h's
+   event_loop_may_advance). It answers 0 for the waiting arm's own copy of a refusal, which stays outstanding
+   to its flow (pending_outstanding) while no reply is coming and no arm is left to build. One walk asks both
+   entry predicates, so a register holding a refusal beside a request in flight answers 1. */
+int  pending_arrival_outstanding(JSValueConst reg);
+
 /* HAS THE TRUSTED ZONE REFUSED THIS ENTRY — the `declined` field read through its own vocabulary, so no caller
    ever spells the JS_NULL-versus-string test for itself, and so the field's two legal shapes are asserted in
    ONE place rather than at each reader.
@@ -727,6 +735,12 @@ int  pending_declined_outstanding(JSValueConst reg);
    RETIREMENT: this note goes when `pend_owed` and `pending_entry_host_owed` can no longer both be reached from one
    exported predicate — that is, when no register-level caller can ask the wrong one at all. */
 int  pending_entry_declined(JSValueConst e);
+
+/* Has this register still to fork the arms of this entry's refusal: `declined` without `declineTaken`.
+   flow_decline_fork's failure and success arms each take an arrival, so until the fork the refusal is an event
+   its timeline has not reached. A replay holds a refusal in this state until its recorded slot
+   (decide_completion_recorded_later); the recording session's request was in flight over the same stretch. */
+int  pending_entry_decline_fork_owed(JSValueConst e);
 
 /* …AND "CAN THE HOST STILL BE ASKED FOR THIS ONE", WHICH IS THE ENTRY ARITY THE NOTE ABOVE DOES NOT MENTION AND
    WHICH A THIRD CALLER HAD TO COMPOSE WRONGLY FOR WANT OF IT. That note names two arities — the host-owed MARK

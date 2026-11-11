@@ -516,7 +516,7 @@ int event_loop_may_advance(void)
     /* COUNTED AT THE ASK, AHEAD OF THE ANSWER, so the pair is a partition of one event rather than two
        writers agreeing — `declined <= asked` is then true by construction and not by inspection. */
     g_advance_asked++;
-    may = !pending_outstanding(f->pending);
+    may = !pending_arrival_outstanding(f->pending);
     if (!may) g_advance_declined++;
     return may;
 }
