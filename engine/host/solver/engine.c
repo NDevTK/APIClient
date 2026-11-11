@@ -6692,18 +6692,24 @@ static long g_gate_asks, g_gate_arm[GATE_ARMS];
  * code, because whether its object has a listener is not inspected. Next diff builds: the listener test on the delivery's target. How
  * its absence would show: `orphanGate.uninspected` nonzero on a run whose drives stay at zero. */
 static int engine_outstanding_runs_page_code(JSContext *ctx, Flow *f, int seq_awaits) {
-    int arm = GATE_NONE, n, i;
+    int arm = GATE_NONE, n, i, ready;
 
     g_gate_asks++;
     if (seq_awaits) arm = GATE_PROGRAM;
     else if (g_timer_active_hook && g_timer_active_hook(ctx) > 0) arm = GATE_TIMER;
+    /* An answered reply still on the register here is one this timeline has not taken: a replay holds it
+       (flow_reply_held), or held it when this step chose its unit and has since consumed the slot it stood
+       behind. Either way it is in flight to the timeline, as it was when the recording asked this gate, so it is
+       judged by its kind as an owed one is; a stricter answer for a held one refuses a drive the record took
+       before that reply landed. */
+    ready = arm == GATE_NONE && flow_pending_ready(f);
     n = arm == GATE_NONE ? pending_count(f->pending) : 0;
     for (i = 0; i < n && arm == GATE_NONE; i++) {
         JSValue e = pending_entry(f->pending, i);
         int kind = (int)pending_get_int(e, PEND_KIND);
 
-        if (pending_entry_owed(e)) {
-            DCHECK(kind != FLOW_PENDING_HOSTREQ || pending_get_int(e, PEND_ASYNC),
+        if (pending_entry_owed(e) || ready) {
+            DCHECK(kind != FLOW_PENDING_HOSTREQ || pending_get_int(e, PEND_ASYNC) || !pending_entry_owed(e),
                    "the orphan gate met an unanswered blocking rendezvous — such a flow is blocked and the ladder "
                    "returns above both orphan rungs");
             if (kind == FLOW_PENDING_SCRIPT || kind == FLOW_PENDING_DOCSCRIPT) {
@@ -6720,9 +6726,6 @@ static int engine_outstanding_runs_page_code(JSContext *ctx, Flow *f, int seq_aw
         }
         JS_FreeValue(ctx, e);
     }
-    /* An answered reply still on the register here is one a replay holds (flow_reply_held): in flight to this
-       timeline, and uninspected as any other kind is. */
-    if (arm == GATE_NONE && flow_pending_ready(f)) arm = GATE_UNINSPECTED;
     g_gate_arm[arm]++;
     return arm;
 }
