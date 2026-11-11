@@ -181,6 +181,8 @@
     X(TIMER_ARRIVED,      "fire-a-timer-that-arrived-first", ABOVE)               \
     /* a timer whose deadline the race put before the next answered arrival */    \
     X(TIMER_RACED,        "fire-a-timer-before-the-next-arrival", ABOVE)          \
+    /* a frame whose moment the race put before the next answered arrival */      \
+    X(RENDERING_RACED,    "queue-a-rendering-opportunity-before-the-next-arrival", ABOVE) \
     X(IDLE_PERIOD,        "start-or-run-an-idle-period", BELOW)                  \
     /* NO `unhandled-rejection-notify` ROW, AND ITS ABSENCE IS A STATEMENT. HTML  */ \
     /* §8.1.4.7 Unhandled promise rejections' "notify about rejected promises" is */ \

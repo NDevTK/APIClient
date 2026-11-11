@@ -171,8 +171,11 @@ void engine_set_timer_hook(int (*fn)(JSContext *ctx));
    (core/timing/timer.h's timer_due_stamp), and the write it reads (timer_stamp_due), which the scheduler performs
    at the end of each step of the running flow. Registered by the timer component beside the step above. */
 void engine_set_timer_due_hooks(uint64_t (*due)(JSContext *ctx), void (*stamp)(JSContext *ctx));
-/* The delivery arm's half of the deadline race (core/timing/timer.h's timer_race_arrival). */
-void engine_set_timer_race_hook(int (*fn)(JSContext *ctx));
+/* The delivery arm's half of the deadline race, registered by the event loop (core/timing/event_loop.h's
+   event_loop_deadline_pending and event_loop_race_arrival). `pending` is a read: some clock-driven source may
+   hold a deadline. `race` answers which task the arrival about to be delivered follows. */
+typedef enum { ENGINE_RACE_ARRIVAL_FIRST, ENGINE_RACE_RENDERING, ENGINE_RACE_TIMER } EngineDeadlineRace;
+void engine_set_deadline_race_hooks(int (*pending)(JSContext *ctx), EngineDeadlineRace (*race)(JSContext *ctx));
 /* How many timers stand in the maps of active timers (core/timing/timer.h's timer_active_count), registered by
    the timer component beside the two above. */
 void engine_set_timer_active_hook(int (*fn)(JSContext *ctx));

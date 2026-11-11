@@ -1451,9 +1451,27 @@ void rendering_census(RenderingCensus *out)
     *out = g_census;
 }
 
+/* The next frame's moment, owned by the caller: the last render opportunity time plus one frame, or `now` where
+   the clock has already passed it while work was due. That comparison is of two moments on one clock and a
+   fork wherever either is unknown, which either can be once a timer with an unknown expiry has fired: on one
+   arm the page's animation callbacks see the frame they asked for, on the other the moment the timer left. */
+static JSValue rendering_next_frame(JSContext *ctx, JSValueConst now)
+{
+    JSValue last = event_loop_last_render(ctx), ms = JS_NewFloat64(ctx, RENDERING_FRAME_MS);
+    JSValue next = event_loop_moment_plus(ctx, last, ms);
+
+    JS_FreeValue(ctx, ms);
+    JS_FreeValue(ctx, last);
+    if (event_loop_before(ctx, next, now)) {
+        JS_FreeValue(ctx, next);
+        next = JS_DupValue(ctx, now);
+    }
+    return next;
+}
+
 int rendering_run_opportunity(JSContext *ctx, bool due_only)
 {
-    JSValue now, last, ms, next;
+    JSValue now, next;
     JSContext *topctx;
     JSValue driver;
 
@@ -1475,20 +1493,7 @@ int rendering_run_opportunity(JSContext *ctx, bool due_only)
         }
     }
     now = event_loop_now(ctx);
-    last = event_loop_last_render(ctx);
-    ms = JS_NewFloat64(ctx, RENDERING_FRAME_MS);
-    next = event_loop_moment_plus(ctx, last, ms);
-    JS_FreeValue(ctx, ms);
-    JS_FreeValue(ctx, last);
-    /* HAS THE CLOCK ALREADY MOVED PAST THIS FRAME while work was due? — a comparison of two moments on one
-       clock, and a FORK wherever either is unknown, which either can be once a timer with an unknown expiry
-       has fired. `if (next < now) next = now;` read as arithmetic and was a DECISION: taking the arm where
-       the frame is still ahead and the arm where it is behind are two different programs — in one the page's
-       animation callbacks see the frame they asked for, in the other they see the moment the timer left. */
-    if (event_loop_before(ctx, next, now)) {
-        JS_FreeValue(ctx, next);
-        next = JS_DupValue(ctx, now);
-    }
+    next = rendering_next_frame(ctx, now);
     /* A SPIN'S ASK: the continuation it waits for is runnable now, so a frame whose moment is still ahead
        arrives after it and is not this boundary's. Where the clamp fired, `next` is `now` and this costs no
        predicate. */
@@ -1566,6 +1571,26 @@ int rendering_run_opportunity(JSContext *ctx, bool due_only)
     return 1;
 }
 
+/* The rendering task source as the event loop's deadline race reads it (event_loop.h's EventLoopDeadlineOps):
+   the frame rendering_run_opportunity would take, which that step re-derives on the deadline-first arm. */
+static int rendering_deadline_pending(JSContext *ctx) { return rendering_any_opportunity(ctx, NULL); }
+
+static int rendering_deadline(JSContext *ctx, JSValue *when)
+{
+    JSValue now;
+
+    if (!rendering_any_opportunity(ctx, NULL)) return 0;
+    now = event_loop_now(ctx);
+    *when = rendering_next_frame(ctx, now);
+    JS_FreeValue(ctx, now);
+    return 1;
+}
+
+static int rendering_run_idle(JSContext *ctx) { return rendering_run_opportunity(ctx, false); }
+
+static const EventLoopDeadlineOps rendering_deadline_ops = { rendering_deadline_pending, rendering_deadline,
+                                                             rendering_run_idle };
+
 void rendering_init(JSContext *ctx)
 {
     DCHECK(!g_ready, "rendering_init ran twice — one event loop per agent");
@@ -1578,6 +1603,7 @@ void rendering_init(JSContext *ctx)
        reason: the scheduler may not depend on the browser half by name. A host that drives its own pump asks
        rendering_run_opportunity directly. */
     engine_set_rendering_hook(rendering_run_opportunity);
+    event_loop_deadline_source_set(EVENT_LOOP_DEADLINE_RENDERING, &rendering_deadline_ops);
     agent_state_flag("rendering", &g_ready, "the declaration latch");
     agent_state_id("rendering", &g_stepid, "§8.1.7.3's update-the-rendering machine");
     agent_state_realm_slot("rendering", &g_driver_slot, "the per-realm slot the task source's driver is held in");
@@ -1607,6 +1633,7 @@ void rendering_free(JSRuntime *rt)
        frontier (solver/engine.c) and names `rendering_run_opportunity` in this file — the defect
        core/agent_state.h found in idb_transaction. solver_agent_free asserts it. */
     engine_set_rendering_hook(NULL);
+    event_loop_deadline_source_set(EVENT_LOOP_DEADLINE_RENDERING, NULL);
     /* AND THE STEP ID, which this release used to keep. It names a registration in the runtime that is going
        away with it, and a second agent's declaration would have re-registered over the top of a number issued
        by a dead one — core/agent_state.h's fetch defect, asserted by the registry. */

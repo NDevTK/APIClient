@@ -9,6 +9,7 @@
 #include "core/timing/event_loop.h"
 #include "solver/concolic.h"   /* a moment can be unknown external input, and its ordering is a predicate */
 #include "solver/decide.h"     /* …asked as a restartable branch, and read back by this file's invariants */
+#include "solver/engine.h"     /* the delivery arm's deadline race is asked by the scheduler through its hooks */
 #include "solver/flow.h"       /* the clock's second mover writes into the RUNNING flow's delta, and asserts it */
 
 /* THE RECORD, held by each AGENT in its host slot `g_slot`: HTML §8.1.7.1 Definitions, "Each agent has an
@@ -157,6 +158,10 @@ static void event_loop_agent_install(JSContext *ctx, JSAgentRecord *agent)
     JS_SetAgentSlot(agent, g_slot, rec);
 }
 
+/* The clock-driven sources' records, each claimed and given back by its component. */
+static const EventLoopDeadlineOps *g_deadline_ops[EVENT_LOOP_DEADLINE_N];
+static EngineDeadlineRace event_loop_race_arrival_hook(JSContext *ctx);
+
 void event_loop_init(JSContext *ctx)
 {
     DCHECK(g_slot < 0, "event_loop_init ran twice in one runtime — its slot is registration every agent shares");
@@ -171,6 +176,7 @@ void event_loop_init(JSContext *ctx)
           "event loop: the record's own keys could not be interned");
     g_slot = JS_NewAgentSlot(JS_GetRuntime(ctx));
     agent_declare_install(event_loop_agent_install);
+    engine_set_deadline_race_hooks(event_loop_deadline_pending, event_loop_race_arrival_hook);
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The slot id is this init's own
        latch (`g_slot < 0` above). */
     agent_state_id("event_loop", &g_slot,
@@ -204,6 +210,11 @@ void event_loop_free(JSRuntime *rt)
     DCHECK(g_slot >= 0,
            "HTML §8.1.7 Event loops's records were released in a runtime that never declared their slot — "
            "event_loop_init is what declares it");
+    engine_set_deadline_race_hooks(NULL, NULL);
+    for (int k = 0; k < EVENT_LOOP_DEADLINE_N; k++)
+        DCHECK(g_deadline_ops[k] == NULL,
+               "a clock-driven source was still claimed when the event loop was released — the timer and "
+               "rendering components give their slots back at their own release, which runs first");
     JS_FreeAgentSlot(rt, g_slot);   /* every agent's record */
     g_slot = -1;
     JS_FreeAtomRT(rt, g_atom_now);
@@ -475,6 +486,68 @@ int event_loop_deadline_before_arrival(JSContext *ctx, JSValueConst when)
 {
     g_deadline_arrival_asked++;
     return el_deadline_before_next_arrival(ctx, when);
+}
+
+void event_loop_deadline_source_set(EventLoopDeadline which, const EventLoopDeadlineOps *ops)
+{
+    DCHECK(which < EVENT_LOOP_DEADLINE_N, "a deadline source claimed a slot the event loop does not hold");
+    DCHECK(ops == NULL || g_deadline_ops[which] == NULL,
+           "a second component claimed one of the event loop's clock-driven sources — one per event loop");
+    DCHECK(ops == NULL || (ops->pending != NULL && ops->deadline != NULL && ops->run != NULL),
+           "a deadline source was claimed without one of its three answers");
+    g_deadline_ops[which] = ops;
+}
+
+int event_loop_deadline_pending(JSContext *ctx)
+{
+    int k;
+
+    for (k = 0; k < EVENT_LOOP_DEADLINE_N; k++)
+        if (g_deadline_ops[k] != NULL && g_deadline_ops[k]->pending(ctx)) return 1;
+    return 0;
+}
+
+int event_loop_race_arrival(JSContext *ctx)
+{
+    JSValue best = JS_UNDEFINED, now;
+    int src = -1, k, first = 0, ran;
+
+    for (k = 0; k < EVENT_LOOP_DEADLINE_N; k++) {
+        JSValue when = JS_UNDEFINED;
+
+        if (g_deadline_ops[k] != NULL && g_deadline_ops[k]->deadline(ctx, &when) &&
+            (src < 0 || event_loop_before(ctx, when, best))) {
+            JS_FreeValue(ctx, best);
+            best = when;
+            src = k;
+        } else {
+            JS_FreeValue(ctx, when);
+        }
+    }
+    if (src < 0) return 0;
+    now = event_loop_now(ctx);
+    /* A deadline the clock has reached is a due task, ordered by arrival and not raced. */
+    if (event_loop_before(ctx, now, best)) first = event_loop_deadline_before_arrival(ctx, best);
+    JS_FreeValue(ctx, now);
+    JS_FreeValue(ctx, best);
+    if (!first) return 0;
+    ran = g_deadline_ops[src]->run(ctx);
+    DCHECK(ran, "the source whose deadline the race put before the next arrival did not run its task — its "
+                "deadline answer and its idle step walked to different entries, or read the race differently");
+    (void)ran;
+    return 1 + src;
+}
+
+/* The race as the scheduler's ladder names its answer. */
+static EngineDeadlineRace event_loop_race_arrival_hook(JSContext *ctx)
+{
+    static const EngineDeadlineRace unit[EVENT_LOOP_DEADLINE_N] = {
+        [EVENT_LOOP_DEADLINE_RENDERING] = ENGINE_RACE_RENDERING,
+        [EVENT_LOOP_DEADLINE_TIMER] = ENGINE_RACE_TIMER,
+    };
+    int ran = event_loop_race_arrival(ctx);
+
+    return ran == 0 ? ENGINE_RACE_ARRIVAL_FIRST : unit[ran - 1];
 }
 
 void event_loop_advance_census(long *asked, long *declined)

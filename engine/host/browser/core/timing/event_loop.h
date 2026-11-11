@@ -269,10 +269,40 @@ int event_loop_may_advance(void);
    answers first explored in one order only. */
 int event_loop_deadline_first(JSContext *ctx, JSValueConst when);
 
-/* THE SAME PREDICATE ASKED BEFORE AN ARRIVAL THAT HAS ALREADY BEEN ANSWERED — the delivery arm's half of the race
-   (core/timing/timer.h's timer_race_arrival). Asked whatever is owed, since the reply about to be delivered is
-   the arrival in question; a 1 licenses the move as above. */
+/* The same predicate asked before an arrival that has already been answered: the delivery arm's half of the
+   race (event_loop_race_arrival below). Asked whatever is owed, since the reply about to be delivered is the
+   arrival in question; a 1 licenses the move as above. */
 int event_loop_deadline_before_arrival(JSContext *ctx, JSValueConst when);
+
+/* The event loop's clock-driven task sources, in the order the idle ladder asks them: HTML §8.1.7.3 Processing
+   model's in-parallel half (the rendering task source) and HTML §8.7 Timers (the timer task source). */
+typedef enum { EVENT_LOOP_DEADLINE_RENDERING, EVENT_LOOP_DEADLINE_TIMER, EVENT_LOOP_DEADLINE_N } EventLoopDeadline;
+
+/* What a clock-driven source answers the loop. `pending` is a read: 1 when the source may hold a deadline for
+   the running flow; it asks nothing a fork would decide. `deadline` answers 1 and the source's next deadline
+   in `*when` (JS_UNDEFINED on entry, owned by the caller on return); it may ask the order among the source's
+   own entries. `run` is the source's idle step (1 when it queued or fired its task). */
+typedef struct {
+    int (*pending)(JSContext *ctx);
+    int (*deadline)(JSContext *ctx, JSValue *when);
+    int (*run)(JSContext *ctx);
+} EventLoopDeadlineOps;
+
+/* A source claims its slot at its init with a static record and gives it back with NULL at its release. */
+void event_loop_deadline_source_set(EventLoopDeadline which, const EventLoopDeadlineOps *ops);
+
+/* 1 when some source may hold a deadline for the running flow. A read, so the scheduler's ladder can ask it. */
+int event_loop_deadline_pending(JSContext *ctx);
+
+/* The delivery arm's half of the deadline race, one predicate for every source: the earliest deadline any
+   source holds (a later source wins only strictly before an earlier one, the order the idle ladder asks them
+   in), where it is ahead of the clock, is asked against the arrival about to be delivered
+   (event_loop_deadline_before_arrival), and on the deadline-first arm that source's idle step runs, re-asking
+   the same predicates and reading their answers. Returns 0 when the arrival is first or no deadline is ahead,
+   else 1 + the EventLoopDeadline that ran; the caller then makes the answered replies arrive after its task.
+   Asked from a flow's step between tasks. A later deadline is never asked against an arrival an earlier one
+   preceded, so two sources cannot answer one arrival inconsistently. */
+int event_loop_race_arrival(JSContext *ctx);
 
 /* How often each half asked its predicate: lifetime counts of the ask, ahead of the answer. The idle half is
    asked only after a refusal, so it is at most the licence's refusals; the delivery half before a delivery. */

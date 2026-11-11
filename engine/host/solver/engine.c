@@ -852,12 +852,15 @@ void engine_task_arrival(uint64_t seq)
     g_task_arrival = seq;
 }
 
-static int (*g_timer_race_hook)(JSContext *ctx);
-void engine_set_timer_race_hook(int (*fn)(JSContext *ctx))
+static int (*g_deadline_pending_hook)(JSContext *ctx);
+static EngineDeadlineRace (*g_deadline_race_hook)(JSContext *ctx);
+void engine_set_deadline_race_hooks(int (*pending)(JSContext *ctx), EngineDeadlineRace (*race)(JSContext *ctx))
 {
-    DCHECK(fn == NULL || g_timer_race_hook == NULL,
-           "a second component claimed the delivery arm's deadline race — there is one timer source per event loop");
-    g_timer_race_hook = fn;
+    DCHECK((pending == NULL) == (race == NULL), "the deadline race's read and its ask were claimed apart");
+    DCHECK(race == NULL || g_deadline_race_hook == NULL,
+           "a second component claimed the delivery arm's deadline race — there is one event loop per agent");
+    g_deadline_pending_hook = pending;
+    g_deadline_race_hook = race;
 }
 
 static int (*g_timer_active_hook)(JSContext *ctx);
@@ -9907,7 +9910,7 @@ typedef enum {
     NEXT_TURN_DONE,             /* a continued pass: the task is done and its checkpoint has drained */
     NEXT_PARSE_END,
     NEXT_TIMER_ARRIVED,
-    NEXT_TIMER_RACE,            /* the deadline race is asked; its other answer is NEXT_DELIVER_REPLY */
+    NEXT_DEADLINE_RACE,         /* the deadline race is asked; its other answer is NEXT_DELIVER_REPLY */
     NEXT_DELIVER_REPLY,
     NEXT_SCRIPT_LOAD_FAILED,
     NEXT_PARSE_SPIN,
@@ -9994,7 +9997,7 @@ static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry
     timer_seq = stack_empty && g_timer_due_hook ? g_timer_due_hook(ctx) : 0;
     if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq)) {
         nu.arm = engine_timer_turn_due(f, timer_seq, deliv_seq) ? NEXT_TIMER_ARRIVED
-               : !flow_blocked(f) && g_timer_active_hook && g_timer_active_hook(ctx) > 0 ? NEXT_TIMER_RACE
+               : !flow_blocked(f) && g_deadline_pending_hook && g_deadline_pending_hook(ctx) ? NEXT_DEADLINE_RACE
                : NEXT_DELIVER_REPLY;
         return nu;
     }
@@ -10328,14 +10331,21 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 g_step_unit = STEP_UNIT_TIMER_ARRIVED;
                 return 0;
             }
-            /* The deadline race before this arrival: where a timer ahead of the clock comes first, it fires and
-               every answered reply arrives after its task (pending_restamp_answered), so the next step runs it. */
-            if (nu.arm == NEXT_TIMER_RACE && g_timer_race_hook(ctx)) {
-                pending_restamp_answered(f->pending, flow_work_seq_next);
-                g_step_unit = STEP_UNIT_TIMER_RACED;
-                return 0;
+            /* The deadline race before this arrival, one ask over the earliest deadline any clock-driven source
+               holds: where a timer or a frame ahead of the clock comes first, its task is queued and every
+               answered reply arrives after it (pending_restamp_answered), so the next step runs it. */
+            if (nu.arm == NEXT_DEADLINE_RACE) {
+                EngineDeadlineRace raced = g_deadline_race_hook(ctx);
+
+                if (raced != ENGINE_RACE_ARRIVAL_FIRST) {
+                    DCHECK(raced == ENGINE_RACE_RENDERING || raced == ENGINE_RACE_TIMER,
+                           "the deadline race answered a source the ladder has no unit for");
+                    pending_restamp_answered(f->pending, flow_work_seq_next);
+                    g_step_unit = raced == ENGINE_RACE_TIMER ? STEP_UNIT_TIMER_RACED : STEP_UNIT_RENDERING_RACED;
+                    return 0;
+                }
             }
-            if (nu.arm == NEXT_TIMER_RACE || nu.arm == NEXT_DELIVER_REPLY) {
+            if (nu.arm == NEXT_DEADLINE_RACE || nu.arm == NEXT_DELIVER_REPLY) {
                 /* Whether this arm took a step the flow's task queue could have had (`g_task_held_deliv`), raised
                    before the delivery, whose settle lengthens the queue. With the stack empty a queued job is a task:
                    the checkpoint arm above is guarded by exactly `flow_job_microtask && flow_stack_empty`, asserted.
@@ -15079,6 +15089,9 @@ void solver_agent_free(JSContext *ctx)
     DCHECK(g_timer_active_hook == NULL,
            "the count of active timers was still registered when the solver's agent state was released — "
            "core/timing/timer.c gives it back at timer_free, which runs first");
+    DCHECK(g_deadline_race_hook == NULL && g_deadline_pending_hook == NULL,
+           "the delivery arm's deadline race was still registered when the solver's agent state was released — "
+           "core/timing/event_loop.c gives it back at event_loop_free, which runs first");
     DCHECK(g_rendering_hook == NULL,
            "§8.1.7.3's in-parallel half was still registered when the solver's agent state was released — "
            "core/rendering/rendering.c claimed it and gives it back at rendering_free");
