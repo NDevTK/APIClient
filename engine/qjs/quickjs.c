@@ -14450,13 +14450,18 @@ static const char *js_why_class_string(JSContext *ctx, JSObject *p, char *buf, s
    by the macro over every public spelling (see the contract above JS_GetPropertyAt in quickjs.h). They are read
    only by the two assertions in the accessor arms, which a release build compiles out; the parameters stay in
    the signature there so ONE argument list serves both builds.
-   The INTERPRETER's own routed reads pass js_read_site_routed for the file and their own __LINE__: reaching an
+   The INTERPRETER's own routed reads pass js_read_site_routed, naming their file, and their __LINE__: reaching an
    accessor from one of those is not an unrouted caller at all but the read opcode's tramp_accessor_getter walk
    disagreeing with this one about a single object, which is a different bug with a different fix — and the
    line still says WHICH opcode disagreed, which is the half of the address that is still worth having.
    Stating that as a positive value rather than a NULL is the point: a hole here would be indistinguishable
    from a caller written against the raw entry, which is the defect a defaulted field always is. */
-static const char js_read_site_routed[] = "the interpreter's own routed read";
+#define JS_READ_SITE_ROUTED_TAG "the interpreter's own routed read at "
+#define js_read_site_routed (JS_READ_SITE_ROUTED_TAG __FILE__)
+static inline bool js_read_site_is_routed(const char *file)
+{
+    return strncmp(file, JS_READ_SITE_ROUTED_TAG, sizeof(JS_READ_SITE_ROUTED_TAG) - 1) == 0;
+}
 static JSValue JS_GetPropertyInternal(JSContext *ctx, JSValueConst obj,
                                       JSAtom prop, JSValueConst this_obj,
                                       bool throw_ref_error,
@@ -14607,16 +14612,13 @@ static JSValue JS_GetPropertyInternal(JSContext *ctx, JSValueConst obj,
                             char frames[2048], site[320];
                             JSRuntime *rt0 = ctx->rt;
                             const char *rcls = "a primitive";
-                            bool routed = (file == js_read_site_routed);
+                            bool routed = js_read_site_is_routed(file);
                             JSObject *robj = JS_VALUE_GET_TAG(obj) == JS_TAG_OBJECT
                                              ? JS_VALUE_GET_OBJ(obj) : NULL;
                             if (robj)
                                 rcls = JS_AtomGetStr(ctx, rbuf, sizeof(rbuf),
                                                      rt0->class_array[robj->class_id].class_name);
-                            if (routed)
-                                snprintf(site, sizeof site, "%s (%s:%d)", js_read_site_routed, __FILE__, line);
-                            else
-                                snprintf(site, sizeof site, "%s:%d", file ? file : "(no call site)", line);
+                            snprintf(site, sizeof site, "%s:%d", file, line);
                             js_why_backtrace(ctx, frames, sizeof frames);
                             snprintf(why, sizeof why,
                                      "A property READ reached a getter for `%s` on %s / %s (the accessor is "
@@ -14752,13 +14754,8 @@ static JSValue JS_GetPropertyInternal(JSContext *ctx, JSValueConst obj,
                                     char why[4096], frames[2048], site[320];
                                     char pbuf[ATOM_GET_STR_BUF_SIZE], hbuf[ATOM_GET_STR_BUF_SIZE];
                                     char htag[128];
-                                    bool routed = (file == js_read_site_routed);
-                                    if (routed)
-                                        snprintf(site, sizeof site, "%s (%s:%d)",
-                                                 js_read_site_routed, __FILE__, line);
-                                    else
-                                        snprintf(site, sizeof site, "%s:%d",
-                                                 file ? file : "(no call site)", line);
+                                    bool routed = js_read_site_is_routed(file);
+                                    snprintf(site, sizeof site, "%s:%d", file, line);
                                     js_why_backtrace(ctx, frames, sizeof frames);
                                     /* THE CLASS STRING IS HERE FOR THE SAME REASON IT IS IN THE SHAPE-SLOT ARM,
                                        and this arm needs it MORE: an exotic class is a SUBSTRATE, so one class
