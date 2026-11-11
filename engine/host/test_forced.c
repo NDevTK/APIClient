@@ -1542,13 +1542,71 @@ static int tf_sellable(void) {
     return n;
 }
 
+/* `salekeep`'s holder outside the sold member (fixture/sale.h): at the act, one counted reference on the record
+   the member owes /api/sl-keep-owed on, as a component outside the member's bytes holds one. `answered`: a
+   reply reached the held record, which is what the restored member's own record receives only when its
+   restore gave the held one back; `split`: the member stood resident again, the held record unanswered and
+   its register not naming it, so its bytes rebuilt a copy beside the one held. */
+static struct { JSValue rec; Flow *member; int held, answered, split; } g_tf_keep = { .rec = JS_UNDEFINED };
+
+/* The record a member's register holds for `url`, owned, or JS_UNDEFINED. */
+static JSValue tf_keep_record(const Flow *f, const char *url) {
+    for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+        JSValue e = pending_entry(f->pending, i), u = pending_get(e, PEND_URL);
+        const char *us = JS_IsString(u) ? JS_ToCString(pending_ctx(), u) : NULL;
+        int hit = us != NULL && strstr(us, url) != NULL;
+
+        if (us) JS_FreeCString(pending_ctx(), us);
+        JS_FreeValue(pending_ctx(), u);
+        if (hit) return e;
+        JS_FreeValue(pending_ctx(), e);
+    }
+    return JS_UNDEFINED;
+}
+
+static void tf_keep_take(void) {
+    for (int i = 0; flow_at(i) && !g_tf_keep.held; i++) {
+        Flow *f = flow_at(i);
+
+        if (flow_cold(f) || flow_held(f) || f == flow_running()) continue;
+        g_tf_keep.rec = tf_keep_record(f, "/api/sl-keep-owed");
+        if (JS_IsUndefined(g_tf_keep.rec)) continue;
+        g_tf_keep.member = f;
+        g_tf_keep.held = 1;
+    }
+}
+
+/* At each payment after the act: the hold ends once the held record is answered, or once its member stands
+   resident naming another record for the request, or has left the registry. */
+static void tf_keep_watch(void) {
+    int present = 0;
+
+    if (!JS_IsObject(g_tf_keep.rec)) return;
+    if (pending_get_int(g_tf_keep.rec, PEND_HAVE_VALUE)) {
+        g_tf_keep.answered = 1;
+    } else {
+        for (int i = 0; flow_at(i); i++) present |= flow_at(i) == g_tf_keep.member;
+        if (present && !flow_cold(g_tf_keep.member)) {
+            JSValue now = tf_keep_record(g_tf_keep.member, "/api/sl-keep-owed");
+
+            g_tf_keep.split = !JS_IsObject(now) || JS_VALUE_GET_PTR(now) != JS_VALUE_GET_PTR(g_tf_keep.rec);
+            JS_FreeValue(pending_ctx(), now);
+            if (!g_tf_keep.split) return;
+        } else if (present) {
+            return;
+        }
+    }
+    JS_FreeValue(pending_ctx(), g_tf_keep.rec);
+    g_tf_keep.rec = JS_UNDEFINED;
+}
+
 /* At the payment whose bill first lists a sale document's owed request, sells every member but the one switched
    in through the allocator's refusal edge (engine_reclaim_at_rest), before anything is paid, and answers the
    bill as it stands after. It stops when no member but that one is resident, so the edge's next exit, which
    gives a written stub's bytes back at the floor, is not asked. A held member is never sold. */
 static const char *tf_sale_act(const char *urls) {
     static const char *const owed[] = { "/api/sl-forced-owed", "/api/sl-own-owed", "/api/sl-floor-owed",
-                                        "/api/sl-async-owed" };
+                                        "/api/sl-async-owed", "/api/sl-keep-owed" };
 
     if (g_tf_pressure_none) return urls;
     for (size_t i = 0; !g_tf_sale.listed && i < COUNTOF(owed); i++) {
@@ -1557,6 +1615,7 @@ static const char *tf_sale_act(const char *urls) {
         if (!strstr(urls, owed[i])) continue;
         g_tf_sale.listed = 1;
         if (at_floor) g_tf_sale.floor = tf_floor_place();
+        if (i == 4) tf_keep_take();
         while (tf_sellable() > (flow_running() != NULL) && engine_reclaim_at_rest() > 0) g_tf_sale.gave++;
         if (at_floor) tf_floor_lift();
         urls = engine_pending_fetches();
@@ -1568,6 +1627,8 @@ static const char *tf_sale_act(const char *urls) {
 static int fixture_provide(JSContext *ctx) {
     const char *urls = tf_sale_act(engine_pending_fetches());
     int filled = 0;
+
+    tf_keep_watch();
 
     /* The zone's order: the notices since the last read, then the bill, then the payment. */
     g_tf_payments++;
@@ -2777,6 +2838,7 @@ TF_DOCS[] = {
     { "salectl", HTML_SALECTL },
     { "salefloor", HTML_SALEFLOOR },
     { "saleasync", HTML_SALEASYNC },
+    { "salekeep", HTML_SALEKEEP },
     { "layoutshed", HTML_LAYOUTSHED, OPENER_POLICY_UNSAFE_NONE, 0, NULL, NULL, 1 },
     { "replyrec", HTML_REPLYREC },
     { "replynone", HTML_REPLYNONE },
@@ -19388,7 +19450,9 @@ TF_UNIT void probes_rangerest(const char *js, Probe *tab, int *n) {
    sale-floor-sells: with every allocation refused at the act, the members were sold, a sale took its census on
    storage it funded, and the bill after the sale still lists the request the sold member owes.
    sale-async-returns: as sale-forced-returns, for a member whose delta holds a pre-fork promise's settlement,
-   and its report reads the value the restored settlement carries. */
+   and its report reads the value the restored settlement carries.
+   sale-keep-same-record: as sale-forced-returns, for a member whose owed record a holder outside it names at the
+   act (g_tf_keep); the reply reached the held record, so the restore gave that record back and built no copy. */
 TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *fwhy = NULL, *owhy = NULL, *cwhy = NULL, *lwhy = NULL, *xwhy = NULL, *at = strstr(js, "\"sold\":");
     const char *cat = strstr(js, "\"saleCensus\":{\"n\":");
@@ -19398,8 +19462,8 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     const char *wat = strstr(js, "\"soldRestores\":"), *rat = strstr(js, "\"restored\":");
     long wrote = wat ? strtol(wat + strlen("\"soldRestores\":"), NULL, 10) : -1;
     long restored = rat ? strtol(rat + strlen("\"restored\":"), NULL, 10) : -1;
-    int ft = 1, ot = 1, ct = 1, lt = 1, yt = 1;
-    const char *awhy = NULL;
+    int ft = 1, ot = 1, ct = 1, lt = 1, yt = 1, kt = 1;
+    const char *awhy = NULL, *kwhy = NULL;
 
     fold_row(&lt, &lwhy, g_tf_sale.listed && g_tf_sale.gave > 0 && sold > 0,
              "the act sold nothing: no bill listed the owed request with a member to sell beside the one switched "
@@ -19434,6 +19498,20 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
     fold_row(&yt, &awhy, param_value_is(js, "/api/sl-async-done", "v", "7"),
              "the returned member read its pre-fork promise as other than fulfilled with 7: its delta's settlement "
              "did not come back with it");
+    fold_row(&kt, &kwhy, g_tf_keep.held && g_tf_sale.gave > 0 && sold > 0,
+             "NOT ARMED: the act held no record of /api/sl-keep-owed or sold nothing, so no member was sold while "
+             "a holder outside it named its record");
+    fold_row(&kt, &kwhy, wrote > 0 && restored > 0,
+             "no sold member was restored from its written bytes (`soldRestores`, `restored`)");
+    fold_row(&kt, &kwhy, !g_tf_keep.split,
+             "the restored member's register names another record for /api/sl-keep-owed than the one held: its "
+             "bytes rebuilt a copy of an object a holder outside them still named");
+    fold_row(&kt, &kwhy, g_tf_keep.answered,
+             "the held record of /api/sl-keep-owed was never answered: the reply went to a record other than the "
+             "one its holder names");
+    fold_row(&kt, &kwhy, param_value_is(js, "/api/sl-keep-done", "b", "22"),
+             "NOT REACHED: no /api/sl-keep-done?b=22 record, so the member sold while it owed /api/sl-keep-owed did "
+             "not return within the session");
     fold_row(&ot, &owhy, param_value_is(js, "/api/sl-own-done", "b", "22"),
              "NOT REACHED: no /api/sl-own-done?b=22 record, so the page's own run, sold while it owed "
              "/api/sl-own-owed, did not return within the session");
@@ -19458,6 +19536,7 @@ TF_UNIT void probes_sale(const char *js, Probe *tab, int *n) {
         { "sale-forced-returns", ft, "slForced", SESS_EXPLORE, fwhy },
         { "sale-own-returns", ot, "slOwn", SESS_EXPLORE, owhy },
         { "sale-async-returns", yt, "slAsync", SESS_EXPLORE, awhy },
+        { "sale-keep-same-record", kt, "slKeep", SESS_EXPLORE, kwhy },
         { "sale-control-reaches", ct, "slCtl", SESS_EXPLORE, cwhy },
         { "sale-forced-stays-listed", lt, "slForced", SESS_EXPLORE, lwhy },
         { "sale-own-stays-listed", lt, "slOwn", SESS_EXPLORE, lwhy },
