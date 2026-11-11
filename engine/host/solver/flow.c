@@ -37,6 +37,9 @@ static long g_world_commit_rows;
    one lifetime to a lifetime that restarted is about no run. Cross-checkable: flow_credit_pick has one caller and
    engine.c raises `g_switches` beside it, so this equals the result document's `_switches`. */
 static int64_t g_picks_total = 0;
+/* Dispatches of a priced member made while an indexed observed-class member of its family weighed strictly less:
+   lifetime, raised in flow_credit_pick beside `g_picks_total`. */
+static int64_t g_priced_over_observed = 0;
 /* The half of that total the frontier no longer holds, which makes the total a partition: the members' gauge sum
    plus this equals `g_picks_total`, asserted at the end of flow_wfq_census and published as `picksDeparted`
    (`WfqCensus.picks_departed`), so flow.h's reading `(picks_lifetime - picks_live) / departures` is checked rather
@@ -292,6 +295,10 @@ typedef struct FlowAcct {
     struct FlowAcct *ix_fprev, *ix_fnext;
     unsigned char ix_listed;
     Flow *away_head;
+    /* The family's indexed observed-class members (flow_observed_class) and their count, meaningful only on a
+       root: linked where a member enters the index, unlinked where it leaves or stops being of the class. */
+    Flow *obs_head;
+    long obs_n;
     /* The birth sequence of the flow this node was minted for: on a root, the family's name in the pick ledger
        (flow_pick_terms). Written once at flow_new; nothing ranks by it. */
     uint64_t founder;
@@ -559,7 +566,8 @@ static void acct_unref(FlowAcct *a) {
         /* And the index holds nothing through it: a site leaves its family's heap with its last indexed member,
            and a family leaves the list with its last site, both before the departure that drops the last
            reference. */
-        DCHECK(!a->ix_sites && !a->ix_nsites && !a->ix_msites && !a->ix_listed && !a->away_head,
+        DCHECK(!a->ix_sites && !a->ix_nsites && !a->ix_msites && !a->ix_listed && !a->away_head && !a->obs_head &&
+                   a->obs_n == 0,
                "a fork-tree node was freed while the order's index still links it — flow_remove takes a member out "
                "of the index before acct_depart, so a node reaching its free is no member's family");
         acct_free_sites(a);
@@ -691,6 +699,7 @@ static void flow_ix_rekey(Flow *f);
 static void flow_ix_first_pick(Flow *f);
 static void flow_ix_site_sync(FlowSite *st);
 static int flow_priced(const Flow *f);
+static void flow_obs_unlink(Flow *f);
 static FlowAcct *g_ix_fams;   /* the families holding an indexed member, linked through `ix_fprev`/`ix_fnext` */
 static long g_ix_fams_n;      /* …how many */
 static long g_ix_n;           /* members in the index: the frontier's members not host-owed */
@@ -1860,6 +1869,7 @@ void flow_mark_forced_arm(void) {
            "an arm contradicting its own example was recorded with no flow running — the contradiction is a fact "
            "about one flow's path");
     g_running->path_forced = 1;
+    if (g_running->obs_in) flow_obs_unlink(g_running);
 }
 
 void flow_take_peer_marks(Flow *f, FlowPeerMarks m) {
@@ -1868,6 +1878,7 @@ void flow_take_peer_marks(Flow *f, FlowPeerMarks m) {
            "another instance's flow's marks are not three bits — engine.c composes them from the wire's three "
            "words");
     f->path_forced |= m.forced;
+    if (f->obs_in && f->path_forced) flow_obs_unlink(f);
     f->path_peer_pinned |= m.pinned;
     f->path_peer_driven |= m.driven;
 }
@@ -1928,6 +1939,48 @@ int flow_against_env(const Flow *f) {
 /* The decisions the optimism term prices at FLOW_PRICED_WORK each: the assumptions and the arms against an
    environment unknown's example. */
 static int flow_priced(const Flow *f) { return flow_assumed(f) + flow_against_env(f); }
+
+/* The observed class: a member whose path took no arm against its example, rests on no priced decision, and is
+   neither a drive nor an @S candidate, so its path is one the page's own run takes. The one predicate the census,
+   the pick ledger and the family's list below ask. */
+static int flow_observed_class(const Flow *f) {
+    return !flow_path_forced(f) && flow_priced(f) == 0 && !f->orphan && f->cand_payload == NULL;
+}
+
+/* A family's list of indexed observed-class members. flow_ix_insert links a member of the class and flow_ix_remove
+   unlinks it; a priced count that moves re-files the member through both, and a forced mark written on an indexed
+   member unlinks it here. The other two facts are written only on a member outside the index, which
+   flow_family_observed asserts of every member it walks. */
+static void flow_obs_link(Flow *f) {
+    DCHECK(!f->obs_in && f->ix_in && f->family != NULL && flow_observed_class(f),
+           "a member was listed as observed-class twice, outside the index, or without being of the class");
+    f->obs_prev = NULL;
+    f->obs_next = f->family->obs_head;
+    if (f->obs_next) f->obs_next->obs_prev = f;
+    f->family->obs_head = f;
+    f->family->obs_n++;
+    f->obs_in = 1;
+}
+
+static void flow_obs_unlink(Flow *f) {
+    DCHECK(f->obs_in && f->family != NULL && f->family->obs_n > 0 &&
+               (f->obs_prev != NULL || f->family->obs_head == f),
+           "a member left its family's observed-class list without standing on it");
+    if (f->obs_prev) f->obs_prev->obs_next = f->obs_next;
+    else f->family->obs_head = f->obs_next;
+    if (f->obs_next) f->obs_next->obs_prev = f->obs_prev;
+    f->obs_prev = f->obs_next = NULL;
+    f->family->obs_n--;
+    f->obs_in = 0;
+}
+
+void flow_observed_class_moved(Flow *f) {
+    int want;
+    DCHECK(f != NULL && flow_is_member(f), "a class fact was reported written on a flow outside the frontier");
+    want = f->ix_in && flow_observed_class(f);
+    if (want && !f->obs_in) flow_obs_link(f);
+    else if (!want && f->obs_in) flow_obs_unlink(f);
+}
 
 /* The interned names of priced decisions (flow_priced_name), owned here and released by flow_registry_free. */
 static char **g_priced_names;
@@ -2268,6 +2321,12 @@ void flow_credit_pick(Flow *f) {
     /* And the index's count of eligible members never dispatched loses this one, read by the plateau rows. */
     if (f->picks == 0) flow_ix_first_pick(f);
     f->picks++;
+    if (flow_priced(f) > 0) {
+        double w_min = 0.0;
+
+        if (flow_family_observed(f->family, NULL, &w_min) > 0 && w_min < flow_order_key(f).w)
+            g_priced_over_observed++;
+    }
     /* And the same event counted for the life of the instance: a member that departs takes its share of the
        per-member total with it, so the sum over standing members is a gauge and a difference of two gauges is not
        a number of dispatches. Counted on the one line every dispatch passes. */
@@ -4362,6 +4421,26 @@ double flow_weight(const Flow *f) {
     return flow_order_key(f).w;
 }
 
+/* The largest optimism and the least weight among `fam`'s indexed observed-class members, through whichever of
+   `x_max` and `w_min` is not NULL; answers how many stand. A read over the family's list. */
+static long flow_family_observed(const FlowAcct *fam, double *x_max, double *w_min) {
+    long n = 0;
+
+    DCHECK(fam != NULL && fam->up == NULL, "the observed class was asked of a node that is not a family root");
+    for (const Flow *o = fam->obs_head; o; o = o->obs_next, n++) {
+        FlowOrderKey k = flow_order_key(o);
+
+        DCHECK(o->ix_in && o->family == fam && flow_observed_class(o),
+               "a family's observed-class list holds a member outside the index, of another family, or no longer "
+               "of the class — a writer of the drive mark or the candidate payload did not report it "
+               "(flow_observed_class_moved)");
+        if (x_max && (n == 0 || k.x > *x_max)) *x_max = k.x;
+        if (w_min && (n == 0 || k.w < *w_min)) *w_min = k.w;
+    }
+    DCHECK(n == fam->obs_n, "a family's observed-class count and its list's length disagree");
+    return n;
+}
+
 void flow_pick_terms(const Flow *f, FlowPickTerms *t) {
     const long rank_changes = g_rank_changes;
     FlowOrderKey k;
@@ -4396,8 +4475,9 @@ void flow_pick_terms(const Flow *f, FlowPickTerms *t) {
     if (victim_acts(f) > 0) t->cls |= FLOW_PICK_CLS_VICTIM;
     if (f->user_acts_n > victim_acts(f)) t->cls |= FLOW_PICK_CLS_ATTACKER;
     if (flow_path_forced(f)) t->cls |= FLOW_PICK_CLS_FORCED;
-    if (!flow_path_forced(f) && flow_assumed(f) == 0 && !f->orphan && f->cand_payload == NULL)
-        t->cls |= FLOW_PICK_CLS_OBSERVED;
+    if (flow_observed_class(f)) t->cls |= FLOW_PICK_CLS_OBSERVED;
+    t->obs_x = 0.0;
+    t->obs_present = flow_family_observed(f->family, &t->obs_x, NULL) > 0;
     /* The order's own composition, so a term added to flow_order_key and not read here fires. */
     DCHECKF(t->coord + t->x == t->w && t->w == flow_weight(f),
             "a member's pick-ledger terms do not recompose its weight (coord %.17g + x %.17g, weight %.17g) — "
@@ -4681,6 +4761,7 @@ static void flow_ix_insert(Flow *f) {
     g_ix_n++;
     if (f->picks == 0) g_ix_never_n++;
     flow_ix_site_sync(st);
+    if (flow_observed_class(f)) flow_obs_link(f);
 }
 
 static void flow_ix_remove(Flow *f) {
@@ -4689,6 +4770,7 @@ static void flow_ix_remove(Flow *f) {
     DCHECK(f != NULL && f->ix_in && f->family != NULL && f->acct != NULL && f->at != NULL,
            "a member left the order's index without standing in it — the index holds the members not host-owed, so "
            "this member's mark and its index state came apart");
+    if (f->obs_in) flow_obs_unlink(f);
     st = f->at;
     c = ix_t_find(st->ix_members, &f->ix_t);
     DCHECK(c != NULL, "an indexed member's class is not in its site's treap — its stored tuple moved without a "
@@ -5935,6 +6017,9 @@ void flow_wfq_census(WfqCensus *out) {
     memset(&out->cand_top_ops, 0, sizeof out->cand_top_ops);
     memset(&out->cand_ops, 0, sizeof out->cand_ops);
     out->observed_members = 0;
+    out->observed_env_members = 0;
+    memset(&out->observed_oldest, 0, sizeof out->observed_oldest);
+    out->priced_over_observed = g_priced_over_observed;
     out->observed_w_gap = 0.0;
     memset(&out->observed_top_ops, 0, sizeof out->observed_top_ops);
     memset(&out->observed_ops, 0, sizeof out->observed_ops);
@@ -6038,9 +6123,31 @@ void flow_wfq_census(WfqCensus *out) {
            family produces. A member never handed the thread is the population starvation is about, and `picks` is
            the one field nothing resets. The best weight among them goes to the gap below: how far the most-favoured
            starved member stands behind the pick is the reading, which the count cannot make (flow.h). */
-        if (!flow_path_forced(f) && flow_assumed(f) == 0 && !f->orphan && f->cand_payload == NULL) {
+        DCHECK(f->obs_in == (f->ix_in && flow_observed_class(f)),
+               "a member's place on its family's observed-class list disagrees with its class and index state — a "
+               "writer of the drive mark or the candidate payload did not report it (flow_observed_class_moved)");
+        if (flow_observed_class(f)) {
             out->observed_members++;
             if (ordered && (!observed_holder || w > observed_w)) { observed_w = w; observed_holder = f; }
+            if (!out->observed_oldest.present || f->ix_t.seq < out->observed_oldest.seq) {
+                int64_t own = 0;
+
+                for (int a = 0; a < f->n_agents; a++) own += (int64_t)f->agents[a].work;
+                out->observed_oldest.present = 1;
+                out->observed_oldest.seq = f->ix_t.seq;
+                out->observed_oldest.cursor = f->script_i;
+                out->observed_oldest.own_work = own;
+                out->observed_oldest.picks = f->picks;
+                out->observed_oldest.step_unit = f->step_unit;
+                out->observed_oldest.host_owed = flow_host_owed(f);
+                out->observed_oldest.indexed = f->ix_in;
+                out->observed_oldest.unit = f == g_running ? FLOW_UNIT_RUNNING
+                                          : flow_frame(f) ? FLOW_UNIT_PROGRAM
+                                          : flow_agent_running(f)->parked ? FLOW_UNIT_PARKED
+                                          : flow_job_microtask(f) ? FLOW_UNIT_CHECKPOINT : FLOW_UNIT_BETWEEN;
+            }
+        } else if (!flow_path_forced(f) && flow_assumed(f) == 0 && !f->orphan && f->cand_payload == NULL) {
+            out->observed_env_members++;
         }
         if (f->picks == 0 && ordered) {
             out->never_picked++;

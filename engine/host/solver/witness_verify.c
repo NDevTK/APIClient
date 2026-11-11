@@ -201,6 +201,7 @@ int witness_verify_seed(JSContext *ctx) {
         f->cand_src = reclaim_strdup(v->src);
         f->cand_payload = reclaim_strdup(v->payload);
         CHECK(f->cand_src && f->cand_payload, "witness_verify: OOM minting a verification flow");
+        flow_observed_class_moved(f);
         fire_target_request(&f->fire, v->key);
         flow_seed(f);   /* named first: its seed's parks are this tool's act */
         v->seeded = 1;

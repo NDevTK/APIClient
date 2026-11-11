@@ -2325,6 +2325,7 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
                    "writes a flow's whole chain before them, so this member is out of seeding order");
             if (!last_flow->orphan) drives++;
             last_flow->orphan = 1;
+            flow_observed_class_moved(last_flow);
             last_flow->orphan_hash = 0;
             last_flow->orphan_want = 1;
             last_flow->orphan_claim_at = 0;
@@ -2381,6 +2382,7 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
                 gt = park_unhex(gb, q);
                 q = park_comma(q);
                 fl->cand_payload = park_unhex(q, end);
+                flow_observed_class_moved(fl);
                 witness_verify_resumed(fire_target_key(&fl->fire), vh, gt);
                 free(vh);
                 free(gt);
@@ -2482,6 +2484,7 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
                 q = park_comma(q);
             }
             fl->cand_payload = park_unhex(q, end);
+            flow_observed_class_moved(fl);
             /* THE SINK BINDS BACK TO THE TABLE'S OWN POINTER, and the same call tells the search how these
                bytes arrive, re-registers it as pending-and-tried, and REFUSES the record where the root's
                carrier contradicts the payload — solve.h says why those are one call and not four, and the
@@ -2530,6 +2533,7 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
                    it would tell solve.c's arrival check to read a substitution that no longer exists. */
                 free(fl->cand_src);     fl->cand_src = NULL;
                 free(fl->cand_payload); fl->cand_payload = NULL;
+                flow_observed_class_moved(fl);
                 c->cands_withdrawn++;
             } else {
                 /* AND THE PAYLOAD'S PROVENANCE IS STATED, because this is the only site that knows it. These

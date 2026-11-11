@@ -135,7 +135,7 @@ static void pick_header(void) {
 
     pick_put(&l, "@PICKCOLS row\twork\tsold\tmembers\tsampled\teligible\tdisplaced\tseq\tfamily\tsiteKind\tsiteKey"
                  "\tcls\tonLedger\tindexed\tw\tcoord\treward\tfamNotch\tx\tserved\tseen\tassumed\tagainstEnv\tikey"
-                 "\treplay\tsurv\trung\tturn\townSilence\tvisits\tpicks");
+                 "\treplay\tsurv\trung\tturn\townSilence\tvisits\tpicks\tobsX");
 #define PICK_LEDGER_RANK_COL(name, expr) pick_put(&l, "\tr_%s", #name);
     PICK_LEDGER_RANKED(PICK_LEDGER_RANK_COL)
 #undef PICK_LEDGER_RANK_COL
@@ -164,6 +164,8 @@ static void pick_emit(int64_t work, long sold, char by) {
              t->w, t->coord, t->reward, (long long)t->fam_notch, t->x, (long long)t->served, (long long)t->seen,
              t->assumed, t->against_env, t->ikey, t->replay, t->surv, t->rung, (long long)t->turn,
              (long long)t->own_silence, (long long)t->visits, (long long)t->picks);
+    /* The family's best indexed observed-class optimism, `-` where no such member stood. */
+    if (t->obs_present) pick_put(&l, "\t%.17g", t->obs_x); else pick_put(&l, "\t-");
     for (int r = 0; r < PICK_RANK_N; r++) pick_put(&l, "\t%d:%d", g_row.gt[r], g_row.eq[r]);
     pick_put(&l, "\t%lld\t%ld\t%c\t%ld", (long long)work, sold, by, (long)g_sites_n - g_row.sites);
     for (int k = 0; k < NOVELTY_KIND_N; k++) {

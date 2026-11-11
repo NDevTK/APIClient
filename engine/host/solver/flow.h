@@ -787,6 +787,10 @@ typedef struct Flow {
        (members out of the index, re-admitted by flow_clear_host_owed_all). NULL-linked, owned by flow.c. */
     struct Flow *away_prev, *away_next;
     struct Flow *owed_prev, *owed_next;
+    /* Its links on its family's list of indexed observed-class members (flow.c's flow_observed_class), and whether
+       it stands on it. Owned by flow.c. */
+    struct Flow *obs_prev, *obs_next;
+    unsigned char obs_in;
     /* How many cascade inputs this flow has written: a generation raised at each write chokepoint
        core/css/css_cascade_pass.h lists, which a layout job's held record stamps and checks. Zero at birth,
        never inherited: a fork's arm gets a fresh job, so no record spans the fork. */
@@ -1045,6 +1049,10 @@ int flow_owes_answer(const Flow *f);
 
 /* The WFQ priority of a flow (higher = run sooner). Pure function of the flow's reward/aging/visit state. */
 double flow_weight(const Flow *f);
+/* `f`'s drive mark or candidate payload was written: the two facts of the observed class (flow.c's
+   flow_observed_class) whose writers live outside flow.c. Re-lists a member the write moved into or out of the
+   class; flow.c asserts the list against the class wherever it walks it. */
+void flow_observed_class_moved(Flow *f);
 
 /* One member's ranking terms as flow_order_cmp_level and flow_weight read them, for the pick ledger
    (solver/pick_ledger.h). The order is `w = coord + x`, ties broken by `x`, then `ikey`, then the lesser `turn`, then
@@ -1059,11 +1067,13 @@ double flow_weight(const Flow *f);
 #define FLOW_PICK_CLS_VICTIM    8u     /* a victim act this tool performed stands on the path */
 #define FLOW_PICK_CLS_ATTACKER  16u    /* an attacker act stands on the path (flow_attacker_act_push) */
 #define FLOW_PICK_CLS_FORCED    32u    /* flow_path_forced */
-#define FLOW_PICK_CLS_OBSERVED  64u    /* the census's observed world: none of the above and nothing assumed */
+#define FLOW_PICK_CLS_OBSERVED  64u    /* the observed class (flow.c's flow_observed_class) */
+/* `obs_x` is the largest optimism among the indexed observed-class members of the member's family, a reading only
+   while `obs_present`; no such member stands otherwise. */
 typedef struct {
-    double w, coord, reward, x, ikey, replay, surv;
+    double w, coord, reward, x, ikey, replay, surv, obs_x;
     int64_t fam_notch, served, seen, turn, own_silence, visits, picks;
-    int assumed, against_env, rung, on_ledger, indexed, site_kind;
+    int assumed, against_env, rung, on_ledger, indexed, site_kind, obs_present;
     uint64_t site_key, seq, family;
     unsigned cls;
 } FlowPickTerms;
@@ -1542,12 +1552,25 @@ typedef struct {
        reader names the term that keeps the starved population behind. `present` is 0 where no member is
        never-dispatched. */
     FlowWeightOperands never_picked_top_ops, never_picked_ops;
-    /* The observed world against the front: members whose path no fork forced against its example
-       (flow_path_forced), resting on no assumption (flow_assumed), and neither a drive nor an @S candidate, so
-       their arms are the page's own run. `observed_members` counts them; `observed_w_gap` is `w_top` minus the
-       best weight among them, and the pair of operands is that member's and the front's. `present` is 0 and the
-       gap 0.0 where no such member stands. */
+    /* The observed world against the front: the observed class (flow.c's flow_observed_class), whose arms are
+       the page's own run. `observed_members` counts them; `observed_w_gap` is `w_top` minus the best weight among
+       them, and the pair of operands is that member's and the front's. `present` is 0 and the gap 0.0 where no
+       such member stands. `observed_env_members` counts the members the class leaves out only for resting on an
+       arm against an environment unknown's example. */
     long observed_members;
+    long observed_env_members;
+    /* The oldest observed-class member by birth sequence, indexed or not: the program row its cursor names, the
+       work its agents retired, the arm its last step returned through, where it rests (FLOW_UNIT_*), and whether
+       it is host-owed and indexed. `present` is 0 where no observed-class member stands. */
+    struct {
+        int present, cursor, host_owed, indexed, unit;
+        uint64_t seq;
+        int64_t own_work, picks;
+        StepUnit step_unit;
+    } observed_oldest;
+    /* Lifetime: dispatches of a priced member made while an indexed observed-class member of its family weighed
+       strictly less. */
+    int64_t priced_over_observed;
     double observed_w_gap;
     FlowWeightOperands observed_top_ops, observed_ops;
     /* The same for the assumed worlds: the best weight among members resting on at least one assumption

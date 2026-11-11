@@ -233,6 +233,14 @@ METRIC(never_picked_terms, "neverPickedTerms", GAUGE, "operand", AGENT, "solver/
 METRIC(observed_members, "observedMembers", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(observed_wgap, "observedWGap", GAUGE, "point", AGENT, "solver/flow.c", FIXED3)
 METRIC(observed_terms, "observedTerms", GAUGE, "operand", AGENT, "solver/flow.c", OBJECT)
+/* …and the members the observed class leaves out only for an arm against an environment unknown's example; the
+   class's oldest member by birth sequence, indexed or not (`cursor` its program row, `ownWork` the work its
+   agents retired, `stepUnit` the arm its last step returned through), absent where the class is empty; and the
+   dispatches of a priced member made while an indexed observed-class member of its family weighed strictly
+   less. */
+METRIC(observed_env_members, "observedEnvMembers", GAUGE, "member", AGENT, "solver/flow.c", INT)
+METRIC(observed_oldest, "observedOldest", GAUGE, "member", AGENT, "solver/flow.c", OBJECT)
+METRIC(priced_over_observed, "pricedOverObserved", LIFETIME, "dispatch", PROCESS, "solver/flow.c", INT)
 /* …and the assumed worlds against the front (solver/flow.h's `assumed_ops`): the best member resting on an
    assumption, `assumed` in place of `observed`. Read beside `assumedMembers`. */
 METRIC(assumed_wgap, "assumedWGap", GAUGE, "point", AGENT, "solver/flow.c", FIXED3)

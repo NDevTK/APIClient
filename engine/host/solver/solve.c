@@ -2490,6 +2490,7 @@ static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload, const ch
         f->cand_payload = reclaim_strdup(payload);
         fire_target_sink_set(&f->fire, sink_name(e->sink));
         CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
+        flow_observed_class_moved(f);
         e->cut_seeded++;
         return f;
     }
@@ -2501,6 +2502,7 @@ static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload, const ch
     f->cand_payload = reclaim_strdup(payload);
     fire_target_sink_set(&f->fire, sink_name(e->sink));
     CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
+    flow_observed_class_moved(f);
     flow_seed(f);
     /* And the flow stands on the path the detection proved reaches this sink. It still re-runs the
        document from the baseline (the payload enters at the source read), but it consumes the recorded

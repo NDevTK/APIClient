@@ -6567,6 +6567,7 @@ void engine_orphan_wait_seat(Flow *f, const uint64_t *hash, const int *doc, int 
                    "a seated chain drives one body twice in one load with another body between — a take hands a "
                    "body over once per timeline, so only a listener's next event repeats a member, right after it");
     f->orphan = 1;
+    flow_observed_class_moved(f);
     f->orphan_hash = 0;
     f->orphan_want = 1;
     f->orphan_claim_at = 0;
@@ -7097,6 +7098,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
            "a seed its record does not hold replayed an arm — decide_arrival_recorded reads the same run");
     sib = engine_sibling_assemble(ctx, f, base, dblob, concolic_pins_suspend(), flow_path_marks(f));
     sib->orphan = 1;
+    flow_observed_class_moved(sib);
     /* The function it drives, flow.h's `fn`, so a walk of the frontier can say which functions are being driven.
        The assembly dup'd the parent's, which is given back here. */
     JS_FreeValue(ctx, sib->fn);
