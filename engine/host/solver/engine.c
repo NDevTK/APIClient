@@ -5585,6 +5585,76 @@ static int64_t g_step_open_compile;   /* …and on quickjs's compile-work counte
 static int64_t g_step_open_frameless; /* …and on its frameless-work counter */
 static int g_in_step;
 
+/* Banks to the site the running member stands at what its open step has retired under a page frame and not yet
+   banked, before the member moves off it: the compile and the frameless work left out, as the step's closing charge
+   reads the same three counters (flow_age_running). The rest of the step is charged at its end to wherever the
+   member then stands. */
+static void engine_bank_step_framed(Flow *f) {
+    int64_t framed = g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
+                     - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile)
+                     - ((int64_t)JS_FlowFramelessWorkLife() - g_step_open_frameless);
+
+    DCHECKF(f == flow_running() && g_in_step > 0 && framed >= f->site_banked,
+            "a member was moved off its site mid-step while not running or outside a step, or the work the step has "
+            "retired under a page frame (%lld) fell below what it already banked (%lld) — both read the step's "
+            "three counters", (long long)framed, (long long)f->site_banked);
+    flow_site_bank_running(framed - f->site_banked);
+}
+
+/* The running member stands at the site of an act the engine forces (solver/flow.h's FLOW_SITE_ACT, keyed by the
+   rung's step unit) or, for a drive building its own call, at its driven body: asked where the rung decides to act
+   and before it forks, so every arm the act mints stands at the act and reads one count. */
+static void engine_stand_running(Flow *f, int kind, uint64_t key) {
+    engine_bank_step_framed(f);
+    flow_stand_at(f, kind, key);
+}
+
+/* Whose work a step unit's frameless part is, asked at the step's charge for every step that retired any. 1: an act
+ * the engine forces because it chose to explore (a drive's seed, a modelled close request, scroll or second open, a
+ * fork over a value no observation decided, a retirement), whose frameless work is exploration and is service at
+ * the site the member stands at; each such rung stands its member at its act site (engine_stand_running) or keeps
+ * the site whose decision its arms fork over. 0: a unit the page's own event loop runs (rendering, a parse, a
+ * reply's delivery, a task's host steps, a park), which every world owes and which no site's optimism pays for.
+ * Evidence. For 1: dom at 8265531e (dev, gdb per step unit at flow_age_running), where frameless work free of
+ * charge took the orphan seed from 855 steps and 25.7M units to 4,593 steps and 497.6M, and the close request from
+ * 15.6M to 46.0M, at 108k and 102k units a step, the orphan walk's cost. For 0: mdn's first paint (the evidence at
+ * solver/flow.c's FlowCodeSite.served).
+ * A unit named in neither list fails in dev; in release it is charged as an act, the side that keeps a new rung's
+ * work on a site. */
+static int step_unit_forced_act(StepUnit u) {
+    switch (u) {
+    case STEP_UNIT_LEAVE_SOURCE_CUT: case STEP_UNIT_FORK_PEER_ANSWER: case STEP_UNIT_LEAVE_ANSWER_STANDBY:
+    case STEP_UNIT_RETIRE_EXHAUSTED_ASK: case STEP_UNIT_RETIRE_CONTRADICTED_DELIVERY:
+    case STEP_UNIT_FORK_DECLINED_REQ: case STEP_UNIT_FORK_REPLY_SUCCESS:
+    case STEP_UNIT_ORPHAN_SEED: case STEP_UNIT_ORPHAN_ROUTE: case STEP_UNIT_ORPHAN_RETIRE:
+    case STEP_UNIT_ORPHAN_RESUME: case STEP_UNIT_USER_SCROLL: case STEP_UNIT_CLOSE_REQUEST:
+    case STEP_UNIT_OPEN_AGAIN:
+        return 1;
+    case STEP_UNIT_RESUME_PARKED: case STEP_UNIT_LINK_CONNECTED: case STEP_UNIT_PARSE_END:
+    case STEP_UNIT_PARSE_SPIN: case STEP_UNIT_PARSE_SPIN_RENDERING: case STEP_UNIT_ROUTED_DELIVERY:
+    case STEP_UNIT_ROUTED_NOT_MINE: case STEP_UNIT_ROUTED_PARENT_TOOK: case STEP_UNIT_ROUTED_ARM_OWED:
+    case STEP_UNIT_ROUTED_TARGET_DESTROYED: case STEP_UNIT_CROSS_AGENT_OP: case STEP_UNIT_CROSS_AGENT_OP_NOT_MINE:
+    case STEP_UNIT_MICROTASK: case STEP_UNIT_DELIVER_REPLY: case STEP_UNIT_RUN_TASK: case STEP_UNIT_LIFECYCLE:
+    case STEP_UNIT_RENDERING: case STEP_UNIT_TIMER: case STEP_UNIT_TIMER_ARRIVED: case STEP_UNIT_TIMER_RACED:
+    case STEP_UNIT_RENDERING_RACED: case STEP_UNIT_IDLE_PERIOD: case STEP_UNIT_START_PROGRAM:
+    case STEP_UNIT_EVALUATE_MODULE: case STEP_UNIT_NO_COMPILE: case STEP_UNIT_COMPILE_YIELDED:
+    case STEP_UNIT_MODULE_COMPILE_YIELDED: case STEP_UNIT_SCRIPT_LOAD_FAILED: case STEP_UNIT_REGISTER_IMPORT_MAP:
+    case STEP_UNIT_RESUME_PROGRAM: case STEP_UNIT_AGENT_RESUME_PARKED: case STEP_UNIT_AGENT_RESUME_PROGRAM:
+    case STEP_UNIT_AGENT_EVAL_MODULE: case STEP_UNIT_AGENT_COMPILE_PROGRAM: case STEP_UNIT_AGENT_RUN_JOB:
+    case STEP_UNIT_END_FRAME: case STEP_UNIT_REPORT_EXCEPTION: case STEP_UNIT_DETACH_PROGRAM:
+    case STEP_UNIT_START_ENDED_FRAME: case STEP_UNIT_START_REPORTED: case STEP_UNIT_START_DETACHED:
+    case STEP_UNIT_RESUME_BLOCKED: case STEP_UNIT_START_BLOCKED: case STEP_UNIT_AWAIT_FETCH_RECORD:
+    case STEP_UNIT_HOST_BLOCKED: case STEP_UNIT_AWAIT_OWED_REPLY: case STEP_UNIT_AWAIT_DECLINED:
+    case STEP_UNIT_HELD_DELIVERY: case STEP_UNIT_HELD_ARRIVAL: case STEP_UNIT_AWAIT_PEER: case STEP_UNIT_FINISHED:
+        return 0;
+    default:
+        break;
+    }
+    DFAILF("a step closing as `%s` retired frameless work and is classed neither as an act the engine forces nor "
+           "as a unit of the page's own loop — add it to one list of step_unit_forced_act", step_unit_name(u));
+    return 1;
+}
+
 /* Which account an assembled arm takes: its parent's (a fork, flow_fork_inherit), or a new one at the frontier's
    virtual time (an @S candidate forked off a held snapshot, flow_arrive_on_snapshot). */
 typedef enum { SIB_CONTINUES, SIB_ARRIVES } SibAccount;
@@ -5626,22 +5696,8 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
        parent where it stood. */
     {
         uint64_t site;
-        if (parent == flow_running() && JS_RunningSiteHash(ctx, &site)) {
-            /* The work this step ran from the site the parent is leaving is that site's, banked before the move:
-               what it retired with a page frame standing, the compile and the frameless work left out, as the
-               step's closing charge reads the same three counters (flow_age_running). The rest of the step is
-               charged at its end to wherever the parent then stands. */
-            int64_t framed = g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
-                             - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile)
-                             - ((int64_t)JS_FlowFramelessWorkLife() - g_step_open_frameless);
-
-            DCHECKF(g_in_step > 0 && framed >= parent->site_banked,
-                    "a fork moved the running member outside a step, or the work the step has retired under a page "
-                    "frame (%lld) fell below what it already banked (%lld) — both read the step's three counters",
-                    (long long)framed, (long long)parent->site_banked);
-            flow_site_bank_running(framed - parent->site_banked);
-            flow_stand_at(parent, FLOW_SITE_CODE, site);
-        }
+        if (parent == flow_running() && JS_RunningSiteHash(ctx, &site))
+            engine_stand_running(parent, FLOW_SITE_CODE, site);
     }
     /* Unseeded: an arm inherits its parent's sequence (copied below), so seeding would allocate the root
        document's rows onto it and leak them under the copy. */
@@ -7376,9 +7432,13 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
        the same generation (seeding a flow creates no function object), so recording it after a successful take
        would declare a heap of untaken orphans empty for the session. */
     /* The walk is priced by the heap entries it visited, the one input its cost grows with. */
+    /* The walk is the seed's act whatever it finds, so its work is the act's (FLOW_SITE_ACT) even when the step
+       falls through to a rung of the page's own loop. */
     uint64_t walked0 = JS_OrphanWalkCost(JS_GetRuntime(ctx)).entries;
     int took = JS_OrphanTakeOne(ctx, engine_orphan_record, &t);
+    const uint64_t walk_frameless0 = JS_FlowFramelessWorkLife();
     thread_work_charge(THREAD_WORK_ORPHAN_WALK, JS_OrphanWalkCost(JS_GetRuntime(ctx)).entries - walked0);
+    flow_act_bank_running(STEP_UNIT_ORPHAN_SEED, (int64_t)(JS_FlowFramelessWorkLife() - walk_frameless0));
     if (!took) {
         g_orphan_gen_seen = gen; g_orphan_gen_world = f->world; g_orphan_gen_valid = 1;
         g_orphan_asks_empty++;
@@ -7570,6 +7630,7 @@ static int engine_user_scroll(JSContext *ctx, Flow *f) {
     CHECK(act, "engine: OOM spelling a scroll act");
     snprintf(act, n, "{\"kind\":\"scroll\",\"target\":\"%s\",\"type\":\"scroll\"}", loc);
     flow_scroll_asked_push(f, loc);   /* before the fork, so both arms stand in the answer */
+    engine_stand_running(f, FLOW_SITE_ACT, STEP_UNIT_USER_SCROLL);
     at = f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0;
     arm = decide_completion("(the person scrolls an observed target into view)", &dblob);
     if (arm == 1) {   /* a replay whose recorded path scrolled: this flow is the scrolling arm */
@@ -7634,6 +7695,7 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
        document whose traversable was closed (its own close(), a peer's definitely close) is no target, and
        modelling the arrival there would return at step 6 on every ask with nothing latched. */
     if (!document_fully_active(ctx)) return 0;
+    engine_stand_running(f, FLOW_SITE_ACT, STEP_UNIT_CLOSE_REQUEST);
     flow_install_base(f, ctx, close_request_flow(ctx, document));
     f->close_req = 1;
     {
@@ -7681,6 +7743,7 @@ static int engine_open_again(JSContext *ctx, Flow *f) {
        live verify performs as a real click there. */
     act = strdup("{\"kind\":\"open\",\"target\":\"address\",\"type\":\"open\",\"activation\":\"attacker-page\"}");
     CHECK(act, "engine: OOM spelling an open act");
+    engine_stand_running(f, FLOW_SITE_ACT, STEP_UNIT_OPEN_AGAIN);
     at = f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0;
     arm = decide_completion("(the attacker opens this page's address again in a new window)", &dblob);
     if (arm == 1) {   /* a replay whose recorded path opened the page again: this flow is that arm */
@@ -10046,7 +10109,8 @@ typedef struct {
    digest, a job's by JS_JobSiteHash over its callee. A member's site is thus the last decision it reached (the fork
    stands it there) or the entry of the unit it began since, never where a quantum ended: the quantum is the
    scheduler's rest granularity, and no ranking term may move with it.
-   A host rung or a step-machine job names no entry: its own work runs with no page frame and serves no site.
+   A host rung or a step-machine job names no entry: its own work runs with no page frame, which serves no site in a
+   unit of the page's own loop and serves the act's site in an act the engine forces (step_unit_forced_act).
    Named residual. Not covered: the agent choice of a flow with more than one agent, and the rungs below
    run-a-task, answer HOOK_UNDECIDED; and page code such a unit hands control to (a settled reply's head reaction,
    a timer task's handler, an animation frame callback) is served at the member's previous stand. Next diff builds:
@@ -10754,6 +10818,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                replay or behind them, so a recorded path would diverge at its first slot. */
             else if ((gate = engine_outstanding_runs_page_code(ctx, f, seq_awaits)) == GATE_NONE &&
                      (orphan_step = engine_orphan_resume(ctx, f)) != 0) {
+                /* A drive building its own call stands at its body, as a seeded drive does. */
+                engine_stand_running(f, FLOW_SITE_DRIVE, f->orphan_hash);
                 g_step_unit = engine_orphan_unit(orphan_step); return 0; }
             /* §8.1.7.3's in-parallel half, the first clock-driven source because it can defer: it compares the next
                rendering opportunity with the earliest timer expiry and yields to an earlier timer. Without it there
@@ -10782,7 +10848,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                the exit, which the exit asserts through `gate`. */
             else if ((gate = engine_outstanding_runs_page_code(ctx, f, seq_awaits)) == GATE_NONE &&
                      (orphan_step = engine_orphan_seed(ctx, f)) != 0) {
-                g_step_unit = engine_orphan_unit(orphan_step); return 0; }
+                g_step_unit = engine_orphan_unit(orphan_step);
+                /* A seed's drive stands at its own body (engine_orphan_seed), so no arm reads the seeder's site. */
+                engine_stand_running(f, FLOW_SITE_ACT, g_step_unit);
+                return 0; }
             /* Only host-owed replies, an awaited script row or a refusal remain: no progress, and not finished.
              *
              * Below the clock-driven sources, as the lifecycle arm is: a debt no task source waits on must not
@@ -14303,8 +14372,12 @@ static int engine_sched_slice(int resume) {
                    "or `step_us` was narrowed");
             g_step_us += now - t0;
             g_step_work += step_work;
-            flow_age_running(step_work, (int64_t)JS_FlowCompileWorkLife() - step_compile0,
-                             (int64_t)JS_FlowFramelessWorkLife() - step_frameless0);
+            {
+                const int64_t frameless = (int64_t)JS_FlowFramelessWorkLife() - step_frameless0;
+
+                flow_age_running(step_work, (int64_t)JS_FlowCompileWorkLife() - step_compile0, frameless,
+                                 frameless > 0 && step_unit_forced_act(g_step_unit));
+            }
             /* The service just charged was the site the flow stood at while it ran. A member about to begin a unit
                stands at that unit's entry (flow_next_unit: the program or task the ladder starts next, the head of a
                checkpoint); one in the middle of a unit keeps its last decision or that unit's entry. */

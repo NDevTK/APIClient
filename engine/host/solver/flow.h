@@ -268,9 +268,10 @@ typedef struct Flow {
        member's last step end, 0 before its first, and whether that answer named the site `at` was moved to. A fork's
        arm is born with both at 0: it stands at the decision, which no step end named. */
     int next_arm1, next_sited;
-    /* The part of the running step's work already charged to sites it moved off (flow_site_bank_running), which
-       flow_age_running leaves out of the site the step ends at. Zero between steps. */
-    int64_t site_banked;
+    /* The part of the running step's work already charged to sites it moved off (flow_site_bank_running), and its
+       frameless part already charged to act sites (flow_act_bank_running), which flow_age_running leaves out of the
+       site the step ends at. Zero between steps. */
+    int64_t site_banked, act_banked;
 
     /* Interleaving state, kept while this flow is paused so the scheduler can run another flow and come back. A
        flow is preempted mid-execution (cooperative quantum) and resumed byte-identically; its COW delta,
@@ -1391,8 +1392,9 @@ typedef struct {
     int64_t br_retired_work; /* lifetime work received by buckets whose subtree has wholly departed */
     int64_t charged_work; /* lifetime work the scheduler has charged at all — the identity's total */
     /* Lifetime: the part of `charged_work` that was a compile's (the script tokenizer and codegen), the part that ran
-       with no page frame standing, and the work charged to code sites. */
-    int64_t compile_work, frameless_work, site_work;
+       with no page frame standing in a unit of the page's own loop, the frameless part of the engine's forced acts
+       (inside `site_work`), and the work charged to code sites. */
+    int64_t compile_work, frameless_work, act_work, site_work;
     /* Gauge: how deep in the fork tree the deepest live member sits (0 at a root). It ranks nothing; it says
        whether the fork tree is a star (a root walk is O(1) amortised) or a chain (quadratic). Real bundles read
        a star, but the binding cost of a per-node bucket is retention, which depth cannot see (FlowAcct `up`). */
@@ -1909,10 +1911,12 @@ const Flow *flow_running_cascade_writes(uint64_t *gen);
 /* A just-seeded drive's product count (flow.h's `orphan_seen`), re-keyed and raised as a rank change. */
 void  flow_set_orphan_seen(Flow *f, int64_t seen);
 /* The member stands at a code site (FlowSite's identity): a code position named by quickjs's JS_RunningSiteHash
-   (or a program's entry, by its content digest), or a driven body named by its orphan hash. Moves it to its class
-   at that code site in its family and raises a rank change. */
+   (or a program's entry, by its content digest), a driven body named by its orphan hash, or an act the engine
+   forces named by its rung's step unit (solver/step_unit.h). Moves it to its class at that code site in its family
+   and raises a rank change. */
 #define FLOW_SITE_CODE  1
 #define FLOW_SITE_DRIVE 2
+#define FLOW_SITE_ACT   3
 void  flow_stand_at(Flow *f, int kind, uint64_t key);
 /* The member's optimism denominator in work, `Q*(1 + orphan_seen) + max(site_served, W*priced)` with
    Q = ENGINE_PULL_WORK and W = FLOW_PRICED_WORK: engine.c's rank assertions snapshot it. */
@@ -2050,19 +2054,27 @@ int   flow_path_victim_act(const Flow *f);
    the step and by the scheduler alone, which holds both ends of the interval. Never a step count (see `work`).
    `compile` is the part of `us` that was a compile's (JS_FlowCompileWorkLife's rise over the step, asserted
    within `us`): it ages the family and is charged to no code site and no member's turn. `frameless` is the part
-   that ran with no page frame standing (JS_FlowFramelessWorkLife's rise, disjoint from `compile`): it ages the
-   member and its family and is charged to no code site. */
-void  flow_age_running(int64_t us, int64_t compile, int64_t frameless);
-/* Lifetime: the work charged to code sites, the compile work charged, the frameless work charged, and all work
-   charged (flow_age_running). */
+   that ran with no page frame standing (JS_FlowFramelessWorkLife's rise, disjoint from `compile`), what the step
+   banked to act sites included. `act` says whose work the step was: nonzero for an act the engine forced, whose
+   frameless rest is service at the site the member stands at; zero for a unit the page's own event loop runs,
+   whose frameless rest ages the member and its family and is charged to no code site. */
+void  flow_age_running(int64_t us, int64_t compile, int64_t frameless, int act);
+/* Lifetime: the work charged to code sites, the compile work charged, the frameless work of the page's own loop
+   charged to no site, the frameless work of forced acts charged to sites, and all work charged
+   (flow_age_running). */
 int64_t flow_site_work_lifetime(void);
 int64_t flow_compile_work_lifetime(void);
 int64_t flow_frameless_work_lifetime(void);
+int64_t flow_act_work_lifetime(void);
 int64_t flow_charged_work_lifetime(void);
 /* Charge the running flow's site, mid-step, for the `us` units its step ran from there under a page frame before
    the member moves to another site (a fork stands it at the decision). flow_age_running charges the step's remainder to the site the
    member stands at when the step ends; the aging halves are charged there whole. */
 void  flow_site_bank_running(int64_t us);
+/* Charge the act site `act` (FLOW_SITE_ACT) of the running flow's family, mid-step, for `us` frameless units the
+   act retired, whichever unit the step then closes as: an orphan walk that finds nothing falls through to the
+   next rung. flow_age_running leaves them out of the step's own charge. */
+void  flow_act_bank_running(uint64_t act, int64_t us);
 
 /* The forked sibling takes over its parent's account: both rank terms at the instant of the branch, and the fork
    edge that sends the work the arm burns to its family. Without it an arm would read zero reward and
