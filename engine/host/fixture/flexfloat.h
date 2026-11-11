@@ -1,4 +1,4 @@
-/* THE FLOATED FLEX ITEM DOCUMENT. One of test_forced.c's exploring documents (its TF_DOCS table). css-flexbox-1
+/* The floated flex item document. One of test_forced.c's exploring documents (its TF_DOCS table). css-flexbox-1
    §3 "Flex Containers: the flex and inline-flex display values": "float and clear do not create floating or
    clearance of flex item, and do not take it out-of-flow", so `ff` is the second item of its flex line and
    starts where the 30px first item ends. The container's `overflow: hidden` makes it a block formatting
