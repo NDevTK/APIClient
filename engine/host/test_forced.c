@@ -2085,6 +2085,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rangerest.h"
 #include "fixture/sale.h"
 #include "fixture/layoutshed.h"
+#include "fixture/cssparsetwin.h"
 #include "fixture/replyrecord.h"
 #include "fixture/rangeinsertrest.h"
 #include "fixture/rangedelrest.h"
@@ -2922,6 +2923,7 @@ TF_DOCS[] = {
     { "salepexec", HTML_SALEPEXEC },
     { "saleasyncfn", HTML_SALEASYNCFN },
     { "layoutshed", HTML_LAYOUTSHED, OPENER_POLICY_UNSAFE_NONE, 0, NULL, NULL, 1 },
+    { "cssparsetwin", HTML_CSSPARSETWIN },
     { "replyrec", HTML_REPLYREC },
     { "replynone", HTML_REPLYNONE },
     { "rangeinsertrest", HTML_RANGEINSERTREST },
@@ -19812,6 +19814,50 @@ TF_UNIT void probes_layoutshed(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the CSS parse twin document (fixture/cssparsetwin.h). css-parse-twin-armed: a flow was charged a
+   sheet parse unit as the parse table recorded it, another flow having run it (`_cssParseUnitsReplayed`).
+   css-parse-twin-equal: each arm reported on a record of its own, with the sheet's color resolved, and the two
+   durations (in tenths of a millisecond) are within one grid step of each other, so the arm that found the parse
+   held was charged what the arm that ran it was. */
+static int tf_cpt_value(const EmittedRec *r, const char *pname, char *out, size_t cap) {
+    const char *v = param_values_in(r, pname), *b;
+    size_t m;
+
+    if (v == NULL || (v = param_value_next(v, &b, &m)) == NULL || m + 1 > cap) return 0;
+    memcpy(out, b, m);
+    out[m] = '\0';
+    return param_value_next(v, &b, &m) == NULL;   /* exactly one value */
+}
+
+TF_UNIT void probes_cssparsetwin(const char *js, Probe *tab, int *n) {
+    const char *awhy = NULL, *ewhy = NULL, *ra = strstr(js, "\"_cssParseUnitsReplayed\":");
+    long replayed = ra ? strtol(ra + strlen("\"_cssParseUnitsReplayed\":"), NULL, 10) : -1;
+    EmittedRec r[EMITTED_REC_MAX];
+    int cnt = emitted_records(js, "/api/cpt-now", r, EMITTED_REC_MAX), i, a = 1, e = 1;
+    long da = -1, db = -1;
+
+    for (i = 0; i < cnt; i++) {
+        char arm[8], d[24];
+
+        if (!tf_cpt_value(&r[i], "arm", arm, sizeof arm) || !tf_cpt_value(&r[i], "d", d, sizeof d)) continue;
+        if (strcmp(arm, "a") == 0) da = strtol(d, NULL, 10);
+        if (strcmp(arm, "b") == 0) db = strtol(d, NULL, 10);
+    }
+    fold_row(&a, &awhy, replayed > 0,
+             "NOT ARMED: no flow was charged a parse unit another flow ran (`_cssParseUnitsReplayed` 0 or absent)");
+    fold_row(&e, &ewhy, da >= 0 && db >= 0 && param_value_is(js, "/api/cpt-now", "c", "y"),
+             "NOT REACHED: no /api/cpt-now record carrying one arm and one duration for each arm, or the sheet's "
+             "color did not resolve");
+    fold_row(&e, &ewhy, da >= 0 && db >= 0 && labs(da - db) <= 1,
+             "the two arms' resolutions moved their clocks by more than one grid step apart, so one arm's path was "
+             "charged a parse the other's was not");
+    const Probe rows[] = {
+        { "css-parse-twin-armed", a, "cptEl", SESS_EXPLORE, awhy },
+        { "css-parse-twin-equal", e, "cptEl", SESS_EXPLORE, ewhy },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the two reply-record documents (fixture/replyrecord.h), read off the census's `replyRecords` and
    `replyTrailRows`. reply-record-trailed: both of the page's requests were recorded and the flow's trail took a
    row. reply-record-none, the control: a document that asks for nothing records nothing, read once its
@@ -33750,6 +33796,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rangerest(js, probes, &np);
     probes_sale(js, probes, &np);
     probes_layoutshed(js, probes, &np);
+    probes_cssparsetwin(js, probes, &np);
     probes_replyrecord(js, probes, &np);
     probes_rangeinsertrest(js, probes, &np);
     probes_rangedelrest(js, probes, &np);
