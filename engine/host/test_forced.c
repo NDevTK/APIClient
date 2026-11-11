@@ -8999,6 +8999,89 @@ TF_UNIT void flow_graph_chain_selftest(void)
     JS_FreeRuntime(rt);
 }
 
+/* @GRAPHRT over a parked call flow, on a runtime of its own: outer and inner as above, but closures over a
+   counter rather than globals (a global's property operation offers a park of its own), outer called as a flow
+   (JS_FlowNewCall, a call-root base) with 5, parked at inner's third back-edge, so the call root stands under two
+   ordinary heap frames. Written, rebuilt, written again: the bytes must agree and the graph must hold one base and
+   two frames. The rebuilt call then completes before the original, and each must answer 760 over one call: a
+   rebuilt root that lost its callee's frames or its block would return elsewhere or call outer again. */
+static int tf_root_graph_polls;
+static int tf_root_graph_preempt(int kind) { return kind == JS_PREEMPT_BACKEDGE && ++tf_root_graph_polls == 3; }
+static const JSFlowControlHooks TF_ROOT_GRAPH_THIRD = { .preempt = tf_root_graph_preempt };
+TF_UNIT void flow_graph_root_selftest(void)
+{
+    static const char *defs =
+        "var api = (function () { var calls = 0;"
+        "  function inner(k) { let s = 0; for (let i = 0; i < 6; i++) s += i * k; return s; }"
+        "  function outer(k) { calls++; var t = inner(k) + 1; return t * 10; }"
+        "  return { outer: outer, count: function () { return calls; } }; })(); 0";
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx;
+    JSValue *flow, *back = NULL, v1 = JS_UNDEFINED, v2 = JS_UNDEFINED, calls, global, api, outer;
+    JSValue five = JS_NewInt32(NULL, 5);
+    JSFlowGraphRoots roots = { .n_frames = 1 };
+    JSFlowGraphFrames fr;
+    JSFlowGraph *g1, *g2;
+    const uint8_t *b1, *b2;
+    size_t n1, n2;
+    int32_t got1 = 0, got2 = 0, ncalls = 0;
+    int same, r;
+
+    CHECK(rt != NULL, "the call-root graph witness could not make a runtime");
+    JS_SetGCThreshold(rt, (size_t)-1);
+    ctx = JS_NewContext(rt);
+    CHECK(ctx != NULL, "the call-root graph witness could not make a context");
+    JS_FreeValue(ctx, tf_graph_program(ctx, defs));
+    global = JS_GetGlobalObject(ctx);
+    api = JS_GetPropertyStr(ctx, global, "api");
+    outer = JS_GetPropertyStr(ctx, api, "outer");
+    JS_SetFlowGen(5);
+    tf_root_graph_polls = 0;
+    JS_SetFlowControlHooks(&TF_ROOT_GRAPH_THIRD);
+    flow = JS_FlowNewCall(ctx, outer, JS_UNDEFINED, 1, &five, true);
+    CHECK(flow != NULL, "the call-root graph witness could not create its call flow");
+    CHECK(JS_FlowResume(ctx, flow, &v1) == 1,
+          "the call-root graph witness's flow did not park at its third back-edge");
+    JS_SetFlowControlHooks(&TF_DIFF_DECLINE);
+    roots.frames = &flow;
+    g1 = JS_FlowGraphWriteFlow(ctx, &roots, 2);
+    JS_FlowGraphFrameCensus(g1, &fr);
+    JS_SetFlowGen(9);
+    CHECK(JS_FlowGraphReadFlow(ctx, g1, NULL, &back) == 0 && back != NULL,
+          "the call-root graph witness could not rebuild its flow");
+    roots.frames = &back;
+    g2 = JS_FlowGraphWriteFlow(ctx, &roots, 2);
+    n1 = JS_FlowGraphBytes(g1, &b1); n2 = JS_FlowGraphBytes(g2, &b2);
+    same = n1 == n2 && !memcmp(b1, b2, n1);
+    printf("@GRAPHRT {\"rootBytes\":%zu,\"rootFrames\":%u,\"identical\":%d}\n", n1, fr.heap, same);
+    CHECKF(fr.bases == 1 && fr.heap == 2, "the call-root graph witness parked with %u bases and %u heap frames, "
+           "not one call root under outer and inner — the row's premise did not arise", fr.bases, fr.heap);
+    CHECK(same, "a rebuilt graph holding a parked call root did not write the same bytes as its original");
+    while ((r = JS_FlowResume(ctx, back, &v2)) != 0)
+        CHECK(r == 1, "the call-root graph witness's rebuilt flow detached — it holds no await");
+    while ((r = JS_FlowResume(ctx, flow, &v1)) != 0)
+        CHECK(r == 1, "the call-root graph witness's flow detached — it holds no await");
+    JS_ToInt32(ctx, &got2, v2);
+    JS_ToInt32(ctx, &got1, v1);
+    calls = tf_graph_program(ctx, "api.count()");
+    JS_ToInt32(ctx, &ncalls, calls);
+    CHECKF(got2 == 760 && got1 == 760 && ncalls == 1,
+           "the rebuilt call answered %d and the original %d over %d calls, not 760 each over one: the rebuilt "
+           "call root does not continue from the park's frames", (int)got2, (int)got1, (int)ncalls);
+    JS_FreeValue(ctx, v1); JS_FreeValue(ctx, v2); JS_FreeValue(ctx, calls);
+    JS_FlowFree(ctx, back);
+    JS_FlowFree(ctx, flow);
+    JS_FlowGraphFree(ctx, g1);
+    JS_FlowGraphFree(ctx, g2);
+    JS_FreeValue(ctx, outer);
+    JS_FreeValue(ctx, api);
+    JS_FreeValue(ctx, global);
+    JS_SetFlowControlHooks(&TF_DIFF_NONE);
+    JS_SetFlowGen(0);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+}
+
 TF_UNIT void concat_keyed_selftest(JSContext *ctx)
 {
     int susp_off = 0, mach_off = 0, susp_on = 0, mach_on = 0;
@@ -46833,6 +46916,7 @@ int main(int argc, char **argv) {
     flow_graph_promise_selftest();
     flow_graph_frame_selftest();
     flow_graph_chain_selftest();
+    flow_graph_root_selftest();
     malloc_accounting_selftest();
     concolic_bound_selftest();
     /* AFTER the two digest primitives and for their reason: this one stands on FIPS 197's cipher
