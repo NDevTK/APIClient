@@ -19,8 +19,8 @@ import { stampArtifact, readStamp, gateRevision, revisionLines, revisionMoved } 
 import { probeTables } from "./probe_rows.mjs";
 import { abortRecord } from "./abort_record.mjs";
 import { curDeepTermSplit, neverPickedTermSplit } from "./wfq_gap.mjs";
-import { vehicleReading, compareVehicle, emsdkNode } from "./vehicle.mjs";
-import { regimeReading, compareRegimes, comparePressure, compareSlicing, regimeDocArgs } from "./regimeparity.mjs";
+import { vehicleReading, compareVehicle, emsdkNode, fixtureDocArgs } from "./vehicle.mjs";
+import { compareRegimes, comparePressure, compareSlicing } from "./regimeparity.mjs";
 import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
 import { objStore, toolIdentity } from "./obj_store.mjs";
 import { cpuText } from "./gate_cpu.mjs";
@@ -7295,9 +7295,9 @@ function regimeParityStages(kind, regime, bin, runs) {
   }
   return mine.map((run) => {
     const label = `assert-regime parity (${run.doc})`;
-    const theirRun = runChild(`${label}, the ${other} run`, peer, regimeDocArgs(run.doc),
+    const theirRun = runChild(`${label}, the ${other} run`, peer, fixtureDocArgs(run.doc),
                               "an abort above is the other regime's own; the comparison below reads both runs");
-    const read = (r) => regimeReading(r.captured, r.signal, r.log);
+    const read = (r) => vehicleReading(r.captured, r.signal, r.log);
     const [d, rl] = regime === "dev" ? [read(run), read(theirRun)] : [read(theirRun), read(run)];
     const c = compareRegimes(run.doc, d, rl);
     console.log(`[build] ${label}: compared ${c.compared.join("; ") || "nothing"}` +
@@ -7322,9 +7322,9 @@ function pressureParityStages(bin, runs) {
   if (bin === null) return [];
   return mine.map((run) => {
     const label = `pressure parity (${run.doc})`;
-    const twin = runChild(`${label}, the no-pressure twin`, bin, [...regimeDocArgs(run.doc), "--pressure-act", "none"],
+    const twin = runChild(`${label}, the no-pressure twin`, bin, [...fixtureDocArgs(run.doc), "--pressure-act", "none"],
                           "an abort above is the twin's own; the comparison below reads both runs");
-    const read = (r) => regimeReading(r.captured, r.signal, r.log);
+    const read = (r) => vehicleReading(r.captured, r.signal, r.log);
     const c = comparePressure(run.doc, read(run), read(twin));
     console.log(`[build] ${label}: compared ${c.compared.join("; ")}`);
     if (c.defect !== null)
@@ -7359,9 +7359,9 @@ function sliceParityStages(bin, runs) {
   if (bin === null) return [];
   return mine.flatMap((run) => SLICE_PARITY_DOCS[run.doc].map((t) => {
     const label = `slicing parity (${run.doc}, ${t.what})`;
-    const twin = runChild(`${label}, the twin`, bin, [...regimeDocArgs(run.doc), ...t.args],
+    const twin = runChild(`${label}, the twin`, bin, [...fixtureDocArgs(run.doc), ...t.args],
                           "an abort above is the twin's own; the comparison below reads both runs");
-    const read = (r) => regimeReading(r.captured, r.signal, r.log);
+    const read = (r) => vehicleReading(r.captured, r.signal, r.log);
     const c = compareSlicing(run.doc, read(run), read(twin), t);
     console.log(`[build] ${label}: compared ${c.compared.join("; ")}`);
     if (c.defect !== null)

@@ -5,9 +5,10 @@
  *     other reached its final table, since a completed run executed every flow the crashing one could have;
  *   - each statement's value in the final @H table (the one printed after `@RESULT`) and the fixture's own
  *     verdict line: when both runs completed;
- *   - every @H table paired by the `@HEVENTS` work total it was composed at, and the work retired by a completed
- *     run: only when both hosts announce the same `@QUANTUM` slice, because slices that end at different points
- *     interleave flows differently and the two runs then take different paths through one document.
+ *   - every @H table paired by the `@HEVENTS` work total it was composed at, and, when both runs completed, the
+ *     work rows of their terminal frontier censuses and `_workRetired` (`workRows`): only when both hosts
+ *     announce the same `@QUANTUM` slice, because slices that end at different points interleave flows
+ *     differently and the two runs then take different paths through one document.
  *   node engine/vehicle.mjs --native <bin> --wasm <qjs.js> [--wasm-node <node>] [--cpu <s>] [--jobs <n>]
  *                           --out <dir> <doc>...
  * runs each named document on both hosts under the CPU budget and prints one comparison per document. */
@@ -22,6 +23,37 @@ import { crashIdentity } from "./abort_record.mjs";
 /* The fixture's verdict sentences, in test_forced.c's main() after the final table. */
 const VERDICTS = [["PASS:", "PASS"], ["FAIL:", "FAIL"], ["[test-forced] NOT ASKED", "NOT ASKED"],
                   ["LIFECYCLE:", "LIFECYCLE"]];
+
+/* The fixture arguments that run document `doc`: `min` names test_forced.c's minimal document (`--min`), any
+   other name a `--doc <name>`. */
+export const fixtureDocArgs = (doc) => doc === "min" ? ["--min"] : ["--doc", doc];
+
+/* The census rows that are work or its input, read off the census itself so a kind added to
+   core/timing/thread_work.h is compared without an entry here. Thread CPU (`tw…Us`) is a host's price, not work. */
+const CENSUS_NAMED = ["pickDigest", "steps", "stepWork", "serviceWork"];
+const censusRows = (c) => [...CENSUS_NAMED, ...Object.keys(c).filter((k) => /^tw[A-Z]/.test(k) && !k.endsWith("Us"))];
+
+/* The work two completed runs of one document retired: every work row of their terminal frontier censuses and
+   the result documents' `_workRetired`, compared. `sides` names the two runs. Answers `{ rows, differing }`,
+   where `differing` lists each differing row as `row=a|b`. Engine work is a function of the flow's path, so two
+   runs that took the same path agree on every row. */
+export function workRows(doc, a, b, sides) {
+  for (const [r, s] of [[a, sides[0]], [b, sides[1]]])
+    if (r.cold === null || !r.cold.terminal || !Number.isInteger(r.retired))
+      throw new Error(`${doc}: the ${s} run's work was compared with no terminal census or no \`_workRetired\` — ` +
+                      `a caller compares work only between completed runs`);
+  const ac = a.cold.census, bc = b.cold.census, rows = censusRows(ac), differing = [];
+  for (const k of censusRows(bc)) if (!rows.includes(k)) rows.push(k);
+  for (const k of rows) {
+    if (!Number.isInteger(ac[k]) || !Number.isInteger(bc[k]))
+      throw new Error(`${doc}: the frontier census row \`${k}\` is ${JSON.stringify(ac[k])} in the ${sides[0]} run ` +
+                      `and ${JSON.stringify(bc[k])} in the ${sides[1]} run — solver/metrics/cold.def declares one ` +
+                      `integer row for every run, so a composer and this reader disagree`);
+    if (ac[k] !== bc[k]) differing.push(`${k}=${ac[k]}|${bc[k]}`);
+  }
+  if (a.retired !== b.retired) differing.push(`_workRetired=${a.retired}|${b.retired}`);
+  return { rows, differing };
+}
 
 /* The slice an `@QUANTUM` line announces (solver/quantum.c's quantum_json), as the text two hosts compare: the work
    budget, which is the whole slice on every host (a host turn ends none). `price` and `priceIsCpu` name the clock
@@ -41,7 +73,7 @@ export function vehicleReading(out, signal, where) {
   const lines = out.split("\n");
   if (!out.endsWith("\n")) lines.pop();
   const tables = [];
-  let work = null, completed = false, verdict = null, quantum = null, cold = null;
+  let work = null, completed = false, verdict = null, quantum = null, cold = null, retired = null;
   for (const line of lines) {
     if (line.startsWith("@HEVENTS ")) { work = JSON.parse(line.slice("@HEVENTS ".length)).schedEvents; continue; }
     if (line.startsWith("@RESULT ")) {
@@ -51,6 +83,10 @@ export function vehicleReading(out, signal, where) {
         throw new Error(`${where}: the result document carries no \`_cold\` census — solver/result.c composes ` +
                         `it into every result, so the composer and this reader disagree`);
       cold = { census: r._cold, terminal: true };
+      retired = r._workRetired;
+      if (!Number.isInteger(retired))
+        throw new Error(`${where}: the result document carries no integer \`_workRetired\` — solver/result.c ` +
+                        `composes it into every result, so the composer and this reader disagree`);
       continue;
     }
     if (line.startsWith("@QUANTUM ")) { if (quantum === null) quantum = sliceOf(line.slice(9), where); continue; }
@@ -76,7 +112,7 @@ export function vehicleReading(out, signal, where) {
                     `the emitter and this reader disagree`);
   const finals = verdict === null ? [] : tables.filter((t) => t.final);
   return { tables, final: finals.length ? finals[finals.length - 1].row : null, verdict, crash, quantum,
-           work: coldWork(cold, where), cold };
+           work: coldWork(cold, where), cold, retired };
 }
 
 /* The work the run retired: every unit the event loop's clock banked under a flow, the units retired with no
@@ -156,9 +192,13 @@ export function compareVehicle(doc, nat, veh) {
       if (k !== null) { fail(`the tables at work ${t.work} differ; first statement: ${k}`); break; }
     }
     compared.push(`${paired} table(s) paired by work total`);
-    if (nat.final !== null && veh.final !== null && nat.work !== null && veh.work !== null &&
-        nat.work.retired !== veh.work.retired)
-      fail(`the completed runs retired different work: native ${nat.work.retired}, wasm ${veh.work.retired}`);
+    if (nat.final !== null && veh.final !== null) {
+      const w = workRows(doc, nat, veh, ["native", "wasm"]);
+      if (w.differing.length)
+        fail(`the two hosts ran different schedules or retired different work (native|wasm): ` +
+             w.differing.join(" "));
+      else compared.push(`${w.rows.length + 1} work row(s), the pick digest ${nat.cold.census.pickDigest} among them`);
+    }
     work = `exact (one slice on both hosts: ${nat.quantum}); native ${workText(nat)}; wasm ${workText(veh)}`;
   } else {
     work = `not yet exact: the hosts end their slices at different points (native ${nat.quantum ?? "no @QUANTUM"}; ` +
@@ -224,8 +264,8 @@ async function main() {
   mkdirSync(o.out, { recursive: true });
   const jobs = [];
   for (const d of o.docs) {
-    jobs.push({ doc: d, host: "native", prog: o.native, args: ["--doc", d] });
-    jobs.push({ doc: d, host: "wasm", prog: o.wasmNode, args: [o.wasm, "--doc", d] });
+    jobs.push({ doc: d, host: "native", prog: o.native, args: fixtureDocArgs(d) });
+    jobs.push({ doc: d, host: "wasm", prog: o.wasmNode, args: [o.wasm, ...fixtureDocArgs(d)] });
   }
   const runs = new Map();
   let next = 0;

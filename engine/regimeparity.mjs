@@ -16,29 +16,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { vehicleReading } from "./vehicle.mjs";
-
-/* The fixture arguments that run document `doc`. */
-export const regimeDocArgs = (doc) => doc === "min" ? ["--min"] : ["--doc", doc];
-
-/* The census rows that are work or its input, read off the census itself so a kind added to
-   core/timing/thread_work.h is compared without an entry here. */
-const CENSUS_NAMED = ["pickDigest", "steps", "stepWork", "serviceWork"];
-const censusRows = (c) => [...CENSUS_NAMED, ...Object.keys(c).filter((k) => /^tw[A-Z]/.test(k) && !k.endsWith("Us"))];
-
-/* One run's reading: engine/vehicle.mjs's, with the result document's own work total beside it. */
-export function regimeReading(out, signal, where) {
-  const r = vehicleReading(out, signal, where);
-  let retired = null;
-  for (const line of out.split("\n")) {
-    if (!line.startsWith("@RESULT ")) continue;
-    retired = JSON.parse(line.slice(8))._workRetired;
-    if (!Number.isInteger(retired))
-      throw new Error(`${where}: the result document carries no integer \`_workRetired\` — solver/result.c ` +
-                      `composes it into every result, so the composer and this reader disagree`);
-  }
-  return Object.assign(r, { retired });
-}
+import { vehicleReading, fixtureDocArgs, workRows } from "./vehicle.mjs";
 
 /* The comparison of one document's two readings: `{ defect, answered, compared, uncompared, differing }`.
    `defect` is null or the first disagreement; `differing` lists every work row that differs, as
@@ -77,20 +55,12 @@ export function compareRegimes(doc, dev, rel) {
   else if (dev.verdict !== rel.verdict) fail(`the verdicts differ: dev ${dev.verdict}; release ${rel.verdict}`);
   else compared.push(`every final statement's value and the verdict ${dev.verdict}`);
 
-  const dc = dev.cold.census, rc = rel.cold.census, rows = censusRows(dc);
-  for (const k of censusRows(rc)) if (!rows.includes(k)) rows.push(k);
-  for (const k of rows) {
-    if (!Number.isInteger(dc[k]) || !Number.isInteger(rc[k]))
-      throw new Error(`${doc}: the frontier census row \`${k}\` is ${JSON.stringify(dc[k])} in the dev run and ` +
-                      `${JSON.stringify(rc[k])} in the release run — solver/metrics/cold.def declares one ` +
-                      `integer row for both regimes, so a composer and this reader disagree`);
-    if (dc[k] !== rc[k]) differing.push(`${k}=${dc[k]}|${rc[k]}`);
-  }
-  if (dev.retired !== rel.retired) differing.push(`_workRetired=${dev.retired}|${rel.retired}`);
+  const w = workRows(doc, dev, rel, ["dev", "release"]), rows = w.rows;
+  differing.push(...w.differing);
   if (differing.length)
     fail(`a dev build and a release build of one revision ran different schedules or retired different work ` +
          `(dev|release): ${differing.join(" ")}`);
-  else compared.push(`${rows.length + 1} work row(s), the pick digest ${dc.pickDigest} among them`);
+  else compared.push(`${rows.length + 1} work row(s), the pick digest ${dev.cold.census.pickDigest} among them`);
 
   const at = new Map(rel.tables.filter((t) => t.work !== null).map((t) => [t.work, t.row]));
   let paired = 0;
@@ -109,22 +79,14 @@ export function compareRegimes(doc, dev, rel) {
    lives, never whether or when it runs, so the two pick the same members in the same order and retire the same
    work; the final tables are not compared, since the act's own rows read the act. */
 export function comparePressure(doc, act, none) {
-  const compared = [], differing = [];
+  const compared = [];
   if (act.crash !== null || none.crash !== null || act.cold === null || none.cold === null ||
       !act.cold.terminal || !none.cold.terminal)
     return { defect: null, answered: false, differing,
              compared: [`nothing (act: ${act.crash ?? (act.cold?.terminal ? "completed" : "no terminal census")}; ` +
                         `none: ${none.crash ?? (none.cold?.terminal ? "completed" : "no terminal census")})`] };
-  const ac = act.cold.census, nc = none.cold.census, rows = censusRows(ac);
-  for (const k of censusRows(nc)) if (!rows.includes(k)) rows.push(k);
-  for (const k of rows) {
-    if (!Number.isInteger(ac[k]) || !Number.isInteger(nc[k]))
-      throw new Error(`${doc}: the frontier census row \`${k}\` is ${JSON.stringify(ac[k])} with the act and ` +
-                      `${JSON.stringify(nc[k])} without it — solver/metrics/cold.def declares one integer row`);
-    if (ac[k] !== nc[k]) differing.push(`${k}=${ac[k]}|${nc[k]}`);
-  }
-  if (act.retired !== none.retired) differing.push(`_workRetired=${act.retired}|${none.retired}`);
-  compared.push(`${rows.length + 1} work row(s), the pick digest ${ac.pickDigest} among them`);
+  const { rows, differing } = workRows(doc, act, none, ["act", "none"]);
+  compared.push(`${rows.length + 1} work row(s), the pick digest ${act.cold.census.pickDigest} among them`);
   return { defect: differing.length ? `${doc}: the run with its pressure act and its no-pressure twin ran different ` +
                                       `schedules or retired different work (act|none): ${differing.join(" ")}` : null,
            answered: true, compared, differing };
@@ -204,7 +166,7 @@ async function main() {
   const jobs = [];
   for (const d of o.docs)
     for (const [regime, prog] of [["dev", o.dev], ["release", o.release]])
-      jobs.push({ doc: d, regime, prog, args: regimeDocArgs(d) });
+      jobs.push({ doc: d, regime, prog, args: fixtureDocArgs(d) });
   const runs = new Map();
   let next = 0;
   const worker = async () => {
@@ -212,7 +174,7 @@ async function main() {
       const j = jobs[i], log = join(o.out, `${j.doc}.${j.regime}.log`);
       const t = await budgeted({ slug: `regime-${j.doc}-${j.regime}`, prog: j.prog, args: j.args, log,
                                  hardS: o.cpu + 60, softS: o.cpu, deadlockMs: 4 * o.cpu * 1000 });
-      runs.set(`${j.doc}.${j.regime}`, { t, r: regimeReading(readFileSync(log, "utf8"), t.signal, log) });
+      runs.set(`${j.doc}.${j.regime}`, { t, r: vehicleReading(readFileSync(log, "utf8"), t.signal, log) });
     }
   };
   await Promise.all(Array.from({ length: Math.min(o.jobs, jobs.length) }, worker));
