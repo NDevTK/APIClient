@@ -574,9 +574,12 @@ int64_t engine_service_work(void);
 struct Flow;
 /* A flow's reply clock (its path counters' path_work plus reply_skip, plus what the open step has run for the running
    flow): where on its own path its network answers land, so a reply's arrival point does not depend on what its
-   siblings run or how fast the wire answered. `engine_reply_due` is the due point of an answer asked now. */
+   siblings run or how fast the wire answered. `engine_reply_due` is the due point of an answer asked now.
+   `engine_reply_wait` moves the running flow's reply clock `work` units on: the event loop's jump to a deadline
+   (core/timing/event_loop.c's event_loop_advance_to) is a wait the network spends too. */
 int64_t engine_reply_clock(const struct Flow *f);
 int64_t engine_reply_due(const struct Flow *f);
+void engine_reply_wait(struct Flow *f, int64_t work);
 
 /* The disk tier a written stub's bytes and a frozen heap segment's entries move to at the RAM floor and are read
    back from within the session (engine.c's engine_reclaim_tail, engine_sale_restore, cow.c's chain fill): a file

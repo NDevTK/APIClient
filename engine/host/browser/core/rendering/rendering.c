@@ -1513,8 +1513,8 @@ int rendering_run_opportunity(JSContext *ctx, bool due_only)
         return rendering_declined(RENDERING_DECLINE_TIMER_FIRST);
     }
     /* A frame strictly ahead of the clock is reached by moving it, which stands in for §8.1.7.3 Processing
-       model's wait ("Wait until at least one navigable ... might have a rendering opportunity"). A reply the
-       host owes this flow has no moment on this clock, and the section determines a rendering opportunity from
+       model's wait ("Wait until at least one navigable ... might have a rendering opportunity"). A reply in
+       flight arrives at a moment the network decides, and the section determines a rendering opportunity from
        the display and the page, never from the network, so whether the frame or the arrival comes first is
        the race a timer's deadline has: event_loop_deadline_first asks it, and a 1 licenses the move below.
        The strictly-ahead order is asked, not inferred: over an unknown moment `next == now` manufactures no

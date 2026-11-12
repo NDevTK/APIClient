@@ -262,7 +262,9 @@ int event_loop_may_advance(void);
    (a restartable fork, so only between a flow's tasks), and a 1 licenses the one forward move to `when` that
    follows. The arrival is the timeline's next one, one unknown per arrival (named by flow.h's `replies_taken`),
    so a request issued after an arrival is raced again, and the earliest timer is always the one asked, so a
-   later deadline is never asked against an arrival an earlier one already preceded. Named residual. Not
+   later deadline is never asked against an arrival an earlier one already preceded. The arrival's example is
+   the earliest due point of an answer the flow has not landed (solver/pending.h), so the run carrying the
+   examples takes the order the modelled latency gives and the other arm is an assumption. Named residual. Not
    covered: the order of the replies among themselves is the host's. Next diff builds: an arrival order asked
    between answered replies, held until the deadline race's measured family size decides it, since it is the
    same principle at factorial cost. Absence shows as: a page whose behaviour depends on which of two requests

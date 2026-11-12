@@ -1,11 +1,10 @@
 /* The deferred-script-beside-frames document. One of test_forced.c's exploring documents (its TF_DOCS table). An
    animation frame chain keeps a rendering opportunity ahead of the clock while a root module script's bytes are
    in flight, the shape of a page whose `<script type=module>` waits behind frames (HTML §13.2.7 The end runs it
-   once its fetch is answered). The classic script after it runs for several work quanta, so this host pays the
-   bytes before the parse ends and the first frame is still ahead: the race is the delivery arm's, over an
-   arrival already answered. The module reports how many frames ran before it. The bytes are test_forced.c's
-   TF_SERVED row for `/chunk/df-main.js`; the document ends with TF_CANVAS_INK, which test_forced.c defines
-   before including this. */
+   once its fetch is answered). The answer lands at its due point on the asking flow's path, so each frame is raced
+   against an arrival whose example is that point, and the classic script after the module runs for several work
+   quanta first. The module reports how many frames ran before it. The bytes are test_forced.c's TF_SERVED row for
+   `/chunk/df-main.js`; the document ends with TF_CANVAS_INK, which test_forced.c defines before including this. */
 #ifndef ENGINE_HOST_FIXTURE_DEFERFRAME_H
 #define ENGINE_HOST_FIXTURE_DEFERFRAME_H
 #ifndef TF_CANVAS_INK

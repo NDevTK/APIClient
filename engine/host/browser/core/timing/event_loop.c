@@ -340,6 +340,20 @@ static int el_rel_nonforking(JSContext *ctx, JSValueConst a, JSValueConst b, con
     return r;
 }
 
+/* A moment's example in milliseconds: the number itself, or an unknown's computed example. 0 when it has none. */
+static int el_example_ms(JSContext *ctx, JSValueConst m, double *out)
+{
+    JSValue e = concolic_is(m) ? concolic_example(ctx, m) : JS_DupValue(ctx, m);
+    int ok = JS_IsNumber(e);
+
+    DCHECK(ok || JS_IsUndefined(e),
+           "a moment's example is not a number — a moment on this clock is a number or an unknown whose example "
+           "the real `+` computed over numbers");
+    if (ok) JS_ToFloat64(ctx, out, e);
+    JS_FreeValue(ctx, e);
+    return ok;
+}
+
 /* THE TWO HALVES OF THE ORDER QUESTION — the ask, which forks, and the read, which never does. They share the
    relation's NAME, which is the whole reason the read can discharge what the ask decided. */
 static int el_rel(JSContext *ctx, JSValueConst a, JSValueConst b, const char *op, int ask)
@@ -470,23 +484,27 @@ static const char EL_ARRIVAL[] = "HTML §8.1.7.3 Processing model: the arrival o
    replies this timeline has taken: one unknown per arrival, so after one arrives the deadline is raced against
    the next, and a request issued with none arriving only moves the next arrival earlier, which an answered race
    already covers. `answered` is the delivery half: the host has paid the reply, so it arrived no later than the
-   clock, and the clock's example is the arrival's; the idle half's reply is still owed and has none. */
+   clock, and the clock's example is the arrival's. On the idle half the example is the earliest due point of an
+   answer the flow has not landed (solver/pending.h's pending_next_due), the clock's example plus the reply-clock
+   work still ahead of it at EVENT_LOOP_WORK_PER_MS; a register with no due point gives the arrival none. */
 static int el_deadline_before_next_arrival(JSContext *ctx, JSValueConst when, int answered)
 {
     char src[sizeof EL_ARRIVAL + 32], shape[sizeof src + 2];
+    Flow *f = flow_running();
+    int64_t due = answered ? 0 : pending_next_due(f->pending);
     JSValue arrival, example = JS_UNDEFINED;
     int first;
 
-    snprintf(src, sizeof src, "%s, number %u", EL_ARRIVAL, (unsigned)flow_running()->replies_taken + 1);
+    snprintf(src, sizeof src, "%s, number %u", EL_ARRIVAL, (unsigned)f->replies_taken + 1);
     snprintf(shape, sizeof shape, "{%s}", src);   /* a source's shape is its provenance in braces */
-    if (answered) {
+    if (answered || due > 0) {
         JSValue now = event_loop_now(ctx);
+        int64_t ahead = answered ? 0 : due - engine_reply_clock(f);
+        double at = 0;
 
-        example = concolic_is(now) ? concolic_example(ctx, now) : JS_DupValue(ctx, now);
+        if (el_example_ms(ctx, now, &at))
+            example = JS_NewFloat64(ctx, at + (ahead > 0 ? (double)ahead / EVENT_LOOP_WORK_PER_MS : 0));
         JS_FreeValue(ctx, now);
-        DCHECK(JS_IsUndefined(example) || JS_IsNumber(example),
-               "the clock's example is not a moment — event_loop_now answers a number or an unknown whose example "
-               "the real `+` computed over numbers");
     }
     arrival = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, CONCOLIC_TYF_NUMBER, example);
     first = event_loop_before(ctx, when, arrival);
@@ -652,6 +670,21 @@ void event_loop_advance_to(JSContext *ctx, JSValueConst when, JSValueConst due)
            "instantly and beats the network deterministically. The caller must not move the clock here — it "
            "reports NO SOURCE DUE (a task whose expiry the clock has not reached is not a runnable task under "
            "§8.1.7.3 step 2) and the flow parks host-owed until the host pays");
+    /* The jump stands in for a wait, and the network spends it too: the running flow's reply clock moves by the
+       same span, so an answer's due point stays the same moment on this clock (el_deadline_before_next_arrival
+       reads it there). The span is the examples' difference; a moment with none has no span to move by. */
+    {
+        double a = 0, b = 0;
+
+        if (el_example_ms(ctx, now, &a) && el_example_ms(ctx, when, &b)) {
+            int64_t work = (int64_t)((b - a) * EVENT_LOOP_WORK_PER_MS);
+
+            if (work > 0) engine_reply_wait(flow_running(), work);
+        } else {
+            DFAIL("the event loop's clock jumped to or from a moment with no example, so the wait it stands in for "
+                  "has no span the reply clock can move by; build the span from the deadline's domain");
+        }
+    }
     JS_FreeValue(ctx, now);
     el_num_set(ctx, g_atom_licence, 0);   /* the licence covers this one move */
     el_set(ctx, g_atom_now, when);

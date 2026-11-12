@@ -24329,33 +24329,32 @@ TF_UNIT void probes_modpreload(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `deferframe` document (fixture/deferframe.h): the module's bytes are answered while a frame is
-   still ahead of the clock. HTML §8.1.7.3 Processing model runs a task already queued before a rendering
-   opportunity that has not come, so the run carrying the examples delivers the answered bytes first; a frame
-   ahead of an arrival the host has paid is an assumption, explored on a priced arm. */
+/* The rows of the `deferframe` document (fixture/deferframe.h): the module's bytes are in flight while frames are
+   ahead of the clock. Which comes first is the moment of each (HTML §8.1.7.3 Processing model), and the
+   arrival's example is the answer's due point, so the run carrying the examples is one order and every other
+   order is an assumption, explored on a priced arm. */
 TF_UNIT void probes_deferframe(const char *js, Probe *tab, int *n) {
-    static const char *const late[] = { "dfF1", "dfF2", "dfF3" };
+    static const char *const counts[] = { "dfF0", "dfF1", "dfF2", "dfF3" };
     const char *o_why = NULL, *f_why = NULL;
-    int o_tt = 1, f_tt = 1, forced = 0;
+    int o_tt = 1, f_tt = 1, observed = 0, other = 0;
 
     fold_row(&o_tt, &o_why, param_undriven_count(js, "/api/dfran", "w", NULL) > 0,
              "NOT REACHED: /api/dfran has no record, so the root module never ran");
-    fold_row(&o_tt, &o_why, emitted_record_graded_has(js, "/api/dfran", "derived", "dfF0"),
-             "no derived /api/dfran record carries `dfF0`: the observed world did not deliver the answered module "
-             "before the frame ahead of the clock");
-    for (size_t i = 0; i < COUNTOF(late); i++) {
-        fold_row(&o_tt, &o_why, !emitted_record_graded_has(js, "/api/dfran", "derived", late[i]),
-                 "a derived /api/dfran record carries a frame count above zero: a world that ran a frame ahead "
-                 "of the paid arrival was graded as the observed world, so the frame-first order is its "
-                 "primary arm at every race and the module waits behind every frame");
-        forced += emitted_record_graded_has(js, "/api/dfran", "forced", late[i]);
+    for (size_t i = 0; i < COUNTOF(counts); i++) {
+        int derived = emitted_record_graded_has(js, "/api/dfran", "derived", counts[i]);
+
+        observed += derived;
+        other += !derived && emitted_record_graded_has(js, "/api/dfran", "forced", counts[i]);
     }
-    fold_row(&f_tt, &f_why, forced > 0,
-             "no forced /api/dfran record carries a frame count above zero: the frame-first order was not "
-             "explored as an assumption beside the observed one");
+    fold_row(&o_tt, &o_why, observed == 1,
+             "the derived /api/dfran records do not carry exactly one frame count: the observed world is split "
+             "across unpriced orders of the frames and the arrival, or never delivered the module");
+    fold_row(&f_tt, &f_why, other > 0,
+             "no forced /api/dfran record carries a frame count the observed world does not: the other order of "
+             "a frame and the arrival was not explored as an assumption beside the observed one");
     const Probe rows[] = {
-        { "df-arrival-first-observed", o_tt, "/chunk/df-main.js", SESS_EXPLORE, o_why },
-        { "df-frame-first-priced", f_tt, "/chunk/df-main.js", SESS_EXPLORE, f_why },
+        { "df-observed-one-order", o_tt, "/chunk/df-main.js", SESS_EXPLORE, o_why },
+        { "df-other-order-priced", f_tt, "/chunk/df-main.js", SESS_EXPLORE, f_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

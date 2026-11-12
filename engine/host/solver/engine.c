@@ -5629,6 +5629,13 @@ int64_t engine_reply_due(const Flow *f) {
     return engine_reply_clock(f) + ENGINE_REPLY_LATENCY_WORK;
 }
 
+void engine_reply_wait(Flow *f, int64_t work) {
+    DCHECKF(f != NULL && f == flow_running() && work > 0,
+            "a reply clock was moved %lld units on a flow that is not running — a wait is the running flow's "
+            "own, and a move of no work is a call that should not have been made", (long long)work);
+    f->pc.reply_skip += work;
+}
+
 /* What the open step has retired under a page frame, its compile and frameless work left out: the stand's clock,
    which a fork's arm takes at the branch. */
 static int64_t engine_step_framed(void) {
@@ -11041,11 +11048,15 @@ static int flow_step(JSContext *ctx, Flow *f) {
             /* An answer not yet landed on this path and nothing else to run: the flow waits for it and is not
                finished. Its reply clock moves to the earliest due point if that is ahead; the landing at the next
                step's entry takes it, or the due rung waits on the host for it. Asked of the register, not of the
-               clock: the asks above retire work after this step's landing, so the point may already be behind. */
+               clock: the asks above retire work after this step's landing, so the point may already be behind.
+               Named residual. Not covered: the event loop's clock does not move with this wait, though its jumps
+               move the reply clock (event_loop_advance_to). Next diff builds: the same span moved on the event
+               loop's clock where no deadline the race put after the arrival lies inside it. Absence shows as: a
+               moment read after an answer lands that is earlier than the arrival's example the race compared. */
             else if (pending_next_due(f->pending) > 0) {
                 int64_t due = pending_next_due(f->pending), now = engine_reply_clock(f);
 
-                if (due > now) f->pc.reply_skip += due - now;
+                if (due > now) engine_reply_wait(f, due - now);
                 g_step_unit = STEP_UNIT_REPLY_CLOCK_MOVE;
                 return 0;
             }

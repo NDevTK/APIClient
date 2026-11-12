@@ -177,8 +177,8 @@ typedef struct FlowAgent {
      engine_stand_rest), every ENGINE_QUANTUM_WORK of it.
    stand_digest, stand_moves: the stand series, a digest folded at every move to a different code site over the
      move's `framed_work` coordinate and the site's identity, and the number of such moves (flow_stand_at).
-   reply_skip: the work an idle flow's reply clock moved to reach its next due point (engine.h's
-     engine_reply_clock), the wait a browser spends while a request is in flight. */
+   reply_skip: the work an idle flow's reply clock moved to reach its next due point, or with an event loop jump
+     to a deadline (engine.h's engine_reply_clock, engine_reply_wait): the wait while a request is in flight. */
 #define FLOW_PATH_COUNTERS(X) \
     X(int64_t, path_work) X(int64_t, framed_work) X(int64_t, stand_next) X(uint64_t, stand_digest) \
     X(int64_t, stand_moves) X(int64_t, reply_skip)
