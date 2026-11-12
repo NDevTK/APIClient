@@ -93,10 +93,12 @@ extern const char *const RANGE_DEL_STEPS[];
 void range_str_visit(JSContext *ctx, void *st, JSStepVisit *v);
 void range_del_visit(JSContext *ctx, void *st, JSStepVisit *v);
 
-/* ONE step of §5.5's stringification / of §5.5's deleteContents, over `b`. `b` is re-resolved by the CALLER at
-   every entry rather than being remembered on the state, because the record time-travels: a context switch
-   between two steps swaps the delta the bounds live in. Returns the JS_STEP_* the member returns. */
-int range_str_step(JSContext *ctx, JSStepHdr *hdr, RangeStrState *s, RangeBounds *b, JSValue *presult);
-int range_del_step(JSContext *ctx, JSStepHdr *hdr, RangeDelState *s, RangeBounds *b, JSValue *presult);
+/* ONE step of §5.5's stringification / of §5.5's deleteContents, over `b`, the bounds of the range object `range`
+   (which deleteContents collapses through its write accessor). `b` is re-resolved by the CALLER at every entry
+   rather than being remembered on the state, because the record time-travels: a context switch between two
+   steps swaps the delta the bounds live in. Returns the JS_STEP_* the member returns. */
+int range_str_step(JSContext *ctx, JSStepHdr *hdr, RangeStrState *s, const RangeBounds *b, JSValue *presult);
+int range_del_step(JSContext *ctx, JSStepHdr *hdr, RangeDelState *s, JSValueConst range, const RangeBounds *b,
+                   JSValue *presult);
 
 #endif

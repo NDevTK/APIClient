@@ -83,10 +83,10 @@ ReaderData *rs_reader_data(JSValueConst v);
    function rather than a plain one: the caller is in another translation unit, so a check that stamped its own
    line would name readable_stream.c for a write made anywhere. See cow.h's THE SITE TRAVELS WITH THE
    OPERATION. */
-void rs_stream_set_at(JSContext *ctx, StreamData *d, JSValue *slot, JSValue v,
+void rs_stream_set_at(JSContext *ctx, JSValueConst owner, StreamData *d, JSValue *slot, JSValue v,
                       const char *file, int line);
-#define rs_stream_set(ctx_, d_, slot_, v_) \
-    rs_stream_set_at((ctx_), (d_), (slot_), (v_), __FILE__, __LINE__)
+#define rs_stream_set(ctx_, owner_, d_, slot_, v_) \
+    rs_stream_set_at((ctx_), (owner_), (d_), (slot_), (v_), __FILE__, __LINE__)
 
 /* 7.4.14's CreateIterResultObject — `{ value, done }`, own properties DEFINED and not assigned. `value` is
    CONSUMED. */
@@ -103,6 +103,7 @@ void rs_park_read(JSContext *ctx, StreamData *d, JSValue *funcs);
 
 /* The settle sequence itself. The caller sets `w->settle` (and `w->err` for the arms that carry a reason) and
    calls until it returns 0; >0 is the step code to return, <0 is a throw. */
-int rs_settle_run(JSContext *ctx, StreamWork *w, StreamData *d, JSValue in, JSValue **out_cb, int *out_argc);
+int rs_settle_run(JSContext *ctx, StreamWork *w, JSValueConst stream, StreamData *d, JSValue in,
+                  JSValue **out_cb, int *out_argc);
 
 #endif

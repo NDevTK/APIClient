@@ -104,9 +104,8 @@ static JSValue   g_deliver_fn = JS_UNDEFINED;   /* the queued delivery task's ca
 
 /* THE RECORD TIME-TRAVELS. `enabled` and the queue head are state a flow writes where no property hook can see
    — a forked arm that called start() would have enabled the queue for its sibling, and an arm that received a
-   message would have consumed it for every other. The capture is in the ACCESSOR for the reason the streams
-   components give: a record a flow has reached is one it may write, and there is then no write site to miss.
-   The offset list is the same list the finalizer frees. */
+   message would have consumed it for every other. A write takes the record through port_of_for_write, which
+   captures it first; a read captures nothing. The offset list is the same list the finalizer frees. */
 #define MP_OFF(f) (uint16_t)offsetof(PortData, f)
 static const uint16_t PORT_VALS[] = { MP_OFF(entangled), MP_OFF(queue), MP_OFF(target) };
 static const CowRecord PORT_REC = { sizeof(PortData), PORT_VALS, 3 };
@@ -124,25 +123,35 @@ static const CowRecord PORT_REC = { sizeof(PortData), PORT_VALS, 3 };
    slot names storage that has been given back. */
 /* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
    line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
-static void mp_set_at(JSContext *ctx, PortData *d, JSValue *slot, JSValue v,
+static void mp_set_at(JSContext *ctx, JSValueConst owner, PortData *d, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, d, &PORT_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, d, &PORT_REC, slot, v, file, line);
 }
-#define mp_set(ctx_, d_, slot_, v_) mp_set_at((ctx_), (d_), (slot_), (v_), __FILE__, __LINE__)
+static PortData *port_of_for_write(JSValueConst v);
+/* The write accessor and the write in one expansion, so a slot is never written through a record nobody captured. */
+#define mp_set(ctx_, owner_, field_, v_)                                                                   \
+    do {                                                                                                   \
+        PortData *mp_set_d_ = port_of_for_write(owner_);                                                   \
+                                                                                                           \
+        DCHECK(mp_set_d_ != NULL, "a MessagePort record was written through something that is not a port"); \
+        mp_set_at((ctx_), (owner_), mp_set_d_, &mp_set_d_->field_, (v_), __FILE__, __LINE__);              \
+    } while (0)
 
 /* HOW MANY MESSAGES THE QUEUE HOLDS, building the Array on first use. Lazy because most ports never receive
    one and an Array per port is not free; the record's slot is JS_UNDEFINED until then. Returns 0 with an
    exception live. */
-static int port_queue_len(JSContext *ctx, PortData *d, uint32_t *pn)
+static const PortData *port_of(JSValueConst v);
+static int port_queue_len(JSContext *ctx, JSValueConst port, uint32_t *pn)
 {
+    const PortData *d = port_of(port);
     JSValue len;
     if (JS_IsUndefined(d->queue)) {
         JSValue q = JS_NewArray(ctx);
         /* BUILT INTO A LOCAL AND THEN PUBLISHED, so the exception marker never reaches the record's slot at all
            — port_gc_mark walks that slot, and a marker there is a value the walk has no answer for. */
         if (JS_IsException(q)) return 0;
-        mp_set(ctx, d, &d->queue, q);
+        mp_set(ctx, port, queue, q);
     }
     len = JS_GetPropertyStr(ctx, d->queue, "length");
     if (JS_IsException(len)) return 0;
@@ -152,7 +161,14 @@ static int port_queue_len(JSContext *ctx, PortData *d, uint32_t *pn)
     return 1;
 }
 
-static PortData *port_of(JSValueConst v)
+static const PortData *port_of(JSValueConst v)
+{
+    const PortData *p = JS_GetOpaque(v, g_port_class);
+    return p;
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static PortData *port_of_for_write(JSValueConst v)
 {
     PortData *p = JS_GetOpaque(v, g_port_class);
     if (p) cow_capture_host_record(v, p, &PORT_REC);
@@ -194,14 +210,14 @@ bool message_port_is(JSValueConst v)
  * COW_STATE_HOST_REC memcpys the whole struct): a context switch would restore this port's prev/next to what
  * they were when the flow first reached it, splicing freed ports back into the live list. A row OUTSIDE the
  * record is what keeps the two lifetimes apart. */
-static PortData **g_ports;
+static const PortData **g_ports;
 static int        g_ports_n, g_ports_cap;
 
-static void port_track(PortData *d)
+static void port_track(const PortData *d)
 {
     if (g_ports_n == g_ports_cap) {
         int cap = g_ports_cap ? g_ports_cap * 2 : 8;
-        PortData **g = lexbor_realloc(g_ports, (size_t)cap * sizeof *g);
+        const PortData **g = lexbor_realloc(g_ports, (size_t)cap * sizeof *g);
 
         CHECK(g != NULL, "message port: OOM recording a live MessagePort — an unrecorded port is one §7.5.10 "
                          "cannot see, and a destroyed document would keep an entangled channel with nothing "
@@ -302,7 +318,7 @@ static void chan_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
 static void port_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    PortData *d = JS_GetAnyOpaque(val, &id);
+    const PortData *d = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     DCHECK(d != NULL, "a MessagePort was marked with no record — port_new attaches one before the object can "
@@ -347,7 +363,7 @@ static int js_port_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
 {
     PortDeliverTask *s = st;
     JSValueConst port = step_arg(&s->hdr, 0);
-    PortData *d = port_of(port);
+    const PortData *d = port_of(port);
     JSContext *rctx;
     int r;
 
@@ -370,10 +386,10 @@ static int js_port_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         s->fphase = 0;
         /* The port may have been closed, or its queue disabled again, between the enqueue and now — the task
            is in the queue and the state is the port's, so the state is what decides. */
-        if (!d || !d->enabled || !port_queue_len(ctx, d, &n) || d->head >= n)
+        if (!d || !d->enabled || !port_queue_len(ctx, port, &n) || d->head >= n)
             return JS_STEP_DONE;
         entry = JS_GetPropertyUint32(ctx, d->queue, d->head);
-        d->head++;
+        port_of_for_write(port)->head++;
         /* The Array's own elements, read with no page code in the way: this component built them and nothing
            else can reach them. The bytes are BORROWED for the deserialize — the buffer owns them. */
         buf = JS_GetPropertyUint32(ctx, entry, 0);
@@ -469,7 +485,7 @@ static const JSTrampStepDef js_port_deliver_def = {
 static void port_enqueue_delivery(JSContext *ctx, JSValueConst port)
 {
     JSValueConst args[1];
-    PortData *d = port_of(port);
+    const PortData *d = port_of(port);
 
     args[0] = port;
     DCHECK(JS_IsFunction(ctx, g_deliver_fn), "a port delivery was queued before message_port_init built it");
@@ -480,12 +496,13 @@ static void port_enqueue_delivery(JSContext *ctx, JSValueConst port)
 }
 
 /* §9.4.4's "enable this's port message queue": everything already in it becomes a task, in order. */
-static void port_enable(JSContext *ctx, JSValueConst port, PortData *d)
+static void port_enable(JSContext *ctx, JSValueConst port)
 {
+    const PortData *d = port_of(port);
     uint32_t n = 0, i;
     if (d->enabled) return;
-    d->enabled = 1;
-    if (!port_queue_len(ctx, d, &n)) return;
+    port_of_for_write(port)->enabled = 1;
+    if (!port_queue_len(ctx, port, &n)) return;
     for (i = d->head; i < n; i++)
         port_enqueue_delivery(ctx, port);
 }
@@ -506,7 +523,7 @@ static void port_enable(JSContext *ctx, JSValueConst port, PortData *d)
  * step 1 is `options["transfer"]`. The wrapping is all that differs, and it is three lines below. */
 static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    PortData *d = port_of(this_val), *t;
+    const PortData *d = port_of(this_val), *t;
     JSValueConst second = argc > 1 ? argv[1] : JS_UNDEFINED;
     StructuredWithTransfer swt;
     JSValue transfer, target;
@@ -657,7 +674,7 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
            the example alone, and the receiver would DECIDE a branch the sender forked. */
         JS_SetPropertyUint32(ctx, entry, 2, JS_DupValue(ctx, swt.symbols));
         structured_with_transfer_free(ctx, &swt);
-        if (!port_queue_len(ctx, t, &qn)) { JS_FreeValue(ctx, entry); JS_FreeValue(ctx, target); return JS_EXCEPTION; }
+        if (!port_queue_len(ctx, target, &qn)) { JS_FreeValue(ctx, entry); JS_FreeValue(ctx, target); return JS_EXCEPTION; }
         JS_SetPropertyUint32(ctx, t->queue, qn, entry);
     }
     if (t->enabled)
@@ -669,10 +686,10 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
 /* §9.4.4's `start()`. */
 static JSValue js_port_start(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    PortData *d = port_of(this_val);
+    const PortData *d = port_of(this_val);
     (void)argc; (void)argv; (void)magic;
     if (!d) return JS_ThrowTypeError(ctx, "not a MessagePort");
-    port_enable(ctx, this_val, d);
+    port_enable(ctx, this_val);
     return JS_UNDEFINED;
 }
 
@@ -732,7 +749,7 @@ static int js_port_close_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
 
     STEP_ARM(PC_BEGIN);
     {
-        PortData *d = port_of(hdr->this_val);
+        PortData *d = port_of_for_write(hdr->this_val);
         int i;
 
         JS_FreeValue(ctx, in);
@@ -756,14 +773,14 @@ static int js_port_close_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
             /* The disentangle steps' 1-3: take otherPort, assert it exists, and make the two no longer
                entangled or associated with each other. Entanglement is symmetric, so BOTH sides are cleared
                here — a port left pointing at a closed one would keep queueing messages nobody will read. */
-            PortData *o = port_of(d->entangled);
+            const PortData *o = port_of(d->entangled);
 
             s->other = d->entangled;
             d->entangled = JS_UNDEFINED;
             DCHECK(o != NULL, "HTML §9.4.4's disentangle steps assert otherPort exists, and this port was "
                               "entangled with something that is not a MessagePort — entanglement is written "
                               "in exactly two places and both write a port");
-            if (o) mp_set(ctx, o, &o->entangled, JS_UNDEFINED);
+            if (o) mp_set(ctx, s->other, entangled, JS_UNDEFINED);
         }
         /* The disentangle steps' step 4. A `close` event bubbles no further than its target and is not
            cancelable: §9.4.4 fires it with no initialisation, which is DOM §2.5's un-initialized event. */
@@ -799,12 +816,12 @@ static const IdlStepDecl PORT_CLOSE_DECL = {
    left alone. */
 static void port_handler_set(JSContext *ctx, JSValueConst target, const char *name)
 {
-    PortData *d;
+    const PortData *d;
     if (strcmp(name, "onmessage") != 0)
         return;
     d = port_of(target);   /* NULL for every target that is not a port, which is most of them */
     if (d)
-        port_enable(ctx, target, d);
+        port_enable(ctx, target);
 }
 
 /* ---- §9.4.4's TRANSFER STEPS ---------------------------------------------------------------------------------
@@ -828,7 +845,7 @@ enum { TH_QUEUE = 0, TH_HEAD, TH_REMOTE, TH_N };
 static JSValue port_transfer_out(JSContext *ctx, JSValueConst v, StructuredRecordSymbols *symbols)
 {
     (void)symbols;   /* a port's holder carries no value */
-    PortData *d = port_of(v);
+    PortData *d = port_of_for_write(v);
     JSValue h;
 
     DCHECK(d != NULL, "the port transfer steps ran on something that is not a MessagePort");
@@ -842,14 +859,14 @@ static JSValue port_transfer_out(JSContext *ctx, JSValueConst v, StructuredRecor
     JS_SetPropertyUint32(ctx, h, TH_HEAD, JS_NewUint32(ctx, d->head));
     JS_SetPropertyUint32(ctx, h, TH_REMOTE, JS_DupValue(ctx, d->entangled));
     /* The old object keeps nothing: its queue has moved and it is detached. */
-    mp_set(ctx, d, &d->queue, JS_UNDEFINED);
+    mp_set(ctx, v, queue, JS_UNDEFINED);
     d->head = 0;
     d->enabled = 0;
     d->detached = 1;
     if (!JS_IsUndefined(d->entangled)) {
-        PortData *o = port_of(d->entangled);
-        if (o) mp_set(ctx, o, &o->entangled, JS_UNDEFINED);
-        mp_set(ctx, d, &d->entangled, JS_UNDEFINED);
+        const PortData *o = port_of(d->entangled);
+        if (o) mp_set(ctx, d->entangled, entangled, JS_UNDEFINED);
+        mp_set(ctx, v, entangled, JS_UNDEFINED);
     }
     return h;
 }
@@ -864,8 +881,8 @@ static JSValue port_transfer_in(JSContext *ctx, JSValueConst holder, StructuredR
     uint32_t head = 0;
 
     if (JS_IsException(obj)) return obj;
-    d = JS_GetOpaque(obj, g_port_class);
-    mp_set(ctx, d, &d->queue, JS_GetPropertyUint32(ctx, holder, TH_QUEUE));
+    d = port_of_for_write(obj);
+    mp_set(ctx, obj, queue, JS_GetPropertyUint32(ctx, holder, TH_QUEUE));
     { JSValue hv = JS_GetPropertyUint32(ctx, holder, TH_HEAD);
       JS_ToUint32(ctx, &head, hv);
       JS_FreeValue(ctx, hv); }
@@ -875,9 +892,9 @@ static JSValue port_transfer_in(JSContext *ctx, JSValueConst holder, StructuredR
     d->enabled = 0;
     remote = JS_GetPropertyUint32(ctx, holder, TH_REMOTE);
     if (!JS_IsUndefined(remote)) {
-        PortData *o = port_of(remote);
-        mp_set(ctx, d, &d->entangled, JS_DupValue(ctx, remote));
-        if (o) mp_set(ctx, o, &o->entangled, JS_DupValue(ctx, obj));
+        const PortData *o = port_of(remote);
+        mp_set(ctx, obj, entangled, JS_DupValue(ctx, remote));
+        if (o) mp_set(ctx, remote, entangled, JS_DupValue(ctx, obj));
     }
     JS_FreeValue(ctx, remote);
     return obj;
@@ -914,16 +931,12 @@ static JSValue port_new(JSContext *ctx)
 JSValue message_port_pair(JSContext *ctx, JSValue *port2)
 {
     JSValue p1 = port_new(ctx), p2;
-    PortData *d1, *d2;
-
     if (JS_IsException(p1)) return p1;
     p2 = port_new(ctx);
     if (JS_IsException(p2)) { JS_FreeValue(ctx, p1); return p2; }
     /* ENTANGLE. Each holds the other, which is the cycle port_gc_mark exists for. */
-    d1 = JS_GetOpaque(p1, g_port_class);
-    d2 = JS_GetOpaque(p2, g_port_class);
-    mp_set(ctx, d1, &d1->entangled, JS_DupValue(ctx, p2));
-    mp_set(ctx, d2, &d2->entangled, JS_DupValue(ctx, p1));
+    mp_set(ctx, p1, entangled, JS_DupValue(ctx, p2));
+    mp_set(ctx, p2, entangled, JS_DupValue(ctx, p1));
     *port2 = p2;
     return p1;
 }
@@ -935,29 +948,29 @@ JSValue message_port_new_in(JSContext *realm)
 
 void message_port_entangle(JSContext *ctx, JSValueConst a, JSValueConst b)
 {
-    PortData *da = port_of(a), *db = port_of(b);
+    const PortData *da = port_of(a), *db = port_of(b);
 
     DCHECK(da != NULL && db != NULL && JS_IsUndefined(da->entangled) && JS_IsUndefined(db->entangled),
            "§9.4.4's entangle was asked of something that is not a pair of free MessagePorts");
-    mp_set(ctx, da, &da->entangled, JS_DupValue(ctx, b));
-    mp_set(ctx, db, &db->entangled, JS_DupValue(ctx, a));
+    mp_set(ctx, a, entangled, JS_DupValue(ctx, b));
+    mp_set(ctx, b, entangled, JS_DupValue(ctx, a));
 }
 
 void message_port_set_message_event_target(JSContext *ctx, JSValueConst port, JSValueConst target)
 {
-    PortData *d = port_of(port);
+    const PortData *d = port_of(port);
 
     DCHECK(d != NULL && JS_IsUndefined(d->target) && JS_IsObject(target),
            "a message event target was set on something that is not a MessagePort, twice, or to a non-object");
-    mp_set(ctx, d, &d->target, JS_DupValue(ctx, target));
+    mp_set(ctx, port, target, JS_DupValue(ctx, target));
 }
 
 void message_port_enable(JSContext *ctx, JSValueConst port)
 {
-    PortData *d = port_of(port);
+    const PortData *d = port_of(port);
 
     DCHECK(d != NULL, "§9.4.4's enable was asked of something that is not a MessagePort");
-    port_enable(ctx, port, d);
+    port_enable(ctx, port);
 }
 
 JSValue message_port_post_message(JSContext *ctx, JSValueConst port, int argc, JSValueConst *argv)

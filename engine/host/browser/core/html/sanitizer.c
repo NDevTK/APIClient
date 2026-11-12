@@ -1281,24 +1281,18 @@ static int g_id_ctor = -1, g_id_get = -1, g_id_remove_unsafe = -1, g_id_set_comm
            g_id_replace_with_children = -1, g_id_allow_pi = -1, g_id_remove_pi = -1,
            g_id_allow_attribute = -1, g_id_remove_attribute = -1;
 
-/* THE RECORD TIME-TRAVELS. Its one owned value is named here and freed by the finalizer below — one list, read
-   together, so a field added to the record is a field both of them get. */
-static const uint16_t SANITIZER_VALS[] = { (uint16_t)offsetof(SanitizerRec, config) };
-static const CowRecord SANITIZER_REC = { sizeof(SanitizerRec), SANITIZER_VALS, 1 };
 
-/* The capture belongs HERE, in the accessor: a flow that has reached the record is one that may write it, and
-   there is then no write site left to miss. */
-static SanitizerRec *san_rec_of(JSValueConst v)
+/* The accessor every member reaches the record through. The record is written once, by its mint before
+   JS_SetOpaque, and never again, so it answers const, has no write accessor and is never captured. */
+static const SanitizerRec *san_rec_of(JSValueConst v)
 {
-    SanitizerRec *r = JS_GetOpaque(v, g_class);
-
-    if (r) cow_capture_host_record(v, r, &SANITIZER_REC);
+    const SanitizerRec *r = JS_GetOpaque(v, g_class);
     return r;
 }
 
-static SanitizerRec *san_rec_here(JSContext *ctx, JSValueConst v)
+static const SanitizerRec *san_rec_here(JSContext *ctx, JSValueConst v)
 {
-    SanitizerRec *r = san_rec_of(v);
+    const SanitizerRec *r = san_rec_of(v);
 
     if (!r) JS_ThrowTypeError(ctx, "a Sanitizer member was reached on something that is not a Sanitizer");
     return r;
@@ -1334,7 +1328,7 @@ static void san_finalizer(JSRuntime *rt, JSValue val)
 static void san_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    SanitizerRec *r = JS_GetAnyOpaque(val, &id);
+    const SanitizerRec *r = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     if (!r) return;
@@ -1433,7 +1427,7 @@ static JSValue san_config_from_spec(JSContext *ctx, JSValueConst spec)
         /* §8.6.4's `get a sanitizer instance from options`: neither the string arm (step 4) nor the dictionary
            arm (step 5) runs for a Sanitizer INSTANCE, so step 6 returns the instance itself — and `sanitize`
            step 3 then mutates ITS configuration, so this is the same object the page holds, not a copy. */
-        SanitizerRec *r = san_rec_of(spec);
+        const SanitizerRec *r = san_rec_of(spec);
 
         return JS_DupValue(ctx, r->config);
     }
@@ -1517,7 +1511,7 @@ static JSValue js_san_get(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     static const char *const LISTS[] = { "elements", "removeElements", "replaceWithChildrenElements",
                                          "attributes", "removeAttributes", NULL };
     static const char *const PI_LISTS[] = { "processingInstructions", "removeProcessingInstructions", NULL };
-    SanitizerRec *r = san_rec_here(ctx, this_val);
+    const SanitizerRec *r = san_rec_here(ctx, this_val);
     JSValue out;
     int i;
 
@@ -1574,7 +1568,7 @@ static JSValue js_san_get(JSContext *ctx, JSValueConst this_val, int argc, JSVal
 static JSValue js_san_remove_unsafe(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                     int magic)
 {
-    SanitizerRec *r = san_rec_here(ctx, this_val);
+    const SanitizerRec *r = san_rec_here(ctx, this_val);
 
     (void)argc; (void)argv; (void)magic;
     if (!r) return JS_EXCEPTION;
@@ -1586,7 +1580,7 @@ static JSValue js_san_remove_unsafe(JSContext *ctx, JSValueConst this_val, int a
    allow-list, because §8.6.3 makes the member an extension of that list. */
 static JSValue js_san_set_flag(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    SanitizerRec *r = san_rec_here(ctx, this_val);
+    const SanitizerRec *r = san_rec_here(ctx, this_val);
     const char *member = magic ? "dataAttributes" : "comments";
     bool allow, had;
 
@@ -1638,9 +1632,9 @@ static JSValue js_san_set_flag(JSContext *ctx, JSValueConst this_val, int argc, 
    same two lines, so they are one helper, and the assert is the real §8.6.4 check rather than a comment saying
    it holds. The only ways into a configuration are `configure` (which throws for an invalid one) and these
    methods, so a failure here names one of them. */
-static SanitizerRec *san_modifier_rec(JSContext *ctx, JSValueConst this_val)
+static const SanitizerRec *san_modifier_rec(JSContext *ctx, JSValueConst this_val)
 {
-    SanitizerRec *r = san_rec_here(ctx, this_val);
+    const SanitizerRec *r = san_rec_here(ctx, this_val);
 
     if (r)
         DCHECK(san_config_is_valid(ctx, r->config),
@@ -1672,7 +1666,7 @@ static bool san_modifier_item(JSContext *ctx, JSValueConst arg, SanKind kind, JS
 static JSValue js_san_allow_element(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                     int magic)
 {
-    SanitizerRec *r = san_modifier_rec(ctx, this_val);
+    const SanitizerRec *r = san_modifier_rec(ctx, this_val);
     JSValue el, list;
     SanName nm;
     bool modified = false, answer = false;
@@ -1778,7 +1772,7 @@ static JSValue js_san_allow_element(JSContext *ctx, JSValueConst this_val, int a
    differ in the canonical shape and in which operation, and in nothing else. */
 static JSValue js_san_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    SanitizerRec *r = san_modifier_rec(ctx, this_val);
+    const SanitizerRec *r = san_modifier_rec(ctx, this_val);
     JSValue item;
     SanName nm;
     bool answer;
@@ -1798,7 +1792,7 @@ static JSValue js_san_remove(JSContext *ctx, JSValueConst this_val, int argc, JS
 static JSValue js_san_replace_with_children(JSContext *ctx, JSValueConst this_val, int argc,
                                             JSValueConst *argv, int magic)
 {
-    SanitizerRec *r = san_modifier_rec(ctx, this_val);
+    const SanitizerRec *r = san_modifier_rec(ctx, this_val);
     JSValue el, list, rwc;
     SanName nm;
     bool modified, answer;
@@ -1844,7 +1838,7 @@ static JSValue js_san_replace_with_children(JSContext *ctx, JSValueConst this_va
 static JSValue js_san_allow_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                       int magic)
 {
-    SanitizerRec *r = san_modifier_rec(ctx, this_val);
+    const SanitizerRec *r = san_modifier_rec(ctx, this_val);
     JSValue at, list;
     SanName nm;
     bool answer = false;
@@ -1894,7 +1888,7 @@ static JSValue js_san_allow_attribute(JSContext *ctx, JSValueConst this_val, int
    already says what the member wants it to. */
 static JSValue js_san_pi(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    SanitizerRec *r = san_modifier_rec(ctx, this_val);
+    const SanitizerRec *r = san_modifier_rec(ctx, this_val);
     JSValue pi, tv, list;
     const char *target;
     bool has_allow, answer;

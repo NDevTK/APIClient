@@ -107,7 +107,7 @@ void policy_container_free(PolicyContainer *p);
  * NAMED RESIDUAL — the grown list is the DOCUMENT's and not the appending FLOW's. policy_container.c already
  * states that a container is installed once on the pre-boot baseline and is not yet per-flow; an append made
  * by a flow is therefore visible to that flow's siblings, which is the same gap document_install's own DCHECK
- * names ("build it as a COW record, like ProxyData's PROXY_REC, captured in its accessor"). The next diff is
+ * names ("build it as a COW record, like ProxyData's PROXY_REC, captured by its write accessor"). The next diff is
  * that record, and the append is what makes it load-bearing rather than hypothetical. Its absence shows as a
  * finding emitted by a flow that never ran the inserting script carrying a `cspBlocks` naming a policy that
  * flow's own path never delivered — a SUPPRESSED real finding, which is the safe half of the two directions

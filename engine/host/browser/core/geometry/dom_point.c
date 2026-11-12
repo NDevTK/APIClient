@@ -36,8 +36,17 @@ static int g_id_ctor_ro = -1, g_id_ctor_pt = -1, g_id_from_ro = -1, g_id_from_pt
 static int g_id_matrix_transform = -1, g_id_tojson = -1;
 static int g_id_set[4] = { -1, -1, -1, -1 };
 
-/* The brand, and the point at which the flow reaches the record: a record reached is one it may write. */
-static DomPointBox *dp_box(JSValueConst v)
+/* The brand. A read captures nothing; the setter takes the record through dp_box_for_write. */
+static const DomPointBox *dp_box(JSValueConst v)
+{
+    const DomPointBox *b = JS_GetOpaque(v, g_ro_class);
+
+    if (!b) b = JS_GetOpaque(v, g_pt_class);
+    return b;
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static DomPointBox *dp_box_for_write(JSValueConst v)
 {
     DomPointBox *b = JS_GetOpaque(v, g_ro_class);
 
@@ -46,9 +55,9 @@ static DomPointBox *dp_box(JSValueConst v)
     return b;
 }
 
-static DomPointBox *dp_this(JSContext *ctx, JSValueConst this_val)
+static const DomPointBox *dp_this(JSContext *ctx, JSValueConst this_val)
 {
-    DomPointBox *b = dp_box(this_val);
+    const DomPointBox *b = dp_box(this_val);
 
     if (!b) JS_ThrowTypeError(ctx, "a DOMPoint member was reached on something that is not a DOMPoint");
     return b;
@@ -61,7 +70,7 @@ bool dom_point_is(JSValueConst v)
 
 void dom_point_values(JSValueConst v, JSValueConst out[4])
 {
-    DomPointBox *b = dp_box(v);
+    const DomPointBox *b = dp_box(v);
     int i;
 
     DCHECK(b != NULL, "dom_point_values was handed something that is not a DOMPoint");
@@ -84,7 +93,7 @@ static void dp_finalizer(JSRuntime *rt, JSValue val)
 static void dp_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    DomPointBox *b = JS_GetAnyOpaque(val, &id);
+    const DomPointBox *b = JS_GetAnyOpaque(val, &id);
     int i;
 
     DCHECK(b != NULL, "a DOMPoint was marked with no internal member variables");
@@ -175,7 +184,7 @@ const IdlDictDecl DOM_POINT_INIT_DECL = {
 
 static JSValue js_dp_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    DomPointBox *b = dp_this(ctx, this_val);
+    const DomPointBox *b = dp_this(ctx, this_val);
 
     if (!b) return JS_EXCEPTION;
     DCHECK(magic >= 0 && magic < 4, "a DOMPoint attribute ran with a magic §2 does not declare");
@@ -185,12 +194,12 @@ static JSValue js_dp_get(JSContext *ctx, JSValueConst this_val, int magic)
 /* §2: "For the DOMPoint interface, setting the x attribute must set the x coordinate to the new value." */
 static JSValue js_dp_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    DomPointBox *b = dp_this(ctx, this_val);
+    DomPointBox *b;
 
-    if (!b) return JS_EXCEPTION;
+    if (!dp_this(ctx, this_val)) return JS_EXCEPTION;
     DCHECK(magic >= 0 && magic < 4, "a DOMPoint setter ran with a magic §2 does not declare");
-    cow_record_set_at(ctx, b, &DOM_POINT_REC, &b->v[magic], dp_value(ctx, JS_DupValue(ctx, val), magic),
-                      __FILE__, __LINE__);
+    b = dp_box_for_write(this_val);
+    cow_record_set(ctx, this_val, b, &DOM_POINT_REC, &b->v[magic], dp_value(ctx, JS_DupValue(ctx, val), magic));
     return JS_UNDEFINED;
 }
 
@@ -207,7 +216,7 @@ static JSValue js_dp_matrix_transform(JSContext *ctx, JSValueConst this_val, int
 /* Web IDL §3.7.7.1.1's default toJSON steps over §2's four attributes, all `unrestricted double`. */
 static JSValue js_dp_tojson(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    DomPointBox *b = dp_this(ctx, this_val);
+    const DomPointBox *b = dp_this(ctx, this_val);
     JSValue out;
     int i;
 

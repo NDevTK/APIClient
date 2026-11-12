@@ -23,10 +23,6 @@ typedef struct {
     JSValue path;
 } Path2DBox;
 
-/* The one statement of what the record owns — read by the COW capture, by the finalizer and by the gc_mark. */
-static const uint16_t PATH_2D_OFF[] = { (uint16_t)offsetof(Path2DBox, path) };
-static const CowRecord PATH_2D_REC = { sizeof(Path2DBox), PATH_2D_OFF, 1 };
-
 static JSClassID g_class;
 static int g_id_ctor = -1;
 
@@ -38,16 +34,11 @@ static int g_id_ctor = -1;
    `roundRect` is absent from the mixin's list too — see the residual at the install below. */
 static int g_id_m[CANVAS_PATH_M_COUNT];
 
-static Path2DBox *p2d_box(JSValueConst v)
+/* The record is written once, by its mint, and never again, so it answers const and nothing captures it.
+   The path array's own element writes are captured by the heap's delta, at JS_SetPropertyInternal2's head. */
+static const Path2DBox *p2d_box(JSValueConst v)
 {
-    Path2DBox *b = JS_GetOpaque(v, g_class);
-
-    /* CLAUDE.md §A-COMPONENT'S-OWN-C-RECORD-TIME-TRAVELS: the capture belongs in the ACCESSOR, so a record a
-       flow has reached is one it may write and there is no write site left to miss. The path ARRAY's own
-       element writes are captured separately and without this component's help — cow_capture runs at
-       JS_SetPropertyInternal2's head, which is where canvas_path.c's writes arrive. */
-    if (b) cow_capture_host_record(v, b, &PATH_2D_REC);
-    return b;
+    return JS_GetOpaque(v, g_class);
 }
 
 /* THE BRAND CHECK, AND IT IS A `TypeError` RATHER THAN AN ASSERT. `this` is whatever the page wrote —
@@ -56,7 +47,7 @@ static Path2DBox *p2d_box(JSValueConst v)
    which this tree has already been caught on once. Web IDL §3.7.7 Operations' own answer is the TypeError. */
 static JSValue p2d_path_of(JSContext *ctx, JSValueConst this_val)
 {
-    Path2DBox *b = p2d_box(this_val);
+    const Path2DBox *b = p2d_box(this_val);
 
     if (!b) return JS_ThrowTypeError(ctx, "a Path2D member was reached on something that is not a Path2D");
     DCHECK(JS_IsArray(b->path), "a Path2D's record held something that is not its path array");
@@ -77,7 +68,7 @@ static void p2d_finalizer(JSRuntime *rt, JSValue val)
 static void p2d_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    Path2DBox *b = JS_GetAnyOpaque(val, &id);
+    const Path2DBox *b = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     DCHECK(b != NULL, "a Path2D was marked with no path — p2d_alloc attaches the record before the object can "
@@ -132,7 +123,7 @@ static JSValue p2d_alloc(JSContext *ctx, JSValueConst new_target)
 static JSValue js_p2d_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv, int magic)
 {
     JSValue out, dst, src;
-    Path2DBox *from;
+    const Path2DBox *from;
 
     (void)magic;
     out = p2d_alloc(ctx, new_target);                                   /* step 1 */

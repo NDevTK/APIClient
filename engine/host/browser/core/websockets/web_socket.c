@@ -73,7 +73,14 @@ static const CowRecord WS_REC = { sizeof(WebSocketData), WS_VALS, (int)(sizeof(W
 
 /* The record, captured for the running flow before it can be written: an arm that closes a socket must not
    close it for its sibling. */
-static WebSocketData *ws_of(JSValueConst v)
+static const WebSocketData *ws_of(JSValueConst v)
+{
+    const WebSocketData *d = JS_GetOpaque(v, g_ws_class);
+    return d;
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static WebSocketData *ws_of_for_write(JSValueConst v)
 {
     WebSocketData *d = JS_GetOpaque(v, g_ws_class);
 
@@ -81,7 +88,8 @@ static WebSocketData *ws_of(JSValueConst v)
     return d;
 }
 
-#define ws_set(ctx_, d_, slot_, v_) cow_record_set_at((ctx_), (d_), &WS_REC, (slot_), (v_), __FILE__, __LINE__)
+#define ws_set(ctx_, owner_, d_, slot_, v_) \
+    cow_record_set_at((ctx_), (owner_), (d_), &WS_REC, (slot_), (v_), __FILE__, __LINE__)
 
 /* The collector runs after the release column, so neither callback may look the class id up. */
 static void ws_finalizer(JSRuntime *rt, JSValue val)
@@ -100,7 +108,7 @@ static void ws_finalizer(JSRuntime *rt, JSValue val)
 static void ws_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    WebSocketData *d = JS_GetAnyOpaque(val, &id);
+    const WebSocketData *d = JS_GetAnyOpaque(val, &id);
     size_t i;
 
     (void)id;
@@ -191,7 +199,7 @@ static int js_ws_task_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
 {
     WsTask *s = st;
     JSValueConst sock = step_arg(&s->hdr, 0);
-    WebSocketData *d = ws_of(sock);
+    WebSocketData *d = ws_of_for_write(sock);
     JSContext *rctx;
     int r;
 
@@ -310,13 +318,13 @@ static void ws_fail(WebSocketData *d, JSValueConst sock)
 static JSValue ws_handshake_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic,
                                     JSValueConst *func_data)
 {
-    WebSocketData *d = ws_of(func_data[0]);
+    WebSocketData *d = ws_of_for_write(func_data[0]);
 
     (void)this_val; (void)magic;
     DCHECK(d != NULL, "a WebSocket handshake's reply was delivered to something that is not a WebSocket");
     DCHECK(argc >= 1 && (JS_IsObject(argv[0]) || JS_IsNull(argv[0])),
            "a WebSocket handshake's reply is neither the host's reply record nor null for a network error");
-    ws_set(ctx, d, &d->handshake, JS_UNDEFINED);
+    ws_set(ctx, func_data[0], d, &d->handshake, JS_UNDEFINED);
     if (d->ready_state != WS_CONNECTING) return JS_UNDEFINED;
     if (argc >= 1 && JS_IsObject(argv[0]) && fetch_reply_status(ctx, argv[0]) == 101)
         DFAIL("a host answered a WebSocket handshake with status 101 and the engine has no frame channel to "
@@ -479,7 +487,7 @@ static void ws_establish(JSContext *ctx, JSValueConst sock, WebSocketData *d, Ur
     req.address = address;
     req.address_value = address == FETCH_ADDRESS_UNKNOWN ? src : JS_UNDEFINED;
     req.address_url = JS_UNDEFINED;
-    ws_set(ctx, d, &d->handshake, JS_DupValue(ctx, deliver));
+    ws_set(ctx, sock, d, &d->handshake, JS_DupValue(ctx, deliver));
     engine_pending_resource_url(ctx, deliver, &req);
     JS_FreeValue(ctx, deliver);
     header_list_free(&hl);
@@ -576,7 +584,7 @@ static JSValue js_ws_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSV
     JS_SetPropertyUint32(ctx, list, ws_list_len(ctx, list), JS_DupValue(ctx, obj));
     JS_FreeValue(ctx, list);
     /* Steps 11-12. */
-    ws_establish(ctx, obj, ws_of(obj), &rec, combined, address, argv[0]);
+    ws_establish(ctx, obj, ws_of_for_write(obj), &rec, combined, address, argv[0]);
     free(combined);
     url_record_free(&rec);
     return obj;
@@ -587,7 +595,7 @@ enum { WS_GET_URL = 0, WS_GET_READY_STATE, WS_GET_BUFFERED_AMOUNT, WS_GET_EXTENS
 
 static JSValue js_ws_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    WebSocketData *d = ws_of(this_val);
+    const WebSocketData *d = ws_of(this_val);
 
     if (!d) return JS_ThrowTypeError(ctx, "not a WebSocket");
     switch (magic) {
@@ -606,7 +614,7 @@ static JSValue js_ws_get(JSContext *ctx, JSValueConst this_val, int magic)
    IDL §3.7.6 "Attributes" returns before the steps for any other string. */
 static JSValue js_ws_set_binary_type(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    WebSocketData *d = ws_of(this_val);
+    WebSocketData *d = ws_of_for_write(this_val);
     const char *s;
     int i, hit = -1;
 
@@ -625,7 +633,7 @@ static JSValue js_ws_set_binary_type(JSContext *ctx, JSValueConst this_val, JSVa
 /* `close(code, reason)`. */
 static JSValue js_ws_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    WebSocketData *d = ws_of(this_val);
+    WebSocketData *d = ws_of_for_write(this_val);
 
     (void)magic;
     if (!d) return JS_ThrowTypeError(ctx, "not a WebSocket");
@@ -656,7 +664,7 @@ static JSValue js_ws_close(JSContext *ctx, JSValueConst this_val, int argc, JSVa
        ready state to CLOSING (2)." The handshake still parked is withdrawn from the host. */
     if (JS_IsFunction(ctx, d->handshake)) {
         engine_pending_resource_cancel(ctx, d->handshake);
-        ws_set(ctx, d, &d->handshake, JS_UNDEFINED);
+        ws_set(ctx, this_val, d, &d->handshake, JS_UNDEFINED);
     }
     ws_fail(d, this_val);
     d->ready_state = WS_CLOSING;
@@ -699,7 +707,7 @@ static double ws_data_bytes(JSContext *ctx, JSValueConst data)
 /* `send(data)`. */
 static JSValue js_ws_send(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    WebSocketData *d = ws_of(this_val);
+    WebSocketData *d = ws_of_for_write(this_val);
     double n;
 
     (void)magic;
@@ -725,13 +733,15 @@ void web_socket_make_disappear_all(JSContext *ctx)
 
     for (i = 0; i < n; i++) {
         JSValue sock = JS_GetPropertyUint32(ctx, list, i);
-        WebSocketData *d = ws_of(sock);
+        const WebSocketData *d = ws_of(sock);
 
         DCHECK(d != NULL, "a realm's socket list holds something that is not a WebSocket");
         if (d != NULL && JS_IsFunction(ctx, d->handshake)) {
-            engine_pending_resource_cancel(ctx, d->handshake);
-            ws_set(ctx, d, &d->handshake, JS_UNDEFINED);
-            d->failed = 1;
+            WebSocketData *w = ws_of_for_write(sock);
+
+            engine_pending_resource_cancel(ctx, w->handshake);
+            ws_set(ctx, sock, w, &w->handshake, JS_UNDEFINED);
+            w->failed = 1;
         }
         JS_FreeValue(ctx, sock);
     }

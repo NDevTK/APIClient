@@ -180,18 +180,18 @@ static ByobReqData *byobreq_of(JSValueConst v)
    collector and its slots hold no value to release. */
 /* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
    line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
-static void bc_set_at(JSContext *ctx, ByteCtrlData *c, JSValue *slot, JSValue v,
+static void bc_set_at(JSContext *ctx, JSValueConst owner, ByteCtrlData *c, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, c, &BCTRL_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, c, &BCTRL_REC, slot, v, file, line);
 }
-static void bq_set_at(JSContext *ctx, ByobReqData *q, JSValue *slot, JSValue v,
+static void bq_set_at(JSContext *ctx, JSValueConst owner, ByobReqData *q, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, q, &BYOBREQ_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, q, &BYOBREQ_REC, slot, v, file, line);
 }
-#define bc_set(ctx_, c_, slot_, v_) bc_set_at((ctx_), (c_), (slot_), (v_), __FILE__, __LINE__)
-#define bq_set(ctx_, q_, slot_, v_) bq_set_at((ctx_), (q_), (slot_), (v_), __FILE__, __LINE__)
+#define bc_set(ctx_, owner_, c_, slot_, v_) bc_set_at((ctx_), (owner_), (c_), (slot_), (v_), __FILE__, __LINE__)
+#define bq_set(ctx_, owner_, q_, slot_, v_) bq_set_at((ctx_), (owner_), (q_), (slot_), (v_), __FILE__, __LINE__)
 
 bool readable_byte_ctrl_is(JSValueConst v)
 {
@@ -394,7 +394,7 @@ static JSValue byte_view_parts(JSContext *ctx, JSValueConst view, double *poff, 
 /* ---- §4.9.5's queue and pull-into operations, none of which run the page's code ---------------------------- */
 
 /* §4.9.5's ReadableByteStreamControllerInvalidateBYOBRequest. */
-static void byte_invalidate_byob(JSContext *ctx, ByteCtrlData *c)
+static void byte_invalidate_byob(JSContext *ctx, JSValueConst ctrl, ByteCtrlData *c)
 {
     ByobReqData *q;
 
@@ -402,34 +402,34 @@ static void byte_invalidate_byob(JSContext *ctx, ByteCtrlData *c)
     q = byobreq_of(c->byob_request);
     DCHECK(q != NULL, "a byte controller held something that is not a ReadableStreamBYOBRequest");
     if (q) {
-        bq_set(ctx, q, &q->controller, JS_UNDEFINED);
-        bq_set(ctx, q, &q->view, JS_NULL);
+        bq_set(ctx, c->byob_request, q, &q->controller, JS_UNDEFINED);
+        bq_set(ctx, c->byob_request, q, &q->view, JS_NULL);
     }
-    bc_set(ctx, c, &c->byob_request, JS_UNDEFINED);
+    bc_set(ctx, ctrl, c, &c->byob_request, JS_UNDEFINED);
 }
 
 /* §4.9.5's ReadableByteStreamControllerClearPendingPullIntos. */
-static void byte_clear_pending(JSContext *ctx, ByteCtrlData *c)
+static void byte_clear_pending(JSContext *ctx, JSValueConst ctrl, ByteCtrlData *c)
 {
     JSValue list;
 
-    byte_invalidate_byob(ctx, c);
+    byte_invalidate_byob(ctx, ctrl, c);
     /* BUILT INTO A LOCAL AND THEN PUBLISHED: the new Array is minted while the OLD one is still live and still
        named by the record, so the collection this allocation can start does not reach a freed slot. */
     list = JS_NewArray(ctx);
     CHECK(!JS_IsException(list), "a byte stream's pull-into list could not be allocated");
-    bc_set(ctx, c, &c->pending, list);
+    bc_set(ctx, ctrl, c, &c->pending, list);
     c->phead = 0;
 }
 
 /* §8.1's ResetQueue over §4.7's queue: the entries and the byte total go together. */
-static void byte_reset_queue(JSContext *ctx, ByteCtrlData *c)
+static void byte_reset_queue(JSContext *ctx, JSValueConst ctrl, ByteCtrlData *c)
 {
     JSValue q = JS_NewArray(ctx);
 
     /* BUILT INTO A LOCAL AND THEN PUBLISHED, for the reason byte_clear_pending states one screen up. */
     CHECK(!JS_IsException(q), "a byte stream's queue could not be allocated");
-    bc_set(ctx, c, &c->queue, q);
+    bc_set(ctx, ctrl, c, &c->queue, q);
     c->qhead = 0;
     c->queue_total = 0;
 }
@@ -844,8 +844,8 @@ static int js_byte_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             /* §4.9.5's ReadableByteStreamControllerError: the pull-intos go, the queue goes, the algorithms go,
                and only then does the stream error. */
             if (d->state == RS_READABLE) {
-                byte_clear_pending(ctx, c);
-                byte_reset_queue(ctx, c);
+                byte_clear_pending(ctx, ctrl, c);
+                byte_reset_queue(ctx, ctrl, c);
                 readable_byte_clear_algorithms(ctx, ctrl);
             }
             s->w.err = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
@@ -853,7 +853,7 @@ static int js_byte_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         }
     }
     r = s->w.pull != P_IDLE ? readable_byte_pull_run(ctx, &s->w, ctrl, cb_result, out_cb, out_argc)
-                            : rs_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc);
+                            : rs_settle_run(ctx, &s->w, c->stream, d, cb_result, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return JS_STEP_ABRUPT;
     return JS_STEP_DONE;
@@ -1054,9 +1054,9 @@ void readable_byte_release_steps(JSContext *ctx, JSValueConst ctrl)
     list = JS_NewArray(ctx);
     CHECK(!JS_IsException(list), "a byte stream's pull-into list could not be allocated");
     JS_SetPropertyUint32(ctx, list, 0, first);
-    bc_set(ctx, c, &c->pending, list);
+    bc_set(ctx, ctrl, c, &c->pending, list);
     c->phead = 0;
-    byte_invalidate_byob(ctx, c);
+    byte_invalidate_byob(ctx, ctrl, c);
 }
 
 void readable_byte_clear(JSContext *ctx, JSValueConst ctrl)
@@ -1064,8 +1064,8 @@ void readable_byte_clear(JSContext *ctx, JSValueConst ctrl)
     ByteCtrlData *c = bctrl_of(ctrl);
 
     DCHECK(c != NULL, "a byte [[CancelSteps]] ran on a value that is not a ReadableByteStreamController");
-    byte_clear_pending(ctx, c);
-    byte_reset_queue(ctx, c);
+    byte_clear_pending(ctx, ctrl, c);
+    byte_reset_queue(ctx, ctrl, c);
 }
 
 JSValueConst readable_byte_cancel_fn(JSValueConst ctrl)
@@ -1089,8 +1089,8 @@ void readable_byte_clear_algorithms(JSContext *ctx, JSValueConst ctrl)
     ByteCtrlData *c = bctrl_of(ctrl);
 
     DCHECK(c != NULL, "a byte ClearAlgorithms ran on a value that is not a ReadableByteStreamController");
-    bc_set(ctx, c, &c->pull_fn, JS_UNDEFINED);
-    bc_set(ctx, c, &c->cancel_fn, JS_UNDEFINED);
+    bc_set(ctx, ctrl, c, &c->pull_fn, JS_UNDEFINED);
+    bc_set(ctx, ctrl, c, &c->cancel_fn, JS_UNDEFINED);
 }
 
 /* ---- what §4.9.1's ReadableByteStreamTee performs on a BRANCH ----------------------------------------------- */
@@ -1193,7 +1193,7 @@ int readable_byte_ctrl_setup(JSContext *ctx, JSValueConst stream, JSValueConst p
     /* §4.2's constructor builds the stream with §4.6's controller already attached (there is no stream without
        one), so THIS is where a byte stream loses it: the two are alternatives, and a stream carrying both would
        answer §4.9.2's polymorphic call from whichever one a reader happened to find. */
-    rs_stream_set(ctx, d, &d->controller, obj);
+    rs_stream_set(ctx, stream, d, &d->controller, obj);
     return 0;
 }
 
@@ -1315,7 +1315,7 @@ static int js_byte_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                     JS_FreeValue(ctx, first);
                     return JS_STEP_ABRUPT;
                 }
-                byte_invalidate_byob(ctx, c);
+                byte_invalidate_byob(ctx, s->hdr.this_val, c);
                 nb = byte_transfer(ctx, fbuf);
                 JS_FreeValue(ctx, fbuf);
                 if (JS_IsException(nb)) { JS_FreeValue(ctx, first); return JS_STEP_ABRUPT; }
@@ -1375,8 +1375,8 @@ static int js_byte_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                                            "pending pull-into");
                     s->w.err = JS_GetException(ctx);
                     s->rethrow = JS_DupValue(ctx, s->w.err);
-                    byte_clear_pending(ctx, c);
-                    byte_reset_queue(ctx, c);
+                    byte_clear_pending(ctx, s->hdr.this_val, c);
+                    byte_reset_queue(ctx, s->hdr.this_val, c);
                     readable_byte_clear_algorithms(ctx, s->hdr.this_val);
                     s->w.settle = S_ERR_SET;
                     STEP_GOTO(s->hdr.stage, BS_RETHROW, &s->w.phase, NULL);
@@ -1389,8 +1389,8 @@ static int js_byte_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         } else {
             DCHECK(op == BC_ERROR, "a byte controller member ran with an operation this component does not have");
             if (d->state != RS_READABLE) return JS_STEP_DONE;
-            byte_clear_pending(ctx, c);
-            byte_reset_queue(ctx, c);
+            byte_clear_pending(ctx, s->hdr.this_val, c);
+            byte_reset_queue(ctx, s->hdr.this_val, c);
             readable_byte_clear_algorithms(ctx, s->hdr.this_val);
             s->w.err = JS_DupValue(ctx, a0);
             s->w.settle = S_ERR_SET;
@@ -1422,7 +1422,7 @@ stages:
             s->sub = L_DRAIN;
         }
         if (s->sub == L_DRAIN) {
-            r = s->w.settle != S_IDLE ? rs_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc)
+            r = s->w.settle != S_IDLE ? rs_settle_run(ctx, &s->w, c->stream, d, cb_result, out_cb, out_argc)
                                       : readable_byte_pull_run(ctx, &s->w, s->hdr.this_val, cb_result,
                                                                out_cb, out_argc);
             if (r > 0) return r;
@@ -1504,13 +1504,13 @@ stages:
     }
 
     if (s->hdr.stage == BS_SETTLE) {
-        r = rs_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc);
+        r = rs_settle_run(ctx, &s->w, c->stream, d, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         return JS_STEP_DONE;
     }
     if (s->hdr.stage == BS_RETHROW) {
-        r = rs_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc);
+        r = rs_settle_run(ctx, &s->w, c->stream, d, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         JS_Throw(ctx, s->rethrow);
@@ -1683,11 +1683,12 @@ static int byte_respond_readable(JSContext *ctx, ByteCtrlData *c, StreamData *d,
 
 /* §4.9.5's ReadableByteStreamControllerRespondInternal. Returns 0, or -1 with the exception live — which the
    caller ERRORS the stream with before re-raising it. */
-static int byte_respond_internal(JSContext *ctx, ByteCtrlData *c, StreamData *d, ByteCommit *cm, double written)
+static int byte_respond_internal(JSContext *ctx, JSValueConst ctrl, ByteCtrlData *c, StreamData *d, ByteCommit *cm,
+                                 double written)
 {
     JSValue first;
 
-    byte_invalidate_byob(ctx, c);
+    byte_invalidate_byob(ctx, ctrl, c);
     first = byte_first_pending(ctx, c);
     if (d->state == RS_CLOSED) {
         DCHECK(written == 0, "a closed byte stream was told bytes had been written into its pull-into");
@@ -1862,13 +1863,13 @@ static int js_byobreq_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
             return JS_STEP_ABRUPT;
         }
     responded:
-        if (byte_respond_internal(ctx, c, d, &s->cm, s->n) < 0) {
+        if (byte_respond_internal(ctx, s->ctrl, c, d, &s->cm, s->n) < 0) {
             /* The one failure §4.9.5 recovers from: the remainder could not be cloned, so the controller is
                ERRORED with that exception and the member re-raises it. */
             s->w.err = JS_GetException(ctx);
             s->rethrow = JS_DupValue(ctx, s->w.err);
-            byte_clear_pending(ctx, c);
-            byte_reset_queue(ctx, c);
+            byte_clear_pending(ctx, s->ctrl, c);
+            byte_reset_queue(ctx, s->ctrl, c);
             readable_byte_clear_algorithms(ctx, s->ctrl);
             s->w.settle = S_ERR_SET;
             s->hdr.stage = BQ_SETTLE;
@@ -1891,7 +1892,7 @@ static int js_byobreq_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->w.pull = P_TEST;
     }
     if (s->hdr.stage == BQ_SETTLE) {
-        r = rs_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc);
+        r = rs_settle_run(ctx, &s->w, c->stream, d, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         JS_Throw(ctx, s->rethrow);
@@ -2493,8 +2494,8 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                 s->result = JS_DupValue(ctx, s->w.err);
                 s->settle = funcs[1];
                 JS_FreeValue(ctx, funcs[0]);
-                byte_clear_pending(ctx, c);
-                byte_reset_queue(ctx, c);
+                byte_clear_pending(ctx, d->controller, c);
+                byte_reset_queue(ctx, d->controller, c);
                 readable_byte_clear_algorithms(ctx, d->controller);
                 s->w.settle = S_ERR_SET;
                 STEP_GOTO(s->hdr.stage, BR_DRAIN, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
@@ -2550,7 +2551,7 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
     if (s->hdr.stage == BR_DRAIN) {
         StreamData *d = rs_stream_data(s->stream);
         DCHECK(d != NULL, "the BYOB read machine's stream stopped being a ReadableStream");
-        r = s->w.settle != S_IDLE ? rs_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc)
+        r = s->w.settle != S_IDLE ? rs_settle_run(ctx, &s->w, s->stream, d, cb_result, out_cb, out_argc)
                                   : readable_byte_pull_run(ctx, &s->w, d->controller, cb_result,
                                                            out_cb, out_argc);
         if (r > 0) return r;

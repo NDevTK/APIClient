@@ -5086,7 +5086,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        Document is a second realm and does not come through here twice. */
     DCHECK(doc_of(ctx) == NULL,
            "a document was installed twice into one realm — that is a NAVIGATION, and its container is "
-           "per-flow state: build it as a COW record (like ProxyData's PROXY_REC) captured in its accessor, so "
+           "per-flow state: build it as a COW record (like ProxyData's PROXY_REC) captured by its write accessor, so "
            "the flow that navigated and the sibling that did not each read their own");
     /* The interface is Document for every document this entry builds, so it is a constant, not an argument. HTML
        §7.5.1 "Shared document creation infrastructure", which every navigation's Document comes through (§7.5.2

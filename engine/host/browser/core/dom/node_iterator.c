@@ -16,10 +16,10 @@
  * every iterator a page ever created immortal for the life of the document, which is a ceiling with no bound on
  * it. A borrowed pointer plus a finalizer that unregisters is Blink's own design (Document::AttachNodeIterator
  * and the NodeIterator destructor), and it is sound HERE for a reason worth stating: the registry is not
- * per-flow data. What a pre-remove WRITES is the iterator's record, and that record is captured into the
- * running flow's COW delta by iter_of — so a flow that removes a node adjusts every iterator's pointers on its
- * OWN timeline and a sibling flow's iterator is untouched. A registry entry that outlives its flow therefore
- * costs a visit, never a wrong answer, and the entry itself dies with the object. */
+ * per-flow data. What a pre-remove WRITES is the iterator's record, and that record is captured into the running
+ * flow's COW delta by iter_of_for_write — so a flow that removes a node adjusts every iterator's pointers on its
+ * OWN timeline and a sibling flow's iterator is untouched. A registry entry that outlives its flow therefore costs
+ * a visit, never a wrong answer, and the entry itself dies with the object. */
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
@@ -49,7 +49,7 @@ typedef struct IterData {
 
 static JSClassID g_iter_class;
 
-/* THE RECORD TIME-TRAVELS — see tree_walker.c for why the capture belongs in the accessor. */
+/* THE RECORD TIME-TRAVELS — see tree_walker.c; a write takes it through iter_of_for_write. */
 static const uint16_t ITER_VALS[] = { TRAVERSER_VALS(IterData), (uint16_t)offsetof(IterData, ref_node),
                                       (uint16_t)offsetof(IterData, cand_node) };
 static const CowRecord ITER_REC = { sizeof(IterData), ITER_VALS, 4 };
@@ -93,7 +93,14 @@ static void iter_live_drop(void)
     g_live_cap = 0;
 }
 
-static IterData *iter_of(JSValueConst v)
+static const IterData *iter_of(JSValueConst v)
+{
+    const IterData *it = JS_GetOpaque(v, g_iter_class);
+    return it;
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static IterData *iter_of_for_write(JSValueConst v)
 {
     IterData *it = JS_GetOpaque(v, g_iter_class);
     if (it) cow_capture_host_record(v, it, &ITER_REC);
@@ -115,12 +122,12 @@ static IterData *iter_of(JSValueConst v)
    record is unreachable by the collector and its calloc'd slots hold no value to release. */
 /* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
    line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
-static void ni_set_at(JSContext *ctx, IterData *it, JSValue *slot, JSValue v,
+static void ni_set_at(JSContext *ctx, JSValueConst owner, IterData *it, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, it, &ITER_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, it, &ITER_REC, slot, v, file, line);
 }
-#define ni_set(ctx_, it_, slot_, v_) ni_set_at((ctx_), (it_), (slot_), (v_), __FILE__, __LINE__)
+#define ni_set(ctx_, owner_, it_, slot_, v_) ni_set_at((ctx_), (owner_), (it_), (slot_), (v_), __FILE__, __LINE__)
 
 /* DOES THIS VALUE IMPLEMENT `NodeIterator` — Web IDL §3.7 Interfaces' implementation-check an object step 3,
    "If object does not implement interface, then throw a TypeError.", as the PREDICATE core/idl_args'
@@ -134,7 +141,7 @@ static void ni_set_at(JSContext *ctx, IterData *it, JSValue *slot, JSValue v,
    declaration is still where the brand belongs, because what keeps that true is the ARGUMENT LIST, which is
    the one thing a later partial interface can change without touching this file.
    PURE, DELIBERATELY: it is called by the brand check and must not capture the record into a flow's delta for
-   a receiver that is about to be refused. iter_of's capture belongs to the members that ACCEPT one. */
+   a receiver that is about to be refused. */
 static bool iter_is(JSValueConst v)
 {
     return JS_GetOpaque(v, g_iter_class) != NULL;
@@ -147,9 +154,9 @@ static bool iter_is(JSValueConst v)
    the interface idl_install_accessor_this took at the install. Both ask the one predicate above, so reaching
    a body means one of them ran and passed, and the only condition left for this to fire on is a member
    installed WITHOUT its brand: this engine's own routing, never page input. */
-static IterData *iter_receiver(JSValueConst v)
+static const IterData *iter_receiver(JSValueConst v)
 {
-    IterData *it = iter_of(v);
+    const IterData *it = iter_of(v);
 
     DCHECK(it != NULL, "a §6.1 member reached its body on a receiver that is not a NodeIterator — its "
                        "declaration states Web IDL §3.7 Interfaces' implementation check, so reaching the body "
@@ -256,11 +263,14 @@ static lxb_dom_node_t *iter_following_outside(lxb_dom_node_t *n, lxb_dom_node_t 
     return NULL;
 }
 
-/* §6.1 "adjust a node pointer". `pnode`/`pbefore` are the pointer, updated in place. */
-static void iter_adjust(JSContext *ctx, IterData *it, JSValue *pnode, uint8_t *pbefore,
-                        lxb_dom_node_t *removed)
+/* §6.1 "adjust a node pointer" over `owner`'s reference (`cand` false) or its candidate (`cand` true). The record is
+   captured only when the step moves the pointer, so an iterator a removal does not touch stays out of the delta. */
+static void iter_adjust(JSContext *ctx, JSValueConst owner, bool cand, lxb_dom_node_t *removed)
 {
-    lxb_dom_node_t *root = node_of(it->t.root), *n = node_of(*pnode), *fresh;
+    const IterData *it = iter_of(owner);
+    lxb_dom_node_t *root = node_of(it->t.root), *n = node_of(cand ? it->cand_node : it->ref_node), *fresh = NULL;
+    uint8_t before = 0;
+    IterData *w;
 
     DCHECK(root != NULL, "a NodeIterator's root is not a node");
     DCHECK(n != NULL, "a NodeIterator's node pointer holds something that is not a node");
@@ -268,19 +278,19 @@ static void iter_adjust(JSContext *ctx, IterData *it, JSValue *pnode, uint8_t *p
     if (!node_is_inclusive_ancestor(removed, n) || node_is_inclusive_ancestor(removed, root))
         return;
     /* STEP 2. */
-    if (*pbefore) {
+    if (cand ? it->cand_before : it->ref_before) {
         fresh = iter_following_outside(removed, root);
-        if (fresh) {
-            ni_set(ctx, it, pnode, node_wrap(ctx, fresh));
-            *pbefore = 1;
-            return;
-        }
+        before = 1;
     }
     /* STEPS 3-4. */
-    fresh = removed->prev ? iter_last_inclusive_descendant(removed->prev) : removed->parent;
+    if (!fresh) {
+        fresh = removed->prev ? iter_last_inclusive_descendant(removed->prev) : removed->parent;
+        before = 0;
+    }
     DCHECK(fresh != NULL, "§6.1's adjust reached a node being removed from no parent");
-    ni_set(ctx, it, pnode, node_wrap(ctx, fresh));
-    *pbefore = 0;
+    w = iter_of_for_write(owner);
+    ni_set(ctx, owner, w, cand ? &w->cand_node : &w->ref_node, node_wrap(ctx, fresh));
+    if (cand) w->cand_before = before; else w->ref_before = before;
 }
 
 void node_iterator_pre_remove(JSContext *ctx, lxb_dom_node_t *to_be_removed)
@@ -290,9 +300,7 @@ void node_iterator_pre_remove(JSContext *ctx, lxb_dom_node_t *to_be_removed)
     if (!g_live_n || !to_be_removed) return;
     for (i = 0; i < g_live_n; i++) {
         if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
-        /* iter_of, not JS_GetOpaque: reaching the record is what puts it in the running flow's delta, which is
-           what makes one flow's adjustment invisible to a sibling. */
-        IterData *it = iter_of(g_live[i]);
+        const IterData *it = iter_of(g_live[i]);
         lxb_dom_node_t *root;
 
         DCHECK(it != NULL, "the live-NodeIterator list holds something that is not a NodeIterator");
@@ -300,9 +308,9 @@ void node_iterator_pre_remove(JSContext *ctx, lxb_dom_node_t *to_be_removed)
         DCHECK(root != NULL, "a live NodeIterator's root is not a node");
         /* §4.2.3: only the iterators of the removed node's NODE DOCUMENT. */
         if (root->owner_document != to_be_removed->owner_document) continue;
-        iter_adjust(ctx, it, &it->ref_node, &it->ref_before, to_be_removed);   /* STEP 1 */
+        iter_adjust(ctx, g_live[i], false, to_be_removed);                    /* STEP 1 */
         if (!JS_IsUndefined(it->cand_node))                                    /* STEP 2 */
-            iter_adjust(ctx, it, &it->cand_node, &it->cand_before, to_be_removed);
+            iter_adjust(ctx, g_live[i], true, to_be_removed);
     }
 }
 
@@ -337,9 +345,9 @@ static void ni_release(JSContext *ctx, void *st)
 }
 
 /* Step 4's "set iterator's candidate reference to null", which is also step 3.4's abrupt exit. */
-static void ni_drop_candidate(JSContext *ctx, IterData *it)
+static void ni_drop_candidate(JSContext *ctx, JSValueConst owner, IterData *it)
 {
-    ni_set(ctx, it, &it->cand_node, JS_UNDEFINED);
+    ni_set(ctx, owner, it, &it->cand_node, JS_UNDEFINED);
     it->cand_before = 0;
 }
 
@@ -347,7 +355,7 @@ static int ni_traverse_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     NodeIterState *s = st;
-    IterData *it = iter_receiver(hdr->this_val);
+    IterData *it = iter_receiver(hdr->this_val) ? iter_of_for_write(hdr->this_val) : NULL;
     int type = idl_step_magic(hdr), result = 0, r;
     lxb_dom_node_t *root;
 
@@ -359,7 +367,7 @@ static int ni_traverse_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* STEP 1: the candidate starts as the reference. STEP 2's `result` is this body's `*presult`. */
-        ni_set(ctx, it, &it->cand_node, JS_DupValue(ctx, it->ref_node));
+        ni_set(ctx, hdr->this_val, it, &it->cand_node, JS_DupValue(ctx, it->ref_node));
         it->cand_before = it->ref_before;
         hdr->stage = NI_FILTER;
     }
@@ -377,14 +385,14 @@ static int ni_traverse_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                 if (!it->cand_before) {
                     lxb_dom_node_t *following = node_next_in(cand, root);
                     if (!following) break;             /* STEP 3.1.1.1's "then break" */
-                    ni_set(ctx, it, &it->cand_node, node_wrap(ctx, following));
+                    ni_set(ctx, hdr->this_val, it, &it->cand_node, node_wrap(ctx, following));
                 }
                 it->cand_before = 0;
             } else {
                 if (it->cand_before) {
                     lxb_dom_node_t *preceding = node_prev_in(cand, root);
                     if (!preceding) break;
-                    ni_set(ctx, it, &it->cand_node, node_wrap(ctx, preceding));
+                    ni_set(ctx, hdr->this_val, it, &it->cand_node, node_wrap(ctx, preceding));
                 }
                 it->cand_before = 1;
             }
@@ -397,9 +405,9 @@ static int ni_traverse_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                             out_cb, out_argc);
         cb_result = JS_UNDEFINED;
         if (r > 0) return r;
-        if (r < 0) { ni_drop_candidate(ctx, it); return JS_STEP_ABRUPT; }
+        if (r < 0) { ni_drop_candidate(ctx, hdr->this_val, it); return JS_STEP_ABRUPT; }
         if (result == NODE_FILTER_ACCEPT) {           /* STEP 3.5 */
-            ni_set(ctx, it, &it->ref_node, JS_DupValue(ctx, it->cand_node));
+            ni_set(ctx, hdr->this_val, it, &it->ref_node, JS_DupValue(ctx, it->cand_node));
             it->ref_before = it->cand_before;
             /* STEP 3.5.2 RETURNS `node`, WHICH STEP 3.3 BOUND BEFORE THE FILTER RAN — not the candidate
                reference, which the filter may have moved. A filter that removes the very node it is filtering
@@ -407,11 +415,11 @@ static int ni_traverse_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                still in the tree while the ANSWER is the node the page was asked about. Reading the candidate
                here returned the retargeted node and the corpus pins the difference. */
             *presult = JS_DupValue(ctx, s->wrap);
-            ni_drop_candidate(ctx, it);               /* STEP 4 */
+            ni_drop_candidate(ctx, hdr->this_val, it);               /* STEP 4 */
             return JS_STEP_DONE;
         }
     }
-    ni_drop_candidate(ctx, it);                       /* STEP 4 */
+    ni_drop_candidate(ctx, hdr->this_val, it);                       /* STEP 4 */
     *presult = JS_NULL;                               /* STEP 5, with `result` still null */
     return JS_STEP_DONE;
 }
@@ -424,7 +432,7 @@ static const IdlStepDecl NI_TRAVERSE = { ni_traverse_step, sizeof(NodeIterState)
 /* magic 0 = root, 1 = referenceNode, 2 = pointerBeforeReferenceNode, 3 = whatToShow, 4 = filter. */
 static JSValue js_iter_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    IterData *it = iter_receiver(this_val);
+    const IterData *it = iter_receiver(this_val);
 
     switch (magic) {
     case 0: return JS_DupValue(ctx, it->t.root);

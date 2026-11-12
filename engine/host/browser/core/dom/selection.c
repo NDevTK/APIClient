@@ -24,10 +24,9 @@
  *   proto slot, because a member's `ctx` is the realm that DEFINED it: a prototype installed once would answer
  *   every document's `getSelection()` out of the first realm that built one.
  *   PER FLOW: the record is C behind a class opaque, so its writes are invisible to every property hook — the
- *   shape §COW's host-record rule is about. `sel_of` captures it into the running flow's delta, so a flow that
- *   calls `selectAllChildren(x)` selects nothing in a sibling and a parked flow resumes with its own
- *   selection. The capture is in the ACCESSOR because a record a flow has REACHED is one it may write, which
- *   is what leaves no write site to miss.
+ *   shape §COW's host-record rule is about. Its two writers, `sel_set_range` and `sel_set_direction`, capture it
+ *   into the running flow's delta through `sel_of_for_write`, so a flow that calls `selectAllChildren(x)` selects
+ *   nothing in a sibling and a parked flow resumes with its own selection; `sel_of` reads without capturing.
  *
  * WHAT IS DELIBERATELY NOT HERE. §3's `modify()` — see the idl_members_excluded declaration at the bottom, and
  * the reason there. §6's `selectstart`/`selectionchange` events and §2's "has scheduled selectionchange event"
@@ -80,7 +79,14 @@ static const CowRecord SEL_REC = { sizeof(Selection), SEL_VALS, (int)(sizeof(SEL
 
 static JSClassID g_sel_class;
 
-static Selection *sel_of(JSValueConst v)
+/* The read accessor: the flow's view of the record, captured by nothing. */
+static const Selection *sel_of(JSValueConst v)
+{
+    return JS_GetOpaque(v, g_sel_class);
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static Selection *sel_of_for_write(JSValueConst v)
 {
     Selection *s = JS_GetOpaque(v, g_sel_class);
     /* THE RECORD TIME-TRAVELS — see the header paragraph. `direction` rides the same capture because it is in
@@ -92,9 +98,9 @@ static Selection *sel_of(JSValueConst v)
 /* Web IDL §3.7.6 Attributes and §3.7.7 Operations — this entry serves both, and each states the same step:
    a member reached with a receiver that does not implement the interface is a TypeError thrown
    at the call. NOT a DCHECK — a page (and the corpus) reaches for one deliberately. */
-static Selection *sel_here(JSContext *ctx, JSValueConst v)
+static const Selection *sel_here(JSContext *ctx, JSValueConst v)
 {
-    Selection *s = sel_of(v);
+    const Selection *s = sel_of(v);
     if (!s) { JS_ThrowTypeError(ctx, "this is not a Selection"); return NULL; }
     return s;
 }
@@ -139,7 +145,7 @@ static void sel_finalizer(JSRuntime *rt, JSValue val)
 static void sel_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    Selection *s = JS_GetAnyOpaque(val, &id);
+    const Selection *s = JS_GetAnyOpaque(val, &id);
     size_t i;
 
     /* THE DOCUMENT HOLDS THE SELECTION AND THE SELECTION HOLDS THE DOCUMENT, which is a cycle the collector can
@@ -171,9 +177,9 @@ static bool sel_empty(const Selection *s) { return JS_IsNull(s->range); }
 /* The bounds of the range this selection is associated with, or NULL when it is empty. Going through
    abstract_range_of is what captures the RANGE's own record into this flow's delta, which matters because
    §3's members read the range's boundary points and `addRange` hands the page a range it can still move. */
-static RangeBounds *sel_bounds(const Selection *s)
+static const RangeBounds *sel_bounds(const Selection *s)
 {
-    RangeBounds *b;
+    const RangeBounds *b;
     if (sel_empty(s)) return NULL;
     b = abstract_range_of(s->range);
     DCHECK(b != NULL, "a Selection's associated range is not a §5 range object — §3's only writers are "
@@ -208,18 +214,29 @@ static bool sel_in_document_tree(const Selection *s, JSValueConst node)
    the document tree". Both points are tested, not just one, which is the standard's own "either". */
 static bool sel_reportable(const Selection *s)
 {
-    RangeBounds *b = sel_bounds(s);
+    const RangeBounds *b = sel_bounds(s);
     if (!b) return false;
     return sel_in_document_tree(s, b->start_node) && sel_in_document_tree(s, b->end_node);
 }
 
 /* ---- §2's STATE, WRITTEN --------------------------------------------------------------------------------- */
 
-/* CONSUMES `r` — JS_NULL to make the selection empty. */
-static void sel_set_range(JSContext *ctx, Selection *s, JSValue r)
+/* CONSUMES `r` — JS_NULL to make the selection empty. The record is captured before the write. */
+static void sel_set_range(JSContext *ctx, JSValueConst owner, JSValue r)
 {
-    JS_FreeValue(ctx, s->range);
-    s->range = r;
+    Selection *s = sel_of_for_write(owner);
+
+    DCHECK(s != NULL, "a Selection's range was set on something that is not a Selection");
+    cow_record_set(ctx, owner, s, &SEL_REC, &s->range, r);
+}
+
+/* §2's direction, written on the record captured before it. */
+static void sel_set_direction(JSValueConst owner, int direction)
+{
+    Selection *s = sel_of_for_write(owner);
+
+    DCHECK(s != NULL, "a Selection's direction was set on something that is not a Selection");
+    s->direction = direction;
 }
 
 /* §3's five members that "let newRange be a new range" and then set this's range to it. It is a LIVE range
@@ -228,10 +245,10 @@ static void sel_set_range(JSContext *ctx, Selection *s, JSValue r)
    THE NEW RANGE IS BUILT BEFORE THE OLD ONE IS RELEASED, and that is load-bearing rather than incidental:
    collapseToStart and extend name boundary points that live in the OLD range's record, so a release first
    would hand this function two freed wrappers. */
-static void sel_set_new_range(JSContext *ctx, Selection *s, JSValueConst sn, uint32_t so,
+static void sel_set_new_range(JSContext *ctx, JSValueConst owner, JSValueConst sn, uint32_t so,
                               JSValueConst en, uint32_t eo)
 {
-    sel_set_range(ctx, s, range_new_bp(ctx, sn, so, en, eo));
+    sel_set_range(ctx, owner, range_new_bp(ctx, sn, so, en, eo));
 }
 
 /* ---- §3's ATTRIBUTES -------------------------------------------------------------------------------------- */
@@ -241,8 +258,8 @@ enum { SG_ANCHOR_NODE = 0, SG_ANCHOR_OFFSET, SG_FOCUS_NODE, SG_FOCUS_OFFSET, SG_
 
 static JSValue js_sel_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    Selection *s = sel_here(ctx, this_val);
-    RangeBounds *b;
+    const Selection *s = sel_here(ctx, this_val);
+    const RangeBounds *b;
     JSValueConst node;
     uint32_t off;
 
@@ -350,9 +367,9 @@ static bool sel_bp_before_or_equal(lxb_dom_node_t *a, uint32_t ao, lxb_dom_node_
 
 static JSValue js_sel_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    Selection *s = sel_here(ctx, this_val);
+    const Selection *s = sel_here(ctx, this_val);
     JSValueConst nodev = argc > 0 ? argv[0] : JS_UNDEFINED;
-    RangeBounds *b;
+    const RangeBounds *b;
     lxb_dom_node_t *n;
     uint32_t off = 0;
 
@@ -374,7 +391,7 @@ static JSValue js_sel_member(JSContext *ctx, JSValueConst this_val, int argc, JS
     }
 
     case SM_ADD_RANGE: {
-        RangeBounds *rb = abstract_range_of(argv[0]);
+        const RangeBounds *rb = abstract_range_of(argv[0]);
         DCHECK(rb != NULL, "addRange reached the body with something that is not a Range — the argument's "
                            "interface type is what brands it");
         /* STEP 1. "If the root of the range's boundary points are not the document associated with this,
@@ -385,7 +402,7 @@ static JSValue js_sel_member(JSContext *ctx, JSValueConst this_val, int argc, JS
                "point precisely so that they cannot be");
         if (node_root(node_of(rb->start_node)) != sel_doc(s)) return JS_UNDEFINED;
         if (sel_reportable(s)) return JS_UNDEFINED;                                          /* STEP 2 */
-        sel_set_range(ctx, s, JS_DupValue(ctx, argv[0]));                                    /* STEP 3 */
+        sel_set_range(ctx, this_val, JS_DupValue(ctx, argv[0]));                                    /* STEP 3 */
         return JS_UNDEFINED;
     }
 
@@ -394,7 +411,7 @@ static JSValue js_sel_member(JSContext *ctx, JSValueConst this_val, int argc, JS
            a NotFoundError." The test is OBJECT IDENTITY, which is the whole point of holding the page's own
            Range by reference. */
         if (!sel_empty(s) && JS_VALUE_GET_PTR(s->range) == JS_VALUE_GET_PTR(argv[0])) {
-            sel_set_range(ctx, s, JS_NULL);
+            sel_set_range(ctx, this_val, JS_NULL);
             return JS_UNDEFINED;
         }
         return JS_ThrowDOMException(ctx, "NotFoundError", "that range is not the selection's range");
@@ -402,12 +419,12 @@ static JSValue js_sel_member(JSContext *ctx, JSValueConst this_val, int argc, JS
     case SM_REMOVE_ALL:
         /* removeAllRanges, and `empty()`, which "must be an alias, and behave identically" to it — so it is
            the same declaration installed under a second name rather than a second body. */
-        sel_set_range(ctx, s, JS_NULL);
+        sel_set_range(ctx, this_val, JS_NULL);
         return JS_UNDEFINED;
 
     case SM_COLLAPSE:
         /* collapse, and `setPosition`, which "must be an alias, and behave identically" to it. */
-        if (JS_IsNull(nodev)) { sel_set_range(ctx, s, JS_NULL); return JS_UNDEFINED; }        /* STEP 1 */
+        if (JS_IsNull(nodev)) { sel_set_range(ctx, this_val, JS_NULL); return JS_UNDEFINED; }        /* STEP 1 */
         n = node_of(nodev);
         DCHECK(n != NULL, "collapse reached the body with something that is neither a Node nor null");
         if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE)                                       /* STEP 2 */
@@ -417,7 +434,7 @@ static JSValue js_sel_member(JSContext *ctx, JSValueConst this_val, int argc, JS
         if (off > node_length(n))                                                             /* STEP 3 */
             return JS_ThrowDOMException(ctx, "IndexSizeError", "the offset is past the node's length");
         if (!sel_doc_reaches(s, n)) return JS_UNDEFINED;                                      /* STEP 4 */
-        sel_set_new_range(ctx, s, nodev, off, nodev, off);                                 /* STEPS 5-7 */
+        sel_set_new_range(ctx, this_val, nodev, off, nodev, off);                                 /* STEPS 5-7 */
         return JS_UNDEFINED;
 
     case SM_COLLAPSE_TO_START:
@@ -429,9 +446,9 @@ static JSValue js_sel_member(JSContext *ctx, JSValueConst this_val, int argc, JS
         if (!b)
             return JS_ThrowDOMException(ctx, "InvalidStateError", "the selection is empty");
         if (magic == SM_COLLAPSE_TO_START)
-            sel_set_new_range(ctx, s, b->start_node, b->start_off, b->start_node, b->start_off);
+            sel_set_new_range(ctx, this_val, b->start_node, b->start_off, b->start_node, b->start_off);
         else
-            sel_set_new_range(ctx, s, b->end_node, b->end_off, b->end_node, b->end_off);
+            sel_set_new_range(ctx, this_val, b->end_node, b->end_off, b->end_node, b->end_off);
         return JS_UNDEFINED;
 
     case SM_EXTEND: {
@@ -450,18 +467,18 @@ static JSValue js_sel_member(JSContext *ctx, JSValueConst this_val, int argc, JS
            because §5.5 keeps its two points in one tree, which addRange's own assertion above states. */
         same_root = node_root(n) == node_root(node_of(b->start_node));
         if (!same_root) {
-            sel_set_new_range(ctx, s, nodev, off, nodev, off);                              /* STEPS 4-5 */
+            sel_set_new_range(ctx, this_val, nodev, off, nodev, off);                              /* STEPS 4-5 */
             /* STEP 9 still runs, and its comparison is between two points that are now in different trees.
                §5.2 has no answer there, and the standard's own step 5 is the acknowledgement that the two are
                not comparable — so the direction that survives is FORWARDS, which is what step 9's "Otherwise"
                arm gives every case its `if` cannot decide. */
-            s->direction = SEL_FORWARDS;
+            sel_set_direction(this_val, SEL_FORWARDS);
             return JS_UNDEFINED;
         }
         focus_first = !sel_bp_before_or_equal(node_of(old_anchor_node), old_anchor_off, n, off);
-        if (!focus_first) sel_set_new_range(ctx, s, old_anchor_node, old_anchor_off, nodev, off);  /* STEP 6 */
-        else              sel_set_new_range(ctx, s, nodev, off, old_anchor_node, old_anchor_off);  /* STEP 7 */
-        s->direction = focus_first ? SEL_BACKWARDS : SEL_FORWARDS;                            /* STEP 9 */
+        if (!focus_first) sel_set_new_range(ctx, this_val, old_anchor_node, old_anchor_off, nodev, off);  /* STEP 6 */
+        else              sel_set_new_range(ctx, this_val, nodev, off, old_anchor_node, old_anchor_off);  /* STEP 7 */
+        sel_set_direction(this_val, focus_first ? SEL_BACKWARDS : SEL_FORWARDS);                            /* STEP 9 */
         return JS_UNDEFINED;
     }
 
@@ -490,9 +507,9 @@ static JSValue js_sel_member(JSContext *ctx, JSValueConst this_val, int argc, JS
                   "what to build is a composed-tree boundary-point ordering, which DOM §5.2 does not define "
                   "and §3's getComposedRanges is the only member that names the composed tree at all");
         focus_first = !sel_bp_before_or_equal(anode, ao, fnode, fo);
-        if (!focus_first) sel_set_new_range(ctx, s, an, ao, fn, fo);
-        else              sel_set_new_range(ctx, s, fn, fo, an, ao);
-        s->direction = focus_first ? SEL_BACKWARDS : SEL_FORWARDS;                             /* STEP 7 */
+        if (!focus_first) sel_set_new_range(ctx, this_val, an, ao, fn, fo);
+        else              sel_set_new_range(ctx, this_val, fn, fo, an, ao);
+        sel_set_direction(this_val, focus_first ? SEL_BACKWARDS : SEL_FORWARDS);                             /* STEP 7 */
         return JS_UNDEFINED;
     }
 
@@ -506,8 +523,8 @@ static JSValue js_sel_member(JSContext *ctx, JSValueConst this_val, int argc, JS
            use. That asymmetry is the standard's; implementing it as one shared test would silently make
            `selectAllChildren` accept a node inside a shadow tree, which this member alone refuses. */
         if (node_root(n) != sel_doc(s)) return JS_UNDEFINED;
-        sel_set_new_range(ctx, s, nodev, 0, nodev, sel_child_count(n));                     /* STEPS 3-6 */
-        s->direction = SEL_FORWARDS;                                                           /* STEP 7 */
+        sel_set_new_range(ctx, this_val, nodev, 0, nodev, sel_child_count(n));                     /* STEPS 3-6 */
+        sel_set_direction(this_val, SEL_FORWARDS);                                                           /* STEP 7 */
         return JS_UNDEFINED;
 
     case SM_CONTAINS_NODE: {
@@ -606,7 +623,7 @@ static void sel_rescope(JSContext *ctx, JSValueConst roots, lxb_dom_node_t **pno
 static JSValue js_sel_composed_ranges(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                       int magic)
 {
-    Selection *s = sel_here(ctx, this_val);
+    const Selection *s = sel_here(ctx, this_val);
     JSValueConst options = argc > 0 ? argv[0] : JS_UNDEFINED;
     lxb_dom_node_t *sn, *en;
     uint32_t so, eo;
@@ -618,7 +635,7 @@ static JSValue js_sel_composed_ranges(JSContext *ctx, JSValueConst this_val, int
     CHECK(!JS_IsException(out), "§3's getComposedRanges could not allocate its result");
     if (sel_empty(s)) return out;                                                              /* STEP 1 */
     {
-        RangeBounds *b = sel_bounds(s);
+        const RangeBounds *b = sel_bounds(s);
         sn = node_of(b->start_node);                                                           /* STEP 2 */
         so = b->start_off;
         en = node_of(b->end_node);                                                             /* STEP 4 */
@@ -663,7 +680,7 @@ static void sel_str_visit(JSContext *ctx, void *st, JSStepVisit *v) { range_str_
 static int sel_del_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    Selection *s = sel_here(ctx, hdr->this_val);
+    const Selection *s = sel_here(ctx, hdr->this_val);
     SelDelState *ss = st;
 
     (void)argc; (void)argv; (void)out_cb; (void)out_argc;
@@ -676,14 +693,14 @@ static int sel_del_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     /* The BOUNDS are re-resolved at every step even though the condition is not, and the two are different
        questions: the record time-travels, so a context switch between two steps swaps the delta this range's
        boundary points live in and a pointer held across one would name the wrong timeline's. */
-    return range_del_step(ctx, hdr, &ss->rd, sel_bounds(s), presult);
+    return range_del_step(ctx, hdr, &ss->rd, s->range, sel_bounds(s), presult);
 }
 
 static int sel_str_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    Selection *s = sel_here(ctx, hdr->this_val);
-    RangeBounds *b;
+    const Selection *s = sel_here(ctx, hdr->this_val);
+    const RangeBounds *b;
 
     (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);

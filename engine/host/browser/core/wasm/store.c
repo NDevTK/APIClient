@@ -154,7 +154,7 @@ size_t wasm_store_add_table(WasmStore *s, const WasmLimits *type, WasmStoreValTy
     t = list_append(s, &s->tables, &TABLE_REC);
     t->type = *type;
     t->elem = elem;
-    cow_record_set(s->ctx, t, &TABLE_REC, &t->refs, refs);
+    cow_record_set(s->ctx, s->owner, t, &TABLE_REC, &t->refs, refs);
     return s->tables.n - 1;
 }
 
@@ -166,7 +166,7 @@ size_t wasm_store_add_mem(WasmStore *s, const WasmLimits *type)
 
     if (JS_IsNull(mem)) return SIZE_MAX;
     slot = list_append(s, &s->mems, &MEM_REC);
-    cow_record_set(s->ctx, slot, &MEM_REC, slot, mem);
+    cow_record_set(s->ctx, s->owner, slot, &MEM_REC, slot, mem);
     return s->mems.n - 1;
 }
 
@@ -177,7 +177,7 @@ size_t wasm_store_add_elem(WasmStore *s, uint64_t n)
 
     if (JS_IsNull(refs)) return SIZE_MAX;
     e = list_append(s, &s->elems, &ELEM_REC);
-    cow_record_set(s->ctx, e, &ELEM_REC, &e->refs, refs);
+    cow_record_set(s->ctx, s->owner, e, &ELEM_REC, &e->refs, refs);
     return s->elems.n - 1;
 }
 
@@ -194,7 +194,7 @@ size_t wasm_store_add_instance(WasmStore *s, JSValueConst owner)
 
     DCHECK(wasm_instance_of(owner)->store == s, "a WebAssembly module instance was added to a store not its own");
     slot = list_append(s, &s->instances, &INSTANCE_REC);
-    cow_record_set(s->ctx, slot, &INSTANCE_REC, slot, JS_DupValue(s->ctx, owner));
+    cow_record_set(s->ctx, s->owner, slot, &INSTANCE_REC, slot, JS_DupValue(s->ctx, owner));
     return s->instances.n - 1;
 }
 

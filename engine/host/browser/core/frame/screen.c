@@ -42,7 +42,6 @@
 #include "quickjs.h"
 #include "solver/concolic.h"
 #include "core/idl_lang_types.h"
-#include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
 #include "core/agent_state.h"
 #include "core/frame/screen.h"
 #include "core/idl_args.h"
@@ -146,11 +145,6 @@ typedef struct {
     JSValue vals;   /* §4.3's six members, indexed by the enum above. OWNED. */
 } Screen;
 
-/* THE ONE STATEMENT OF WHAT THE RECORD OWNS — the same list the finalizer frees and the gc_mark walks, which
-   is why all three are written here together: a field added to one and not the others is the defect this
-   arrangement exists to make unspellable. */
-static const uint16_t SCREEN_VAL_OFF[] = { (uint16_t)offsetof(Screen, vals) };
-static const CowRecord SCREEN_REC = { sizeof(Screen), SCREEN_VAL_OFF, 1 };
 
 int screen_color_depth(void)
 {
@@ -191,17 +185,11 @@ static bool screen_brand(JSContext *ctx, JSValueConst this_val)
     return false;
 }
 
-/* THE ACCESSOR EVERY MEMBER REACHES THE RECORD THROUGH, and the capture is IN it for solver/cow.h's reason: a
-   record a flow has REACHED is one it may write, the delta dedups to one entry per (flow, object), and there is
-   then no write site left to miss. The cost is bounded by §4's own shape rather than argued — there is exactly
-   ONE Screen per realm, so this can add at most one delta entry per realm per flow.
-   NOT the brand: a brand check is a QUESTION, asked of values that are not Screens at all, and a question must
-   not capture. `screen_brand` is asked first and separately, one line above every caller. */
-static Screen *screen_rec(JSValueConst v)
+/* The accessor every member reaches the record through. The record is written once, by its mint before
+   JS_SetOpaque, and never again, so it answers const, has no write accessor and is never captured. */
+static const Screen *screen_rec(JSValueConst v)
 {
-    Screen *s = g_screen_class ? JS_GetOpaque(v, g_screen_class) : NULL;
-
-    if (s) cow_capture_host_record(v, s, &SCREEN_REC);
+    const Screen *s = g_screen_class ? JS_GetOpaque(v, g_screen_class) : NULL;
     return s;
 }
 
@@ -224,7 +212,7 @@ static void screen_finalizer(JSRuntime *rt, JSValue val)
 static void screen_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    Screen *s = JS_GetAnyOpaque(val, &id);
+    const Screen *s = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     DCHECK(s != NULL, "a Screen was marked with no record — its member array is a counted reference and an "
@@ -240,7 +228,7 @@ static void screen_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fu
    a member that answers for whichever realm the page reached the getter through. */
 static JSValue js_screen_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    Screen *s;
+    const Screen *s;
     JSValue v;
 
     if (!screen_brand(ctx, this_val)) return JS_EXCEPTION;

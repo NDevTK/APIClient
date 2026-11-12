@@ -1704,55 +1704,8 @@ void cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *re
        FREE, so an offset that runs off the end of the record dups whatever is next in memory, an unaligned one
        reads a value that is not there, and a DUPLICATED offset dups one field twice and frees it twice — which
        is the failure a hand-written `*_VALS[]` produces when a field is added by copying the line above it. */
-    /* ASKED ONCE PER (SITE, LAYOUT), AND IT USED TO BE ASKED ONCE PER ASK — which is quadratic in the
-       layout's own length and ran BEFORE both early-outs below, so it was paid in full by every ask that
-       was about to return without capturing anything.
-       MEASURED on a real page (gitlab.com/explore, driven through the shipped wasm, which carries these
-       DCHECKs — verified by finding this function's own message strings in the artifact, with an invented
-       control at 0): ONE step of `start-a-classic-program` took 48.3 CPU-seconds and made 13,022,542 asks
-       from a single site, `browser/core/css/css_rule.c`'s `rule_of`, of which 8,893 captured — a ratio of
-       1465 asks per capture. That layout names 21 owned values, so the loop below is 21 outer checks plus
-       21*20/2 = 210 nested ones, ~273 per ask: 3.55 BILLION assertion evaluations in one step, ~13.5ns
-       each. THAT LAST INFERENCE WAS WRONG AND THE INTERVENTION REFUTED IT — recorded here rather than
-       quietly corrected, because the arithmetic fits to within 10% and the next reader will re-derive it.
-       MEASURED AFTER this change, same page, same driver, artifact verified by content to carry it
-       (`site->checked` twice in the snapshot's own source, with a pre-existing string as a positive control
-       and an invented one at 0): 3.994 -> 3.922 us per ask. ONE POINT EIGHT PER CENT. Steps held at 78 and
-       unitsDone at 71 on both sides, so nothing about the run's shape moved either. A number that a cost
-       model predicts to within 10% and that does not move when the modelled cost is removed was never that
-       cost; the fit was a coincidence, and two readers reached it independently from the same multiplication.
-       AND THE SENTENCE THAT STOOD HERE MADE THE SAME MISTAKE A SECOND TIME, one function further out, which
-       is why it is rewritten rather than corrected in place. It said the cost must be "in the ask path" and
-       named `cow_state_ask`, `JS_ObjFlowGen` and `cow_hash_find` as candidates, reasoning that ~3.95 us is
-       ten thousand instructions and this body is fifty. The arithmetic is right and the inference is the
-       error: 3.95 us is `sliceUs` DIVIDED BY asks, so it is only a cost OF the ask if the ask is what the
-       slice was doing. IT IS NOT. `browser/core/css/css_rule.c`'s `rule_of` is a plain accessor and it is
-       the FIRST LINE of `cascade_emit_one`, ahead of the media test and ahead of any selector test, so it
-       counts one RULE VISIT of the cascade. The quotient is the cost of a visit, and the capture is a few
-       instructions of it.
-       WHERE THE TIME GOES IS STATED BY THAT FILE'S OWN BANNER: "This cascade flattens the rules that apply
-       into TEXT that is re-parsed and matched by selector." Two multipliers, neither in this component:
-       there is no selector index of any kind under `browser/core/css` (measured: every bucketing spelling
-       reads 0, with `specificity` at 10 files as a positive control and an invented name at 0), so every
-       (element, property) visits EVERY rule; and each visit re-parses selector text. 48,387,842 asks over
-       32,954 distinct records is ~1,468 cascades of ~33,000 rules. `core/css/css_cascade_pass.h` already
-       holds the memo that collapses RE-DERIVATION per (element, property) and is not the gap.
-       SO THIS COMPONENT IS EXONERATED BY THE SAME MEASUREMENT THAT CONVICTED IT, and the general lesson is
-       the one the first error already taught and the second ignored: a rate whose denominator is somebody
-       else's event counter is a fact about THAT event, and attributing it to the counter's own code is the
-       error both of these corrections are.
-       HOW TO TELL WITHOUT REPEATING EITHER MISTAKE: `sliceUs / cowStateAsks.hostRec` is a CASCADE cost per
-       rule visit and is read as one. The row that would price THIS function is a clock inside it, which no
-       census has; until one exists, no number here attributes anything to this code.
-       THE LAYOUT IS A COMPILE-TIME CONSTANT AND THE SITE IS A MACRO EXPANSION, so `rec` is the same static
-       every time a given site runs and re-deciding it per ask asks a question whose answer cannot have
-       changed. NOTHING IS DELETED: every assertion still fires, and it fires at the FIRST ask at each site
-       rather than the first capture, which is earlier than the old code reached a bad layout in the one
-       case that matters (a site whose every ask dedups away still validates its layout).
-       WHY THIS CHANGE STAYS ANYWAY, having been refuted as a FIX: it deletes no assertion, moves every one
-       of them EARLIER (first ask at a site rather than first capture), and makes an invariant about a
-       compile-time constant cost O(1) instead of quadratic in the layout's length. It is correct and it is
-       not the cost; those are different claims and only the second was wrong. */
+    /* Asked once per (site, layout): the layout is a compile-time constant and the site a macro expansion, so `rec`
+       is the same static every time a given site runs. Every assertion still fires, at the site's first ask. */
     if (rec != site->checked) {
     /* Having a layout and being capturable are two questions: a layout with owned pointers is for the runtime's
        release, mark and graph writer, and a byte copy of it would alias every pointer it owns. */
@@ -1804,11 +1757,19 @@ static bool cow_record_names_slot(const void *p, const CowRecord *rec, const JSV
     return false;
 }
 
+/* Whether the running flow may write the record `p` that `owner` owns: no delta is routed, `owner` was created after
+   the flow's last fork, or the flow's head holds the record's entry. Asked from the DCHECK below and nowhere else. */
+static bool cow_host_record_held(JSValueConst owner, const void *p) {
+    if (cow_hooks_off() || !g_current) return true;
+    if (JS_ObjFlowGen(owner) > g_current->fork_gen) return true;
+    return cow_hash_find(g_current, cow_key_state(COW_STATE_HOST_REC, (void *)p)) >= 0;
+}
+
 /* PUBLISH BEFORE RELEASE — see cow.h for the defect this exists to make impossible. It captures NOTHING: the
-   isolation is taken where the flow REACHES the record (the component's accessor calls cow_capture_host_record),
-   so a second capture here would be the same entry asked for twice. What this owns is the ORDER. */
-void cow_record_set_at(JSContext *ctx, void *p, const CowRecord *rec, JSValue *slot, JSValue v,
-                       const char *file, int line) {
+   isolation is taken by the component's write accessor, which calls cow_capture_host_record before it answers the
+   record, and this asserts it was. What this owns is the ORDER. */
+void cow_record_set_at(JSContext *ctx, JSValueConst owner, void *p, const CowRecord *rec, JSValue *slot,
+                       JSValue v, const char *file, int line) {
     JSValue old;
 
     DCHECKF(p != NULL && rec != NULL && slot != NULL,
@@ -1829,6 +1790,9 @@ void cow_record_set_at(JSContext *ctx, void *p, const CowRecord *rec, JSValue *s
             "the reference gc_decref subtracts, so its cycle is never collected) and the COW capture neither "
             "dups nor restores; add the field's offsetof to the record's layout",
             (size_t)((const char *)slot - (const char *)p), file, line);
+    DCHECKF(cow_host_record_held(owner, p),
+            "a component record's owned slot was written at %s:%d by a flow that did not capture the record — "
+            "the write takes the record through its write accessor, never through the read one", file, line);
     /* PUBLISHED FIRST. From this store on, a collection reaching the record through the component's gc_mark
        reads the new value — so the release below may run a host finalizer, and the caller's construction of
        `v` may have collected, with the slot naming a live value throughout. */

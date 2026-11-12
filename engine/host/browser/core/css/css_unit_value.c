@@ -55,12 +55,17 @@ static int g_id_value_set = -1;
 /* WHICH OF §4.3.3's TWO ATTRIBUTES A GETTER MEANS — one body, magic'd, rather than two that can drift. */
 enum { UV_ATTR_VALUE = 0, UV_ATTR_UNIT };
 
-/* ---- the record, and the COW capture every member reaches it through -------------------------------------- */
+/* ---- the record: a read accessor, and the write accessor `value`'s setter takes ------------------------------ */
 
-/* THE CAPTURE IS HERE AND NOT AT THE ONE WRITE, which is solver/cow.h's rule: a record a flow has REACHED
-   is one it may write, the delta dedups to one entry, and there is then no write site left to miss. §4.3.3
-   declares `value` writable, so unlike a wholly-readonly interface this one has a real second writer today. */
-static CssUnitValueData *uv_of(JSValueConst v)
+/* The read accessor captures nothing. §4.3.3 declares `value` writable, and that setter takes the record through
+   uv_of_for_write, which captures it into the running flow's delta first. */
+static const CssUnitValueData *uv_of(JSValueConst v)
+{
+    return JS_GetOpaque(v, g_unit_class);
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static CssUnitValueData *uv_of_for_write(JSValueConst v)
 {
     CssUnitValueData *u = JS_GetOpaque(v, g_unit_class);
 
@@ -80,7 +85,7 @@ bool css_unit_value_is(JSValueConst v)
    check and is about to read a unit off whatever object the page passed. */
 const char *css_unit_value_unit(JSValueConst v)
 {
-    CssUnitValueData *u = uv_of(v);
+    const CssUnitValueData *u = uv_of(v);
 
     DCHECK(u != NULL, "a §4.3.1 algorithm read the `unit` internal slot of something that is not a "
                       "CSSUnitValue — the member bodies ask their brand first, so this is one that did not");
@@ -89,7 +94,7 @@ const char *css_unit_value_unit(JSValueConst v)
 
 JSValue css_unit_value_value(JSContext *ctx, JSValueConst v)
 {
-    CssUnitValueData *u = uv_of(v);
+    const CssUnitValueData *u = uv_of(v);
 
     DCHECK(u != NULL, "a §4.3.1 algorithm read the `value` internal slot of something that is not a "
                       "CSSUnitValue — the member bodies ask their brand first, so this is one that did not");
@@ -98,9 +103,9 @@ JSValue css_unit_value_value(JSContext *ctx, JSValueConst v)
 
 /* WEB IDL §3.7.6 Attributes' BRAND CHECK. `CSSUnitValue.prototype.value` read off `{}` is a TypeError, and a
    page tells that apart from `undefined`. */
-static CssUnitValueData *uv_here(JSContext *ctx, JSValueConst v)
+static const CssUnitValueData *uv_here(JSContext *ctx, JSValueConst v)
 {
-    CssUnitValueData *u = uv_of(v);
+    const CssUnitValueData *u = uv_of(v);
 
     if (!u) {
         JS_ThrowTypeError(ctx, "a CSSUnitValue member was reached on something that is not a CSSUnitValue");
@@ -132,7 +137,7 @@ static void uv_finalizer(JSRuntime *rt, JSValue val)
 static void uv_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    CssUnitValueData *u = JS_GetAnyOpaque(val, &id);
+    const CssUnitValueData *u = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     DCHECK(u != NULL, "a CSSUnitValue was marked with no record — its `value` slot is a counted reference and "
@@ -187,7 +192,7 @@ const char *css_unit_value_suffix(const char *unit)
 
 JSValue css_unit_value_serialize(JSContext *ctx, JSValueConst v)
 {
-    CssUnitValueData *u = uv_of(v);
+    const CssUnitValueData *u = uv_of(v);
     JSValue example, derived;
     double n = 0.0;
     char *s;
@@ -310,7 +315,7 @@ static JSValue js_css_unit_value_ctor(JSContext *ctx, JSValueConst this_val, int
    matching internal slot, which is the whole of what §4.3.3 states for either. */
 static JSValue js_css_unit_value_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    CssUnitValueData *u = uv_here(ctx, this_val);
+    const CssUnitValueData *u = uv_here(ctx, this_val);
 
     if (!u) return JS_EXCEPTION;
     DCHECK(magic == UV_ATTR_VALUE || magic == UV_ATTR_UNIT,
@@ -325,7 +330,7 @@ static JSValue js_css_unit_value_get(JSContext *ctx, JSValueConst this_val, int 
    input crosses as itself exactly as it does through the constructor's first position. */
 static JSValue js_css_unit_value_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    CssUnitValueData *u = uv_here(ctx, this_val);
+    const CssUnitValueData *u = uv_here(ctx, this_val);
 
     (void)magic;
     if (!u) return JS_EXCEPTION;
@@ -333,8 +338,11 @@ static JSValue js_css_unit_value_set(JSContext *ctx, JSValueConst this_val, JSVa
            "§4.3.3's `value` setter reached its body with something that is neither a Number nor unknown "
            "external input — IDL_DOUBLE produces the first and passes the second through, and there is no "
            "third thing for a declared numeric position to be");
-    JS_FreeValue(ctx, u->value);
-    u->value = JS_DupValue(ctx, val);
+    {
+        CssUnitValueData *w = uv_of_for_write(this_val);
+
+        cow_record_set(ctx, this_val, w, &UV_REC, &w->value, JS_DupValue(ctx, val));
+    }
     return JS_UNDEFINED;
 }
 

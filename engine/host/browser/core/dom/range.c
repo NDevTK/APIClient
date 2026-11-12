@@ -177,15 +177,14 @@ static bool range_is(JSValueConst v)
    declaration states the interface above. Reaching a body means idl_implementation_check ran and passed, so the
    only condition left for this to fire on is a member installed WITHOUT its brand, which is this engine's own
    routing being wrong and not a fact about page input. */
-static RangeBounds *range_receiver(JSValueConst v)
+static const RangeBounds *range_receiver(JSValueConst v)
 {
-    RangeBounds *b = JS_GetOpaque(v, g_range_class);
+    const RangeBounds *b = JS_GetOpaque(v, g_range_class);
 
     DCHECK(b != NULL, "a §5.5 member reached its body on a receiver that is not a Range — its declaration "
                       "states Web IDL §3.7 Interfaces' implementation check, at idl_this_iface for an "
                       "operation and at idl_install_accessor_this for an attribute, so reaching the body "
                       "means neither door's check ran for it");
-    cow_capture_host_record(v, b, &RANGE_BOUNDS_REC);
     return b;
 }
 
@@ -200,17 +199,20 @@ static lxb_dom_node_t *range_root(const RangeBounds *b)
     return node_root(n);
 }
 
-static void bounds_set_start(JSContext *ctx, RangeBounds *b, JSValueConst node, uint32_t off)
+/* The two boundary-point writes, each through the write accessor of the range `owner`. */
+static void bounds_set_start(JSContext *ctx, JSValueConst owner, JSValueConst node, uint32_t off)
 {
-    JS_FreeValue(ctx, b->start_node);
-    b->start_node = JS_DupValue(ctx, node);
+    RangeBounds *b = abstract_range_of_for_write(owner);
+
+    cow_record_set(ctx, owner, b, &RANGE_BOUNDS_REC, &b->start_node, JS_DupValue(ctx, node));
     b->start_off = off;
 }
 
-static void bounds_set_end(JSContext *ctx, RangeBounds *b, JSValueConst node, uint32_t off)
+static void bounds_set_end(JSContext *ctx, JSValueConst owner, JSValueConst node, uint32_t off)
 {
-    JS_FreeValue(ctx, b->end_node);
-    b->end_node = JS_DupValue(ctx, node);
+    RangeBounds *b = abstract_range_of_for_write(owner);
+
+    cow_record_set(ctx, owner, b, &RANGE_BOUNDS_REC, &b->end_node, JS_DupValue(ctx, node));
     b->end_off = off;
 }
 
@@ -230,9 +232,9 @@ void range_pre_remove(JSContext *ctx, lxb_dom_node_t *node)
     pw = node_wrap(ctx, parent);
     for (i = 0; i < g_live_n; i++) {
         if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
-        /* abstract_range_of, not JS_GetOpaque: reaching the record is what puts it in the running flow's
-           delta, which is what makes one flow's adjustment invisible to a sibling. */
-        RangeBounds *b = abstract_range_of(g_live[i]);
+        /* Read through abstract_range_of; each adjustment below writes through abstract_range_of_for_write, which
+           puts the record in the running flow's delta and keeps one flow's adjustment from its siblings. */
+        const RangeBounds *b = abstract_range_of(g_live[i]);
         lxb_dom_node_t *sn, *en;
 
         DCHECK(b != NULL, "the live-range list holds something that is not a range");
@@ -240,15 +242,15 @@ void range_pre_remove(JSContext *ctx, lxb_dom_node_t *node)
         en = bounds_end(b);
         DCHECK(sn != NULL && en != NULL, "a live range's boundary point is not a node");
         /* STEPS 4-5: a boundary point INSIDE the subtree being removed collapses onto the removal site. */
-        if (node_is_inclusive_ancestor(node, sn)) bounds_set_start(ctx, b, pw, index);
-        if (node_is_inclusive_ancestor(node, en)) bounds_set_end(ctx, b, pw, index);
+        if (node_is_inclusive_ancestor(node, sn)) bounds_set_start(ctx, g_live[i], pw, index);
+        if (node_is_inclusive_ancestor(node, en)) bounds_set_end(ctx, g_live[i], pw, index);
         /* STEPS 6-7: a boundary point in the PARENT past the removed child moves back by one. Re-read, because
            steps 4-5 may have just moved it here — and the standard runs the four in this order for that
            reason. `>` and not `>=`: an offset EQUAL to the index already points at the removal site. */
         sn = bounds_start(b);
         en = bounds_end(b);
-        if (sn == parent && b->start_off > index) b->start_off--;
-        if (en == parent && b->end_off > index)   b->end_off--;
+        if (sn == parent && b->start_off > index) abstract_range_of_for_write(g_live[i])->start_off--;
+        if (en == parent && b->end_off > index)   abstract_range_of_for_write(g_live[i])->end_off--;
     }
     JS_FreeValue(ctx, pw);
 }
@@ -266,13 +268,13 @@ void range_did_insert(JSContext *ctx, lxb_dom_node_t *node)
     index = node_index(node);
     for (i = 0; i < g_live_n; i++) {
         if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
-        RangeBounds *b = abstract_range_of(g_live[i]);
+        const RangeBounds *b = abstract_range_of(g_live[i]);
         DCHECK(b != NULL, "the live-range list holds something that is not a range");
         /* §4.2.3 insert step 5, stated against the REFERENCE child's index — which, once the node is in, is the
            inserted node's own. An offset EQUAL to it stays: it names the point immediately before the new node,
            which is where the boundary was. */
-        if (bounds_start(b) == parent && b->start_off > index) b->start_off++;
-        if (bounds_end(b) == parent && b->end_off > index)     b->end_off++;
+        if (bounds_start(b) == parent && b->start_off > index) abstract_range_of_for_write(g_live[i])->start_off++;
+        if (bounds_end(b) == parent && b->end_off > index)     abstract_range_of_for_write(g_live[i])->end_off++;
     }
 }
 
@@ -288,11 +290,11 @@ void range_insert_steps(JSContext *ctx, lxb_dom_node_t *parent, lxb_dom_node_t *
     index = node_index(child);
     for (i = 0; i < g_live_n; i++) {
         if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
-        RangeBounds *b = abstract_range_of(g_live[i]);
+        const RangeBounds *b = abstract_range_of(g_live[i]);
 
         DCHECK(b != NULL, "the live-range list holds something that is not a range");
-        if (bounds_start(b) == parent && b->start_off > index) b->start_off += count;   /* STEP 5.1 */
-        if (bounds_end(b) == parent && b->end_off > index)     b->end_off += count;     /* STEP 5.2 */
+        if (bounds_start(b) == parent && b->start_off > index) abstract_range_of_for_write(g_live[i])->start_off += count;   /* STEP 5.1 */
+        if (bounds_end(b) == parent && b->end_off > index)     abstract_range_of_for_write(g_live[i])->end_off += count;     /* STEP 5.2 */
     }
 }
 
@@ -311,18 +313,18 @@ void range_replace_data_steps(JSContext *ctx, lxb_dom_node_t *node, uint32_t off
     DCHECK(node != NULL, "§4.10's live-range steps ran for no node");
     for (i = 0; i < g_live_n; i++) {
         if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
-        /* abstract_range_of, not JS_GetOpaque: reaching the record is what puts it in the running flow's
-           delta, which is what makes one flow's adjustment invisible to a sibling. */
-        RangeBounds *b = abstract_range_of(g_live[i]);
+        /* Read through abstract_range_of; each adjustment below writes through abstract_range_of_for_write, which
+           puts the record in the running flow's delta and keeps one flow's adjustment from its siblings. */
+        const RangeBounds *b = abstract_range_of(g_live[i]);
 
         DCHECK(b != NULL, "the live-range list holds something that is not a range");
         if (bounds_start(b) == node) {
-            if (b->start_off > offset && b->start_off <= end) b->start_off = offset;       /* STEP 8  */
-            else if (b->start_off > end)                      b->start_off += data_units - count;  /* 10 */
+            if (b->start_off > offset && b->start_off <= end) abstract_range_of_for_write(g_live[i])->start_off = offset;       /* STEP 8  */
+            else if (b->start_off > end)                      abstract_range_of_for_write(g_live[i])->start_off += data_units - count;  /* 10 */
         }
         if (bounds_end(b) == node) {
-            if (b->end_off > offset && b->end_off <= end)     b->end_off = offset;         /* STEP 9  */
-            else if (b->end_off > end)                        b->end_off += data_units - count;    /* 11 */
+            if (b->end_off > offset && b->end_off <= end)     abstract_range_of_for_write(g_live[i])->end_off = offset;         /* STEP 9  */
+            else if (b->end_off > end)                        abstract_range_of_for_write(g_live[i])->end_off += data_units - count;    /* 11 */
         }
     }
 }
@@ -348,19 +350,19 @@ void range_split_text_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t
     nw = node_wrap(ctx, new_node);
     for (i = 0; i < g_live_n; i++) {
         if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
-        RangeBounds *b = abstract_range_of(g_live[i]);
+        const RangeBounds *b = abstract_range_of(g_live[i]);
 
         DCHECK(b != NULL, "the live-range list holds something that is not a range");
         /* STEPS 7.2-7.3: a boundary point PAST the split point belongs to the new node now. */
         if (bounds_start(b) == node && b->start_off > offset)
-            bounds_set_start(ctx, b, nw, b->start_off - offset);
+            bounds_set_start(ctx, g_live[i], nw, b->start_off - offset);
         if (bounds_end(b) == node && b->end_off > offset)
-            bounds_set_end(ctx, b, nw, b->end_off - offset);
+            bounds_set_end(ctx, g_live[i], nw, b->end_off - offset);
         /* STEPS 7.4-7.5. Re-read: 7.2 may have just moved the boundary point onto `new_node`, which is not
            `parent`, so the two tests are disjoint — but reading a stale pointer here is the bug that shape
            invites, and the standard runs the four in this order for exactly that reason. */
-        if (bounds_start(b) == parent && b->start_off == idx + 1) b->start_off++;
-        if (bounds_end(b) == parent && b->end_off == idx + 1)     b->end_off++;
+        if (bounds_start(b) == parent && b->start_off == idx + 1) abstract_range_of_for_write(g_live[i])->start_off++;
+        if (bounds_end(b) == parent && b->end_off == idx + 1)     abstract_range_of_for_write(g_live[i])->end_off++;
     }
     JS_FreeValue(ctx, nw);
 }
@@ -386,19 +388,19 @@ void range_normalize_absorb_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_
     nw = node_wrap(ctx, node);
     for (i = 0; i < g_live_n; i++) {
         if (JS_GCCondemned(JS_GetRuntime(ctx), g_live[i])) continue;
-        RangeBounds *b = abstract_range_of(g_live[i]);
+        const RangeBounds *b = abstract_range_of(g_live[i]);
 
         DCHECK(b != NULL, "the live-range list holds something that is not a range");
         /* STEPS 6.1-6.2: a boundary point INSIDE the absorbed sibling lands at the same character of the
            node that absorbed it. */
-        if (bounds_start(b) == sib) bounds_set_start(ctx, b, nw, b->start_off + length);
-        if (bounds_end(b) == sib)   bounds_set_end(ctx, b, nw, b->end_off + length);
+        if (bounds_start(b) == sib) bounds_set_start(ctx, g_live[i], nw, b->start_off + length);
+        if (bounds_end(b) == sib)   bounds_set_end(ctx, g_live[i], nw, b->end_off + length);
         /* STEPS 6.3-6.4: a boundary point in the PARENT naming the sibling's own position lands at the seam.
            Re-read for the reason §5.5's LIVE RANGE pre-remove steps re-read: 6.1 may have just moved it. The
            standard's term is "live range pre-remove steps" and §5.5 is where it defines them; the unqualified
            "pre-remove" is §4.2.3 "Mutation algorithms"' OWN operation, which is a different algorithm. */
-        if (bounds_start(b) == parent && b->start_off == idx) bounds_set_start(ctx, b, nw, length);
-        if (bounds_end(b) == parent && b->end_off == idx)     bounds_set_end(ctx, b, nw, length);
+        if (bounds_start(b) == parent && b->start_off == idx) bounds_set_start(ctx, g_live[i], nw, length);
+        if (bounds_end(b) == parent && b->end_off == idx)     bounds_set_end(ctx, g_live[i], nw, length);
     }
     JS_FreeValue(ctx, nw);
 }
@@ -459,7 +461,7 @@ static JSValue js_range_ctor(JSContext *ctx, JSValueConst new_target, int argc, 
 }
 
 /* §5.5's "set the start or end of a range to a boundary point". magic 0 = start, 1 = end. */
-static int range_set_bp(JSContext *ctx, RangeBounds *b, JSValueConst nodev, uint32_t off, int is_end)
+static int range_set_bp(JSContext *ctx, JSValueConst owner, const RangeBounds *b, JSValueConst nodev, uint32_t off, int is_end)
 {
     lxb_dom_node_t *n = node_of(nodev);
 
@@ -477,13 +479,13 @@ static int range_set_bp(JSContext *ctx, RangeBounds *b, JSValueConst nodev, uint
     if (!is_end) {
         if (range_root(b) != node_root(n) ||
             boundary_position(n, off, bounds_end(b), b->end_off) == BP_AFTER)
-            bounds_set_end(ctx, b, nodev, off);
-        bounds_set_start(ctx, b, nodev, off);
+            bounds_set_end(ctx, owner, nodev, off);
+        bounds_set_start(ctx, owner, nodev, off);
     } else {
         if (range_root(b) != node_root(n) ||
             boundary_position(n, off, bounds_start(b), b->start_off) == BP_BEFORE)
-            bounds_set_start(ctx, b, nodev, off);
-        bounds_set_end(ctx, b, nodev, off);
+            bounds_set_start(ctx, owner, nodev, off);
+        bounds_set_end(ctx, owner, nodev, off);
     }
     return 0;
 }
@@ -525,7 +527,7 @@ static const char *const R_WHAT[R_MEMBER_N] = {
 
 static JSValue js_range_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    RangeBounds *b = range_receiver(this_val);
+    const RangeBounds *b = range_receiver(this_val);
     JSValueConst nodev = argc > 0 ? argv[0] : JS_UNDEFINED;
     lxb_dom_node_t *n;
     uint32_t off = 0;
@@ -534,7 +536,7 @@ static JSValue js_range_member(JSContext *ctx, JSValueConst this_val, int argc, 
     case R_SET_START:
     case R_SET_END:
         if (argc > 1 && JS_ToUint32(ctx, &off, argv[1]) < 0) return JS_EXCEPTION;
-        return range_set_bp(ctx, b, nodev, off, magic == R_SET_END) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+        return range_set_bp(ctx, this_val, b, nodev, off, magic == R_SET_END) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 
     case R_SET_START_BEFORE:
     case R_SET_START_AFTER:
@@ -548,15 +550,15 @@ static JSValue js_range_member(JSContext *ctx, JSValueConst this_val, int argc, 
             return JS_ThrowDOMException(ctx, "InvalidNodeTypeError", "the node has no parent");
         off = node_index(n) + (magic == R_SET_START_AFTER || magic == R_SET_END_AFTER ? 1u : 0u);
         pw = node_wrap(ctx, n->parent);
-        r = range_set_bp(ctx, b, pw, off, magic == R_SET_END_BEFORE || magic == R_SET_END_AFTER);
+        r = range_set_bp(ctx, this_val, b, pw, off, magic == R_SET_END_BEFORE || magic == R_SET_END_AFTER);
         JS_FreeValue(ctx, pw);
         return r < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     }
 
     case R_COLLAPSE:
         /* §5.5: `collapse(optional boolean toStart = false)` — to the START means the END moves. */
-        if (argc > 0 && JS_ToBool(ctx, argv[0])) bounds_set_end(ctx, b, b->start_node, b->start_off);
-        else                                     bounds_set_start(ctx, b, b->end_node, b->end_off);
+        if (argc > 0 && JS_ToBool(ctx, argv[0])) bounds_set_end(ctx, this_val, b->start_node, b->start_off);
+        else                                     bounds_set_start(ctx, this_val, b->end_node, b->end_off);
         return JS_UNDEFINED;
 
     case R_SELECT_NODE:
@@ -569,8 +571,8 @@ static JSValue js_range_member(JSContext *ctx, JSValueConst this_val, int argc, 
         {
             JSValue pw = node_wrap(ctx, n->parent);
             uint32_t i = node_index(n);
-            bounds_set_start(ctx, b, pw, i);
-            bounds_set_end(ctx, b, pw, i + 1);
+            bounds_set_start(ctx, this_val, pw, i);
+            bounds_set_end(ctx, this_val, pw, i + 1);
             JS_FreeValue(ctx, pw);
         }
         return JS_UNDEFINED;
@@ -581,8 +583,8 @@ static JSValue js_range_member(JSContext *ctx, JSValueConst this_val, int argc, 
         if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE)
             return JS_ThrowDOMException(ctx, "InvalidNodeTypeError",
                                         "a Range cannot select a DocumentType's contents");
-        bounds_set_start(ctx, b, nodev, 0);
-        bounds_set_end(ctx, b, nodev, node_length(n));
+        bounds_set_start(ctx, this_val, nodev, 0);
+        bounds_set_end(ctx, this_val, nodev, node_length(n));
         return JS_UNDEFINED;
 
     case R_CLONE:
@@ -595,7 +597,7 @@ static JSValue js_range_member(JSContext *ctx, JSValueConst this_val, int argc, 
         return JS_UNDEFINED;
 
     case R_COMPARE_BP: {
-        RangeBounds *src;
+        const RangeBounds *src;
         uint32_t how = 0;
         lxb_dom_node_t *tn, *sn2;
         uint32_t to, so2;
@@ -606,7 +608,6 @@ static JSValue js_range_member(JSContext *ctx, JSValueConst this_val, int argc, 
                                         "the comparison is not one of §5.5's four constants");
         src = JS_GetOpaque(argc > 1 ? argv[1] : JS_UNDEFINED, g_range_class);
         DCHECK(src != NULL, "compareBoundaryPoints reached the body with something that is not a Range");
-        cow_capture_host_record(argv[1], src, &RANGE_BOUNDS_REC);
         if (range_root(b) != range_root(src))                                 /* STEP 2 */
             return JS_ThrowDOMException(ctx, "WrongDocumentError", "the two ranges are in different trees");
         /* STEP 4's table: START_TO_START(0) this-start/source-start, START_TO_END(1) this-END/source-start,
@@ -670,7 +671,7 @@ static lxb_dom_node_t *common_ancestor(lxb_dom_node_t *start, lxb_dom_node_t *en
 /* §5.5's commonAncestorContainer. No page code, one walk up. */
 static JSValue js_range_common_ancestor(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    RangeBounds *b = range_receiver(this_val);
+    const RangeBounds *b = range_receiver(this_val);
 
     (void)magic;
     /* NO `if (!b)` HERE, AND THAT IS THE CONVERSION RATHER THAN A SHORTCUT. §3.7.6's receiver test is stated at
@@ -765,7 +766,7 @@ static bool range_contains(const RangeBounds *b, lxb_dom_node_t *n)
     return bp_contains(bounds_start(b), b->start_off, bounds_end(b), b->end_off, n);
 }
 
-int range_str_step(JSContext *ctx, JSStepHdr *hdr, RangeStrState *s, RangeBounds *b, JSValue *presult)
+int range_str_step(JSContext *ctx, JSStepHdr *hdr, RangeStrState *s, const RangeBounds *b, JSValue *presult)
 {
     lxb_dom_node_t *sn, *en;
     const char *p;
@@ -826,7 +827,7 @@ int range_str_step(JSContext *ctx, JSStepHdr *hdr, RangeStrState *s, RangeBounds
 static int js_range_to_string(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                               JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    RangeBounds *b = range_receiver(hdr->this_val);
+    const RangeBounds *b = range_receiver(hdr->this_val);
 
     (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
@@ -1136,7 +1137,7 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
     if (!s->sp) {
         /* THE TOP FRAME IS THE RECEIVER'S OWN RANGE — read here and nowhere else, because everything below is
            stated over the four values step 3 snapshots. */
-        RangeBounds *b = range_receiver(hdr->this_val);
+        const RangeBounds *b = range_receiver(hdr->this_val);
         f = rx_push(ctx, s);
         f->sn = bounds_start(b);
         f->so = b->start_off;
@@ -1205,14 +1206,14 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
             /* STEPS 12-15, AND ONLY FOR THE PAGE'S OWN RANGE. A subrange is not a live range in this engine
                (see RxFrame) and nothing reads its position after this point, so moving it would be writing a
                value with no reader — the observable half of these steps is the receiver's. */
-            RangeBounds *b = range_receiver(hdr->this_val);
+            const RangeBounds *b = range_receiver(hdr->this_val);
             lxb_dom_node_t *nn;
             uint32_t no;
             range_collapse_point(f->sn, f->en, f->so, &nn, &no);
             {
                 JSValue w = node_wrap(ctx, nn);
-                bounds_set_start(ctx, b, w, no);
-                bounds_set_end(ctx, b, w, no);
+                bounds_set_start(ctx, hdr->this_val, w, no);
+                bounds_set_end(ctx, hdr->this_val, w, no);
                 JS_FreeValue(ctx, w);
             }
         }
@@ -1382,7 +1383,8 @@ void range_del_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->buf(ctx, (void **)&s->list, sizeof(lxb_dom_node_t *) * (size_t)s->cap);
 }
 
-int range_del_step(JSContext *ctx, JSStepHdr *hdr, RangeDelState *s, RangeBounds *b, JSValue *presult)
+int range_del_step(JSContext *ctx, JSStepHdr *hdr, RangeDelState *s, JSValueConst range, const RangeBounds *b,
+                   JSValue *presult)
 {
     DCHECK(b != NULL, "§5.5's deleteContents stepped with no bounds — the caller resolves the subject before "
                       "every step and an unresolvable one is its own abrupt, not this machine's");
@@ -1434,8 +1436,8 @@ int range_del_step(JSContext *ctx, JSStepHdr *hdr, RangeDelState *s, RangeBounds
         range_collapse_point(s->sn, s->en, s->so, &nn, &no);                                 /* STEPS 5-7 */
         {
             JSValue w = node_wrap(ctx, nn);
-            bounds_set_start(ctx, b, w, no);                                                 /* STEP 8 */
-            bounds_set_end(ctx, b, w, no);
+            bounds_set_start(ctx, range, w, no);                                                 /* STEP 8 */
+            bounds_set_end(ctx, range, w, no);
             JS_FreeValue(ctx, w);
         }
         if (node_is_chardata_kind(s->sn))                                                    /* STEP 9 */
@@ -1463,12 +1465,12 @@ int range_del_step(JSContext *ctx, JSStepHdr *hdr, RangeDelState *s, RangeBounds
 static int rd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                    JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    RangeBounds *b;
+    const RangeBounds *b;
 
     (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
     b = range_receiver(hdr->this_val);
-    return range_del_step(ctx, hdr, st, b, presult);
+    return range_del_step(ctx, hdr, st, hdr->this_val, b, presult);
 }
 
 /* No release: the removal list is range_del_visit's, discharged with the rest. */
@@ -1479,7 +1481,7 @@ static const IdlStepDecl RANGE_DELETE = { rd_step, sizeof(RdState), range_del_vi
 
 /* Steps 1-7: what the algorithm checks and where it inserts, then step 7's split or step 8. Returns false having
    thrown, with nothing started; the machine resumes at `base` and stands at `after` once step 13 is done. */
-static bool range_insert_start(JSContext *ctx, JSStepHdr *hdr, RangeInsertState *s, RangeBounds *b,
+static bool range_insert_start(JSContext *ctx, JSStepHdr *hdr, RangeInsertState *s, const RangeBounds *b,
                                lxb_dom_node_t *node, int base, int after)
 {
     lxb_dom_node_t *sn = bounds_start(b), *ref;
@@ -1512,7 +1514,7 @@ static bool range_insert_start(JSContext *ctx, JSStepHdr *hdr, RangeInsertState 
 }
 
 /* One stage of the algorithm; JS_STEP_YIELD at every rest, or JS_STEP_ABRUPT having thrown. */
-static int range_insert_run(JSContext *ctx, JSStepHdr *hdr, RangeInsertState *s, RangeBounds *b, int base)
+static int range_insert_run(JSContext *ctx, JSStepHdr *hdr, RangeInsertState *s, const RangeBounds *b, int base)
 {
     int phase = hdr->stage - base;
 
@@ -1545,7 +1547,7 @@ static int range_insert_run(JSContext *ctx, JSStepHdr *hdr, RangeInsertState *s,
     case RI_PHASE_END:
         if (node_of(b->start_node) == node_of(b->end_node) && b->start_off == b->end_off) {    /* STEP 13 */
             JSValue w = node_wrap(ctx, s->parent);
-            bounds_set_end(ctx, b, w, s->new_off);
+            bounds_set_end(ctx, hdr->this_val, w, s->new_off);
             JS_FreeValue(ctx, w);
         }
         hdr->stage = s->after;
@@ -1589,7 +1591,7 @@ static const char *rin_script_forbidden(int stage, const void *st)
 static int rin_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                     JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    RangeBounds *b = range_receiver(hdr->this_val);
+    const RangeBounds *b = range_receiver(hdr->this_val);
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
@@ -1639,7 +1641,7 @@ static int rs_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
                    JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     RsState *s = st;
-    RangeBounds *b = range_receiver(hdr->this_val);
+    const RangeBounds *b = range_receiver(hdr->this_val);
     lxb_dom_node_t *np = argc > 0 ? node_of(argv[0]) : NULL;
 
     (void)out_cb; (void)out_argc;
@@ -1711,8 +1713,8 @@ static int rs_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         uint32_t i = node_index(np);
         DCHECK(np->parent != NULL, "§5.5 step 5 has just inserted newParent, so it has a parent");
         pw = node_wrap(ctx, np->parent);
-        bounds_set_start(ctx, b, pw, i);
-        bounds_set_end(ctx, b, pw, i + 1);
+        bounds_set_start(ctx, hdr->this_val, pw, i);
+        bounds_set_end(ctx, hdr->this_val, pw, i + 1);
         JS_FreeValue(ctx, pw);
     }
     *presult = JS_UNDEFINED;
@@ -1788,7 +1790,7 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
         hdr->stage = FRAG_START;
     }
     if (hdr->stage == FRAG_START) {
-        RangeBounds *b = range_receiver(hdr->this_val);
+        const RangeBounds *b = range_receiver(hdr->this_val);
         lxb_dom_element_t *el = NULL;
         lxb_dom_document_t *doc;
         lxb_dom_node_t *node;

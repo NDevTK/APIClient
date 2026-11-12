@@ -266,24 +266,24 @@ static WsCtrlData *wc_of(JSValueConst v)
    JS_SetOpaque, where the record is unreachable by the collector and its slots hold no value to release. */
 /* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
    line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
-static void ws_set_at(JSContext *ctx, WsData *d, JSValue *slot, JSValue v,
+static void ws_set_at(JSContext *ctx, JSValueConst owner, WsData *d, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, d, &WS_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, d, &WS_REC, slot, v, file, line);
 }
-static void wr_set_at(JSContext *ctx, WsWriterData *w, JSValue *slot, JSValue v,
+static void wr_set_at(JSContext *ctx, JSValueConst owner, WsWriterData *w, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, w, &WR_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, w, &WR_REC, slot, v, file, line);
 }
-static void wc_set_at(JSContext *ctx, WsCtrlData *c, JSValue *slot, JSValue v,
+static void wc_set_at(JSContext *ctx, JSValueConst owner, WsCtrlData *c, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, c, &WC_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, c, &WC_REC, slot, v, file, line);
 }
-#define ws_set(ctx_, d_, slot_, v_) ws_set_at((ctx_), (d_), (slot_), (v_), __FILE__, __LINE__)
-#define wr_set(ctx_, w_, slot_, v_) wr_set_at((ctx_), (w_), (slot_), (v_), __FILE__, __LINE__)
-#define wc_set(ctx_, c_, slot_, v_) wc_set_at((ctx_), (c_), (slot_), (v_), __FILE__, __LINE__)
+#define ws_set(ctx_, owner_, d_, slot_, v_) ws_set_at((ctx_), (owner_), (d_), (slot_), (v_), __FILE__, __LINE__)
+#define wr_set(ctx_, owner_, w_, slot_, v_) wr_set_at((ctx_), (owner_), (w_), (slot_), (v_), __FILE__, __LINE__)
+#define wc_set(ctx_, owner_, c_, slot_, v_) wc_set_at((ctx_), (owner_), (c_), (slot_), (v_), __FILE__, __LINE__)
 
 bool writable_stream_is(JSValueConst v)
 {
@@ -330,7 +330,7 @@ static void wc_dequeue(JSContext *ctx, WsCtrlData *c)
     if (c->queue_total < 0) c->queue_total = 0;
 }
 
-static int wc_reset_queue(JSContext *ctx, WsCtrlData *c)
+static int wc_reset_queue(JSContext *ctx, JSValueConst ctrl, WsCtrlData *c)
 {
     JSValue q = JS_NewArray(ctx), qs = JS_NewArray(ctx);
 
@@ -338,8 +338,8 @@ static int wc_reset_queue(JSContext *ctx, WsCtrlData *c)
        named by the record, so neither of the two collections these allocations can start walks a slot naming
        freed storage — and an exception marker never reaches a slot wc_gc_mark reads. */
     if (JS_IsException(q) || JS_IsException(qs)) { JS_FreeValue(ctx, q); JS_FreeValue(ctx, qs); return -1; }
-    wc_set(ctx, c, &c->queue, q);
-    wc_set(ctx, c, &c->queue_size, qs);
+    wc_set(ctx, ctrl, c, &c->queue, q);
+    wc_set(ctx, ctrl, c, &c->queue_size, qs);
     c->qhead = 0;
     c->queue_total = 0;
     return 0;
@@ -357,12 +357,12 @@ static int wc_reset_queue(JSContext *ctx, WsCtrlData *c)
    undefined `size_fn` is the implicit one-per-chunk strategy at S_SIZE, and an undefined write/close/abort is
    the accept-everything-and-answer-at-once algorithm at S_SINK_WRITE and S_ERR_ABORT — so the post-clear
    behaviour the standard describes is exactly what these slots already mean. */
-static void wc_clear_algorithms(JSContext *ctx, WsCtrlData *c)
+static void wc_clear_algorithms(JSContext *ctx, JSValueConst ctrl, WsCtrlData *c)
 {
-    wc_set(ctx, c, &c->write_fn, JS_UNDEFINED);
-    wc_set(ctx, c, &c->close_fn, JS_UNDEFINED);
-    wc_set(ctx, c, &c->abort_fn, JS_UNDEFINED);
-    wc_set(ctx, c, &c->size_fn, JS_UNDEFINED);
+    wc_set(ctx, ctrl, c, &c->write_fn, JS_UNDEFINED);
+    wc_set(ctx, ctrl, c, &c->close_fn, JS_UNDEFINED);
+    wc_set(ctx, ctrl, c, &c->abort_fn, JS_UNDEFINED);
+    wc_set(ctx, ctrl, c, &c->size_fn, JS_UNDEFINED);
 }
 
 static double wc_desired(WsCtrlData *c) { return c->hwm - c->queue_total; }
@@ -486,8 +486,7 @@ enum {
    rejected `close()` and left `ready` fulfilled forever. Two names for one operation is what made a difference
    that does not exist look deliberate, so there is one.
    Its third step — [[PromiseIsHandled]] — is performed on BOTH arms, for the reason stated at the mark. */
-static int wr_settle_run(JSContext *ctx, StreamWork *w, WsWriterData *wr, int which, int reject,
-                         JSValueConst value, JSValue in, JSValue **out_cb, int *out_argc)
+static int wr_settle_run(JSContext *ctx, StreamWork *w, JSValueConst writer, WsWriterData *wr, int which, int reject, JSValueConst value, JSValue in, JSValue **out_cb, int *out_argc)
 {
     JSValueConst arg;
     JSValue out;
@@ -509,7 +508,7 @@ static int wr_settle_run(JSContext *ctx, StreamWork *w, WsWriterData *wr, int wh
             DCHECK(reject, "a §5.3 promise was resolved a second time");
             p = JS_NewPromiseCapability(ctx, pair);
             if (JS_IsException(p)) { JS_FreeValue(ctx, in); return -1; }
-            wr_set(ctx, wr, which ? &wr->ready : &wr->closed, p);
+            wr_set(ctx, writer, wr, which ? &wr->ready : &wr->closed, p);
         } else {
             *settled = 1;
             pair[0] = funcs[0];
@@ -599,7 +598,7 @@ static int ws_settle_run(JSContext *ctx, StreamWork *w, JSValueConst stream, JSV
     if (w->settle >= W_CLOSED_REJ && w->settle <= W_READY_RES) {
         int which  = (w->settle == W_READY_REJ || w->settle == W_READY_RES);
         int reject = (w->settle != W_CLOSED_RES && w->settle != W_READY_RES);
-        r = wr_settle_run(ctx, w, wr, which, reject, reject ? (JSValueConst)w->err : JS_UNDEFINED,
+        r = wr_settle_run(ctx, w, d->writer, wr, which, reject, reject ? (JSValueConst)w->err : JS_UNDEFINED,
                           in, out_cb, out_argc);
         if (r != 0) return r;
         w->settle = W_IDLE;
@@ -777,7 +776,7 @@ static int ws_react(JSContext *ctx, JSValueConst promise, JSValueConst ctrl, int
    runs §5.4.4 Internal methods' [[ErrorSteps]], whose ONE step is ResetQueue. It does not touch the signal:
    only §5.5.1's WritableStreamAbort signals, for the reason spelled out at S_ERROR below. The writer's `ready`
    rejection is a stage, because it is a call. */
-static void ws_start_erroring(JSContext *ctx, WsData *d, JSValueConst reason)
+static void ws_start_erroring(JSContext *ctx, JSValueConst stream, WsData *d, JSValueConst reason)
 {
     /* Its steps 1-2 and 4 are asserts, and they are asserts HERE rather than early returns: this operation has
        one caller (S_ERROR, which has already tested the state), so a false one is this machine having reached a
@@ -789,7 +788,7 @@ static void ws_start_erroring(JSContext *ctx, WsData *d, JSValueConst reason)
     DCHECK(!JS_IsUndefined(d->controller), "§5.5.2's WritableStreamStartErroring step 4 ran on a stream with no "
                                            "controller");
     d->state = WS_ERRORING;
-    ws_set(ctx, d, &d->stored_error, JS_DupValue(ctx, reason));
+    ws_set(ctx, stream, d, &d->stored_error, JS_DupValue(ctx, reason));
     /* THE QUEUE IS NOT DROPPED HERE. §5.5.2's StartErroring has no such step; the drop is §5.4.4's
        [[ErrorSteps]], which §5.5.2's FinishErroring step 4 reaches — and FinishErroring is the step AFTER an
        in-flight operation finishes, so dropping early emptied the queue under a write the sink still held.
@@ -803,7 +802,7 @@ static void ws_start_erroring(JSContext *ctx, WsData *d, JSValueConst reason)
    S_WRITE_QUEUE by the state refusals §5.5.3's WritableStreamDefaultWriterWrite steps 7-9 make, S_WRITE_DONE by
    the very condition §5.5.4's ProcessWrite step 4.5 states. So they are asserts here too, not an early return
    that would let a caller added later skip a backpressure update and leave `ready` pending for ever. */
-static int ws_update_backpressure(JSContext *ctx, WsData *d, WsCtrlData *c)
+static int ws_update_backpressure(JSContext *ctx, JSValueConst stream, WsData *d, WsCtrlData *c)
 {
     bool bp = wc_backpressure(c);
     WsWriterData *wr = JS_IsUndefined(d->writer) ? NULL : wr_of(d->writer);
@@ -821,9 +820,9 @@ static int ws_update_backpressure(JSContext *ctx, WsData *d, WsCtrlData *c)
         JSValue funcs[2];
         JSValue p = JS_NewPromiseCapability(ctx, funcs);
         if (JS_IsException(p)) return W_IDLE;
-        wr_set(ctx, wr, &wr->ready, p);
-        wr_set(ctx, wr, &wr->ready_funcs[0], funcs[0]);
-        wr_set(ctx, wr, &wr->ready_funcs[1], funcs[1]);
+        wr_set(ctx, d->writer, wr, &wr->ready, p);
+        wr_set(ctx, d->writer, wr, &wr->ready_funcs[0], funcs[0]);
+        wr_set(ctx, d->writer, wr, &wr->ready_funcs[1], funcs[1]);
         wr->ready_settled = 0;
     }
     return W_IDLE;
@@ -951,7 +950,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             /* §5.5.4's ProcessWrite step 5.1, which runs BEFORE step 5.2's FinishInFlightWriteWithError and
                only while the stream is still writable — a stream already erroring keeps its algorithms,
                because §5.5.2's FinishErroring step 12 still has [[AbortSteps]] to perform with them. */
-            if (d->state == WS_WRITABLE) wc_clear_algorithms(ctx, c);
+            if (d->state == WS_WRITABLE) wc_clear_algorithms(ctx, s->ctrl, c);
             ws_take_pair(d->in_flight_write, pair);
             DCHECK(!JS_IsUndefined(pair[1]), "§5.5.2's WritableStreamFinishInFlightWriteWithError step 1 ran "
                                              "with no write in flight");
@@ -1074,7 +1073,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
                reason [[abortAlgorithm]] is never wanted afterwards is that an abort() arriving from here on
                finds the state erroring, so §5.5.1's WritableStreamAbort step 8 makes it was-already-erroring
                and §5.5.2's FinishErroring step 11 answers it without reaching step 12. */
-            wc_clear_algorithms(ctx, c);
+            wc_clear_algorithms(ctx, s->ctrl, c);
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, step_arg(&s->hdr, 0));
             STEP_GOTO(s->hdr.stage, S_ERROR, &s->w.phase, NULL);
@@ -1135,11 +1134,11 @@ run:
                    from outside it, which is the one write shape the layout assert cannot see. */
                 JSValue funcs[2], p = JS_NewPromiseCapability(ctx, funcs);
                 if (JS_IsException(p)) return JS_STEP_ABRUPT;
-                ws_set(ctx, d, &d->abort_reason,
+                ws_set(ctx, s->stream, d, &d->abort_reason,
                        d->abort_was_erroring ? JS_UNDEFINED : JS_DupValue(ctx, s->w.value));
-                ws_set(ctx, d, &d->abort_p, p);
-                ws_set(ctx, d, &d->abort_funcs[0], funcs[0]);
-                ws_set(ctx, d, &d->abort_funcs[1], funcs[1]);
+                ws_set(ctx, s->stream, d, &d->abort_p, p);
+                ws_set(ctx, s->stream, d, &d->abort_funcs[0], funcs[0]);
+                ws_set(ctx, s->stream, d, &d->abort_funcs[1], funcs[1]);
             }
             d->abort_pending = 1;
             s->promise = JS_DupValue(ctx, d->abort_p);
@@ -1169,7 +1168,7 @@ run:
                     /* Step 3's ErrorIfNeeded is ControllerError when the stream is writable, so its step 3
                        clears the algorithms before StartErroring — including the very `size` that just threw,
                        which is why a second write does not reach it again. */
-                    if (d->state == WS_WRITABLE) wc_clear_algorithms(ctx, c);
+                    if (d->state == WS_WRITABLE) wc_clear_algorithms(ctx, s->ctrl, c);
                     STEP_GOTO(s->hdr.stage, d->state == WS_WRITABLE ? S_ERROR : S_WRITE_QUEUE, &s->w.phase, NULL);
                     s->tail = S_WRITE_QUEUE;
                     continue;
@@ -1209,12 +1208,12 @@ run:
                 s->w.err = JS_GetException(ctx);
                 /* ControllerWrite step 2's ErrorIfNeeded, which the state refusals above have already
                    established reaches ControllerError, whose step 3 clears the algorithms. */
-                wc_clear_algorithms(ctx, c);
+                wc_clear_algorithms(ctx, s->ctrl, c);
                 STEP_GOTO(s->hdr.stage, S_ERROR, &s->w.phase, NULL);
                 continue;
             }
             wc_enqueue(ctx, c, s->chunk, s->size);
-            s->w.settle = ws_update_backpressure(ctx, d, c);
+            s->w.settle = ws_update_backpressure(ctx, s->stream, d, c);
             STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_ADVANCE;
             continue;
@@ -1229,7 +1228,7 @@ run:
                    the difference is the whole point of the signal: a sink watches it to learn that someone
                    ASKED to abort, not that a write of its own happened to fail. Signalling here told every sink
                    its own thrown error was an abort request. */
-                ws_start_erroring(ctx, d, s->w.err);
+                ws_start_erroring(ctx, s->stream, d, s->w.err);
                 s->w.settle = W_READY_REJ;
                 STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
                 s->next = S_FINISH_ERR;
@@ -1248,7 +1247,7 @@ run:
                 continue;
             }
             d->state = WS_ERRORED;
-            wc_reset_queue(ctx, c);
+            wc_reset_queue(ctx, s->ctrl, c);
             STEP_GOTO(s->hdr.stage, S_ERR_WRITES, &s->w.phase, NULL);
         }
 
@@ -1277,7 +1276,7 @@ run:
             if (JS_IsUndefined(c->abort_fn)) {
                 /* §5.4.4 Internal methods' [[AbortSteps]] step 2's ClearAlgorithms runs on this arm too: its
                    step 1 performed the DEFAULT abort algorithm, which answers at once. */
-                wc_clear_algorithms(ctx, c);
+                wc_clear_algorithms(ctx, s->ctrl, c);
                 s->w.settle = W_ABORT_RES;
                 STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
                 s->next = S_ERR_CLOSE;
@@ -1301,7 +1300,7 @@ run:
                    arrives here already a rejection and takes the same reaction path a rejecting one does. */
                 /* §5.4.4 Internal methods' [[AbortSteps]] step 2, which sits between its step 1's call and its
                    step 3's return — after the call, so `c->abort_fn` is still the function that was invoked. */
-                wc_clear_algorithms(ctx, c);
+                wc_clear_algorithms(ctx, s->ctrl, c);
                 JS_FreeValue(ctx, s->w.value);
                 s->is_close = 2;   /* the ABORT arm of the shared react stage */
                 if (JS_IsException(out)) {
@@ -1393,7 +1392,7 @@ run:
             /* §5.5.4's ProcessClose step 6 — after step 5's call and before steps 7-8's reactions, and ONLY
                on the close arm: ProcessWrite clears at its step 5.1, on the rejection, not here. `fn` is
                borrowed from the slot this releases, and is not read again. */
-            if (is_close) wc_clear_algorithms(ctx, c);
+            if (is_close) wc_clear_algorithms(ctx, s->ctrl, c);
             s->is_close = (uint8_t)is_close;
             JS_FreeValue(ctx, s->w.value);
             if (JS_IsException(out)) {
@@ -1427,7 +1426,7 @@ run:
             /* §5.5.4's ProcessWrite step 4.4: the chunk leaves the queue now, not when the sink took it. */
             wc_dequeue(ctx, c);
             s->w.settle = (!ws_close_queued_or_in_flight(d) && d->state == WS_WRITABLE)
-                        ? ws_update_backpressure(ctx, d, c) : W_IDLE;
+                        ? ws_update_backpressure(ctx, s->stream, d, c) : W_IDLE;
             STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_ADVANCE;
             continue;
@@ -1438,7 +1437,7 @@ run:
                succeeded is CLOSED all the same — the abort it was carrying is answered and the error
                discarded. */
             if (d->state == WS_ERRORING) {
-                ws_set(ctx, d, &d->stored_error, JS_UNDEFINED);
+                ws_set(ctx, s->stream, d, &d->stored_error, JS_UNDEFINED);
                 if (d->abort_pending) {
                     s->w.settle = W_ABORT_RES;
                     STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
@@ -1487,8 +1486,8 @@ run:
             WsWriterData *wr = wr_of(s->hdr.this_val);
             DCHECK(wr != NULL, "a §5.5.3 WritableStreamDefaultWriterRelease lost its writer between two of its "
                                "own stages");
-            ws_set(ctx, d, &d->writer, JS_UNDEFINED);
-            wr_set(ctx, wr, &wr->stream, JS_UNDEFINED);
+            ws_set(ctx, s->stream, d, &d->writer, JS_UNDEFINED);
+            wr_set(ctx, s->hdr.this_val, wr, &wr->stream, JS_UNDEFINED);
             STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
             continue;
         }
@@ -1876,7 +1875,7 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         /* The SINK is the callback this value §5.5.4's SetUpWritableStreamDefaultControllerFromUnderlyingSink
            invokes the page's methods with — §5.5.1's CreateWritableStream has no sink at all, so it is set
            here rather than inside the operation. */
-        wc_set(ctx, c, &c->sink, JS_DupValue(ctx, sink));
+        wc_set(ctx, s->ctrl, c, &c->sink, JS_DupValue(ctx, sink));
         s->start_fn = s->snk[SNK_START];  s->snk[SNK_START] = JS_UNDEFINED;
         s->w.value = JS_UNDEFINED;
         STEP_GOTO(hdr->stage, JS_IsFunction(ctx, s->start_fn) ? WSC_CALL : WSC_RESOLVE, &s->w.phase,

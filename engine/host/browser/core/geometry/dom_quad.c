@@ -14,7 +14,6 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/concolic.h"
-#include "solver/cow.h"
 #include <lexbor/core/base.h>   /* lexbor_calloc: the allocator the engine gives its refusal edge */
 
 /* §5's internal member variables point 1 to point 4, each a DOMPoint. */
@@ -22,26 +21,21 @@ typedef struct {
     JSValue p[4];
 } DomQuadBox;
 
-static const uint16_t DOM_QUAD_OFF[] = {
-    (uint16_t)offsetof(DomQuadBox, p[0]), (uint16_t)offsetof(DomQuadBox, p[1]),
-    (uint16_t)offsetof(DomQuadBox, p[2]), (uint16_t)offsetof(DomQuadBox, p[3]),
-};
-static const CowRecord DOM_QUAD_REC = { sizeof(DomQuadBox), DOM_QUAD_OFF, 4 };
-
 static const char *const DQ_NAMES[4] = { "p1", "p2", "p3", "p4" };
 
 static JSClassID g_quad_class;
 static int g_id_ctor = -1, g_id_from_rect = -1, g_id_from_quad = -1, g_id_bounds = -1, g_id_tojson = -1;
 
-static DomQuadBox *dq_this(JSContext *ctx, JSValueConst this_val)
+/* The record is written once, by dq_alloc's mint, and never again: its points are DOMPoints whose own records
+   time-travel. So it answers const and nothing captures it. */
+static const DomQuadBox *dq_this(JSContext *ctx, JSValueConst this_val)
 {
-    DomQuadBox *b = JS_GetOpaque(this_val, g_quad_class);
+    const DomQuadBox *b = JS_GetOpaque(this_val, g_quad_class);
 
     if (!b) {
         JS_ThrowTypeError(ctx, "a DOMQuad member was reached on something that is not a DOMQuad");
         return NULL;
     }
-    cow_capture_host_record(this_val, b, &DOM_QUAD_REC);
     return b;
 }
 
@@ -60,7 +54,7 @@ static void dq_finalizer(JSRuntime *rt, JSValue val)
 static void dq_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    DomQuadBox *b = JS_GetAnyOpaque(val, &id);
+    const DomQuadBox *b = JS_GetAnyOpaque(val, &id);
     int i;
 
     DCHECK(b != NULL, "a DOMQuad was marked with no internal member variables");
@@ -182,7 +176,7 @@ static JSValue js_dq_from_quad(JSContext *ctx, JSValueConst this_val, int argc, 
 /* "The p1 attribute must return point 1", the same object on every read ([SameObject]). */
 static JSValue js_dq_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    DomQuadBox *b = dq_this(ctx, this_val);
+    const DomQuadBox *b = dq_this(ctx, this_val);
 
     if (!b) return JS_EXCEPTION;
     DCHECK(magic >= 0 && magic < 4, "a DOMQuad attribute ran with a magic §5 does not declare");
@@ -208,7 +202,7 @@ static JSValue js_dq_get_bounds(JSContext *ctx, JSValueConst this_val, int argc,
 {
     static const char *const OP[4] = { "DOMQuad.getBounds.x", "DOMQuad.getBounds.y", "DOMQuad.getBounds.width",
                                        "DOMQuad.getBounds.height" };
-    DomQuadBox *b = dq_this(ctx, this_val);
+    const DomQuadBox *b = dq_this(ctx, this_val);
     JSValueConst ops[8];
     double xs[4], ys[4], r[4];
     bool unknown = false, exact = true;
@@ -256,7 +250,7 @@ static JSValue js_dq_get_bounds(JSContext *ctx, JSValueConst this_val, int argc,
    declares toJSON). */
 static JSValue js_dq_tojson(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    DomQuadBox *b = dq_this(ctx, this_val);
+    const DomQuadBox *b = dq_this(ctx, this_val);
     JSValue out;
     int i;
 

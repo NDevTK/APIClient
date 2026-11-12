@@ -263,10 +263,10 @@ void      cow_capture_host_state_at(JSContext *ctx, JSValueConst owner, void *p,
  * same reason: it is the one statement of what the record OWNS, and a field added to one and not the other is
  * the bug this exists to prevent.
  *
- * NO ctx: the call sites are a component's record ACCESSORS, which is where this belongs — a record captured
- * when the flow REACHES it cannot be missed at a write site, and there is no write site left to forget. Those
- * accessors take only the object, so the context is the session's, stashed by cow_set_ctx exactly as the DOM
- * delta's already is. */
+ * The call sites are a component's write accessors: each record has a read accessor that answers a const
+ * pointer and captures nothing, and a write accessor that captures before it answers a mutable one, so a read
+ * leaves no entry and a write through the read pointer does not compile. A slot write asserts the capture in
+ * cow_record_set. The accessors take only the object, so the context is the session's (cow_set_ctx). */
 typedef JSRecordLayout CowRecord;   /* quickjs.h's layout; the byte capture takes only one with no `fields` */
 
 /* WHICH COMPONENT ASKED — the per-site half of this unit's ask count, and the one question `cowStateAsks`
@@ -291,10 +291,8 @@ typedef JSRecordLayout CowRecord;   /* quickjs.h's layout; the byte capture take
  * two expansions are two objects and one expansion is one object, at every optimisation level and on either
  * host. What `(file, line)` is still good for is the LABEL, resolved once at the site's first ask.
  * IT IS ALSO WHY THE RECORD IS NOT THE KEY, which is the other shape a reader will reach for and which is
- * wrong in BOTH directions at once: `RANGE_BOUNDS_REC` is passed from THREE sites (core/dom/abstract_range.c,
- * and twice from core/dom/range.c) so keying on it merges three accessors into one row, while
- * core/timing/performance_entry.c passes `e->cls->rec` — a record chosen per derived class at run time — so
- * one site would split across as many rows as §3 has derived interfaces.
+ * wrong in both directions at once: one layout can be passed from several sites, which keying on it would merge
+ * into one row, and one site can pass a layout chosen at run time, which keying on it would split.
  *
  * NO TABLE, NO CAPACITY AND NO ALLOCATION: the sites are threaded onto a list through the statics THE LINKER
  * HAS ALREADY ALLOCATED, so there is no array to size, nothing to grow inside a capture (where an allocation
@@ -381,10 +379,10 @@ const CowHostRecSite *cow_host_rec_sites(void);
  * `file`/`line` and forwards them, behind a macro of its own (`fr_set` over `fr_set_at`), or is a macro
  * outright (core/css/css_rule.c's `rule_set`, which expands this one at the leaf and needs nothing else).
  * A wrapper written as a plain function is an unconverted caller, not a supported spelling. */
-void      cow_record_set_at(JSContext *ctx, void *p, const CowRecord *rec, JSValue *slot, JSValue v,
-                            const char *file, int line);
-#define cow_record_set(ctx_, p_, rec_, slot_, v_) \
-    cow_record_set_at((ctx_), (p_), (rec_), (slot_), (v_), __FILE__, __LINE__)
+void      cow_record_set_at(JSContext *ctx, JSValueConst owner, void *p, const CowRecord *rec, JSValue *slot,
+                            JSValue v, const char *file, int line);
+#define cow_record_set(ctx_, owner_, p_, rec_, slot_, v_) \
+    cow_record_set_at((ctx_), (owner_), (p_), (rec_), (slot_), (v_), __FILE__, __LINE__)
 
 /* The session's context, for the captures that have no call-site one. The DOM delta's twin is dom_cow_set_ctx. */
 void      cow_set_ctx(JSContext *ctx);

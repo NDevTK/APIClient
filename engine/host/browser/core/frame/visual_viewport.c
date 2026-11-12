@@ -9,7 +9,6 @@
 
 #include "check.h"
 #include "quickjs.h"
-#include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
 #include "core/agent_state.h"
 #include "core/events/event_target.h"
 #include "core/frame/viewport.h"
@@ -61,9 +60,6 @@ typedef struct {
     JSValue    global;   /* "this's relevant global object" — OWNED, and what holds `realm` up */
 } VisualViewportRec;
 
-/* THE ONE STATEMENT OF WHAT THE RECORD OWNS — the same list the finalizer frees and the gc_mark walks. */
-static const uint16_t VV_VAL_OFF[] = { (uint16_t)offsetof(VisualViewportRec, global) };
-static const CowRecord VV_REC = { sizeof(VisualViewportRec), VV_VAL_OFF, 1 };
 static JSClassID g_resize_slot = JS_INVALID_CLASS_ID;   /* §13.1 step 2's "since the last time these steps were run" */
 
 /* ---- §12's attributes ------------------------------------------------------------------------------------ */
@@ -107,16 +103,11 @@ static bool vv_brand(JSContext *ctx, JSValueConst this_val)
     return false;
 }
 
-/* THE ACCESSOR EVERY MEMBER REACHES THE RECORD THROUGH, and the capture is IN it for solver/cow.h's reason: a
-   record a flow has REACHED is one it may write, the delta dedups to one entry per (flow, object), and there
-   is then no write site left to miss. Bounded by §2's own shape — one VisualViewport per document.
-   NOT vv_brand: a brand check is a QUESTION, asked of values that are not VisualViewports at all, and a
-   question must not capture. */
-static VisualViewportRec *vv_rec(JSValueConst v)
+/* The accessor every member reaches the record through. The record is written once, by its mint before
+   JS_SetOpaque, and never again, so it answers const, has no write accessor and is never captured. */
+static const VisualViewportRec *vv_rec(JSValueConst v)
 {
-    VisualViewportRec *r = g_vv_class ? JS_GetOpaque(v, g_vv_class) : NULL;
-
-    if (r) cow_capture_host_record(v, r, &VV_REC);
+    const VisualViewportRec *r = g_vv_class ? JS_GetOpaque(v, g_vv_class) : NULL;
     return r;
 }
 
@@ -138,7 +129,7 @@ static void vv_finalizer(JSRuntime *rt, JSValue val)
 static void vv_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    VisualViewportRec *r = JS_GetAnyOpaque(val, &id);
+    const VisualViewportRec *r = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     DCHECK(r != NULL, "a VisualViewport was marked with no record — its global is a counted reference and an "
@@ -152,7 +143,7 @@ static void vv_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
    thing a DCHECK may stand on; the receiver's own brand is a TypeError one line above every caller. */
 static JSContext *vv_environment(JSValueConst this_val)
 {
-    VisualViewportRec *r = vv_rec(this_val);
+    const VisualViewportRec *r = vv_rec(this_val);
 
     DCHECK(r != NULL, "a VisualViewport reached a member with no record — the brand is the class and the mint "
                       "attaches the record before the object leaves it, so a branded object without one came "

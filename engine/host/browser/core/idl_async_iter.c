@@ -165,11 +165,9 @@ static void idl_async_iter_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc 
     }
 }
 
-/* THE RECORD'S ACCESSOR, AND THEREFORE ITS COW CAPTURE POINT. `ongoing promise`, `is finished` and the
-   component's state are written by §3.7.10.2 and by the component's algorithms, and a flow that has REACHED the
-   record is one that may write it — so the capture belongs here rather than at each of the assignments, where
-   the last one added would be the one forgotten. */
-static IdlAsyncIter *ait_of(JSValueConst v)
+/* The record's write accessor, and its only accessor: every caller is §3.7.10.2's machine, which writes `ongoing
+   promise`, `is finished` and the component's state, so it captures the record before answering it. */
+static IdlAsyncIter *ait_of_for_write(JSValueConst v)
 {
     int i;
 
@@ -194,12 +192,12 @@ static IdlAsyncIter *ait_of(JSValueConst v)
    initialization steps' write to `state` does not either, for the reason stated where they are run. */
 /* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
    line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
-static void ait_set_at(JSContext *ctx, IdlAsyncIter *rec, JSValue *slot, JSValue v,
+static void ait_set_at(JSContext *ctx, JSValueConst owner, IdlAsyncIter *rec, JSValue *slot, JSValue v,
                        const char *file, int line)
 {
-    cow_record_set_at(ctx, rec, &AIT_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, rec, &AIT_REC, slot, v, file, line);
 }
-#define ait_set(ctx_, rec_, slot_, v_) ait_set_at((ctx_), (rec_), (slot_), (v_), __FILE__, __LINE__)
+#define ait_set(ctx_, owner_, rec_, slot_, v_) ait_set_at((ctx_), (owner_), (rec_), (slot_), (v_), __FILE__, __LINE__)
 
 JSValue idl_async_iter_end(JSContext *ctx)
 {
@@ -405,10 +403,10 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
 
         if (op == AIT_FULFILL || op == AIT_REJECT) {
             s->iter = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));
-            rec = ait_of(s->iter);
+            rec = ait_of_for_write(s->iter);
             DCHECK(rec != NULL, "a §3.7.10.2 reaction captured something that is not a default asynchronous "
                                 "iterator object — it was captured at the ask, so it cannot have become one");
-            ait_set(ctx, rec, &rec->ongoing, JS_NULL);     /* steps 8.5.1 and 8.7.1 */
+            ait_set(ctx, s->iter, rec, &rec->ongoing, JS_NULL);     /* steps 8.5.1 and 8.7.1 */
             if (op == AIT_REJECT) {
                 rec->finished = 1;                         /* step 8.7.2 */
                 /* step 8.7.3: "Throw reason" — which rejects the capability step 8.9 attached this to, so the
@@ -428,7 +426,7 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
             /* steps 3-4: the this value. There is no separate ToObject to perform — a primitive receiver
                carries no opaque, so step 7's check is what rejects it, with the same TypeError. */
             s->iter = JS_DupValue(ctx, s->hdr.this_val);
-            rec = ait_of(s->iter);
+            rec = ait_of_for_write(s->iter);
             if (!rec || rec->iface != handle) {
                 /* step 7: "If object is not a default asynchronous iterator object for interface" — REJECT the
                    validation capability rather than throw, because a page distinguishes the two and every
@@ -466,7 +464,7 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
                     cap = JS_PerformPromiseThen(ctx, rec->ongoing, onsettled, onsettled);   /* step 10.3 */
                     JS_FreeValue(ctx, onsettled);
                     if (JS_IsException(cap)) return JS_STEP_ABRUPT;
-                    ait_set(ctx, rec, &rec->ongoing, cap);                                  /* step 10.4 */
+                    ait_set(ctx, s->iter, rec, &rec->ongoing, cap);                                  /* step 10.4 */
                     if (op == AIT_NEXT) {
                         s->result = JS_DupValue(ctx, rec->ongoing);                         /* step 12 */
                         return JS_STEP_DONE;
@@ -499,7 +497,7 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
         return JS_STEP_DONE;               /* step 7.3 */
     }
 
-    rec = ait_of(s->iter);
+    rec = ait_of_for_write(s->iter);
     DCHECK(rec != NULL, "a §3.7.10.2 machine reached its steps holding something that is not a default "
                         "asynchronous iterator object");
 
@@ -568,7 +566,7 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
         cb_result = JS_UNDEFINED;
         /* THE RECORD MAY HAVE MOVED UNDER US: the component's algorithm can suspend, and a resume re-derives
            every pointer. Re-fetch rather than trusting the one taken before the call. */
-        rec = ait_of(s->iter);
+        rec = ait_of_for_write(s->iter);
         DCHECK(rec != NULL, "a §3.7.10.2 machine's iterator stopped being one across its component's algorithm");
         if (returning) {
             s->result = s->source;           /* return step 8.4: the algorithm's promise IS returnSteps' result */
@@ -597,7 +595,7 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
        MEMBER only. An entry reached as step 10.2's onSettled had the ongoing promise set by step 10.4 before it
        was ever queued, and overwriting it here would drop the chain a third call is already waiting on. */
     if (op == AIT_NEXT || op == AIT_RETURN)
-        ait_set(ctx, rec, &rec->ongoing, JS_DupValue(ctx, s->result));
+        ait_set(ctx, s->iter, rec, &rec->ongoing, JS_DupValue(ctx, s->result));
     if (op == AIT_RETURN) return ait_return_tail(ctx, s, rec);   /* steps 12-15 */
     return JS_STEP_DONE;                                         /* next step 12 / a reaction's own answer */
 }

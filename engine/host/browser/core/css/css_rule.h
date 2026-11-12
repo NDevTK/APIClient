@@ -209,8 +209,8 @@ bool css_rule_is_import(JSValueConst v);
    for every rule type that has no declaration block at all. */
 char *css_rule_block_text(JSContext *ctx, JSValueConst rule, size_t *plen);
 
-/* Replace them. The write goes through the record's capturing accessor, so it rides the running flow's COW
-   delta exactly as `selectorText`'s does. */
+/* Replace them. The write goes through the record's write accessor, so it rides the running flow's COW delta
+   exactly as `selectorText`'s does. */
 void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text, size_t len);
 
 /* CSSOM §6.4's "INSERT A CSS RULE rule in a CSS rule list list at index index, with a flag nested", and "REMOVE A CSS

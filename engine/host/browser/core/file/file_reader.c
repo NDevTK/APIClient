@@ -105,14 +105,20 @@ static int        g_task_stepid = -1;
 
 /* THE RECORD TIME-TRAVELS. `state`, `result`, `error` and the three task handles are state a FLOW writes where
    no property hook can see — an arm that read must not have read for its sibling, and an arm that aborted must
-   not have aborted for it — and the capture is in the ACCESSOR for the reason the streams and messaging
-   components give: a record a flow has REACHED is one it may write, so there is no write site left to miss.
-   The offset list is the same list the finalizer frees and the gc_mark walks. */
+   not have aborted for it — so a write takes the record through fr_of_for_write, which captures it first; a read
+   captures nothing. The offset list is the same list the finalizer frees and the gc_mark walks. */
 #define FRO(f) (uint16_t)offsetof(FileReaderData, f)
 static const uint16_t FR_VALS[] = { FRO(result), FRO(error) };
 static const CowRecord FR_REC = { sizeof(FileReaderData), FR_VALS, (int)(sizeof(FR_VALS) / sizeof(FR_VALS[0])) };
 
-static FileReaderData *fr_of(JSValueConst v)
+static const FileReaderData *fr_of(JSValueConst v)
+{
+    const FileReaderData *d = JS_GetOpaque(v, g_fr_class);
+    return d;
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static FileReaderData *fr_of_for_write(JSValueConst v)
 {
     FileReaderData *d = JS_GetOpaque(v, g_fr_class);
     if (d) cow_capture_host_record(v, d, &FR_REC);
@@ -126,12 +132,12 @@ static FileReaderData *fr_of(JSValueConst v)
    the collector and its calloc'd slots hold no value to release.
    THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
    line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
-static void fr_set_at(JSContext *ctx, FileReaderData *d, JSValue *slot, JSValue v,
+static void fr_set_at(JSContext *ctx, JSValueConst owner, FileReaderData *d, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, d, &FR_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, d, &FR_REC, slot, v, file, line);
 }
-#define fr_set(ctx_, d_, slot_, v_) fr_set_at((ctx_), (d_), (slot_), (v_), __FILE__, __LINE__)
+#define fr_set(ctx_, owner_, d_, slot_, v_) fr_set_at((ctx_), (owner_), (d_), (slot_), (v_), __FILE__, __LINE__)
 
 /* THE COLLECTOR RUNS AFTER THE RELEASE COLUMN, SO NEITHER OF THESE MAY LOOK THE CLASS ID UP. Every host's
    teardown is platform_agent_free(), JS_RunGC, JS_FreeRuntime in that order, and this file's class id is
@@ -160,7 +166,7 @@ static void fr_finalizer(JSRuntime *rt, JSValue val)
 static void fr_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    FileReaderData *d = JS_GetAnyOpaque(val, &id);
+    const FileReaderData *d = JS_GetAnyOpaque(val, &id);
     size_t i;
 
     (void)id;
@@ -376,7 +382,7 @@ static int js_fr_task_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     FrTask *s = st;
     JSValueConst reader = JS_StepClosureData(&s->hdr, FR_CD_READER);
     JSValueConst blob = JS_StepClosureData(&s->hdr, FR_CD_BLOB);
-    FileReaderData *d = fr_of(reader);
+    FileReaderData *d = fr_of_for_write(reader);
     size_t len = 0;
     const char *bytes = blob_bytes_of(blob, &len, NULL);
     int r;
@@ -467,12 +473,12 @@ static int js_fr_task_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         if (JS_IsException(packaged)) {
             /* Step 10.5.3: "If package data threw an exception error: Set fr's error to error. Fire a progress
                event called error at fr." */
-            fr_set(ctx, d, &d->error, JS_GetException(ctx));
+            fr_set(ctx, reader, d, &d->error, JS_GetException(ctx));
             s->transmitted = s->length = 0;
             s->ev = progress_event_new(ctx, "error", 0, 0);
         } else {
             /* Step 10.5.4: "Set fr's result to result. Fire a progress event called load at the fr." */
-            fr_set(ctx, d, &d->result, fr_source_wrap(ctx, blob, type, packaged));
+            fr_set(ctx, reader, d, &d->result, fr_source_wrap(ctx, blob, type, packaged));
             s->transmitted = s->length = (double)len;
             s->ev = progress_event_new(ctx, "load", s->transmitted, s->length);
         }
@@ -548,7 +554,7 @@ static JSTaskHandle fr_queue(JSContext *ctx, JSValueConst reader, JSValueConst b
 
 static JSValue js_fr_read(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    FileReaderData *d = fr_of(this_val);
+    FileReaderData *d = fr_of_for_write(this_val);
     FileReadType type = (FileReadType)magic;
     JSValueConst blob, label;
     const char *bytes;
@@ -567,8 +573,8 @@ static JSValue js_fr_read(JSContext *ctx, JSValueConst this_val, int argc, JSVal
                                     "a read is already in progress on this FileReader");
     /* Steps 2-4. */
     d->state = FR_LOADING;
-    fr_set(ctx, d, &d->result, JS_NULL);
-    fr_set(ctx, d, &d->error, JS_NULL);
+    fr_set(ctx, this_val, d, &d->result, JS_NULL);
+    fr_set(ctx, this_val, d, &d->error, JS_NULL);
     /* Steps 5-10. See the file comment for why the chunk sequence a Blob's stream produces is STATED here: it
        is one chunk carrying every byte, or none at all for an empty byte sequence.
          step 10.2  — the first fulfilment queues loadstart, whether or not it carried data;
@@ -647,7 +653,7 @@ static int js_fr_abort_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     FrAbortState *s = st;
-    FileReaderData *d = fr_of(hdr->this_val);
+    FileReaderData *d = fr_of_for_write(hdr->this_val);
     JSValue in = cb_result;
     int r;
 
@@ -669,13 +675,13 @@ static int js_fr_abort_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         /* Step 1: "If this's state is "empty" or if this's state is "done" set this's result to null and
            terminate this algorithm." — no event of any kind. */
         if (d->state != FR_LOADING) {
-            fr_set(ctx, d, &d->result, JS_NULL);
+            fr_set(ctx, hdr->this_val, d, &d->result, JS_NULL);
             *presult = JS_UNDEFINED;
             return 0;
         }
         /* Step 2: "If this's state is "loading" set this's state to "done" and set this's result to null." */
         d->state = FR_DONE;
-        fr_set(ctx, d, &d->result, JS_NULL);
+        fr_set(ctx, hdr->this_val, d, &d->result, JS_NULL);
         /* Step 3, and step 4's "Terminate the algorithm for the read method being processed" — which for a
            read whose whole remainder is queued tasks is the SAME operation: with the tasks off the queue there
            is no step of §6.2's step 10 left to run. */
@@ -734,7 +740,7 @@ enum { FR_GET_READY_STATE = 0, FR_GET_RESULT, FR_GET_ERROR };
 
 static JSValue js_fr_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    FileReaderData *d = fr_of(this_val);
+    const FileReaderData *d = fr_of(this_val);
 
     if (!d)
         return JS_ThrowTypeError(ctx, "a FileReader attribute was read on something that is not one");

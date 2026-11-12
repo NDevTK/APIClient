@@ -427,20 +427,11 @@ static const IdlPairIface *idl_pair_iface_of(JSContext *ctx, JSValueConst v)
     return NULL;
 }
 
-/* THE RECORD'S ACCESSOR, AND THEREFORE ITS COW CAPTURE POINT.
-   CLAUDE.md §A-COMPONENT'S-OWN-C-RECORD-TIME-TRAVELS: `index` is PER-FLOW STATE behind a class opaque, so its
-   write is seen by no property hook and no engine hook; two arms of a fork sharing one iterator stepped ONE
-   cursor and each saw a proper subset of the pairs, which §State-isolation exists to make impossible and which
-   a page reaches in one line, since §3.7.9's iterator is held by the very object it iterates
-   (`h.it = h.entries()`).
-   THIS IS THE ONE DOOR A FLOW REACHES AN EXISTING RECORD THROUGH, which is what makes the accessor placement
-   complete rather than merely conventional: js_idl_pair_next is this function's only caller and holds the only
-   write to `index`, js_idl_pair_make never reads a record back (it allocates one and hands it over), and the
-   finalizer and the gc_mark reach theirs with JS_GetAnyOpaque deliberately — a capture there would dup values
-   on an object being torn down. So there is no write site left to miss.
-   core/idl_async_iter.c's ait_of is the same call at the same place in the same loop, for the same reason, and
-   solver/cow.h's iter_state entry records this exact split for the ENGINE'S OWN iterator records. */
-static IdlPairIter *idl_pair_iter_of(JSValueConst v)
+/* The record's write accessor, and its only accessor. `index` is per-flow state behind a class opaque, so its
+   write is seen by no property hook; two arms of a fork sharing one iterator would step one cursor and each see a
+   proper subset of the pairs. js_idl_pair_next is the only caller and holds the only write to `index`, so it
+   captures the record before answering it; the finalizer and the gc_mark reach theirs with JS_GetAnyOpaque. */
+static IdlPairIter *idl_pair_iter_of_for_write(JSValueConst v)
 {
     int i;
     for (i = 0; i < g_pair_n; i++) {
@@ -501,7 +492,7 @@ static int js_idl_pair_next(JSContext *ctx, JSStepHdr *hdr, void *state, int arg
     JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
     *presult = JS_UNDEFINED;
     DCHECK(hdr->stage == PAIR_NEXT_READ, "§3.7.9.2's nextSteps resumed at a stage it does not have");
-    it = idl_pair_iter_of(hdr->this_val);
+    it = idl_pair_iter_of_for_write(hdr->this_val);
     if (!it) {
         JS_ThrowTypeError(ctx, "not an iterator of this interface");
         return JS_STEP_ABRUPT;

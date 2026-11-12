@@ -68,9 +68,16 @@ static int       g_id_post = -1, g_id_close = -1;   /* the agent's pool entries;
    never again — so the byte capture is the whole of what a flow can change here, which is `closed`. */
 static const CowRecord CHAN_REC = { sizeof(ChanData), NULL, 0 };
 
-/* The capture is in the accessor, as it is for every other component record here: `closed` is state a flow
-   writes, and an arm that closes a channel must not close it for its sibling. */
-static ChanData *chan_of(JSValueConst v)
+/* `closed` is state a flow writes, and an arm that closes a channel must not close it for its sibling, so the
+   write takes the record through chan_of_for_write; a read captures nothing. */
+static const ChanData *chan_of(JSValueConst v)
+{
+    const ChanData *c = JS_GetOpaque(v, g_chan_class);
+    return c;
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static ChanData *chan_of_for_write(JSValueConst v)
 {
     ChanData *c = JS_GetOpaque(v, g_chan_class);
     if (c) cow_capture_host_record(v, c, &CHAN_REC);
@@ -133,7 +140,7 @@ static int js_chan_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
 {
     ChanDeliverTask *s = st;
     JSValueConst dest = step_arg(&s->hdr, 0);
-    ChanData *c = chan_of(dest);
+    const ChanData *c = chan_of(dest);
     JSContext *rctx;
     int r;
 
@@ -250,7 +257,7 @@ static const JSTrampStepDef js_chan_deliver_def = {
 
 static JSValue js_chan_name(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    ChanData *c = chan_of(this_val);
+    const ChanData *c = chan_of(this_val);
     (void)magic;
     if (!c) return JS_ThrowTypeError(ctx, "not a BroadcastChannel");
     return JS_AtomToString(ctx, c->name);
@@ -258,7 +265,7 @@ static JSValue js_chan_name(JSContext *ctx, JSValueConst this_val, int magic)
 
 static JSValue js_chan_post(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    ChanData *c = chan_of(this_val);
+    const ChanData *c = chan_of(this_val);
     StructuredWithTransfer swt;
     JSValue buf;
     uint32_t n = 0, i;
@@ -294,7 +301,7 @@ static JSValue js_chan_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
     }
     for (i = 0; i < n; i++) {
         JSValue d = JS_GetPropertyUint32(ctx, g_registry, i);
-        ChanData *dc;
+        const ChanData *dc;
         if (JS_IsException(d)) {
             JS_FreeValue(ctx, buf);
             structured_with_transfer_free(ctx, &swt);
@@ -333,7 +340,7 @@ static JSValue js_chan_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
 
 static JSValue js_chan_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    ChanData *c = chan_of(this_val);
+    ChanData *c = chan_of_for_write(this_val);
     (void)argc; (void)argv; (void)magic;
     if (!c) return JS_ThrowTypeError(ctx, "not a BroadcastChannel");
     c->closed = 1;

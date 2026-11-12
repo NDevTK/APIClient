@@ -28,11 +28,6 @@ typedef struct {
     uint8_t  color_space;    /* an index into IMAGE_DATA_COLOR_SPACES */
 } ImageDataBox;
 
-/* The one statement of what the record owns — read by the COW capture, by the finalizer and by the gc_mark, so
-   a field added to one and not the others is caught by reading them together. */
-static const uint16_t IMAGE_DATA_OFF[] = { (uint16_t)offsetof(ImageDataBox, data) };
-static const CowRecord IMAGE_DATA_REC = { sizeof(ImageDataBox), IMAGE_DATA_OFF, 1 };
-
 static JSClassID g_class;
 static int g_id_ctor = -1;
 
@@ -67,23 +62,19 @@ static const IdlArgType IMAGE_DATA_CTOR[4] = {
     IDL_ULONG_OR_IMAGE_DATA_ARRAY, IDL_UNSIGNED_LONG, IDL_ULONG_OR_DICT_BY_ENTRY, IDL_DICT
 };
 
-static ImageDataBox *image_data_box(JSValueConst v)
+/* The record is written once, by its mint, and never again, so it answers const and nothing captures it.
+   The typed array's own element writes are captured by the heap's delta: a page's `img.data[0] = 255` is an
+   ordinary indexed store. */
+static const ImageDataBox *image_data_box(JSValueConst v)
 {
-    ImageDataBox *b = JS_GetOpaque(v, g_class);
-
-    /* CLAUDE.md §A-COMPONENT'S-OWN-C-RECORD-TIME-TRAVELS: the capture belongs in the ACCESSOR, so a record a
-       flow has reached is one it may write and there is no write site left to miss. The typed array's own
-       ELEMENT writes are captured without this component's help — a page's `img.data[0] = 255` is an ordinary
-       indexed store that cow_capture already sees. */
-    if (b) cow_capture_host_record(v, b, &IMAGE_DATA_REC);
-    return b;
+    return JS_GetOpaque(v, g_class);
 }
 
 /* THE BRAND CHECK, AND IT IS A `TypeError` RATHER THAN AN ASSERT — CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE. A
    receiver is whatever the page wrote, and a forcing solver reaches unusual ones constantly. */
-static ImageDataBox *image_data_this(JSContext *ctx, JSValueConst this_val)
+static const ImageDataBox *image_data_this(JSContext *ctx, JSValueConst this_val)
 {
-    ImageDataBox *b = image_data_box(this_val);
+    const ImageDataBox *b = image_data_box(this_val);
 
     if (!b) { JS_ThrowTypeError(ctx, "an ImageData attribute was reached on something that is not an "
                                      "ImageData"); return NULL; }
@@ -104,7 +95,7 @@ static void image_data_finalizer(JSRuntime *rt, JSValue val)
 static void image_data_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    ImageDataBox *b = JS_GetAnyOpaque(val, &id);
+    const ImageDataBox *b = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     DCHECK(b != NULL, "an ImageData was marked with no record — image_data_alloc attaches it before the object "
@@ -322,7 +313,7 @@ static JSValue js_image_data_ctor(JSContext *ctx, JSValueConst new_target, int a
                       "type list than this body reads");
     out = image_data_alloc(ctx, new_target);
     if (JS_IsException(out)) return out;
-    b = image_data_box(out);
+    b = JS_GetOpaque(out, g_class);   /* the mint's own object: no flow but this one has seen it */
     DCHECK(b != NULL, "a freshly allocated ImageData carried no record");
 
     /* WHAT CAN STAND AT POSITION 0 ONCE WEB IDL §3.6 HAS RUN, which is what makes reading it here a DISPATCH rather
@@ -415,7 +406,7 @@ typedef enum { IMG_WIDTH = 0, IMG_HEIGHT, IMG_DATA, IMG_PIXEL_FORMAT, IMG_COLOR_
 
 static JSValue js_image_data_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    ImageDataBox *b = image_data_this(ctx, this_val);
+    const ImageDataBox *b = image_data_this(ctx, this_val);
 
     if (!b) return JS_EXCEPTION;
     switch (magic) {
@@ -496,13 +487,12 @@ void image_data_install_realm(JSContext *ctx)
     JS_SetClassProto(ctx, g_class, proto);      /* the realm owns it from here */
 }
 
-
 /* ---- the C face: §4.12.5.1.16's two directions, and the mint getImageData returns ------------------------- */
 
 /* See image_data.h for why the refusals are the CALLER's and why nothing here asserts on a page's value. */
 bool image_data_pixels(JSContext *ctx, JSValueConst v, ImageDataPixels *out)
 {
-    ImageDataBox *b = image_data_box(v);
+    const ImageDataBox *b = image_data_box(v);
     JSValue buf;
     size_t off = 0, len = 0, bpe = 0;
     uint8_t *base;
@@ -588,7 +578,6 @@ JSValue image_data_new(JSContext *ctx, uint32_t width, uint32_t height, int colo
     return obj;
 }
 
-
 int image_data_color_space_index(const char *name)
 {
     int i;
@@ -601,7 +590,7 @@ int image_data_color_space_index(const char *name)
 
 int image_data_color_space(JSValueConst v)
 {
-    ImageDataBox *b = image_data_box(v);
+    const ImageDataBox *b = image_data_box(v);
     return b ? (int)b->color_space : -1;
 }
 

@@ -35,12 +35,17 @@ static JSClassID g_kw_class;
 static int g_id_ctor      = -1;
 static int g_id_value_set = -1;
 
-/* ---- the record, and the COW capture every member reaches it through -------------------------------------- */
+/* ---- the record: a read accessor, and the write accessor `value`'s setter takes ------------------------------ */
 
-/* THE CAPTURE IS HERE AND NOT AT THE ONE WRITE, which is solver/cow.h's rule: a record a flow has REACHED is
-   one it may write, the delta dedups to one entry, and there is then no write site left to miss. §4.2 declares
-   `value` writable, so this interface has a real second writer today — `kw.value = "grid"`. */
-static CssKeywordValueData *kw_of(JSValueConst v)
+/* The read accessor captures nothing. §4.2 declares `value` writable — `kw.value = "grid"` — and that setter takes
+   the record through kw_of_for_write, which captures it into the running flow's delta first. */
+static const CssKeywordValueData *kw_of(JSValueConst v)
+{
+    return JS_GetOpaque(v, g_kw_class);
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static CssKeywordValueData *kw_of_for_write(JSValueConst v)
 {
     CssKeywordValueData *k = JS_GetOpaque(v, g_kw_class);
 
@@ -56,9 +61,9 @@ bool css_keyword_value_is(JSValueConst v)
 /* WEB IDL §3.7.6 "Attributes"' BRAND CHECK. `CSSKeywordValue.prototype.value` read off `{}` is a TypeError,
    and a page tells that apart from `undefined`. It is a TypeError and NOT a DCHECK because the receiver is
    PAGE-SUPPLIED input: asserting on it would hand any page an abort switch for this agent. */
-static CssKeywordValueData *kw_here(JSContext *ctx, JSValueConst v)
+static const CssKeywordValueData *kw_here(JSContext *ctx, JSValueConst v)
 {
-    CssKeywordValueData *k = kw_of(v);
+    const CssKeywordValueData *k = kw_of(v);
 
     if (!k) {
         JS_ThrowTypeError(ctx, "a CSSKeywordValue member was reached on something that is not a "
@@ -90,7 +95,7 @@ static void kw_finalizer(JSRuntime *rt, JSValue val)
 static void kw_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    CssKeywordValueData *k = JS_GetAnyOpaque(val, &id);
+    const CssKeywordValueData *k = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     DCHECK(k != NULL, "a CSSKeywordValue was marked with no record — its `value` slot is a counted reference "
@@ -128,7 +133,7 @@ JSValue css_keyword_value_new(JSContext *ctx, JSValue value)
    operation, so there is no result to derive and the serialization of an unknown keyword IS that unknown. */
 JSValue css_keyword_value_serialize(JSContext *ctx, JSValueConst v)
 {
-    CssKeywordValueData *k = kw_of(v);
+    const CssKeywordValueData *k = kw_of(v);
 
     DCHECK(k != NULL, "§6's serialize-a-CSSStyleValue reached §6.2's arm on something that is not a "
                       "CSSKeywordValue — the caller asks css_keyword_value_is before it asks this");
@@ -183,7 +188,7 @@ static JSValue js_css_keyword_value_ctor(JSContext *ctx, JSValueConst this_val, 
    internal slot the setter writes. */
 static JSValue js_css_keyword_value_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    CssKeywordValueData *k = kw_here(ctx, this_val);
+    const CssKeywordValueData *k = kw_here(ctx, this_val);
 
     (void)magic;
     if (!k) return JS_EXCEPTION;
@@ -200,7 +205,7 @@ static JSValue js_css_keyword_value_get(JSContext *ctx, JSValueConst this_val, i
    one position. */
 static JSValue js_css_keyword_value_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    CssKeywordValueData *k = kw_here(ctx, this_val);
+    const CssKeywordValueData *k = kw_here(ctx, this_val);
 
     (void)magic;
     if (!k) return JS_EXCEPTION;
@@ -210,8 +215,11 @@ static JSValue js_css_keyword_value_set(JSContext *ctx, JSValueConst this_val, J
            "third thing for a declared USVString position to be");
     if (kw_value_is_empty(ctx, val))
         return JS_ThrowTypeError(ctx, "CSSKeywordValue's value cannot be the empty string");
-    JS_FreeValue(ctx, k->value);
-    k->value = JS_DupValue(ctx, val);
+    {
+        CssKeywordValueData *w = kw_of_for_write(this_val);
+
+        cow_record_set(ctx, this_val, w, &KW_REC, &w->value, JS_DupValue(ctx, val));
+    }
     return JS_UNDEFINED;
 }
 

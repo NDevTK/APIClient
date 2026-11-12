@@ -119,18 +119,18 @@ bool transform_stream_is(JSValueConst v) { return g_ts_class != 0 && JS_GetOpaqu
    the collector and its slots hold no value to release. */
 /* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
    line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
-static void tsd_set_at(JSContext *ctx, TsData *t, JSValue *slot, JSValue v,
+static void tsd_set_at(JSContext *ctx, JSValueConst owner, TsData *t, JSValue *slot, JSValue v,
                        const char *file, int line)
 {
-    cow_record_set_at(ctx, t, &TSD_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, t, &TSD_REC, slot, v, file, line);
 }
-static void tc_set_at(JSContext *ctx, TsCtrlData *c, JSValue *slot, JSValue v,
+static void tc_set_at(JSContext *ctx, JSValueConst owner, TsCtrlData *c, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, c, &TCD_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, c, &TCD_REC, slot, v, file, line);
 }
-#define tsd_set(ctx_, t_, slot_, v_) tsd_set_at((ctx_), (t_), (slot_), (v_), __FILE__, __LINE__)
-#define tc_set(ctx_, c_, slot_, v_)  tc_set_at((ctx_), (c_), (slot_), (v_), __FILE__, __LINE__)
+#define tsd_set(ctx_, owner_, t_, slot_, v_) tsd_set_at((ctx_), (owner_), (t_), (slot_), (v_), __FILE__, __LINE__)
+#define tc_set(ctx_, owner_, c_, slot_, v_)  tc_set_at((ctx_), (owner_), (c_), (slot_), (v_), __FILE__, __LINE__)
 
 static void ts_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -348,11 +348,11 @@ static JSValue js_ts_fini(JSContext *ctx, void *st, bool take_result)
 
 /* §6.3's ClearAlgorithms — the transformer's functions are dropped so what they close over can be collected,
    and so a second terminating path cannot run one of them again. */
-static void ts_clear_algorithms(JSContext *ctx, TsCtrlData *c)
+static void ts_clear_algorithms(JSContext *ctx, JSValueConst ctrl, TsCtrlData *c)
 {
-    tc_set(ctx, c, &c->transform_fn, JS_UNDEFINED);
-    tc_set(ctx, c, &c->flush_fn, JS_UNDEFINED);
-    tc_set(ctx, c, &c->cancel_fn, JS_UNDEFINED);
+    tc_set(ctx, ctrl, c, &c->transform_fn, JS_UNDEFINED);
+    tc_set(ctx, ctrl, c, &c->flush_fn, JS_UNDEFINED);
+    tc_set(ctx, ctrl, c, &c->cancel_fn, JS_UNDEFINED);
 }
 
 /* THE STAGE IS THE HEADER'S, AND THE TWO ENTRY SHAPES INDEX IT FROM DIFFERENT BASES. §6's constructor is an
@@ -608,16 +608,16 @@ run:
                 cb_result = JS_UNDEFINED;
                 if (JS_IsException(out)) return JS_STEP_ABRUPT;
                 JS_FreeValue(ctx, out);
-                tsd_set(ctx, t, &t->bp_funcs[0], JS_UNDEFINED);
-                tsd_set(ctx, t, &t->bp_funcs[1], JS_UNDEFINED);
+                tsd_set(ctx, s->ts, t, &t->bp_funcs[0], JS_UNDEFINED);
+                tsd_set(ctx, s->ts, t, &t->bp_funcs[1], JS_UNDEFINED);
                 s->w.pull = B_FRESH;
             }
             {
                 JSValue funcs[2], p = JS_NewPromiseCapability(ctx, funcs);
                 if (JS_IsException(p)) return JS_STEP_ABRUPT;
-                tsd_set(ctx, t, &t->bp_promise, p);
-                tsd_set(ctx, t, &t->bp_funcs[0], funcs[0]);
-                tsd_set(ctx, t, &t->bp_funcs[1], funcs[1]);
+                tsd_set(ctx, s->ts, t, &t->bp_promise, p);
+                tsd_set(ctx, s->ts, t, &t->bp_funcs[0], funcs[0]);
+                tsd_set(ctx, s->ts, t, &t->bp_funcs[1], funcs[1]);
                 t->backpressure = s->bp_want;
             }
             s->w.pull = B_IDLE;
@@ -641,7 +641,7 @@ run:
                     if (JS_IsException(out)) return JS_STEP_ABRUPT;
                     JS_FreeValue(ctx, out);
                 }
-                if (c) ts_clear_algorithms(ctx, c);
+                if (c) ts_clear_algorithms(ctx, s->ctrl, c);
                 s->w.settle = E_WRITABLE;
             }
             if (s->w.settle == E_WRITABLE) {
@@ -1194,9 +1194,9 @@ run:
                        `finish`, which tc_gc_mark walks. */
                     JSValue funcs[2], p = JS_NewPromiseCapability(ctx, funcs);
                     if (JS_IsException(p)) return JS_STEP_ABRUPT;
-                    tc_set(ctx, c, &c->finish, p);
-                    tc_set(ctx, c, &c->finish_funcs[0], funcs[0]);
-                    tc_set(ctx, c, &c->finish_funcs[1], funcs[1]);
+                    tc_set(ctx, s->ctrl, c, &c->finish, p);
+                    tc_set(ctx, s->ctrl, c, &c->finish_funcs[0], funcs[0]);
+                    tc_set(ctx, s->ctrl, c, &c->finish_funcs[1], funcs[1]);
                 }
                 JS_FreeValue(ctx, s->promise);
                 s->promise = JS_DupValue(ctx, c->finish);
@@ -1222,7 +1222,7 @@ run:
                 cb_result = JS_UNDEFINED;
             }
             /* §6.2 clears the algorithms BEFORE the answer is awaited, so nothing can run one again. */
-            ts_clear_algorithms(ctx, c);
+            ts_clear_algorithms(ctx, s->ctrl, c);
             if (JS_IsException(out)) {
                 JS_FreeValue(ctx, s->w.value);
                 s->w.value = JS_GetException(ctx);

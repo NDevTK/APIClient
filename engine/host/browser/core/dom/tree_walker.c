@@ -49,12 +49,19 @@ static JSRuntime *g_walker_rt;
 
 /* THE RECORD TIME-TRAVELS. `current` is what every member of this interface writes, and it is written where no
    property hook can see — a forked arm that called nextNode() would otherwise have advanced the walker for its
-   sibling. The capture is in the ACCESSOR: a record a flow has REACHED is one it may write, so there is no
-   write site left to miss. The offset list is the same list the finalizer frees. */
+   sibling. A write takes the record through walker_of_for_write, which captures it first; a read captures
+   nothing. The offset list is the same list the finalizer frees. */
 static const uint16_t WALKER_VALS[] = { TRAVERSER_VALS(WalkerData), (uint16_t)offsetof(WalkerData, current) };
 static const CowRecord WALKER_REC = { sizeof(WalkerData), WALKER_VALS, 3 };
 
-static WalkerData *walker_of(JSValueConst v)
+static const WalkerData *walker_of(JSValueConst v)
+{
+    const WalkerData *w = JS_GetOpaque(v, g_walker_class);
+    return w;
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static WalkerData *walker_of_for_write(JSValueConst v)
 {
     WalkerData *w = JS_GetOpaque(v, g_walker_class);
     if (w) cow_capture_host_record(v, w, &WALKER_REC);
@@ -74,12 +81,12 @@ static WalkerData *walker_of(JSValueConst v)
    and its calloc'd slot holds no value to release. */
 /* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
    line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
-static void tw_set_at(JSContext *ctx, WalkerData *w, JSValue *slot, JSValue v,
+static void tw_set_at(JSContext *ctx, JSValueConst owner, WalkerData *w, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, w, &WALKER_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, w, &WALKER_REC, slot, v, file, line);
 }
-#define tw_set(ctx_, w_, slot_, v_) tw_set_at((ctx_), (w_), (slot_), (v_), __FILE__, __LINE__)
+#define tw_set(ctx_, owner_, w_, slot_, v_) tw_set_at((ctx_), (owner_), (w_), (slot_), (v_), __FILE__, __LINE__)
 
 /* DOES THIS VALUE IMPLEMENT `TreeWalker` — Web IDL §3.7 Interfaces' implementation-check an object step 3, "If
    object does not implement interface, then throw a TypeError.", as the PREDICATE core/idl_args' idl_this_iface
@@ -92,7 +99,7 @@ static void tw_set_at(JSContext *ctx, WalkerData *w, JSValue *slot, JSValue v,
    AFTER every conversion. §3.7.6 Attributes' setter opening steps ask the same question at the same point,
    which is why `currentNode`'s setter states it too and no longer tests its receiver by hand.
    PURE, DELIBERATELY: it is called by the brand check and must not capture the record into a flow's delta for a
-   receiver that is about to be refused. walker_of's capture belongs to the members that ACCEPT one. */
+   receiver that is about to be refused. */
 static bool walker_is(JSValueConst v)
 {
     return JS_GetOpaque(v, g_walker_class) != NULL;
@@ -106,14 +113,22 @@ static bool walker_is(JSValueConst v)
    predicate above, so reaching a body means one of them ran and passed, and the only condition left for this
    to fire on is a member installed WITHOUT its brand: this engine's own routing being wrong, never a fact
    about page input. */
-static WalkerData *walker_receiver(JSValueConst v)
+static const WalkerData *walker_receiver(JSValueConst v)
 {
-    WalkerData *w = walker_of(v);
+    const WalkerData *w = walker_of(v);
 
     DCHECK(w != NULL, "a §6.2 member reached its body on a receiver that is not a TreeWalker — its declaration "
                       "states Web IDL §3.7 Interfaces' implementation check, so reaching the body means neither "
                       "idl_implementation_check nor idl_this_attribute_get ran for it");
     return w;
+}
+
+/* The same receiver for a member that writes the record: §6.2's traversals move `current` and §6.4 raises the
+   traverser's active flag, so the record is captured before any of it. */
+static WalkerData *walker_receiver_for_write(JSValueConst v)
+{
+    DCHECK(walker_receiver(v) != NULL, "a §6.2 member that writes reached its body on something else");
+    return walker_of_for_write(v);
 }
 
 /* THIS FILE USED TO HOLD A `walker_here`, AND ITS ARGUMENT IS KEPT BECAUSE A READER WILL RE-DERIVE IT. It
@@ -246,22 +261,22 @@ static int tw_filter(JSContext *ctx, JSStepHdr *hdr, WalkerData *w, TreeWalkStat
 }
 
 /* "set walker's current to node and return node" — the one sentence six of §6.2's algorithms end with. */
-static JSValue tw_accept(JSContext *ctx, WalkerData *w, lxb_dom_node_t *n)
+static JSValue tw_accept(JSContext *ctx, JSValueConst owner, WalkerData *w, lxb_dom_node_t *n)
 {
     JSValue v = node_wrap(ctx, n);
-    tw_set(ctx, w, &w->current, JS_DupValue(ctx, v));
+    tw_set(ctx, owner, w, &w->current, JS_DupValue(ctx, v));
     return v;
 }
 
 /* `walker's current`, READ FRESH — the filter may have assigned it. */
-static lxb_dom_node_t *tw_current(WalkerData *w)
+static lxb_dom_node_t *tw_current(const WalkerData *w)
 {
     lxb_dom_node_t *n = node_of(w->current);
     DCHECK(n != NULL, "a TreeWalker's current is not a node — the IDL's interface type is what keeps it one");
     return n;
 }
 
-static lxb_dom_node_t *tw_root(WalkerData *w)
+static lxb_dom_node_t *tw_root(const WalkerData *w)
 {
     lxb_dom_node_t *n = node_of(w->t.root);
     DCHECK(n != NULL, "a TreeWalker's root is not a node");
@@ -280,7 +295,7 @@ static int tw_parent_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     TreeWalkState *s = st;
-    WalkerData *w = walker_receiver(hdr->this_val);
+    WalkerData *w = walker_receiver_for_write(hdr->this_val);
     int r;
 
     (void)argc; (void)argv;
@@ -303,7 +318,7 @@ static int tw_parent_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         cb_result = JS_UNDEFINED;
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
-        if (s->result == NODE_FILTER_ACCEPT) { *presult = tw_accept(ctx, w, s->node); return JS_STEP_DONE; }
+        if (s->result == NODE_FILTER_ACCEPT) { *presult = tw_accept(ctx, hdr->this_val, w, s->node); return JS_STEP_DONE; }
         /* Back to step 2: stop at the root, otherwise ascend and filter again. */
         if (s->node == tw_root(w)) { *presult = JS_NULL; return JS_STEP_DONE; }
         s->node = s->node->parent;
@@ -337,7 +352,7 @@ static int tw_children_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     TreeWalkState *s = st;
-    WalkerData *w = walker_receiver(hdr->this_val);
+    WalkerData *w = walker_receiver_for_write(hdr->this_val);
     int type = idl_step_magic(hdr), r;
 
     (void)argc; (void)argv;
@@ -356,7 +371,7 @@ static int tw_children_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         if (s->result == NODE_FILTER_ACCEPT) {                        /* STEP 3.2 */
-            *presult = tw_accept(ctx, w, s->node);
+            *presult = tw_accept(ctx, hdr->this_val, w, s->node);
             return JS_STEP_DONE;
         }
         if (s->result == NODE_FILTER_SKIP) {                          /* STEP 3.3 */
@@ -399,7 +414,7 @@ static int tw_siblings_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     TreeWalkState *s = st;
-    WalkerData *w = walker_receiver(hdr->this_val);
+    WalkerData *w = walker_receiver_for_write(hdr->this_val);
     int type = idl_step_magic(hdr), r;
 
     (void)argc; (void)argv;
@@ -422,7 +437,7 @@ static int tw_siblings_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                 if (r > 0) return r;
                 if (r < 0) return JS_STEP_ABRUPT;
                 if (s->result == NODE_FILTER_ACCEPT) {                    /* STEP 3.2.3 */
-                    *presult = tw_accept(ctx, w, s->node);
+                    *presult = tw_accept(ctx, hdr->this_val, w, s->node);
                     return JS_STEP_DONE;
                 }
                 s->sibling = tw_edge_child(s->node, type);                /* STEP 3.2.4 */
@@ -465,7 +480,7 @@ static int tw_previous_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     TreeWalkState *s = st;
-    WalkerData *w = walker_receiver(hdr->this_val);
+    WalkerData *w = walker_receiver_for_write(hdr->this_val);
     int r;
 
     (void)argc; (void)argv;
@@ -508,7 +523,7 @@ static int tw_previous_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                 if (r < 0) return JS_STEP_ABRUPT;
             }
             if (s->result == NODE_FILTER_ACCEPT) {                             /* STEP 2.2.4 */
-                *presult = tw_accept(ctx, w, s->node);
+                *presult = tw_accept(ctx, hdr->this_val, w, s->node);
                 return JS_STEP_DONE;
             }
             s->sibling = s->node->prev;                                        /* STEP 2.2.5 */
@@ -521,7 +536,7 @@ static int tw_previous_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         cb_result = JS_UNDEFINED;
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
-        if (s->result == NODE_FILTER_ACCEPT) { *presult = tw_accept(ctx, w, s->node); return JS_STEP_DONE; }
+        if (s->result == NODE_FILTER_ACCEPT) { *presult = tw_accept(ctx, hdr->this_val, w, s->node); return JS_STEP_DONE; }
         /* Back to STEP 2's condition, then STEP 2.1. */
         if (s->node == tw_root(w)) { *presult = JS_NULL; return JS_STEP_DONE; }
         s->sibling = s->node->prev;
@@ -545,7 +560,7 @@ static int tw_next_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     TreeWalkState *s = st;
-    WalkerData *w = walker_receiver(hdr->this_val);
+    WalkerData *w = walker_receiver_for_write(hdr->this_val);
     int r;
 
     (void)argc; (void)argv;
@@ -568,7 +583,7 @@ static int tw_next_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
                 if (r > 0) return r;
                 if (r < 0) return JS_STEP_ABRUPT;
                 if (s->result == NODE_FILTER_ACCEPT) {                      /* STEP 3.1.3 */
-                    *presult = tw_accept(ctx, w, s->node);
+                    *presult = tw_accept(ctx, hdr->this_val, w, s->node);
                     return JS_STEP_DONE;
                 }
             }
@@ -593,7 +608,7 @@ static int tw_next_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         if (s->result == NODE_FILTER_ACCEPT) {                              /* STEP 3.8 */
-            *presult = tw_accept(ctx, w, s->node);
+            *presult = tw_accept(ctx, hdr->this_val, w, s->node);
             return JS_STEP_DONE;
         }
         hdr->stage = TWN_CHILD;
@@ -609,7 +624,7 @@ static const IdlStepDecl TW_NEXT = { tw_next_step, sizeof(TreeWalkState), tw_vis
    one slot of the record — so they are ordinary C getters. */
 static JSValue js_walker_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    WalkerData *w = walker_receiver(this_val);
+    const WalkerData *w = walker_receiver(this_val);
 
     switch (magic) {
     case 0: return JS_DupValue(ctx, w->t.root);
@@ -625,10 +640,10 @@ static JSValue js_walker_get(JSContext *ctx, JSValueConst this_val, int magic)
    brand-checked by the declaration's IDL_INTERFACE, so a non-Node threw before this ran. */
 static JSValue js_walker_set_current(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    WalkerData *w = walker_receiver(this_val);
+    WalkerData *w = walker_receiver_for_write(this_val);
 
     (void)magic;
-    tw_set(ctx, w, &w->current, JS_DupValue(ctx, val));
+    tw_set(ctx, this_val, w, &w->current, JS_DupValue(ctx, val));
     return JS_UNDEFINED;
 }
 

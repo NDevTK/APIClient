@@ -28,12 +28,10 @@
  * an ArrayBuffer alike — while `IDBKeyRange.only(v).includes(v)` runs §2.4's compare over the same key. A key
  * conversion that is right in one direction and wrong in the other has nowhere to hide from those two lines.
  *
- * THE RECORD IS THE COMPONENT'S OWN AND IT TIME-TRAVELS. Two owned JSValues (the bounds, each a key record or
- * null) and two flags live behind the class opaque, so the capture goes in the ACCESSOR every member reaches —
- * a record a flow has reached is one it may write, and there is then no write site left to miss. §4.7 declares
- * every member of this interface readonly, so today there is no write; the capture is what makes that a fact
- * nothing has to re-check the day a member is added. The offset list is the SAME list the finalizer frees and
- * the gc_mark walks, which is what makes a field added to one and not the others impossible to miss. */
+ * The record is the component's own. Two owned JSValues (the bounds, each a key record or null) and two flags
+ * live behind the class opaque. §4.7 declares every member of this interface readonly and the mint writes the
+ * record once, so its accessor answers const and nothing captures it: a member that wrote would need a write
+ * accessor, and a write through the const pointer does not compile. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -48,7 +46,6 @@
 #include "core/indexeddb/idb_key_array.h"
 #include "core/indexeddb/idb_key_range.h"
 #include "core/realm.h"
-#include "solver/cow.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §2.9's four fields: "an associated lower bound (null or a key)", "an associated upper bound (null or a
@@ -60,9 +57,6 @@ typedef struct IdbRangeData {
     uint8_t upper_open;
 } IdbRangeData;
 
-static const uint16_t RANGE_VALS[] = { (uint16_t)offsetof(IdbRangeData, lower),
-                                       (uint16_t)offsetof(IdbRangeData, upper) };
-static const CowRecord RANGE_REC = { sizeof(IdbRangeData), RANGE_VALS, 2 };
 
 static JSClassID g_range_class;
 static int g_id_only        = -1;
@@ -77,11 +71,11 @@ static int g_id_includes    = -1;
    four one-key members rather than the two bounds. */
 enum { IDB_SIDE_LOWER = 0, IDB_SIDE_UPPER };
 
-static IdbRangeData *range_of(JSValueConst v)
+/* The accessor every member reaches the record through. The record is written once, by its mint before
+   JS_SetOpaque, and never again, so it answers const, has no write accessor and is never captured. */
+static const IdbRangeData *range_of(JSValueConst v)
 {
-    IdbRangeData *r = JS_GetOpaque(v, g_range_class);
-
-    if (r) cow_capture_host_record(v, r, &RANGE_REC);
+    const IdbRangeData *r = JS_GetOpaque(v, g_range_class);
     return r;
 }
 
@@ -93,9 +87,9 @@ bool idb_key_range_is(JSValueConst v)
 /* WEB IDL §3.7.6 Attributes' BRAND CHECK for the four bound getters and §3.7.7 Operations' for `includes` —
    this one entry serves both. `IDBKeyRange.prototype.includes.call({}, 1)` is a TypeError, and a page tells
    that apart from `false`. */
-static IdbRangeData *range_here(JSContext *ctx, JSValueConst v)
+static const IdbRangeData *range_here(JSContext *ctx, JSValueConst v)
 {
-    IdbRangeData *r = range_of(v);
+    const IdbRangeData *r = range_of(v);
 
     if (!r) {
         JS_ThrowTypeError(ctx, "an IDBKeyRange member was reached on something that is not an IDBKeyRange");
@@ -130,7 +124,7 @@ static void range_finalizer(JSRuntime *rt, JSValue val)
 static void range_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    IdbRangeData *r = JS_GetAnyOpaque(val, &id);
+    const IdbRangeData *r = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     DCHECK(r != NULL, "an IDBKeyRange was marked with no record — its two bounds are counted references and an "
@@ -427,7 +421,7 @@ static int js_range_one_key(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         default: {
             /* STEP 4 is asked of `this` AFTER the conversion, which is where the standard asks it — a fact
                about the range and not about the operation, so it is read here rather than carried. */
-            IdbRangeData *r = range_here(ctx, hdr->this_val);
+            const IdbRangeData *r = range_here(ctx, hdr->this_val);
             bool in;
 
             if (!r) { JS_FreeValue(ctx, key); return JS_STEP_ABRUPT; }
@@ -525,7 +519,7 @@ static const IdlStepDecl RANGE_BOUND_STEP = {
    is not null, or undefined otherwise" — and the mirror for `upper`. */
 static JSValue js_range_bound_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    IdbRangeData *r = range_here(ctx, this_val);
+    const IdbRangeData *r = range_here(ctx, this_val);
     JSValueConst bound;
 
     if (!r) return JS_EXCEPTION;
@@ -539,7 +533,7 @@ static JSValue js_range_bound_get(JSContext *ctx, JSValueConst this_val, int mag
 /* "The lowerOpen getter steps are to return this's lower open flag" — and the mirror for `upperOpen`. */
 static JSValue js_range_open_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    IdbRangeData *r = range_here(ctx, this_val);
+    const IdbRangeData *r = range_here(ctx, this_val);
 
     if (!r) return JS_EXCEPTION;
     DCHECK(magic == IDB_SIDE_LOWER || magic == IDB_SIDE_UPPER,

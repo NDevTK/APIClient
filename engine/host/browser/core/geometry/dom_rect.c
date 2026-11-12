@@ -77,10 +77,18 @@ static int g_id_set[4] = { -1, -1, -1, -1 };
 /* ---- the record ------------------------------------------------------------------------------------------ */
 
 /* §3.7.6 Attributes' and §3.7.7 Operations' BRAND — the accessors and `toJSON` share this one entry — and the
-   point at which the flow REACHES the record. A record a flow has reached is one it may
-   write, and capturing here is what makes it impossible to have a `r.x = …` this delta did not see — CLAUDE.md's
-   rule for a component's own C record. The delta dedups to one entry per flow. */
-static DomRectBox *dr_box(JSValueConst v)
+   flow's view of the record. A read captures nothing; the setter takes the record through dr_box_for_write, which
+   captures it before `r.x = …` writes. */
+static const DomRectBox *dr_box(JSValueConst v)
+{
+    const DomRectBox *b = JS_GetOpaque(v, g_ro_class);
+
+    if (!b) b = JS_GetOpaque(v, g_rect_class);
+    return b;
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static DomRectBox *dr_box_for_write(JSValueConst v)
 {
     DomRectBox *b = JS_GetOpaque(v, g_ro_class);
 
@@ -100,12 +108,12 @@ static DomRectBox *dr_box(JSValueConst v)
    it and its slots hold no value to release. */
 /* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
    line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
-static void dr_set_at(JSContext *ctx, DomRectBox *b, JSValue *slot, JSValue v,
+static void dr_set_at(JSContext *ctx, JSValueConst owner, DomRectBox *b, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, b, &DOM_RECT_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, b, &DOM_RECT_REC, slot, v, file, line);
 }
-#define dr_set(ctx_, b_, slot_, v_) dr_set_at((ctx_), (b_), (slot_), (v_), __FILE__, __LINE__)
+#define dr_set(ctx_, owner_, b_, slot_, v_) dr_set_at((ctx_), (owner_), (b_), (slot_), (v_), __FILE__, __LINE__)
 
 bool dom_rect_is(JSValueConst v)
 {
@@ -115,9 +123,9 @@ bool dom_rect_is(JSValueConst v)
 /* The brand, with §3.7.6 Attributes' TypeError pending when it fails: `DOMRectReadOnly.prototype.x` read off
    a plain
    object throws, and a page's feature detector reads that throw as "this is a real interface". */
-static DomRectBox *dr_this(JSContext *ctx, JSValueConst this_val)
+static const DomRectBox *dr_this(JSContext *ctx, JSValueConst this_val)
 {
-    DomRectBox *b = dr_box(this_val);
+    const DomRectBox *b = dr_box(this_val);
 
     if (!b) JS_ThrowTypeError(ctx, "a DOMRect member was reached on something that is not a DOMRect");
     return b;
@@ -157,7 +165,7 @@ static void dr_finalizer(JSRuntime *rt, JSValue val)
 static void dr_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    DomRectBox *b = JS_GetAnyOpaque(val, &id);
+    const DomRectBox *b = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     DCHECK(b != NULL, "a DOMRect was marked with no internal member variables — dr_alloc attaches the record "
@@ -354,7 +362,7 @@ static JSValue dr_member(JSContext *ctx, const DomRectBox *b, DomRectMember m)
 
 static JSValue js_dr_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    DomRectBox *b = dr_this(ctx, this_val);
+    const DomRectBox *b = dr_this(ctx, this_val);
 
     if (!b) return JS_EXCEPTION;
     return dr_member(ctx, b, (DomRectMember)magic);
@@ -364,10 +372,11 @@ static JSValue js_dr_get(JSContext *ctx, JSValueConst this_val, int magic)
    four stored variables have a setter, which is what `inherit attribute` on exactly those four says. */
 static JSValue js_dr_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    DomRectBox *b = dr_this(ctx, this_val);
+    DomRectBox *b;
     JSValue *slot;
 
-    if (!b) return JS_EXCEPTION;
+    if (!dr_this(ctx, this_val)) return JS_EXCEPTION;
+    b = dr_box_for_write(this_val);
     switch ((DomRectMember)magic) {
     case DR_X:      slot = &b->x; break;
     case DR_Y:      slot = &b->y; break;
@@ -378,7 +387,7 @@ static JSValue js_dr_set(JSContext *ctx, JSValueConst this_val, JSValueConst val
               "the derived edges have no setter, and `inherit attribute` names exactly the four that do");
         return JS_UNDEFINED;
     }
-    dr_set(ctx, b, slot, dr_value(ctx, JS_DupValue(ctx, val)));
+    dr_set(ctx, this_val, b, slot, dr_value(ctx, JS_DupValue(ctx, val)));
     return JS_UNDEFINED;
 }
 
@@ -396,7 +405,7 @@ static const char *const DR_MEMBER_NAMES[DR_MEMBER_COUNT] = {
    DOMRect answers with those same eight rather than with the four it redeclares. */
 static JSValue js_dr_tojson(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    DomRectBox *b = dr_this(ctx, this_val);
+    const DomRectBox *b = dr_this(ctx, this_val);
     JSValue out;
     int i;
 

@@ -249,25 +249,25 @@ static ControllerData *ctrl_of(JSValueConst v)
    Each record binds its layout ONCE, here, so no site can pass a slot from one of the three with the layout of
    another. The MINTS do not come here: each fills its block before JS_SetOpaque, where the record is
    unreachable by the collector and its slots hold no value to release. */
-void rs_stream_set_at(JSContext *ctx, StreamData *d, JSValue *slot, JSValue v,
+void rs_stream_set_at(JSContext *ctx, JSValueConst owner, StreamData *d, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, d, &STREAM_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, d, &STREAM_REC, slot, v, file, line);
 }
 /* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
    line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
-static void rd_set_at(JSContext *ctx, ReaderData *r, JSValue *slot, JSValue v,
+static void rd_set_at(JSContext *ctx, JSValueConst owner, ReaderData *r, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, r, &READER_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, r, &READER_REC, slot, v, file, line);
 }
-static void rc_set_at(JSContext *ctx, ControllerData *c, JSValue *slot, JSValue v,
+static void rc_set_at(JSContext *ctx, JSValueConst owner, ControllerData *c, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, c, &CTRL_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, c, &CTRL_REC, slot, v, file, line);
 }
-#define rd_set(ctx_, r_, slot_, v_) rd_set_at((ctx_), (r_), (slot_), (v_), __FILE__, __LINE__)
-#define rc_set(ctx_, c_, slot_, v_) rc_set_at((ctx_), (c_), (slot_), (v_), __FILE__, __LINE__)
+#define rd_set(ctx_, owner_, r_, slot_, v_) rd_set_at((ctx_), (owner_), (r_), (slot_), (v_), __FILE__, __LINE__)
+#define rc_set(ctx_, owner_, c_, slot_, v_) rc_set_at((ctx_), (owner_), (c_), (slot_), (v_), __FILE__, __LINE__)
 
 /* How many chunks are still unread. §4.2 has no length to expose; this is the queue's own bookkeeping. */
 static uint32_t stream_queued(JSContext *ctx, StreamData *d)
@@ -282,7 +282,7 @@ static uint32_t stream_queued(JSContext *ctx, StreamData *d)
 /* §8.1's ResetQueue: the chunks, their sizes and the total go together, so they are dropped together. Every
    site that empties the queue calls this — an error, a cancel, a fresh stream — because a total left behind
    makes desiredSize answer for chunks that are gone. Returns -1 with an exception live. */
-static int stream_queue_reset(JSContext *ctx, StreamData *d)
+static int stream_queue_reset(JSContext *ctx, JSValueConst stream, StreamData *d)
 {
     JSValue q = JS_NewArray(ctx), qs = JS_NewArray(ctx);
 
@@ -290,8 +290,8 @@ static int stream_queue_reset(JSContext *ctx, StreamData *d)
        named by the record, so neither of the two collections these allocations can start walks a slot naming
        freed storage — and an exception marker never reaches a slot stream_gc_mark reads. */
     if (JS_IsException(q) || JS_IsException(qs)) { JS_FreeValue(ctx, q); JS_FreeValue(ctx, qs); return -1; }
-    rs_stream_set(ctx, d, &d->queue, q);
-    rs_stream_set(ctx, d, &d->queue_size, qs);
+    rs_stream_set(ctx, stream, d, &d->queue, q);
+    rs_stream_set(ctx, stream, d, &d->queue_size, qs);
     d->head = 0;
     d->queue_total = 0;
     return 0;
@@ -552,7 +552,7 @@ void rs_park_read(JSContext *ctx, StreamData *d, JSValue *funcs)
  * and REJECTS with a TypeError when the reader is released. Settling it is a call of the page's code like every
  * other settle, so it is a call request. `rd` may be NULL (a stream nobody is reading) and `value` is read only
  * on the first entry, which is the only entry that has one. */
-static int reader_closed_run(JSContext *ctx, StreamWork *w, ReaderData *rd, int reject, JSValueConst value,
+static int reader_closed_run(JSContext *ctx, StreamWork *w, JSValueConst reader, ReaderData *rd, int reject, JSValueConst value,
                              bool replace_if_settled, JSValue in, JSValue **out_cb, int *out_argc)
 {
     JSValueConst arg;
@@ -572,7 +572,7 @@ static int reader_closed_run(JSContext *ctx, StreamWork *w, ReaderData *rd, int 
                cannot be a no-op. */
             p = JS_NewPromiseCapability(ctx, funcs);
             if (JS_IsException(p)) { JS_FreeValue(ctx, in); return -1; }
-            rd_set(ctx, rd, &rd->closed, p);
+            rd_set(ctx, reader, rd, &rd->closed, p);
         } else {
             rd->closed_settled = 1;
             funcs[0] = rd->closed_funcs[0];               /* the pair is HANDED OVER and dropped together */
@@ -617,7 +617,7 @@ static int reader_closed_run(JSContext *ctx, StreamWork *w, ReaderData *rd, int 
  * page's code — so the tail is a LOOP OF CALL REQUESTS, one suspension per request. Answering only the first,
  * which is what this component did before the controller could pull, silently abandons the rest.
  * The caller sets `w->settle` (and `w->err` for the arms that carry a reason) and calls until it returns 0. */
-int rs_settle_run(JSContext *ctx, StreamWork *w, StreamData *d, JSValue in,
+int rs_settle_run(JSContext *ctx, StreamWork *w, JSValueConst stream, StreamData *d, JSValue in,
                   JSValue **out_cb, int *out_argc)
 {
     ReaderData *rd = JS_IsUndefined(d->reader) ? NULL : rs_reader_data(d->reader);
@@ -629,10 +629,10 @@ int rs_settle_run(JSContext *ctx, StreamWork *w, StreamData *d, JSValue in,
     } else if (w->settle == S_ERR_SET) {
         if (d->state == RS_READABLE) {
             d->state = RS_ERRORED;
-            rs_stream_set(ctx, d, &d->stored_error, w->err);   /* HANDED OVER: the stream owns it from here */
+            rs_stream_set(ctx, stream, d, &d->stored_error, w->err);   /* HANDED OVER: the stream owns it from here */
             w->err = JS_UNDEFINED;
             /* §8.1's ResetQueue: an errored stream has no chunks left to give */
-            if (stream_queue_reset(ctx, d) < 0) { JS_FreeValue(ctx, in); return -1; }
+            if (stream_queue_reset(ctx, stream, d) < 0) { JS_FreeValue(ctx, in); return -1; }
         } else {
             JS_FreeValue(ctx, w->err);
             w->err = JS_UNDEFINED;
@@ -647,7 +647,7 @@ int rs_settle_run(JSContext *ctx, StreamWork *w, StreamData *d, JSValue in,
         JSValueConst v = w->settle == S_ERR_CLOSED ? (JSValueConst)d->stored_error
                        : w->settle == S_REL_CLOSED ? (JSValueConst)w->err
                                                    : JS_UNDEFINED;
-        r = reader_closed_run(ctx, w, rd, reject, v, w->settle == S_REL_CLOSED, in, out_cb, out_argc);
+        r = reader_closed_run(ctx, w, d->reader, rd, reject, v, w->settle == S_REL_CLOSED, in, out_cb, out_argc);
         if (r != 0) return r;
         in = JS_UNDEFINED;
         if (w->settle == S_REL_CLOSED) {
@@ -655,8 +655,13 @@ int rs_settle_run(JSContext *ctx, StreamWork *w, StreamData *d, JSValue in,
                `closed` promise is settled (steps 4-6) while the reader still holds the lock, and only then is
                the lock dropped. */
             DCHECK(rd != NULL, "a release sequence ran on a stream that has no reader");
-            rs_stream_set(ctx, d, &d->reader, JS_UNDEFINED);
-            rd_set(ctx, rd, &rd->stream, JS_UNDEFINED);
+            {
+                JSValue reader = JS_DupValue(ctx, d->reader);   /* the owner of `rd`, held across its release */
+
+                rs_stream_set(ctx, stream, d, &d->reader, JS_UNDEFINED);
+                rd_set(ctx, reader, rd, &rd->stream, JS_UNDEFINED);
+                JS_FreeValue(ctx, reader);
+            }
             /* …AND THE SECOND TYPEERROR, WHICH IS A DIFFERENT OBJECT AND NOT A SECOND SPELLING OF THE FIRST.
                §4.9.3's ReadableStreamDefaultReaderRelease is three steps — "Perform !
                ReadableStreamReaderGenericRelease(reader)", then "Let e be a NEW TypeError exception", then
@@ -958,7 +963,7 @@ static int js_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
         }
     }
     r = s->w.pull != P_IDLE ? ctrl_pull_run(ctx, &s->w, ctrl, cb_result, out_cb, out_argc)
-                            : rs_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc);
+                            : rs_settle_run(ctx, &s->w, c->stream, d, cb_result, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return JS_STEP_ABRUPT;
     return JS_STEP_DONE;
@@ -1137,7 +1142,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
     }
 
     if (s->hdr.stage == RD_CLOSE) {
-        r = rs_settle_run(ctx, &s->w, rs_stream_data(s->stream), cb_result, out_cb, out_argc);
+        r = rs_settle_run(ctx, &s->w, s->stream, rs_stream_data(s->stream), cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
@@ -1242,7 +1247,7 @@ static int js_release_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     if (s->w.settle == S_IDLE) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
     d = rs_stream_data(s->stream);
     DCHECK(d != NULL, "a reader held something that is not a ReadableStream");
-    r = rs_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc);
+    r = rs_settle_run(ctx, &s->w, s->stream, d, cb_result, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return JS_STEP_ABRUPT;
     return JS_STEP_DONE;
@@ -1559,7 +1564,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
     if (s->hdr.stage == CN_CLOSE) {
         /* §4.9.1 step 4: the stream CLOSES before the source is asked to cancel, so a reader awaiting `closed`
            or parked on a `read()` is answered first. */
-        r = rs_settle_run(ctx, &s->w, rs_stream_data(s->stream), cb_result, out_cb, out_argc);
+        r = rs_settle_run(ctx, &s->w, s->stream, rs_stream_data(s->stream), cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
@@ -1576,7 +1581,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
 
     if (s->hdr.stage == CN_CLOSE_INTO) {
         if (s->w.settle != S_IDLE) {
-            r = rs_settle_run(ctx, &s->w, rs_stream_data(s->stream), cb_result, out_cb, out_argc);
+            r = rs_settle_run(ctx, &s->w, s->stream, rs_stream_data(s->stream), cb_result, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
             cb_result = JS_UNDEFINED;
@@ -1604,7 +1609,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
                `cancel` sees a stream with nothing left to give — §4.6's queue, or §4.7's queue AND its
                pending pull-intos. */
             if (bytes) readable_byte_clear(ctx, d->controller);
-            if (stream_queue_reset(ctx, d) < 0) return JS_STEP_ABRUPT;
+            if (stream_queue_reset(ctx, s->stream, d) < 0) return JS_STEP_ABRUPT;
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_UNDEFINED;
         }
@@ -1628,8 +1633,8 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         if (bytes) {
             readable_byte_clear_algorithms(ctx, d->controller);
         } else if (c) {
-            rc_set(ctx, c, &c->pull_fn, JS_UNDEFINED);
-            rc_set(ctx, c, &c->cancel_fn, JS_UNDEFINED);
+            rc_set(ctx, d->controller, c, &c->pull_fn, JS_UNDEFINED);
+            rc_set(ctx, d->controller, c, &c->cancel_fn, JS_UNDEFINED);
         }
         STEP_GOTO(s->hdr.stage, CN_RESOLVE, &s->w.phase, NULL);
     }
@@ -1817,7 +1822,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
     if (s->hdr.stage == CS_RETHROW) {
         /* the stream errors first — every parked read is rejected — and only then does enqueue() itself
            re-raise, which is the order §4.5 states and the order a page observes */
-        r = rs_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc);
+        r = rs_settle_run(ctx, &s->w, c->stream, d, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         JS_Throw(ctx, s->rethrow);
         s->rethrow = JS_UNDEFINED;
@@ -1835,7 +1840,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         STEP_GOTO(s->hdr.stage, CS_PULL, &s->w.phase, NULL);
     }
     if (s->hdr.stage == CS_SETTLE_ALL) {
-        r = rs_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc);
+        r = rs_settle_run(ctx, &s->w, c->stream, d, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         return JS_STEP_DONE;
@@ -4859,7 +4864,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             DCHECK(c != NULL, "CreateReadableStream answered a stream with no controller");
             /* The SOURCE is the receiver §4.9.4 invokes the page's methods on — CreateReadableStream has no
                source at all, so it is set here rather than inside the operation. */
-            rc_set(ctx, c, &c->source, JS_DupValue(ctx, source));
+            rc_set(ctx, s->controller, c, &c->source, JS_DupValue(ctx, source));
         }
         s->start_fn = s->src[SRC_START];
         s->src[SRC_START] = JS_UNDEFINED;

@@ -165,11 +165,10 @@ void performance_entry_free(void);
 JSValue performance_entry_new(JSContext *ctx, JSValueConst proto, const PerfEntryClass *cls, void *derived,
                               JSValue start_time, JSValue entry_type, JSValue name, double end_time);
 
-/* THE BASE OF AN ENTRY, or NULL for anything that is not one — and it CAPTURES, so every derived component's
-   accessor reaches its own fields through this rather than through JS_GetOpaque. That is not a convenience:
-   the capture must happen where a flow REACHES the record, and routing it here is what makes it impossible for
-   a derived interface to add an accessor and forget one. */
-PerfEntry *performance_entry_of(JSValueConst v);
+/* The base of an entry, or NULL for anything that is not one. Every derived component's accessor reaches its own
+   fields through this rather than through JS_GetOpaque. An entry is written once, at its mint, so the record
+   answers const and nothing captures it. */
+const PerfEntry *performance_entry_of(JSValueConst v);
 /* Web IDL §3.7 Interfaces' implementation-check, for §3 itself and for one derived interface. `cls` is the
    deriving component's own static — see PerfEntryClass. */
 bool performance_entry_is(JSValueConst v);

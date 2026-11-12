@@ -13,7 +13,6 @@
 #include "core/realm.h"
 #include "core/timing/hr_time.h"
 #include "core/timing/performance.h"
-#include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 /* THIS COMPONENT NO LONGER NAMES core/workers/, AND THAT IS THE POINT RATHER THAN A TIDY-UP. It used to
    include that header for two things — the §3.7.3 prototype `performance` lands on in a worker realm and
@@ -76,32 +75,17 @@ typedef struct {
                             global object of this" — OWNED, and what holds `realm` up */
 } Performance;
 
-/* THE ONE STATEMENT OF WHAT THE RECORD OWNS — the same list the finalizer frees and the gc_mark walks, which is
-   why all three are written here together. `realm` is not in it: it is a pointer and not a JSValue, so the
-   capture copies its BYTES with the rest of the record and never dups or frees it, which is exactly right for a
-   handle whose lifetime the value beside it guarantees. */
-static const uint16_t PERF_VALS[] = { (uint16_t)offsetof(Performance, global) };
-static const CowRecord PERF_REC = { sizeof(Performance), PERF_VALS, 1 };
 
 bool performance_is(JSValueConst v)
 {
     return g_perf_class != 0 && JS_GetClassID(v) == g_perf_class;
 }
 
-/* THE ACCESSOR EVERY MEMBER REACHES THE RECORD THROUGH, and the capture is IN it for solver/cow.h's reason: a
-   record a flow has REACHED is one it may write, the delta dedups to one entry per (flow, object), and there is
-   then no write site left to miss. There is no write TODAY — both fields are stated once at the mint below and
-   nothing else names them — and that is a fact this arrangement does not have to re-check the day a member
-   starts writing one. The cost is bounded by §8.1's own shape rather than argued: there is exactly ONE
-   Performance per realm, so this can never add more than one delta entry per realm per flow, which is why it is
-   affordable on §7.1's own hot path (`while (performance.now() - t0 < 8)` is a spin every bundle writes).
-   NOT performance_is: a brand check is a QUESTION, asked of values that are not Performances at all, and a
-   question must not capture. */
-static Performance *performance_rec(JSValueConst v)
+/* The accessor every member reaches the record through. The record is written once, by its mint before
+   JS_SetOpaque, and never again, so it answers const, has no write accessor and is never captured. */
+static const Performance *performance_rec(JSValueConst v)
 {
-    Performance *p = g_perf_class ? JS_GetOpaque(v, g_perf_class) : NULL;
-
-    if (p) cow_capture_host_record(v, p, &PERF_REC);
+    const Performance *p = g_perf_class ? JS_GetOpaque(v, g_perf_class) : NULL;
     return p;
 }
 
@@ -124,7 +108,7 @@ static void perf_finalizer(JSRuntime *rt, JSValue val)
 static void perf_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    Performance *p = JS_GetAnyOpaque(val, &id);
+    const Performance *p = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     DCHECK(p != NULL, "a Performance was marked with no record — its global is a counted reference and an "
@@ -158,7 +142,7 @@ static bool perf_brand(JSContext *ctx, JSValueConst this_val)
    line above every caller. */
 static JSContext *perf_environment(JSValueConst this_val)
 {
-    Performance *p = performance_rec(this_val);
+    const Performance *p = performance_rec(this_val);
 
     DCHECK(p != NULL, "a Performance reached a member with no record — the brand is the class and the mint "
                       "attaches the record before the object leaves it, so a branded object without one came "

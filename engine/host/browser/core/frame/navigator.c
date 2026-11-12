@@ -57,7 +57,6 @@
 #include "quickjs.h"
 #include "solver/concolic.h"
 #include "core/idl_lang_types.h"
-#include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
 #include "core/agent_state.h"
 #include "core/file/storage_manager.h"
 #include "core/frame/navigator.h"
@@ -295,15 +294,6 @@ typedef struct {
     JSValue    vals;     /* §8.10.1's member values, indexed by the enum above. OWNED. */
 } Navigator;
 
-/* THE ONE STATEMENT OF WHAT THE RECORD OWNS — the same list the finalizer frees and the gc_mark walks, which
-   is why all three are written here together. `realm` is not in it: it is a pointer and not a JSValue, so the
-   capture copies its BYTES with the rest of the record and never dups or frees it, which is exactly right for
-   a handle whose lifetime the value beside it guarantees. */
-static const uint16_t NAV_VAL_OFF[] = {
-    (uint16_t)offsetof(Navigator, global),
-    (uint16_t)offsetof(Navigator, vals),
-};
-static const CowRecord NAV_REC = { sizeof(Navigator), NAV_VAL_OFF, 2 };
 static int g_id_java_enabled = -1;
 
 /* WEB IDL §3.7.6 "Attributes"' BRAND CHECK. `Navigator.prototype.userAgent` read off a plain object is a TypeError, and a
@@ -331,18 +321,12 @@ bool navigator_is(JSValueConst v)
     return JS_GetClassID(v) == g_nav_class;
 }
 
-/* THE ACCESSOR EVERY MEMBER REACHES THE RECORD THROUGH, and the capture is IN it for solver/cow.h's reason: a
-   record a flow has REACHED is one it may write, the delta dedups to one entry per (flow, object), and there is
-   then no write site left to miss. Bounded by §8.10.1's own shape — one Navigator per realm, so at most one
-   delta entry per realm per flow.
-   NOT nav_brand and NOT navigator_is: a brand check is a QUESTION, asked of values that are not Navigators at
-   all, and a question must not capture. */
-static Navigator *nav_rec(JSValueConst v)
+/* The accessor every member reaches the record through. The record is written once, by
+   navigator_install_realm's mint before JS_SetOpaque, and never again, so it answers const, has no write
+   accessor and is never captured: what a flow changes is in `vals`, a JS object the heap's delta isolates. */
+static const Navigator *nav_rec(JSValueConst v)
 {
-    Navigator *n = g_nav_class ? JS_GetOpaque(v, g_nav_class) : NULL;
-
-    if (n) cow_capture_host_record(v, n, &NAV_REC);
-    return n;
+    return g_nav_class ? JS_GetOpaque(v, g_nav_class) : NULL;
 }
 
 /* JS_GetAnyOpaque and not JS_GetOpaque in BOTH of these — core/agent_state.h's rule: the collector dispatched
@@ -382,7 +366,7 @@ static void nav_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
    rather than refuses, so it may only be reached with a value `navigator_is` has already answered true for. */
 JSContext *navigator_environment(JSValueConst this_val)
 {
-    Navigator *n = nav_rec(this_val);
+    const Navigator *n = nav_rec(this_val);
 
     DCHECK(n != NULL, "a Navigator reached a member with no record — the brand is the class and the mint "
                       "attaches the record before the object leaves it, so a branded object without one came "
@@ -395,7 +379,7 @@ JSContext *navigator_environment(JSValueConst this_val)
 /* THE VALUE A MEMBER ANSWERS WITH, out of THE RECEIVER'S record. Owned — the caller returns it. */
 static JSValue nav_value(JSValueConst this_val, int idx)
 {
-    Navigator *n = nav_rec(this_val);
+    const Navigator *n = nav_rec(this_val);
     JSValue v;
 
     DCHECK(idx >= 0 && idx < NAV_N, "a Navigator getter was installed with a magic that is not a member index "

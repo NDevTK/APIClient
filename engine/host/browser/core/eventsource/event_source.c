@@ -70,7 +70,14 @@ static const CowRecord ES_REC = { sizeof(EventSourceData), ES_VALS, (int)(sizeof
 
 /* The record, captured for the running flow before it can be written: an arm that closes the object must not
    close it for its sibling. */
-static EventSourceData *es_of(JSValueConst v)
+static const EventSourceData *es_of(JSValueConst v)
+{
+    const EventSourceData *d = JS_GetOpaque(v, g_es_class);
+    return d;
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static EventSourceData *es_of_for_write(JSValueConst v)
 {
     EventSourceData *d = JS_GetOpaque(v, g_es_class);
 
@@ -78,7 +85,12 @@ static EventSourceData *es_of(JSValueConst v)
     return d;
 }
 
-#define es_set(ctx_, d_, slot_, v_) cow_record_set_at((ctx_), (d_), &ES_REC, (slot_), (v_), __FILE__, __LINE__)
+#define es_set(ctx_, owner_, field_, v_)                                                                  \
+    do {                                                                                                  \
+        EventSourceData *es_set_d_ = es_of_for_write(owner_);                                             \
+                                                                                                          \
+        cow_record_set((ctx_), (owner_), es_set_d_, &ES_REC, &es_set_d_->field_, (v_));                   \
+    } while (0)
 
 static void es_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -96,7 +108,7 @@ static void es_finalizer(JSRuntime *rt, JSValue val)
 static void es_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    EventSourceData *d = JS_GetAnyOpaque(val, &id);
+    const EventSourceData *d = JS_GetAnyOpaque(val, &id);
     size_t i;
 
     (void)id;
@@ -150,14 +162,17 @@ static void es_set_remove(JSContext *rctx, JSValueConst ev)
 
 /* §9.2.2's close() and §9.2.9's forcibly close: abort the fetch started for the object (withdraw the parked
    processResponse; a body delivery reads no further piece of a CLOSED object) and set readyState to CLOSED. */
-static void es_close(JSContext *ctx, EventSourceData *d, JSValueConst ev)
+static void es_close(JSContext *ctx, JSValueConst ev)
 {
+    const EventSourceData *d = es_of(ev);
+
     if (JS_IsFunction(ctx, d->deliver)) {
         engine_pending_resource_cancel(ctx, d->deliver);
-        es_set(ctx, d, &d->deliver, JS_UNDEFINED);
+        es_set(ctx, ev, deliver, JS_UNDEFINED);
     }
-    if (d->ready_state != ES_CLOSED) es_set_remove(d->realm, ev);
-    d->ready_state = ES_CLOSED;
+    if (d->ready_state == ES_CLOSED) return;
+    es_set_remove(d->realm, ev);
+    es_of_for_write(ev)->ready_state = ES_CLOSED;
 }
 
 /* ---- §9.2.3: the remote event task source -------------------------------------------------------------- */
@@ -184,7 +199,7 @@ typedef struct {
     EventFireCb cb;
 } EsTask;
 
-static void es_fetch(JSContext *ctx, JSValueConst obj, EventSourceData *d);
+static void es_fetch(JSContext *ctx, JSValueConst obj, const EventSourceData *d);
 
 static void es_queue(JSContext *rctx, JSValueConst obj, int kind, JSValueConst event)
 {
@@ -202,7 +217,7 @@ static int js_es_task_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
 {
     EsTask *s = st;
     JSValueConst obj = step_arg(&s->hdr, 0);
-    EventSourceData *d = es_of(obj);
+    EventSourceData *d = es_of_for_write(obj);
     JSContext *rctx;
     int r;
 
@@ -232,7 +247,7 @@ static int js_es_task_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
             break;
         case ES_TASK_FAIL:
             if (d->ready_state == ES_CLOSED) return JS_STEP_DONE;
-            es_close(ctx, d, obj);
+            es_close(ctx, obj);
             type = "error";
             break;
         case ES_TASK_LOST:
@@ -296,7 +311,7 @@ static const JSTrampStepDef es_task_def = {
 
 /* §9.2.3 reestablish the connection. Step 1 queues its task now; steps 2-4 wait the reconnection time on the
    timer source, whose steps queue step 5's task behind step 1's on the same source, which is step 4's wait. */
-static void es_reestablish(JSContext *ctx, JSValueConst obj, EventSourceData *d)
+static void es_reestablish(JSContext *ctx, JSValueConst obj, const EventSourceData *d)
 {
     JSValue steps;
 
@@ -318,7 +333,7 @@ static int js_es_wait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
 {
     EsPlain *s = st;
     JSValueConst obj = JS_StepClosureData(&s->hdr, 0);
-    EventSourceData *d = es_of(obj);
+    const EventSourceData *d = es_of(obj);
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
@@ -338,7 +353,7 @@ static const JSTrampStepDef es_wait_def = {
 
 /* ---- §9.2.5-§9.2.6: interpreting the body --------------------------------------------------------------- */
 
-typedef struct { JSContext *ctx; JSValueConst obj; EventSourceData *d; } EsSinkUser;
+typedef struct { JSContext *ctx; JSValueConst obj; const EventSourceData *d; } EsSinkUser;
 
 static void es_sink_last_event_id(void *user, const char *id, size_t id_n)
 {
@@ -346,7 +361,7 @@ static void es_sink_last_event_id(void *user, const char *id, size_t id_n)
     JSValue v = JS_NewStringLen(u->ctx, id, id_n);
 
     CHECK(!JS_IsException(v), "EventSource: OOM keeping a last event ID string");
-    es_set(u->ctx, u->d, &u->d->last_event_id, v);
+    es_set(u->ctx, u->obj, last_event_id, v);
 }
 
 /* §9.2.6 dispatch the event steps 4-5 (the event, in the object's relevant realm) and step 8's task. */
@@ -374,7 +389,7 @@ static void es_sink_reconnection_time(void *user, uint64_t millis)
 {
     EsSinkUser *u = user;
 
-    u->d->reconnection_ms = (double)millis;
+    es_of_for_write(u->obj)->reconnection_ms = (double)millis;
 }
 
 static const EventSourceParserSink ES_SINK = {
@@ -385,19 +400,19 @@ static const EventSourceParserSink ES_SINK = {
    because event_source_parser_interpret takes a whole body. Next diff builds: an incremental parser whose
    buffers ride the object, fed each piece. Absence shows as: an `open` event from a stream the server holds open
    with no `message` event after it. */
-static void es_interpret_and_end(JSContext *ctx, JSValueConst obj, EventSourceData *d)
+static void es_interpret_and_end(JSContext *ctx, JSValueConst obj, const EventSourceData *d)
 {
     EsSinkUser u = { ctx, obj, d };
     size_t n = 0;
     const uint8_t *b = JS_IsUndefined(d->body) ? NULL : JS_GetArrayBuffer(ctx, &n, d->body);
 
     event_source_parser_interpret((const char *)b, n, &ES_SINK, &u);
-    es_set(ctx, d, &d->body, JS_UNDEFINED);
+    es_set(ctx, obj, body, JS_UNDEFINED);
     /* processEventSourceEndOfBody: "if res is not a network error, then reestablish the connection". */
     if (d->ready_state != ES_CLOSED) es_reestablish(ctx, obj, d);
 }
 
-static void es_body_append(JSContext *ctx, EventSourceData *d, const uint8_t *b, size_t n)
+static void es_body_append(JSContext *ctx, JSValueConst obj, const EventSourceData *d, const uint8_t *b, size_t n)
 {
     size_t have = 0;
     const uint8_t *old = JS_IsUndefined(d->body) ? NULL : JS_GetArrayBuffer(ctx, &have, d->body);
@@ -410,7 +425,7 @@ static void es_body_append(JSContext *ctx, EventSourceData *d, const uint8_t *b,
     ab = JS_NewArrayBufferCopy(ctx, joined, have + n);
     lexbor_free(joined);
     CHECK(!JS_IsException(ab), "EventSource: OOM keeping a response body");
-    es_set(ctx, d, &d->body, ab);
+    es_set(ctx, obj, body, ab);
 }
 
 /* One piece of a streamed body (solver/reply_body.h), or JS_NULL for a decline's network failure. */
@@ -419,7 +434,7 @@ static int js_es_body_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     EsPlain *s = st;
     JSValueConst obj = JS_StepClosureData(&s->hdr, 0);
     JSValueConst piece = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
-    EventSourceData *d = es_of(obj);
+    const EventSourceData *d = es_of(obj);
     ReplyBodyOp op;
 
     (void)out_cb; (void)out_argc;
@@ -433,7 +448,7 @@ static int js_es_body_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         size_t n = 0;
         const uint8_t *b = fetch_body_bytes(ctx, ab, &n);
 
-        es_body_append(ctx, d, b, n);
+        es_body_append(ctx, obj, d, b, n);
         JS_FreeValue(ctx, ab);
         return JS_STEP_DONE;
     }
@@ -516,7 +531,7 @@ static int js_es_response_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     EsPlain *s = st;
     JSValueConst obj = JS_StepClosureData(&s->hdr, 0);
     JSValueConst res = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
-    EventSourceData *d = es_of(obj);
+    const EventSourceData *d = es_of(obj);
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
@@ -524,7 +539,7 @@ static int js_es_response_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     DCHECK(d != NULL, "an EventSource's processResponse was delivered to something that is not an EventSource");
     DCHECK(JS_IsObject(res) || JS_IsNull(res),
            "an EventSource's reply is neither the host's reply record nor null for a network error");
-    es_set(ctx, d, &d->deliver, JS_UNDEFINED);
+    es_set(ctx, obj, deliver, JS_UNDEFINED);
     /* close() aborted the fetch: its response is an aborted network error, and failing the connection then
        changes nothing, since the object is CLOSED. */
     if (d->ready_state == ES_CLOSED) return JS_STEP_DONE;
@@ -544,8 +559,8 @@ static int js_es_response_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         return JS_STEP_DONE;
     }
     /* "Otherwise, announce the connection and interpret res's body line by line." */
-    es_set(ctx, d, &d->origin, es_final_origin(ctx, res));
-    es_set(ctx, d, &d->body, JS_UNDEFINED);
+    es_set(ctx, obj, origin, es_final_origin(ctx, res));
+    es_set(ctx, obj, body, JS_UNDEFINED);
     es_queue(d->realm, obj, ES_TASK_ANNOUNCE, JS_UNDEFINED);
     if (reply_body_streamed(ctx, res)) {
         JSValue body_deliver = JS_NewStepClosure(ctx, g_body_stepid, 1, 1, &obj);
@@ -560,7 +575,7 @@ static int js_es_response_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         size_t n = 0;
         const uint8_t *b = fetch_body_bytes(ctx, bd, &n);
 
-        es_body_append(ctx, d, b, n);
+        es_body_append(ctx, obj, d, b, n);
         JS_FreeValue(ctx, bd);
     }
     es_interpret_and_end(ctx, obj, d);
@@ -582,7 +597,7 @@ static const JSTrampStepDef es_response_def = {
    and the pending line. Absence shows as: a reconnection answered from the zone's cache rather than sent. */
 /* The request §9.2.2 steps 8-13 create, with §9.2.3 step 5.3's Last-Event-ID, fetched with step 15's
    processResponse parked on the running flow. */
-static void es_fetch(JSContext *ctx, JSValueConst obj, EventSourceData *d)
+static void es_fetch(JSContext *ctx, JSValueConst obj, const EventSourceData *d)
 {
     int state = d->with_credentials ? CORS_USE_CREDENTIALS : CORS_ANONYMOUS;
     CspRequestMetadata meta = csp_request_metadata_unstated();
@@ -610,7 +625,7 @@ static void es_fetch(JSContext *ctx, JSValueConst obj, EventSourceData *d)
     req.address = (FetchAddressClass)d->address;
     req.address_value = d->address == FETCH_ADDRESS_UNKNOWN ? d->src : JS_UNDEFINED;
     req.address_url = JS_UNDEFINED;
-    es_set(ctx, d, &d->deliver, JS_DupValue(ctx, deliver));
+    es_set(ctx, obj, deliver, JS_DupValue(ctx, deliver));
     engine_pending_resource_url(ctx, deliver, &req);
     JS_FreeValue(ctx, deliver);
     header_list_free(&hl);
@@ -725,7 +740,7 @@ enum { ES_GET_URL = 0, ES_GET_WITH_CREDENTIALS, ES_GET_READY_STATE };
 
 static JSValue js_es_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    EventSourceData *d = es_of(this_val);
+    const EventSourceData *d = es_of(this_val);
 
     if (!d) return JS_ThrowTypeError(ctx, "not an EventSource");
     switch (magic) {
@@ -740,11 +755,11 @@ static JSValue js_es_get(JSContext *ctx, JSValueConst this_val, int magic)
 /* `close()`. */
 static JSValue js_es_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    EventSourceData *d = es_of(this_val);
+    const EventSourceData *d = es_of(this_val);
 
     (void)argc; (void)argv; (void)magic;
     if (!d) return JS_ThrowTypeError(ctx, "not an EventSource");
-    es_close(ctx, d, this_val);
+    es_close(ctx, this_val);
     return JS_UNDEFINED;
 }
 
@@ -756,11 +771,11 @@ void event_source_forcibly_close_all(JSContext *ctx)
     /* es_close takes each object off the set, so the walk reads its head until the set is empty. */
     while (n > 0) {
         JSValue ev = JS_GetPropertyUint32(ctx, set, 0);
-        EventSourceData *d = es_of(ev);
+        const EventSourceData *d = es_of(ev);
 
         DCHECK(d != NULL && d->ready_state != ES_CLOSED,
                "a realm's EventSource set holds something that is not an EventSource, or a CLOSED one");
-        es_close(ctx, d, ev);
+        es_close(ctx, ev);
         JS_FreeValue(ctx, ev);
         n = es_set_len(ctx, set);
     }
@@ -779,7 +794,7 @@ bool event_source_is_body_delivery(JSContext *ctx, JSValueConst deliver)
 
 bool event_source_body_delivery_open(JSContext *ctx, JSValueConst deliver)
 {
-    EventSourceData *d = es_of(JS_StepClosureDataOf(ctx, deliver, g_body_stepid, 0));
+    const EventSourceData *d = es_of(JS_StepClosureDataOf(ctx, deliver, g_body_stepid, 0));
 
     DCHECK(d != NULL, "a body delivery's closure names something that is not an EventSource");
     return d->ready_state != ES_CLOSED;

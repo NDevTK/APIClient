@@ -1677,7 +1677,7 @@ static void url_finalizer(JSRuntime *rt, JSValue val)
 static void url_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    UrlObj *u = JS_GetAnyOpaque(val, &id);
+    const UrlObj *u = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     if (u) {
@@ -1687,8 +1687,15 @@ static void url_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     }
 }
 
-/* The record's accessor and therefore its capture point: a flow that reaches the record may write it. */
-static UrlObj *url_obj_of(JSValueConst v)
+/* The read accessor: the flow's view of the record, captured by nothing. */
+static const UrlObj *url_obj_of(JSValueConst v)
+{
+    const UrlObj *u = JS_GetOpaque(v, g_url_class);
+    return u;
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static UrlObj *url_obj_of_for_write(JSValueConst v)
 {
     UrlObj *u = JS_GetOpaque(v, g_url_class);
 
@@ -1697,28 +1704,29 @@ static UrlObj *url_obj_of(JSValueConst v)
 }
 
 /* The record as this flow may change it: a copy in a new box, held by the record from here. */
-static UrlRecord *url_rec_edit(JSContext *ctx, UrlObj *u)
+static UrlRecord *url_rec_edit(JSContext *ctx, JSValueConst owner)
 {
+    UrlObj *u = url_obj_of_for_write(owner);
     UrlRecord *r = lexbor_malloc(sizeof *r);
 
     DCHECK(JS_IsUndefined(u->unknown), "a known URL record's write was asked of a URL whose record is unknown");
     CHECK(r != NULL, "url: OOM copying a URL record for a write");
     url_record_init(r);
     CHECK(url_record_copy(r, u->rec), "url: OOM copying a URL record for a write");
-    cow_record_set(ctx, u, &URL_OBJ_REC, &u->rec_box, url_rec_box(ctx, r));
+    cow_record_set(ctx, owner, u, &URL_OBJ_REC, &u->rec_box, url_rec_box(ctx, r));
     u->rec = r;
     return r;
 }
 
 void url_query_assign(JSContext *ctx, JSValueConst url, char *query)
 {
-    UrlObj *u = url_obj_of(url);
+    const UrlObj *u = url_obj_of(url);
     UrlRecord *r;
 
     DCHECK(u != NULL, "a URLSearchParams' associated URL stopped being one");
     DCHECK(JS_IsUndefined(u->unknown), "a URLSearchParams wrote known bytes onto a URL whose record is unknown: "
                                        "that update is url_query_assign_unknown");
-    r = url_rec_edit(ctx, u);
+    r = url_rec_edit(ctx, url);
     free(r->query);
     r->query = query;
 }
@@ -2063,7 +2071,7 @@ static JSValue url_query_unknown(JSContext *ctx, JSValueConst unknown)
    `u.searchParams === u.searchParams` and a mutation of it is a mutation of the URL. */
 static JSValue js_url_get_params(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    UrlObj *u = url_obj_of(this_val);
+    const UrlObj *u = url_obj_of(this_val);
     JSValue p;
     (void)magic;
     if (!u) return JS_ThrowTypeError(ctx, "not a URL");
@@ -2072,7 +2080,11 @@ static JSValue js_url_get_params(JSContext *ctx, JSValueConst this_val, int magi
                 ? usp_new_unknown(ctx, this_val, url_query_unknown(ctx, u->unknown))
                 : usp_new(ctx, this_val, u->rec->query, u->rec->query ? strlen(u->rec->query) : 0);
         if (JS_IsException(p)) return JS_EXCEPTION;
-        cow_record_set(ctx, u, &URL_OBJ_REC, &u->params, p);
+        {
+            UrlObj *w = url_obj_of_for_write(this_val);
+
+            cow_record_set(ctx, this_val, w, &URL_OBJ_REC, &w->params, p);
+        }
     }
     return JS_DupValue(ctx, u->params);
 }
@@ -2081,7 +2093,7 @@ static JSValue js_url_get_params(JSContext *ctx, JSValueConst this_val, int magi
    re-initialised with it — otherwise `u.search = "?b=2"` would leave `u.searchParams` reporting the old pairs. */
 static void url_params_resync(JSContext *ctx, JSValueConst this_val)
 {
-    UrlObj *u = url_obj_of(this_val);
+    const UrlObj *u = url_obj_of(this_val);
     if (!u || JS_IsUndefined(u->params)) return;
     if (!JS_IsUndefined(u->unknown)) {
         usp_reset_unknown(ctx, u->params, url_query_unknown(ctx, u->unknown));
@@ -2127,7 +2139,7 @@ char *url_member_get(const UrlRecord *u, int magic)
 
 static JSValue js_url_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    UrlObj *o = url_obj_of(this_val);
+    const UrlObj *o = url_obj_of(this_val);
     char *s;
     JSValue r;
 
@@ -2646,9 +2658,11 @@ int url_member_set(UrlRecord *u, int magic, const char *v, size_t vlen)
 /* `o`'s URL becomes the unknown record `op` derives from its URL and the value `v`, where either is unknown:
    `apply` is the algorithm run on the examples (url_member_set's signature), whose result is the new record's
    example. The record operand is the unknown record, or a known URL's serialization. */
-static void url_set_unknown(JSContext *ctx, UrlObj *o, const char *op, int member, JSValueConst v,
+static void url_set_unknown(JSContext *ctx, JSValueConst owner, const char *op, int member, JSValueConst v,
                             int (*apply)(UrlRecord *u, int member, const char *v, size_t vlen))
 {
+    const UrlObj *o = url_obj_of(owner);
+    UrlObj *w;
     JSValue hold = JS_UNDEFINED, vex, ex = JS_UNDEFINED, r;
     JSValueConst ops[2];
     const UrlRecord *er;
@@ -2685,9 +2699,10 @@ static void url_set_unknown(JSContext *ctx, UrlObj *o, const char *op, int membe
     r = concolic_new_derived_kept(ctx, op, ops, 2, ex);
     JS_FreeValue(ctx, hold);
     DCHECK(concolic_is(r), "a URL write over an unknown operand derived a known record");
-    cow_record_set(ctx, o, &URL_OBJ_REC, &o->unknown, r);
-    cow_record_set(ctx, o, &URL_OBJ_REC, &o->rec_box, JS_UNDEFINED);
-    o->rec = NULL;
+    w = url_obj_of_for_write(owner);
+    cow_record_set(ctx, owner, w, &URL_OBJ_REC, &w->unknown, r);
+    cow_record_set(ctx, owner, w, &URL_OBJ_REC, &w->rec_box, JS_UNDEFINED);
+    w->rec = NULL;
 }
 
 /* URL §6.2 URLSearchParams class's update steps' query write: the empty serialization is a null query. */
@@ -2701,16 +2716,16 @@ static int url_query_set(UrlRecord *u, int member, const char *v, size_t vlen)
 
 void url_query_assign_unknown(JSContext *ctx, JSValueConst url, JSValueConst query)
 {
-    UrlObj *u = url_obj_of(url);
+    const UrlObj *u = url_obj_of(url);
 
     DCHECK(u != NULL && (concolic_is(query) || !JS_IsUndefined(u->unknown)),
            "a URLSearchParams' unknown update reached no URL, or wrote a known query onto a known record");
-    url_set_unknown(ctx, u, "query=", 0, query, url_query_set);
+    url_set_unknown(ctx, url, "query=", 0, query, url_query_set);
 }
 
 bool url_record_is_unknown(JSValueConst url)
 {
-    UrlObj *u = url_obj_of(url);
+    const UrlObj *u = url_obj_of(url);
 
     DCHECK(u != NULL, "a URLSearchParams' associated URL stopped being one");
     return !JS_IsUndefined(u->unknown);
@@ -2718,7 +2733,7 @@ bool url_record_is_unknown(JSValueConst url)
 
 static JSValue js_url_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    UrlObj *o = url_obj_of(this_val);
+    const UrlObj *o = url_obj_of(this_val);
     const char *v;
     size_t vlen = 0;
     int rc;
@@ -2729,14 +2744,14 @@ static JSValue js_url_set(JSContext *ctx, JSValueConst this_val, JSValueConst va
         char op[16];
 
         snprintf(op, sizeof op, "%s=", URL_MEMBER_NAMES[magic]);
-        url_set_unknown(ctx, o, op, magic, val, url_member_set);
+        url_set_unknown(ctx, this_val, op, magic, val, url_member_set);
         if (magic == URL_HREF || magic == URL_SEARCH)
             url_params_resync(ctx, this_val);
         return JS_UNDEFINED;
     }
     v = JS_ToCStringLen(ctx, &vlen, val);
     if (!v) return JS_EXCEPTION;
-    rc = url_member_set(url_rec_edit(ctx, o), magic, v, vlen);
+    rc = url_member_set(url_rec_edit(ctx, this_val), magic, v, vlen);
     JS_FreeCString(ctx, v);
     if (rc < 0) return JS_ThrowTypeError(ctx, "the string is not a valid URL");
     if (magic == URL_HREF || magic == URL_SEARCH)

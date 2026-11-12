@@ -92,7 +92,7 @@ static void usp_finalizer(JSRuntime *rt, JSValue val)
 static void usp_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    UspObj *u = JS_GetAnyOpaque(val, &id);
+    const UspObj *u = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     /* The URL holds this object and this object holds the URL — a real cycle, which is what gc_mark is for. */
@@ -122,8 +122,15 @@ static JSValue usp_list_box(JSContext *ctx, UspList *l)
     return b;
 }
 
-/* The record's accessor and therefore its capture point: a flow that reaches the record may write it. */
-static UspObj *usp_rec(JSValueConst v)
+/* The read accessor: the flow's view of the record, captured by nothing. */
+static const UspObj *usp_rec(JSValueConst v)
+{
+    const UspObj *u = g_usp_class ? JS_GetOpaque(v, g_usp_class) : NULL;
+    return u;
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static UspObj *usp_rec_for_write(JSValueConst v)
 {
     UspObj *u = g_usp_class ? JS_GetOpaque(v, g_usp_class) : NULL;
 
@@ -220,39 +227,40 @@ static UspList *usp_project(JSContext *ctx, JSValueConst vals)
 
 /* Make `vals` (taken) the record's list, with its projection, through the record's writes; the caller's site
    travels to the write's checks. */
-static void usp_commit_at(JSContext *ctx, UspObj *u, JSValue vals, const char *file, int line)
+static void usp_commit_at(JSContext *ctx, JSValueConst owner, JSValue vals, const char *file, int line)
 {
     UspList *l = usp_project(ctx, vals);
+    UspObj *u = usp_rec_for_write(owner);
 
-    cow_record_set_at(ctx, u, &USP_REC, &u->vals, vals, file, line);
-    cow_record_set_at(ctx, u, &USP_REC, &u->list_box, usp_list_box(ctx, l), file, line);
+    cow_record_set_at(ctx, owner, u, &USP_REC, &u->vals, vals, file, line);
+    cow_record_set_at(ctx, owner, u, &USP_REC, &u->list_box, usp_list_box(ctx, l), file, line);
     u->list = l;
 }
-#define usp_commit(ctx_, u_, vals_) usp_commit_at((ctx_), (u_), (vals_), __FILE__, __LINE__)
+#define usp_commit(ctx_, owner_, vals_) usp_commit_at((ctx_), (owner_), (vals_), __FILE__, __LINE__)
 
 const UrlEncodedList *usp_list_of(JSValueConst v)
 {
-    UspObj *u = usp_rec(v);
+    const UspObj *u = usp_rec(v);
     return u ? u->list : NULL;
 }
 
 /* Declared below beside the reads they serve. */
-static JSValue usp_derive(JSContext *ctx, UspObj *u, const char *op, JSValue r, int argc, JSValueConst *argv);
-static JSValue usp_stringification(JSContext *ctx, UspObj *u);
-static JSValue usp_list_bytes(JSContext *ctx, UspObj *u);
+static JSValue usp_derive(JSContext *ctx, const UspObj *u, const char *op, JSValue r, int argc, JSValueConst *argv);
+static JSValue usp_stringification(JSContext *ctx, const UspObj *u);
+static JSValue usp_list_bytes(JSContext *ctx, const UspObj *u);
 
 JSValue usp_unknown_serialization(JSContext *ctx, JSValueConst v)
 {
-    UspObj *u = usp_rec(v);
+    const UspObj *u = usp_rec(v);
 
     DCHECK(u != NULL, "a body asked for the serialization of something that is not a URLSearchParams");
     if (JS_IsUndefined(u->unknown) && !url_encoded_list_has_hole(u->list)) return JS_UNDEFINED;
     return usp_stringification(ctx, u);
 }
 
-static UspObj *usp_of(JSContext *ctx, JSValueConst v)
+static const UspObj *usp_of(JSContext *ctx, JSValueConst v)
 {
-    UspObj *u = usp_rec(v);
+    const UspObj *u = usp_rec(v);
     if (!u) JS_ThrowTypeError(ctx, "not a URLSearchParams");
     return u;
 }
@@ -260,7 +268,7 @@ static UspObj *usp_of(JSContext *ctx, JSValueConst v)
 /* §6.2 URLSearchParams class's UPDATE STEPS: serialize the list onto the associated URL's query, and set
    that query to NULL rather than to the empty string when the list is empty — `u.searchParams.delete("a")`
    on `?a=1` gives `u.href` with no `?` at all, which is exactly the null/empty distinction the record keeps. */
-static void usp_update(JSContext *ctx, UspObj *u)
+static void usp_update(JSContext *ctx, const UspObj *u)
 {
     size_t n = 0;
     char *q;
@@ -333,12 +341,12 @@ JSValue usp_new(JSContext *ctx, JSValueConst owner, const char *query, size_t qu
 
 void usp_reset(JSContext *ctx, JSValueConst usp, const char *query, size_t query_len)
 {
-    UspObj *u = usp_rec(usp);
+    const UspObj *u = usp_rec(usp);
 
     DCHECK(u != NULL, "a URL's search setter re-initialised something that is not a URLSearchParams");
     DCHECK(JS_IsUndefined(u->unknown), "a known query re-initialised a list derived from an unknown record — a "
                                        "URL whose record is unknown stays unknown, so its setters re-derive");
-    usp_commit(ctx, u, usp_vals_parse(ctx, query, query_len));
+    usp_commit(ctx, usp, usp_vals_parse(ctx, query, query_len));
 }
 
 /* The §6.2 list parsed from the unknown query `q` (taken): its example's parse, which is empty without one. */
@@ -373,12 +381,12 @@ JSValue usp_new_unknown(JSContext *ctx, JSValueConst owner, JSValue query)
 
 void usp_reset_unknown(JSContext *ctx, JSValueConst usp, JSValue query)
 {
-    UspObj *u = usp_rec(usp);
+    UspObj *u = usp_rec_for_write(usp);
     int has_example;
 
     DCHECK(u != NULL && concolic_is(query), "an unknown query re-initialised no URLSearchParams, or is known");
-    usp_commit(ctx, u, usp_vals_unknown(ctx, query, &has_example));
-    cow_record_set(ctx, u, &USP_REC, &u->unknown, query);
+    usp_commit(ctx, usp, usp_vals_unknown(ctx, query, &has_example));
+    cow_record_set(ctx, usp, u, &USP_REC, &u->unknown, query);
     u->unknown_example = has_example;
     u->mutated = 0;
 }
@@ -393,7 +401,7 @@ static int g_usp_id[USP_MEMBER_N];
 /* A read of a list parsed from an unknown string, answered as the unknown that read derives — named by the
    operation, the string and the read's own arguments — with the read over the example's parse as its example
    where the string had one. The answer `r` is consumed. */
-static JSValue usp_derive(JSContext *ctx, UspObj *u, const char *op, JSValue r, int argc, JSValueConst *argv)
+static JSValue usp_derive(JSContext *ctx, const UspObj *u, const char *op, JSValue r, int argc, JSValueConst *argv)
 {
     JSValueConst ops[3];
     int n = 1, i;
@@ -412,8 +420,9 @@ static JSValue usp_derive(JSContext *ctx, UspObj *u, const char *op, JSValue r, 
    arguments — with the updated example list's serialization as its example. Every later read derives from it,
    so a read after a mutation is about the mutated list. §6.2's update steps then write the list's serialization,
    that list's derivation, onto an associated URL (url_query_assign_unknown). */
-static void usp_rederive(JSContext *ctx, UspObj *u, const char *op, int argc, JSValueConst *argv)
+static void usp_rederive(JSContext *ctx, JSValueConst owner, const char *op, int argc, JSValueConst *argv)
 {
+    UspObj *u = usp_rec_for_write(owner);
     JSValueConst ops[3];
     JSValue ex = JS_UNDEFINED, d;
     int n = 1, i;
@@ -426,8 +435,8 @@ static void usp_rederive(JSContext *ctx, UspObj *u, const char *op, int argc, JS
            "a mutation of a URLSearchParams list parsed from an unknown derived no unknown list — the field it "
            "writes is the list's unknown, so a concrete answer here (a candidate delivered at the list's source) "
            "needs the list re-parsed from the delivered value and made concrete; build that rather than store it");
-    cow_record_set(ctx, u, &USP_REC, &u->unknown, d);
-    u->mutated = 1;   /* a POD field of the record usp_rec captured */
+    cow_record_set(ctx, owner, u, &USP_REC, &u->unknown, d);
+    u->mutated = 1;
     if (!JS_IsUndefined(u->owner)) {
         JSValue ser = usp_stringification(ctx, u);
 
@@ -472,7 +481,7 @@ static JSValue usp_example_serialization(JSContext *ctx, JSValueConst vals)
 
 /* §5.2's serialization of the record's list as bytes a run holds: the list's own where no half is unknown, else
    the serialization run on the halves' examples, JS_UNDEFINED where one has none. Owned. */
-static JSValue usp_list_bytes(JSContext *ctx, UspObj *u)
+static JSValue usp_list_bytes(JSContext *ctx, const UspObj *u)
 {
     char *q;
     JSValue r;
@@ -488,7 +497,7 @@ static JSValue usp_list_bytes(JSContext *ctx, UspObj *u)
 /* §6.2's stringification behavior: §5.2's serialization of the list. It is the unknown the list derives where
    the list was parsed from an unknown string, the unknown its halves derive where one of them is unknown, and
    bytes otherwise; an unknown's example is usp_list_bytes. Owned. */
-static JSValue usp_stringification(JSContext *ctx, UspObj *u)
+static JSValue usp_stringification(JSContext *ctx, const UspObj *u)
 {
     JSValue d;
 
@@ -503,7 +512,7 @@ static JSValue usp_stringification(JSContext *ctx, UspObj *u)
 /* URL §6.2's append(name, value) and its stringification behavior, the two members that compare no tuple. */
 static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    UspObj *u = usp_of(ctx, this_val);
+    const UspObj *u = usp_of(ctx, this_val);
     JSValue vals;
     int i, n;
 
@@ -529,9 +538,9 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
         JS_FreeValue(ctx, b);
     }
     usp_vals_push(ctx, vals, argv[0], argv[1]);
-    usp_commit(ctx, u, vals);
+    usp_commit(ctx, this_val, vals);
     usp_update(ctx, u);
-    if (!JS_IsUndefined(u->unknown)) usp_rederive(ctx, u, "URLSearchParams.append", argc, argv);
+    if (!JS_IsUndefined(u->unknown)) usp_rederive(ctx, this_val, "URLSearchParams.append", argc, argv);
     return JS_UNDEFINED;
 }
 
@@ -599,7 +608,7 @@ static void usp_lookup_visit(JSContext *ctx, void *st, JSStepVisit *v)
    with a world per outcome, asked as §7.2.14 IsStrictlyEqual's own predicate (concolic_strict_equal), so the
    holding arm pins the unknown and the other walks on. get's found arm answers the tuple's value itself, which
    is that unknown where it is one. */
-static int usp_lookup_walk(JSContext *ctx, JSStepHdr *hdr, UspLookupState *s, UspObj *u, int magic,
+static int usp_lookup_walk(JSContext *ctx, JSStepHdr *hdr, UspLookupState *s, const UspObj *u, int magic,
                            JSValueConst name, JSValueConst value, bool with_value, JSValue *presult)
 {
     int n = usp_vals_n(ctx, u->vals), want = with_value ? 2 : 1;
@@ -636,7 +645,7 @@ static int usp_lookup_walk(JSContext *ctx, JSStepHdr *hdr, UspLookupState *s, Us
    (concolic_new_urlencoded_value), with the example's value as its example where the example holds the tuple;
    its other arm is null. has(name) answers the same question as a boolean. has(name, value) over an unknown
    list derives, as getAll does. */
-static int usp_lookup_answer(JSContext *ctx, JSStepHdr *hdr, UspLookupState *s, UspObj *u, int magic,
+static int usp_lookup_answer(JSContext *ctx, JSStepHdr *hdr, UspLookupState *s, const UspObj *u, int magic,
                              int argc, JSValueConst *argv, const char *name, size_t nn, const char *value,
                              size_t vn, JSValue *presult)
 {
@@ -679,7 +688,7 @@ static int usp_lookup_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     int magic = idl_step_magic(hdr), rc;
-    UspObj *u;
+    const UspObj *u;
     const char *name, *value = NULL;
     size_t nn = 0, vn = 0;
     bool with_value;
@@ -766,7 +775,7 @@ static int usp_walk_ask(JSContext *ctx, JSStepHdr *hdr, UspWalkState *s, const c
 /* delete, set and getAll: each tuple of this's list whose name is `name` and, for delete given `value`, whose
    value is `value`, is a match. delete keeps every other tuple; set keeps them and gives the first match
    `value` in its place; getAll collects the matches' values in list order. */
-static int usp_walk_match(JSContext *ctx, JSStepHdr *hdr, UspWalkState *s, UspObj *u, int magic,
+static int usp_walk_match(JSContext *ctx, JSStepHdr *hdr, UspWalkState *s, const UspObj *u, int magic,
                           JSValueConst name, JSValueConst value, bool with_value)
 {
     int n = usp_vals_n(ctx, u->vals), want = with_value ? 2 : 1;
@@ -815,7 +824,7 @@ static int usp_walk_match(JSContext *ctx, JSStepHdr *hdr, UspWalkState *s, UspOb
 /* sort(): a stable insertion sort, so tuples whose names compare equal keep their relative order as §6.2 asks.
    Tuple `i` is placed into `acc`, which holds the first `i` in order, after the last tuple its name is not code
    unit less than. */
-static int usp_walk_sort(JSContext *ctx, JSStepHdr *hdr, UspWalkState *s, UspObj *u)
+static int usp_walk_sort(JSContext *ctx, JSStepHdr *hdr, UspWalkState *s, const UspObj *u)
 {
     int n = usp_vals_n(ctx, u->vals);
 
@@ -870,7 +879,7 @@ static int usp_walk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     UspWalkState *s = st;
     int magic = idl_step_magic(hdr), rc;
     bool with_value;
-    UspObj *u;
+    const UspObj *u;
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
@@ -901,11 +910,11 @@ static int usp_walk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     }
     /* set: "Otherwise, append (name, value) to this's list." */
     if (magic == USP_SET && !s->found) usp_vals_push(ctx, s->acc, argv[0], argv[1]);
-    usp_commit(ctx, u, s->acc);
+    usp_commit(ctx, hdr->this_val, s->acc);
     s->acc = JS_UNDEFINED;
     usp_update(ctx, u);
     if (!JS_IsUndefined(u->unknown))
-        usp_rederive(ctx, u, magic == USP_DELETE ? "URLSearchParams.delete" : magic == USP_SET ? "URLSearchParams.set"
+        usp_rederive(ctx, hdr->this_val, magic == USP_DELETE ? "URLSearchParams.delete" : magic == USP_SET ? "URLSearchParams.set"
                                                                                            : "URLSearchParams.sort",
                      magic == USP_SORT ? 0 : argc, argv);
     return JS_STEP_DONE;
@@ -917,7 +926,7 @@ static const IdlStepDecl USP_WALK_DECL = {
 
 static JSValue js_usp_get_size(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    UspObj *u = usp_of(ctx, this_val);
+    const UspObj *u = usp_of(ctx, this_val);
     (void)magic;
     if (!u) return JS_EXCEPTION;
     if (!JS_IsUndefined(u->unknown))
@@ -929,7 +938,7 @@ static JSValue js_usp_get_size(JSContext *ctx, JSValueConst this_val, int magic)
    §2.5.9's "value pairs to iterate over" — over the pair list as it stands right now. */
 static int usp_pair_count(JSContext *ctx, JSValueConst target)
 {
-    UspObj *u = usp_rec(target);
+    const UspObj *u = usp_rec(target);
     (void)ctx;
     return u ? u->list->n : -1;
 }
@@ -937,7 +946,7 @@ static int usp_pair_count(JSContext *ctx, JSValueConst target)
 /* The unknown the list derives from, and how many pairs its example's parse holds (-1 without an example). */
 static JSValueConst usp_pair_unknown(JSContext *ctx, JSValueConst target, int *example_n)
 {
-    UspObj *u = usp_rec(target);
+    const UspObj *u = usp_rec(target);
     (void)ctx;
     DCHECK(u != NULL, "a URLSearchParams pair iterator asked its target's unknown of something that is not one");
     *example_n = u->unknown_example ? u->list->n : -1;
@@ -946,7 +955,7 @@ static JSValueConst usp_pair_unknown(JSContext *ctx, JSValueConst target, int *e
 
 /* One half of the i-th pair of a list derived from unknown input: a derivation over that unknown and the
    index, whose example is the example parse's half where that pair exists and is not itself a hole. */
-static JSValue usp_unknown_half(JSContext *ctx, UspObj *u, const char *op, int i, int name_half)
+static JSValue usp_unknown_half(JSContext *ctx, const UspObj *u, const char *op, int i, int name_half)
 {
     JSValueConst ops[2];
     JSValue idx = JS_NewInt32(ctx, i), ex = JS_UNDEFINED, d;
@@ -966,7 +975,7 @@ static JSValue usp_unknown_half(JSContext *ctx, UspObj *u, const char *op, int i
 /* §6.2's value pairs to iterate over for a list derived from unknown input: the i-th tuple's name and value. */
 static void usp_pair_of_unknown(JSContext *ctx, JSValueConst target, int i, JSValue *key, JSValue *value)
 {
-    UspObj *u = usp_rec(target);
+    const UspObj *u = usp_rec(target);
 
     DCHECK(u != NULL && !JS_IsUndefined(u->unknown) && i >= 0,
            "a URLSearchParams pair over unknown input was asked of a list that is not derived from one");
@@ -977,7 +986,7 @@ static void usp_pair_of_unknown(JSContext *ctx, JSValueConst target, int i, JSVa
 /* §6.2's value pairs to iterate over: the i-th tuple's halves, an unknown one as itself. */
 static void usp_pair_at(JSContext *ctx, JSValueConst target, int i, JSValue *key, JSValue *value)
 {
-    UspObj *u = usp_rec(target);
+    const UspObj *u = usp_rec(target);
 
     DCHECK(u != NULL && i < u->list->n, "a URLSearchParams pair was asked for past the end of the list");
     *key = usp_half(ctx, u->vals, i, 0);

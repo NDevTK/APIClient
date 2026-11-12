@@ -101,7 +101,7 @@ static void pel_sort(JSContext *ctx, JSValueConst arr)
 
     for (i = 1; i < n; i++) {
         JSValue cur = JS_GetPropertyUint32(ctx, (JSValue)arr, i);
-        PerfEntry *ce = performance_entry_of(cur);
+        const PerfEntry *ce = performance_entry_of(cur);
         double ck;
 
         DCHECK(ce != NULL, "§5.5's sort met something that is not a PerformanceEntry — every writer of a "
@@ -111,7 +111,7 @@ static void pel_sort(JSContext *ctx, JSValueConst arr)
         j = i;
         while (j > 0) {
             JSValue prev = JS_GetPropertyUint32(ctx, (JSValue)arr, j - 1);
-            PerfEntry *pe = performance_entry_of(prev);
+            const PerfEntry *pe = performance_entry_of(prev);
             double pk;
             bool swap;
 
@@ -138,7 +138,7 @@ static JSValue pel_filter(JSContext *ctx, JSValueConst buffer, JSValueConst name
     n = pel_len(ctx, buffer);
     for (i = 0; i < n; i++) {                                            /* step 2 */
         JSValue entry = JS_GetPropertyUint32(ctx, (JSValue)buffer, i);
-        PerfEntry *e = performance_entry_of(entry);
+        const PerfEntry *e = performance_entry_of(entry);
 
         DCHECK(e != NULL, "a §4.2.2 entry list held something that is not a PerformanceEntry — §5.3 step 3.3.5 "
                           "builds one out of an observer buffer, and §5.1 step 7 is the only writer of that");

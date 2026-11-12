@@ -63,7 +63,16 @@ static int g_id_method[64];
 
 /* ---- the record ------------------------------------------------------------------------------------------ */
 
-static DomMatrixBox *dm_box(JSValueConst v)
+static const DomMatrixBox *dm_box(JSValueConst v)
+{
+    const DomMatrixBox *b = JS_GetOpaque(v, g_ro_class);
+
+    if (!b) b = JS_GetOpaque(v, g_mx_class);
+    return b;
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static DomMatrixBox *dm_box_for_write(JSValueConst v)
 {
     DomMatrixBox *b = JS_GetOpaque(v, g_ro_class);
 
@@ -72,9 +81,9 @@ static DomMatrixBox *dm_box(JSValueConst v)
     return b;
 }
 
-static DomMatrixBox *dm_this(JSContext *ctx, JSValueConst this_val)
+static const DomMatrixBox *dm_this(JSContext *ctx, JSValueConst this_val)
 {
-    DomMatrixBox *b = dm_box(this_val);
+    const DomMatrixBox *b = dm_box(this_val);
 
     if (!b) JS_ThrowTypeError(ctx, "a DOMMatrix member was reached on something that is not a DOMMatrix");
     return b;
@@ -95,18 +104,18 @@ static void dm_finalizer(JSRuntime *rt, JSValue val)
 static void dm_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    DomMatrixBox *b = JS_GetAnyOpaque(val, &id);
+    const DomMatrixBox *b = JS_GetAnyOpaque(val, &id);
     int k;
 
     DCHECK(b != NULL, "a DOMMatrix was marked with no internal member variables");
     for (k = 0; k < 16; k++) JS_MarkValue(rt, b->m[k], mark_func);
 }
 
-static void dm_set_element(JSContext *ctx, DomMatrixBox *b, int k, JSValue v)
+static void dm_set_element(JSContext *ctx, JSValueConst owner, DomMatrixBox *b, int k, JSValue v)
 {
     DCHECK(JS_IsNumber(v) || concolic_is(v),
            "a DOMMatrix element was given something that is neither a Number nor unknown external input");
-    cow_record_set_at(ctx, b, &DOM_MATRIX_REC, &b->m[k], v, __FILE__, __LINE__);
+    cow_record_set(ctx, owner, b, &DOM_MATRIX_REC, &b->m[k], v);
 }
 
 /* A new matrix of `which` with the sixteen elements and is 2D. CONSUMES the elements. */
@@ -238,22 +247,22 @@ static void dm_set_identity(double a[16])
 }
 
 /* `b`'s elements become `c`, each derived over `o` where an operand is unknown. */
-static void dm_store(JSContext *ctx, DomMatrixBox *b, DmOps *o, const char *op, const double c[16])
+static void dm_store(JSContext *ctx, JSValueConst owner, DomMatrixBox *b, DmOps *o, const char *op, const double c[16])
 {
     int k;
 
-    for (k = 0; k < 16; k++) dm_set_element(ctx, b, k, dm_result(ctx, o, op, k, c[k]));
+    for (k = 0; k < 16; k++) dm_set_element(ctx, owner, b, k, dm_result(ctx, o, op, k, c[k]));
 }
 
 /* `b` post-multiplied (or with `pre`, pre-multiplied) by `t`, whose operands `o` already holds with `a`, `b`'s. */
-static void dm_store_product(JSContext *ctx, DomMatrixBox *b, DmOps *o, const char *op, const double a[16],
+static void dm_store_product(JSContext *ctx, JSValueConst owner, DomMatrixBox *b, DmOps *o, const char *op, const double a[16],
                              const double t[16], bool pre)
 {
     double c[16];
 
     if (pre) dm_mul(t, a, c);
     else dm_mul(a, t, c);
-    dm_store(ctx, b, o, op, c);
+    dm_store(ctx, owner, b, o, op, c);
 }
 
 /* css-transforms-2 §16's rotate3d() matrix about (x, y, z) by `deg` degrees, the axis normalized; identity for a
@@ -691,7 +700,7 @@ static JSValue js_dm_from_array(JSContext *ctx, JSValueConst this_val, int argc,
 
 static JSValue js_dm_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    DomMatrixBox *b = dm_this(ctx, this_val);
+    const DomMatrixBox *b = dm_this(ctx, this_val);
 
     if (!b) return JS_EXCEPTION;
     DCHECK(magic >= 0 && magic < 22, "a DOMMatrix attribute ran with a magic §6.4 does not declare");
@@ -731,7 +740,7 @@ static const char *const DM_SET_IDENTITY_OP[16] = {
 static int js_dm_set_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    DomMatrixBox *b = dm_this(ctx, hdr->this_val);
+    DomMatrixBox *b = dm_this(ctx, hdr->this_val) ? dm_box_for_write(hdr->this_val) : NULL;
     int magic = idl_step_magic(hdr), k, arm = 0, rc;
     JSValueConst val;
 
@@ -761,7 +770,7 @@ static int js_dm_set_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         else arm = dm_example(ctx, val) == identity ? 0 : 1;
         if (arm == 1) b->is2d = false;
     }
-    dm_set_element(ctx, b, k, JS_DupValue(ctx, val));
+    dm_set_element(ctx, hdr->this_val, b, k, JS_DupValue(ctx, val));
     *presult = JS_UNDEFINED;
     return JS_STEP_DONE;
 }
@@ -773,7 +782,7 @@ static const IdlStepDecl DM_SET_DECL = {
 
 static JSValue js_dm_is2d(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    DomMatrixBox *b = dm_this(ctx, this_val);
+    const DomMatrixBox *b = dm_this(ctx, this_val);
 
     (void)magic;
     if (!b) return JS_EXCEPTION;
@@ -783,7 +792,7 @@ static JSValue js_dm_is2d(JSContext *ctx, JSValueConst this_val, int magic)
 /* §6.4's isIdentity: m11, m22, m33 and m44 are 1 and every other element 0 or -0. */
 static JSValue js_dm_is_identity(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    DomMatrixBox *b = dm_this(ctx, this_val);
+    const DomMatrixBox *b = dm_this(ctx, this_val);
     DmOps o;
     double a[16];
     bool id = true;
@@ -821,7 +830,7 @@ static const char *const DM_OP_NAME[DM_OP_COUNT] = {
    rotX and rotY, the axis) and invertSelf's invertibility are decided by the examples. Next diff builds: the
    methods as step members asking step_fork_run per test, as §6.4's setters do. How its absence shows: no flow
    over an unknown argument reaches is2D false when the example is 2D, or the not-invertible arm. */
-static int dm_perform(JSContext *ctx, DomMatrixBox *b, DmOp op, int argc, JSValueConst *argv)
+static int dm_perform(JSContext *ctx, JSValueConst owner, DomMatrixBox *b, DmOp op, int argc, JSValueConst *argv)
 {
     DmOps o;
     double a[16], t[16], u[16];
@@ -837,7 +846,7 @@ static int dm_perform(JSContext *ctx, DomMatrixBox *b, DmOp op, int argc, JSValu
 
         dm_translation(dm_arg(ctx, &o, argc, argv, 0, 0.0), dm_arg(ctx, &o, argc, argv, 1, 0.0), tz, t);
         if (!(tz == 0.0)) b->is2d = false;
-        dm_store_product(ctx, b, &o, name, a, t, false);
+        dm_store_product(ctx, owner, b, &o, name, a, t, false);
         return 0;
     }
     case DM_SCALE:
@@ -860,7 +869,7 @@ static int dm_perform(JSContext *ctx, DomMatrixBox *b, DmOp op, int argc, JSValu
         dm_mul(tr, s, u);
         dm_mul(u, back, t);
         if (!(sz == 1.0)) b->is2d = false;
-        dm_store_product(ctx, b, &o, name, a, t, false);
+        dm_store_product(ctx, owner, b, &o, name, a, t, false);
         return 0;
     }
     case DM_SCALE3D: {
@@ -876,7 +885,7 @@ static int dm_perform(JSContext *ctx, DomMatrixBox *b, DmOp op, int argc, JSValu
         dm_mul(tr, s, u);
         dm_mul(u, back, t);
         if (!(sc == 1.0)) b->is2d = false;
-        dm_store_product(ctx, b, &o, name, a, t, false);
+        dm_store_product(ctx, owner, b, &o, name, a, t, false);
         return 0;
     }
     case DM_ROTATE: {
@@ -900,7 +909,7 @@ static int dm_perform(JSContext *ctx, DomMatrixBox *b, DmOp op, int argc, JSValu
         dm_mul(u, r, t);
         dm_rotation(1.0, 0.0, 0.0, rx, r);
         dm_mul(t, r, u);
-        dm_store(ctx, b, &o, name, u);
+        dm_store(ctx, owner, b, &o, name, u);
         return 0;
     }
     case DM_ROTATE_FROM_VECTOR: {
@@ -909,7 +918,7 @@ static int dm_perform(JSContext *ctx, DomMatrixBox *b, DmOp op, int argc, JSValu
         double x = dm_arg(ctx, &o, argc, argv, 0, 0.0), y = dm_arg(ctx, &o, argc, argv, 1, 0.0);
 
         dm_rotation(0.0, 0.0, 1.0, (x == 0.0 && y == 0.0) ? 0.0 : atan2(y, x) * 180.0 / M_PI, t);
-        dm_store_product(ctx, b, &o, name, a, t, false);
+        dm_store_product(ctx, owner, b, &o, name, a, t, false);
         return 0;
     }
     case DM_ROTATE_AXIS_ANGLE: {
@@ -919,7 +928,7 @@ static int dm_perform(JSContext *ctx, DomMatrixBox *b, DmOp op, int argc, JSValu
 
         dm_rotation(x, y, z, angle, t);
         if (!(x == 0.0) || !(y == 0.0)) b->is2d = false;
-        dm_store_product(ctx, b, &o, name, a, t, false);
+        dm_store_product(ctx, owner, b, &o, name, a, t, false);
         return 0;
     }
     case DM_SKEW_X:
@@ -927,7 +936,7 @@ static int dm_perform(JSContext *ctx, DomMatrixBox *b, DmOp op, int argc, JSValu
         /* css-transforms-1 §12's skewX(α) puts tan(α) at m21, skewY(β) at m12. */
         dm_set_identity(t);
         t[op == DM_SKEW_X ? 4 : 1] = tan(dm_arg(ctx, &o, argc, argv, 0, 0.0) * M_PI / 180.0);
-        dm_store_product(ctx, b, &o, name, a, t, false);
+        dm_store_product(ctx, owner, b, &o, name, a, t, false);
         return 0;
     case DM_MULTIPLY:
     case DM_PRE_MULTIPLY: {
@@ -940,7 +949,7 @@ static int dm_perform(JSContext *ctx, DomMatrixBox *b, DmOp op, int argc, JSValu
         if (dm_from_init(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, other, &other2d) < 0) return -1;
         for (k = 0; k < 16; k++) t[k] = dm_read(ctx, &o, other[k]);
         if (!other2d) b->is2d = false;
-        dm_store_product(ctx, b, &o, name, a, t, op == DM_PRE_MULTIPLY);
+        dm_store_product(ctx, owner, b, &o, name, a, t, op == DM_PRE_MULTIPLY);
         for (k = 0; k < 16; k++) JS_FreeValue(ctx, other[k]);
         return 0;
     }
@@ -948,7 +957,7 @@ static int dm_perform(JSContext *ctx, DomMatrixBox *b, DmOp op, int argc, JSValu
     case DM_FLIP_Y:
         /* "Post-multiply result with new DOMMatrix([-1, 0, 0, 1, 0, 0])", or [1, 0, 0, -1, 0, 0]. */
         dm_scaling(op == DM_FLIP_X ? -1.0 : 1.0, op == DM_FLIP_Y ? -1.0 : 1.0, 1.0, t);
-        dm_store_product(ctx, b, &o, name, a, t, false);
+        dm_store_product(ctx, owner, b, &o, name, a, t, false);
         return 0;
     case DM_INVERT: {
         /* "If the current matrix is not invertible set all attributes to NaN and set is 2D to false." */
@@ -958,7 +967,7 @@ static int dm_perform(JSContext *ctx, DomMatrixBox *b, DmOp op, int argc, JSValu
             for (k = 0; k < 16; k++) t[k] = NAN;
             b->is2d = false;
         }
-        dm_store(ctx, b, &o, name, t);
+        dm_store(ctx, owner, b, &o, name, t);
         return 0;
     }
     case DM_OP_COUNT:
@@ -971,11 +980,12 @@ static int dm_perform(JSContext *ctx, DomMatrixBox *b, DmOp op, int argc, JSValu
 /* A mutable method: perform it and "Return the current matrix". The magic is the DmOp. */
 static JSValue js_dm_self(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    DomMatrixBox *b = dm_this(ctx, this_val);
+    DomMatrixBox *b;
 
-    if (!b) return JS_EXCEPTION;
+    if (!dm_this(ctx, this_val)) return JS_EXCEPTION;
     if (!JS_GetOpaque(this_val, g_mx_class)) return JS_ThrowTypeError(ctx, "a DOMMatrixReadOnly is not mutable");
-    if (dm_perform(ctx, b, (DmOp)magic, argc, argv) < 0) return JS_EXCEPTION;
+    b = dm_box_for_write(this_val);
+    if (dm_perform(ctx, this_val, b, (DmOp)magic, argc, argv) < 0) return JS_EXCEPTION;
     return JS_DupValue(ctx, this_val);
 }
 
@@ -983,15 +993,16 @@ static JSValue js_dm_self(JSContext *ctx, JSValueConst this_val, int argc, JSVal
    perform the matching `*Self` algorithm on it, and return it. */
 static JSValue js_dm_immutable(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    DomMatrixBox *b = dm_this(ctx, this_val), *rb;
+    const DomMatrixBox *b = dm_this(ctx, this_val);
+    DomMatrixBox *rb;
     JSValue m[16], result;
     int k;
 
     if (!b) return JS_EXCEPTION;
     for (k = 0; k < 16; k++) m[k] = JS_DupValue(ctx, b->m[k]);
     result = dm_alloc(ctx, DM_MUTABLE, m, b->is2d);
-    rb = dm_box(result);
-    if (dm_perform(ctx, rb, (DmOp)magic, argc, argv) < 0) {
+    rb = dm_box_for_write(result);
+    if (dm_perform(ctx, result, rb, (DmOp)magic, argc, argv) < 0) {
         JS_FreeValue(ctx, result);
         return JS_EXCEPTION;
     }
@@ -1038,7 +1049,7 @@ JSValue dom_matrix_transform_point_init(JSContext *ctx, JSValueConst init, JSVal
    then §2.1 with the current matrix. */
 static JSValue js_dm_transform_point(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    DomMatrixBox *b = dm_this(ctx, this_val);
+    const DomMatrixBox *b = dm_this(ctx, this_val);
     JSValue p, out;
 
     (void)magic;
@@ -1052,7 +1063,7 @@ static JSValue js_dm_transform_point(JSContext *ctx, JSValueConst this_val, int 
 /* toFloat32Array() and toFloat64Array(): the sixteen elements in column-major order. */
 static JSValue js_dm_to_array(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    DomMatrixBox *b = dm_this(ctx, this_val);
+    const DomMatrixBox *b = dm_this(ctx, this_val);
     JSValue arr, len;
     int k;
 
@@ -1082,7 +1093,7 @@ static JSValue js_dm_to_array(JSContext *ctx, JSValueConst this_val, int argc, J
 static JSValue js_dm_to_string(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     static const int TWO_D[6] = { 0, 1, 4, 5, 12, 13 };
-    DomMatrixBox *b = dm_this(ctx, this_val);
+    const DomMatrixBox *b = dm_this(ctx, this_val);
     DmOps o;
     double a[16];
     char buf[16 * 32 + 16];
@@ -1120,17 +1131,18 @@ static JSValue js_dm_to_string(JSContext *ctx, JSValueConst this_val, int argc, 
    element. */
 static JSValue js_dm_set_matrix_value(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    DomMatrixBox *b = dm_this(ctx, this_val);
+    DomMatrixBox *b;
     JSValue m[16];
     bool two_d;
     int k;
 
     (void)magic;
-    if (!b) return JS_EXCEPTION;
+    if (!dm_this(ctx, this_val)) return JS_EXCEPTION;
     DCHECK(argc > 0, "setMatrixValue ran with no argument; its one argument is required");
     if (dm_parse_value(ctx, argv[0], m, &two_d) < 0) return JS_EXCEPTION;
+    b = dm_box_for_write(this_val);
     b->is2d = two_d;
-    for (k = 0; k < 16; k++) dm_set_element(ctx, b, k, m[k]);
+    for (k = 0; k < 16; k++) dm_set_element(ctx, this_val, b, k, m[k]);
     return JS_DupValue(ctx, this_val);
 }
 
@@ -1138,7 +1150,7 @@ static JSValue js_dm_set_matrix_value(JSContext *ctx, JSValueConst this_val, int
    order. */
 static JSValue js_dm_tojson(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    DomMatrixBox *b = dm_this(ctx, this_val);
+    const DomMatrixBox *b = dm_this(ctx, this_val);
     JSValue out;
     int i;
 

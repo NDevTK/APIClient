@@ -119,25 +119,34 @@ void abstract_range_claim_class(JSClassID cls)
     g_bounds_classes[g_bounds_class_n++] = cls;
 }
 
-RangeBounds *abstract_range_of(JSValueConst v)
+static RangeBounds *abstract_range_record(JSValueConst v)
 {
     int i;
     for (i = 0; i < g_bounds_class_n; i++) {
         RangeBounds *b = JS_GetOpaque(v, g_bounds_classes[i]);
-        if (b) {
-            /* THE RECORD TIME-TRAVELS. A flow that moves a range's start must not move it for a sibling, and
-               the capture belongs where the flow REACHES the record — see tree_walker.c. */
-            cow_capture_host_record(v, b, &RANGE_BOUNDS_REC);
-            return b;
-        }
+        if (b) return b;
     }
     return NULL;
+}
+
+const RangeBounds *abstract_range_of(JSValueConst v)
+{
+    return abstract_range_record(v);
+}
+
+RangeBounds *abstract_range_of_for_write(JSValueConst v)
+{
+    RangeBounds *b = abstract_range_record(v);
+
+    /* A flow that moves a range's start must not move it for a sibling. */
+    if (b) cow_capture_host_record(v, b, &RANGE_BOUNDS_REC);
+    return b;
 }
 
 /* magic 0 = startContainer, 1 = startOffset, 2 = endContainer, 3 = endOffset, 4 = collapsed. */
 static JSValue js_abstract_range_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    RangeBounds *b = abstract_range_of(this_val);
+    const RangeBounds *b = abstract_range_of(this_val);
 
     if (!b) return JS_ThrowTypeError(ctx, "not an AbstractRange");
     switch (magic) {

@@ -625,7 +625,7 @@ static bool po_options_want(JSContext *ctx, JSValueConst options, JSValueConst e
 
 void performance_observer_queue_entry(JSContext *ctx, JSValueConst entry)
 {
-    PerfEntry *e = performance_entry_of(entry);
+    const PerfEntry *e = performance_entry_of(entry);
     JSValue list, interested;
     uint32_t n, i, k;
 

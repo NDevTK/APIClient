@@ -92,16 +92,16 @@ bool performance_mark_is(JSValueConst v)
    interface", and tells it apart from `undefined`. */
 static JSValue js_mark_get_detail(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    PerfEntry *e;
+    const PerfEntry *e;
 
     (void)magic;
     if (!performance_mark_is(this_val))
         return JS_ThrowTypeError(ctx, "PerformanceMark.detail was reached on something that is not a "
                                       "PerformanceMark");
-    e = performance_entry_of(this_val);   /* through the base's accessor, which is where the capture lives */
+    e = performance_entry_of(this_val);
     DCHECK(e != NULL, "a value that passed §2.2's brand answered no record — the brand IS a read of the record, "
                       "so the two cannot disagree unless the entry was released between them");
-    return JS_DupValue(ctx, ((PerfMark *)e)->detail);
+    return JS_DupValue(ctx, ((const PerfMark *)e)->detail);
 }
 
 /* ---- §2.2.1 The PerformanceMark Constructor ----------------------------------------------------------------
@@ -385,7 +385,7 @@ bool performance_measure_is(JSValueConst v)
    hands a page an abort switch. */
 static JSValue js_measure_get_detail(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    PerfEntry *e;
+    const PerfEntry *e;
 
     (void)magic;
     if (!performance_measure_is(this_val))
@@ -393,7 +393,7 @@ static JSValue js_measure_get_detail(JSContext *ctx, JSValueConst this_val, int 
                                       "PerformanceMeasure");
     e = performance_entry_of(this_val);
     DCHECK(e != NULL, "a value that passed §2.3's brand answered no record — the brand IS a read of the record");
-    return JS_DupValue(ctx, ((PerfMeasure *)e)->detail);
+    return JS_DupValue(ctx, ((const PerfMeasure *)e)->detail);
 }
 
 /* ---- §3 Processing: §3.2 Convert a name to a timestamp -----------------------------------------------------
@@ -543,10 +543,10 @@ static void measure_state_start(JSContext *ctx, JSMeasureState *s)
 }
 
 /* THE ENTRY UNDER TEST, and the base every one of them wears. */
-static PerfEntry *ut_buffer_entry(JSContext *ctx, JSValueConst buffer, uint32_t i, JSValue *pheld)
+static const PerfEntry *ut_buffer_entry(JSContext *ctx, JSValueConst buffer, uint32_t i, JSValue *pheld)
 {
     JSValue held = JS_GetPropertyUint32(ctx, (JSValue)buffer, i);
-    PerfEntry *e = performance_entry_of(held);
+    const PerfEntry *e = performance_entry_of(held);
 
     DCHECK(e != NULL,
            "§2's performance entry buffer holds something that is not a PerformanceEntry — §5.1 step 12 is its "
@@ -647,7 +647,7 @@ static int ut_mark_to_timestamp(JSContext *ctx, JSStepHdr *hdr, JSMeasureState *
 
     for (;;) {
         JSValue held, ex;
-        PerfEntry *e;
+        const PerfEntry *e;
         const char *member;
         int real, rc;
         bool yes = false, searched_unknown = concolic_is(s->operand) != 0;
@@ -1125,7 +1125,7 @@ static void ut_clear_remove(JSContext *ctx, JSValueConst buffer, const PerfEntry
     JS_FreeValue(ctx, lenv);
     for (i = 0; i < n; i++) {
         JSValue held = JS_GetPropertyUint32(ctx, (JSValue)buffer, i);
-        PerfEntry *e = performance_entry_of(held);
+        const PerfEntry *e = performance_entry_of(held);
         bool remove;
 
         DCHECK(e != NULL, "§2's performance entry buffer holds something that is not a PerformanceEntry");
@@ -1196,7 +1196,7 @@ static int ut_clear_step(JSContext *ctx, JSStepHdr *hdr, JSClearState *s, int ar
     }
     while (!s->settled) {
         JSValue held, ex;
-        PerfEntry *e;
+        const PerfEntry *e;
         const char *member;
         int real, rc;
         bool yes = false;

@@ -4,12 +4,11 @@
  * THE RECORD TIME-TRAVELS, AND THE DISABLED FLAG IS WHY. §6.1.1's `disabled` is the one state item a page
  * WRITES on a sheet it did not create, and it is written into a C record behind a class opaque where no
  * property hook and no engine hook can see it — so a forked arm that set `sheet.disabled = true` would have
- * disabled that sheet for its sibling, and for every flow the frontier resumes afterwards. The capture is in
- * the ACCESSOR (`sheet_of`), which is the one rule that makes this impossible to get wrong: a record a flow
- * has REACHED is one it may write, the delta dedups to a single entry, and there is then no write site left to
- * miss. `SHEET_VALS` names the record's owned JSValues and is the SAME list `sheet_finalizer` frees and
- * `sheet_gc_mark` marks — read the three together, because a field added to one and not the others is exactly
- * the bug the layout exists to prevent.
+ * disabled that sheet for its sibling, and for every flow the frontier resumes afterwards. A read goes through
+ * `sheet_of`, which answers a const record and captures nothing; a write holds the pointer `sheet_for_write`
+ * answers after it captures, so a write through the read pointer does not compile. `SHEET_VALS` names the record's
+ * owned JSValues and is the SAME list `sheet_finalizer` frees and `sheet_gc_mark` marks — read the three together,
+ * because a field added to one and not the others is exactly the bug the layout exists to prevent.
  *
  * THE TITLE IS READ LIVE OFF THE OWNER NODE WHILE THERE IS ONE, AND FROZEN WHEN THERE IS NOT. §6.1 says the
  * title is "specified when created", and then that when it is specified to an ATTRIBUTE of the owner node it
@@ -81,7 +80,7 @@ typedef struct CssStyleSheetData {
     /* §6.1 "constructed flag". A POD latch and NOT a JSValue, so it is not in SHEET_VALS — the layout names the
        record's owned JSValues, and this is the same kind of field `disabled` is. It is written once, by §6.1's
        create a constructed CSSStyleSheet, and never again: no member of either interface sets or clears it, so
-       it does not have to time-travel independently of the record the accessor already captures. */
+       it does not have to time-travel independently of the record a write captures. */
     bool    constructed;
 } CssStyleSheetData;
 
@@ -108,9 +107,15 @@ static const uint16_t SHEET_VALS[] = {
 };
 static const CowRecord SHEET_REC = { sizeof(CssStyleSheetData), SHEET_VALS, 8 };
 
-/* THE ACCESSOR, AND THEREFORE THE CAPTURE POINT. Every member of both interfaces reaches the record through
-   here, so every flow that can write the disabled flag has already had its delta take a copy of the record. */
-static CssStyleSheetData *sheet_of(JSValueConst v)
+/* The read accessor: the flow's view of the record, captured by nothing. */
+static const CssStyleSheetData *sheet_of(JSValueConst v)
+{
+    return JS_GetOpaque(v, g_sheet_class);
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. Every
+   write to the record holds the pointer this answers. */
+static CssStyleSheetData *sheet_for_write(JSValueConst v)
 {
     CssStyleSheetData *s = JS_GetOpaque(v, g_sheet_class);
 
@@ -120,7 +125,7 @@ static CssStyleSheetData *sheet_of(JSValueConst v)
 
 /* The document whose rendering this sheet takes part in: the node document of its outermost parent CSS style
    sheet's owner node, or NULL for a sheet no node owns (a constructed sheet, or one §6.2 removed). BORROWED. */
-static lxb_dom_document_t *sheet_rec_document(CssStyleSheetData *s)
+static lxb_dom_document_t *sheet_rec_document(const CssStyleSheetData *s)
 {
     lxb_dom_node_t *n;
 
@@ -134,7 +139,7 @@ static lxb_dom_document_t *sheet_rec_document(CssStyleSheetData *s)
 
 lxb_dom_document_t *css_style_sheet_node_document(JSValueConst sheet)
 {
-    CssStyleSheetData *s = sheet_of(sheet);
+    const CssStyleSheetData *s = sheet_of(sheet);
 
     DCHECK(s != NULL, "a node document was asked of something that is not a CSS style sheet");
     return sheet_rec_document(s);
@@ -154,7 +159,7 @@ lxb_dom_document_t *css_style_sheet_node_document(JSValueConst sheet)
    unreachable by the collector and its calloc'd slots hold no value to release. */
 /* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
    line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
-static void sheet_set_at(JSContext *ctx, CssStyleSheetData *s, JSValue *slot, JSValue v,
+static void sheet_set_at(JSContext *ctx, JSValueConst owner, CssStyleSheetData *s, JSValue *slot, JSValue v,
                          const char *file, int line)
 {
     /* A cascade input moving while a layout job holds its record — see core/css/css_cascade_pass.h. A
@@ -173,16 +178,23 @@ static void sheet_set_at(JSContext *ctx, CssStyleSheetData *s, JSValue *slot, JS
             file, line);
     css_cascade_input_written();
     visual_update_document_changed(sheet_rec_document(s));   /* resolved before the write moves an owner */
-    cow_record_set_at(ctx, s, &SHEET_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, s, &SHEET_REC, slot, v, file, line);
 }
-#define sheet_set(ctx_, s_, slot_, v_) sheet_set_at((ctx_), (s_), (slot_), (v_), __FILE__, __LINE__)
+/* The write accessor and the write in one expansion, so a slot is never written through a record nobody captured. */
+#define sheet_set(ctx_, owner_, field_, v_)                                                              \
+    do {                                                                                                 \
+        CssStyleSheetData *sheet_set_s_ = sheet_for_write(owner_);                                       \
+                                                                                                         \
+        DCHECK(sheet_set_s_ != NULL, "a CSS style sheet record was written through something else");     \
+        sheet_set_at((ctx_), (owner_), sheet_set_s_, &sheet_set_s_->field_, (v_), __FILE__, __LINE__);   \
+    } while (0)
 
 /* The receiver, brand-checked. Both interfaces declare every member on a PROTOTYPE, so a page can apply one to
    anything at all, and the answer — Web IDL §3.7.6 Attributes' for the accessors, §3.7.7 Operations' for
    `insertRule`, `deleteRule`, `replace` and `replaceSync` — is a TypeError rather than a read of nothing. */
-static CssStyleSheetData *sheet_here(JSContext *ctx, JSValueConst v)
+static const CssStyleSheetData *sheet_here(JSContext *ctx, JSValueConst v)
 {
-    CssStyleSheetData *s = sheet_of(v);
+    const CssStyleSheetData *s = sheet_of(v);
 
     if (!s) {
         JS_ThrowTypeError(ctx, "not a CSSStyleSheet");
@@ -276,7 +288,7 @@ enum { SS_TYPE = 0, SS_HREF, SS_OWNER_NODE, SS_PARENT_STYLE_SHEET, SS_TITLE, SS_
 
 static JSValue js_sheet_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    CssStyleSheetData *s = sheet_here(ctx, this_val);
+    const CssStyleSheetData *s = sheet_here(ctx, this_val);
 
     if (!s) return JS_EXCEPTION;
     switch (magic) {
@@ -328,10 +340,11 @@ static JSValue js_sheet_get(JSContext *ctx, JSValueConst this_val, int magic)
    disabled flag otherwise." The value arrives already converted — `boolean` is the declaration's work. */
 static JSValue js_sheet_set_disabled(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    CssStyleSheetData *s = sheet_here(ctx, this_val);
+    CssStyleSheetData *s;
 
     (void)magic;
-    if (!s) return JS_EXCEPTION;
+    if (!sheet_here(ctx, this_val)) return JS_EXCEPTION;
+    s = sheet_for_write(this_val);
     s->disabled = JS_ToBool(ctx, val) != 0;
     return JS_UNDEFINED;
 }
@@ -341,7 +354,7 @@ static JSValue js_sheet_set_disabled(JSContext *ctx, JSValueConst this_val, JSVa
    and answering `false` for it would report a live sheet as enabled forever. */
 bool css_style_sheet_disabled(JSValueConst sheet)
 {
-    CssStyleSheetData *s = sheet_of(sheet);
+    const CssStyleSheetData *s = sheet_of(sheet);
 
     DCHECK(s != NULL, "the disabled flag was read off something that is not a CSS style sheet — the callers "
                       "that forward to it hold a value they took off an association slot, and that slot holds "
@@ -357,7 +370,7 @@ bool css_style_sheet_disabled(JSValueConst sheet)
    object it holds, and a parse cached beside it would answer the text the sheet was created with for ever. */
 bool css_style_sheet_media_matches(JSContext *ctx, JSValueConst sheet)
 {
-    CssStyleSheetData *s = sheet_of(sheet);
+    const CssStyleSheetData *s = sheet_of(sheet);
     MediaQuerySet *set;
     bool m;
 
@@ -381,7 +394,7 @@ bool css_style_sheet_media_matches(JSContext *ctx, JSValueConst sheet)
 
 void css_style_sheet_set_disabled(JSValueConst sheet, bool disabled)
 {
-    CssStyleSheetData *s = sheet_of(sheet);
+    CssStyleSheetData *s = sheet_for_write(sheet);
 
     DCHECK(s != NULL, "the disabled flag was written on something that is not a CSS style sheet");
     /* A cascade input moving while a layout job holds its record — see core/css/css_cascade_pass.h. The
@@ -408,29 +421,27 @@ void css_style_sheet_set_disabled(JSValueConst sheet, bool disabled)
    answering `false` for it would let an @import into a constructed sheet for ever. */
 bool css_style_sheet_constructed(JSValueConst sheet)
 {
-    CssStyleSheetData *s = sheet_of(sheet);
+    const CssStyleSheetData *s = sheet_of(sheet);
 
     DCHECK(s != NULL, "the constructed flag was read off something that is not a CSS style sheet — §6.1.2's "
                       "insertRule is its one reader and it holds the receiver its own brand check passed");
     return s->constructed;
 }
 
-/* §6.2's two questions about a sheet it is placing. Both go through the capturing accessor like every other
-   read, and both assert the brand rather than answering for a stranger. */
+/* §6.2's two questions about a sheet it is placing. Both assert the brand rather than answering for a stranger. */
 lxb_dom_node_t *css_style_sheet_owner_node(JSValueConst sheet)
 {
-    CssStyleSheetData *s = sheet_of(sheet);
+    const CssStyleSheetData *s = sheet_of(sheet);
 
     DCHECK(s != NULL, "the owner node was read off something that is not a CSS style sheet");
     return node_of(s->owner_node);
 }
 
 /* §6.1's CSS RULES, as the very Array `cssRules` shares — the CASCADE reads the rule OBJECTS through here, so
-   an `insertRule` the running flow made is in the cascade that flow resolves and in no sibling's. Through the
-   capturing accessor like every other read. OWNED. */
+   an `insertRule` the running flow made is in the cascade that flow resolves and in no sibling's. OWNED. */
 JSValue css_style_sheet_rules(JSContext *ctx, JSValueConst sheet)
 {
-    CssStyleSheetData *s = sheet_of(sheet);
+    const CssStyleSheetData *s = sheet_of(sheet);
 
     DCHECK(s != NULL, "the CSS rules were read off something that is not a CSS style sheet");
     DCHECK(JS_IsArray(s->rules),
@@ -441,7 +452,7 @@ JSValue css_style_sheet_rules(JSContext *ctx, JSValueConst sheet)
 
 JSValue css_style_sheet_title(JSContext *ctx, JSValueConst sheet)
 {
-    CssStyleSheetData *s = sheet_of(sheet);
+    const CssStyleSheetData *s = sheet_of(sheet);
 
     DCHECK(s != NULL, "the title was read off something that is not a CSS style sheet");
     return sheet_title_concept(ctx, s);
@@ -449,7 +460,7 @@ JSValue css_style_sheet_title(JSContext *ctx, JSValueConst sheet)
 
 JSValue css_style_sheet_location(JSContext *ctx, JSValueConst sheet)
 {
-    CssStyleSheetData *s = sheet_of(sheet);
+    const CssStyleSheetData *s = sheet_of(sheet);
 
     DCHECK(s != NULL, "the location was read off something that is not a CSS style sheet");
     return JS_DupValue(ctx, s->location);
@@ -537,7 +548,7 @@ void css_style_sheet_remove(JSContext *ctx, JSValueConst sheet)
     /* THE BRAND IS ASSERTED, NOT THROWN. This is an algorithm another standard invokes on a sheet it already
        holds — never a member a page can apply to a stranger — so a non-sheet here is an engine bug, and
        sheet_here's TypeError would leave a pending exception in a C caller with no member to return it from. */
-    CssStyleSheetData *s = sheet_of(sheet);
+    const CssStyleSheetData *s = sheet_of(sheet);
     JSValue title;
 
     DCHECK(s != NULL, "§6.2's remove a CSS style sheet was invoked on something that is not a CSS style sheet");
@@ -549,11 +560,11 @@ void css_style_sheet_remove(JSContext *ctx, JSValueConst sheet)
        nulls the owner node and says nothing about the title, so after this line there is nothing left to read
        it off and the last value the live read produced IS the title from here on. */
     title = sheet_title_concept(ctx, s);
-    sheet_set(ctx, s, &s->title, title);
+    sheet_set(ctx, sheet, title, title);
     /* Step 2. */
-    sheet_set(ctx, s, &s->owner_node, JS_NULL);
-    sheet_set(ctx, s, &s->parent_style_sheet, JS_NULL);
-    sheet_set(ctx, s, &s->owner_rule, JS_NULL);
+    sheet_set(ctx, sheet, owner_node, JS_NULL);
+    sheet_set(ctx, sheet, parent_style_sheet, JS_NULL);
+    sheet_set(ctx, sheet, owner_rule, JS_NULL);
 }
 
 /* ---- §6.1.2's CSS RULES: cssRules, insertRule and deleteRule ---------------------------------------------- */
@@ -576,7 +587,7 @@ static uint32_t rules_len(JSContext *ctx, JSValueConst list)
 
 void css_style_sheet_set_rules_from_text(JSContext *ctx, JSValueConst sheet, const char *text, size_t len)
 {
-    CssStyleSheetData *s = sheet_of(sheet);
+    const CssStyleSheetData *s = sheet_of(sheet);
 
     DCHECK(s != NULL, "a sheet's CSS rules were set on something that is not a CSS style sheet");
     DCHECK(rules_len(ctx, s->rules) == 0,
@@ -590,7 +601,7 @@ void css_style_sheet_set_rules_from_text(JSContext *ctx, JSValueConst sheet, con
 bool css_style_sheet_build_rules_step(JSContext *ctx, JSValueConst sheet, JSValueConst chain, CssomRulesRun *run,
                                       size_t *pinput)
 {
-    CssStyleSheetData *s = sheet_of(sheet);
+    const CssStyleSheetData *s = sheet_of(sheet);
 
     DCHECK(s != NULL, "a sheet's CSS rules were built on something that is not a CSS style sheet");
     return css_rule_build_sheet_step(ctx, s->rules, sheet, chain, run, pinput);
@@ -602,12 +613,15 @@ bool css_style_sheet_build_rules_step(JSContext *ctx, JSValueConst sheet, JSValu
    nothing here can make. [SameObject] is why the collection is remembered on the record. */
 static JSValue js_sheet_css_rules(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    CssStyleSheetData *s = sheet_here(ctx, this_val);
+    const CssStyleSheetData *s = sheet_here(ctx, this_val);
 
     (void)magic;
     if (!s) return JS_EXCEPTION;
-    if (!JS_IsObject(s->rule_list))
-        s->rule_list = css_rule_list_new(ctx, JS_DupValue(ctx, s->rules));
+    if (!JS_IsObject(s->rule_list)) {
+        CssStyleSheetData *w = sheet_for_write(this_val);
+
+        cow_record_set(ctx, this_val, w, &SHEET_REC, &w->rule_list, css_rule_list_new(ctx, JS_DupValue(ctx, s->rules)));
+    }
     return JS_DupValue(ctx, s->rule_list);
 }
 
@@ -621,7 +635,7 @@ static JSValue js_sheet_css_rules(JSContext *ctx, JSValueConst this_val, int mag
 static JSValue js_sheet_insert_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                     int magic)
 {
-    CssStyleSheetData *s = sheet_here(ctx, this_val);
+    const CssStyleSheetData *s = sheet_here(ctx, this_val);
     const char *text;
     uint32_t index = 0;
     JSValue out;
@@ -683,7 +697,7 @@ static int js_sheet_delete_rule(JSContext *ctx, JSStepHdr *hdr, void *state, int
                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     IdlIndexChain *c = state;
-    CssStyleSheetData *s;
+    const CssStyleSheetData *s;
     uint32_t index = 0;
     JSValue out;
     int rc;
@@ -713,8 +727,7 @@ static int js_sheet_delete_rule(JSContext *ctx, JSStepHdr *hdr, void *state, int
            "the second's carries a declared `= 0`, so §3.6 hands this body exactly one position either way");
     /* Re-derived on every entry rather than held across the fork: no line between the entry and the ask runs
        the page's code — step_fork_run only clones and re-enters — so re-deriving cannot answer differently,
-       and holding the record on a state that PARKS would keep a raw C pointer across a park. The accessor is
-       also what captures the sheet into the running flow's COW delta, which a held pointer would skip. */
+       and holding the record on a state that PARKS would keep a raw C pointer across a park. */
     s = sheet_here(ctx, hdr->this_val);
     if (!s)
         return JS_STEP_ABRUPT;   /* §3.7.7 Operations' TypeError on a receiver that is not a CSSStyleSheet */
@@ -805,7 +818,7 @@ static const IdlStepDecl SD_DECL = {
 static JSValue js_sheet_replace_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                      int magic)
 {
-    CssStyleSheetData *s = sheet_here(ctx, this_val);
+    const CssStyleSheetData *s = sheet_here(ctx, this_val);
     const char *text;
     size_t len = 0;
     JSValue rules;
@@ -955,7 +968,7 @@ static JSValue js_sheet_replace_sync(JSContext *ctx, JSValueConst this_val, int 
  * one, this member inherits it, because it composes the member rather than re-implementing the algorithm. */
 static JSValue js_sheet_add_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    CssStyleSheetData *s = sheet_here(ctx, this_val);
+    const CssStyleSheetData *s = sheet_here(ctx, this_val);
     const char *sel, *block;
     size_t sel_len = 0, block_len = 0, n = 0;
     char *rule;

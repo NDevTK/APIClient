@@ -89,9 +89,8 @@ bool css_unit_value_is(JSValueConst v);
  * so it is handed out dup'd — a borrow of it would be a pointer into a slot a page's own assignment can free
  * while the algorithm that borrowed it is still running.
  *
- * BOTH GO THROUGH THIS COMPONENT'S COW CAPTURE, which is solver/cow.h's rule and is why they are entries and
- * not a struct in the header: a record a flow has REACHED is one it may write, so reaching it through anything
- * but this file would be a read the delta never saw. */
+ * Both read through this component's accessor, which is why they are entries and not a struct in the header:
+ * only this file writes the record, through the write accessor that captures it. */
 const char *css_unit_value_unit(JSValueConst v);
 JSValue     css_unit_value_value(JSContext *ctx, JSValueConst v);
 

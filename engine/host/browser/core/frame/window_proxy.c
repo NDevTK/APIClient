@@ -81,7 +81,7 @@ typedef struct {
        rewritten. */
     JSValue created;
     /* The active document's origin, §7.1.1's record, for the §7.1.1 same origin check §7.2.1 makes. Borrowed: an
-       origin is immutable and lives for the agent (core/url/origin.h), so it can sit inside the bytes proxy_of
+       origin is immutable and lives for the agent (core/url/origin.h), so it can sit inside the record a write
        captures; a navigation replaces this pointer rather than mutating its target, so a parked flow's copy still
        names its world's origin. A record, not a serialization, because §7.1.1's step 1 compares identity: every
        opaque origin serializes to "null", so a string cannot tell one opaque origin read twice from two distinct ones
@@ -114,7 +114,7 @@ typedef struct {
        NULL means nobody stated it, not an answer: a navigable whose parent is a remote proxy is a child navigable
        by §7.3.1.3 and has a container, so core/dom/document.c crashes on the absence rather than reading it as
        §9.7 step 1's null container, which would return `Enabled` for every supported feature.
-       POD and owned by the component, like `top_level_url`: proxy_strdup'd, inside the bytes proxy_of captures,
+       POD and owned by the component, like `top_level_url`: proxy_strdup'd, inside the record a write captures,
        and never freed on a navigation because a parked flow's saved bytes still name it. */
     char   *remote_container;
     /* What §3.1.3's steps answered, for that same navigable only: HTML §3.1.3 "Ancestor origins"' internal ancestor
@@ -126,7 +126,7 @@ typedef struct {
        NULL means nobody stated it, as above: a navigable whose parent is a remote proxy has ancestors, so
        core/dom/document.c crashes on the absence rather than reading it as the empty list, which would tell a
        cross-origin frame it is the top of its own tree.
-       POD and owned by the component: proxy_strdup'd into the never-released list, inside the bytes proxy_of
+       POD and owned by the component: proxy_strdup'd into the never-released list, inside the record a write
        captures, so a parked flow's saved bytes name live memory. It is not on PROXY_VALS, which names only this
        record's JSValues. */
     char   *remote_ancestor_origins;
@@ -190,7 +190,7 @@ typedef struct {
      * document's opener policy". Neither holds a Document, and a navigable §7.4 created with no address holds an
      * initial about:blank Document whose realm is materialized lazily, so a row kept only on a Document could not
      * be read for the popup §7.1.3.2 is written about.
-     * Per flow at no cost: one enum word inside the bytes proxy_of captures, so an arm that navigated this
+     * Per flow at no cost: one enum word inside the record a write captures, so an arm that navigated this
      * navigable and a sibling that did not each read their own. It moves with the rest of the binding in
      * window_proxy_navigate, since a navigation replaces the active document and this is that document's row. */
     OpenerPolicyValue opener_policy;
@@ -199,7 +199,7 @@ typedef struct {
        when a realm is built. §7.4 makes a child navigable inherit its creator's and gives an auxiliary one its own
        address, and §7.4.5's navigation of a top-level traversable moves it while a nested navigable's stays where
        its creation put it. Per flow like `url`, since navigating a top-level traversable moves it. A POD pointer
-       inside the bytes proxy_of captures, never freed on a navigation because a parked flow's saved bytes still
+       inside the record a write captures, never freed on a navigation because a parked flow's saved bytes still
        name the old one. */
     char   *top_level_url;
     /* HTML §8.1.3.1's top-level origin, the other field of that pair, separate because its definition says "This
@@ -320,13 +320,19 @@ static const uint16_t PROXY_VALS[] = { WP_OFF(window), WP_OFF(parent), WP_OFF(op
                                        WP_OFF(name_val), WP_OFF(created) };
 static const CowRecord PROXY_REC = { sizeof(ProxyData), PROXY_VALS, 6 };
 
-/* The capture is in the accessor, as for every other component record: a record a flow has reached is one it may
-   write, so there is no write site to miss. `origin` is a POD pointer and `doc` a POD id inside the captured bytes;
-   a navigation replaces them rather than mutating their targets, so the byte copy describes the binding completely.
-   So the strings are not freed on navigation: a delta's saved bytes still name the old pointer, and freeing it
-   would resume a parked flow onto freed memory. The component owns them and releases them at teardown, one string
-   per navigation, the only arrangement in which a parked flow's binding stays readable. */
-static ProxyData *proxy_of(JSValueConst v)
+/* The read accessor answers the flow's view as a const record and captures nothing; proxy_for_write captures before
+   it answers a mutable one, and every write holds that pointer. `origin` is a POD pointer and `doc` a POD id inside
+   the captured bytes; a navigation replaces them rather than mutating their targets, so the byte copy describes the
+   binding completely. So the strings are not freed on navigation: a delta's saved bytes still name the old pointer,
+   and freeing it would resume a parked flow onto freed memory. The component owns them and releases them at
+   teardown, one string per navigation, the only arrangement in which a parked flow's binding stays readable. */
+static const ProxyData *proxy_of(JSValueConst v)
+{
+    return JS_GetOpaque(v, g_proxy_class);
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static ProxyData *proxy_for_write(JSValueConst v)
 {
     ProxyData *p = JS_GetOpaque(v, g_proxy_class);
     if (p) cow_capture_host_record(v, p, &PROXY_REC);
@@ -342,12 +348,12 @@ static ProxyData *proxy_of(JSValueConst v)
    write goes through it except the two mints: before JS_SetOpaque the record is unreachable by the collector and
    its slots hold nothing to release. The caller's file and line pass through, so the asserts inside name the
    write and not this line. */
-static void wp_set_at(JSContext *ctx, ProxyData *p, JSValue *slot, JSValue v,
+static void wp_set_at(JSContext *ctx, JSValueConst owner, ProxyData *p, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
-    cow_record_set_at(ctx, p, &PROXY_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, p, &PROXY_REC, slot, v, file, line);
 }
-#define wp_set(ctx_, p_, slot_, v_) wp_set_at((ctx_), (p_), (slot_), (v_), __FILE__, __LINE__)
+#define wp_set(ctx_, owner_, p_, slot_, v_) wp_set_at((ctx_), (owner_), (p_), (slot_), (v_), __FILE__, __LINE__)
 
 /* The check §7.2.1 makes, §7.1.1's same origin over two records: step 1's nonce comparison and step 2's tuple
  * comparison, both inside origin_same. Step 1 ("If A and B are the same opaque origin, then return true") is an
@@ -442,7 +448,7 @@ static RemoteNav *g_remote_navs;
 static int        g_remote_navs_n, g_remote_navs_cap;
 
 /* Every WindowProxy this agent has minted, scanned on the proxy's own per-flow `doc`: the (document, world) keying
-   a per-document registry row cannot express. A document's realm is a POD field inside the bytes proxy_of
+   a per-document registry row cannot express. A document's realm is a POD field inside the record a write
    captures (PROXY_REC above), so two flows that each read through one srcless navigable hold two realms for one
    name and neither is wrong.
    It has no `doc` column: a column would be a second copy of a field that already rides the delta (which
@@ -505,7 +511,7 @@ static JSValueConst live_nav_of_document(uint32_t doc)
     DCHECK(doc != 0, "the navigable of document zero was asked for — zero is the world registry's NONE, so the "
                      "caller is holding a handle it never resolved rather than a document");
     for (i = 0; i < g_live_navs_n; i++) {
-        ProxyData *p;
+        const ProxyData *p;
 
         if (nav_row_gone(g_live_navs[i])) continue;
         p = JS_GetOpaque(g_live_navs[i], g_proxy_class);
@@ -536,7 +542,7 @@ static JSValueConst live_nav_of_global(JSValueConst global)
     int i;
 
     for (i = 0; i < g_live_navs_n; i++) {
-        ProxyData *p;
+        const ProxyData *p;
         JSValue g;
         bool same;
 
@@ -601,7 +607,7 @@ static void proxy_finalizer(JSRuntime *rt, JSValue val)
 
 static void proxy_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    ProxyData *p = proxy_collector_record(val);
+    const ProxyData *p = proxy_collector_record(val);
     /* An unmarked child is worse than a leaked parent: it keeps the internal reference gc_decref subtracts, so
        gc_scan reads it as rooted from outside the heap and it is never collected. That is what reading the record
        through a released class id would cost here, silently (core/agent_state.h). */
@@ -625,7 +631,7 @@ static void proxy_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
    document comes here, and so does §7.4's navigation, which calls window_proxy_realm to materialize the navigable
    it created. See navigable.h for which navigable is materialized when, and why the difference is a spec sentence
    rather than a saving. */
-static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
+static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, const ProxyData *p)
 {
     /* Same-origin implies hosted, by construction: an instance is an origin-keyed agent, so a navigable this agent
        does not hold has a cross-origin active document, and every same-origin-only member is answerable in this
@@ -665,9 +671,12 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
            popup inherits the creator's flags only when the propagate flag survived the parse, and unioning the
            inherited policy's CSP-derived flags in here would re-sandbox the popup `allow-popups-to-escape-sandbox`
            exists to free. The union belongs to §7.4.5's navigation (core/frame/navigable.c). */
-        p->realm = navigable_realm(ctx, p->doc, p->url, p->top_level_url, p->origin, proxy, NULL, 0, NULL, NULL,
+        ProxyData *w = proxy_for_write(proxy);
+
+        DCHECK(w == p, "a WindowProxy's realm was materialized through a record that is not the proxy's own");
+        w->realm = navigable_realm(ctx, p->doc, p->url, p->top_level_url, p->origin, proxy, NULL, 0, NULL, NULL,
                                    p->creator_policy, p->creator_base_url, p->creation_sandbox_flags, p->created);
-        wp_set(ctx, p, &p->window, JS_GetGlobalObject(p->realm));
+        wp_set(ctx, proxy, w, &w->window, JS_GetGlobalObject(w->realm));
     }
     return p->realm;
 }
@@ -677,7 +686,7 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
                            const char *url, const char *top_level_url, const Origin *top_level_origin,
                            const Origin *origin, OpenerPolicyValue opener_policy)
 {
-    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor: the whole binding rides the delta */
+    ProxyData *p = proxy_for_write(proxy);
 
     DCHECK(p != NULL, "something that is not a WindowProxy was navigated");
     DCHECK(realm != NULL, "a navigable was navigated to no realm — a Document this agent holds IS a realm, and "
@@ -741,7 +750,7 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
            "aborts a navigated-away Document's fetches, so these rows are what §7.5.10 step 5's removal takes "
            "off the queue without running; they are not work to preserve");
     p->realm  = realm;
-    wp_set(ctx, p, &p->window, JS_GetGlobalObject(realm));
+    wp_set(ctx, proxy, p, &p->window, JS_GetGlobalObject(realm));
     p->doc    = doc;
     /* The old strings are not freed: a parked flow's saved bytes still name them (see proxy_of). */
     p->url    = proxy_strdup(url);
@@ -780,7 +789,7 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
 void window_proxy_navigate_to_peer(JSContext *ctx, JSValueConst proxy, uint32_t doc, const char *url,
                                    const Origin *origin)
 {
-    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor: the whole binding rides the delta */
+    ProxyData *p = proxy_for_write(proxy);
 
     DCHECK(p != NULL, "something that is not a WindowProxy was navigated to a peer's document");
     DCHECK(!world_doc_hosted(doc),
@@ -802,7 +811,7 @@ void window_proxy_navigate_to_peer(JSContext *ctx, JSValueConst proxy, uint32_t 
        goes, while the outgoing realm stays the agent's (navigable.c) because a flow parked in it resumes there. A
        remote proxy holds neither, which window_proxy_is_remote asserts on every ask. */
     p->realm = NULL;
-    wp_set(ctx, p, &p->window, JS_UNDEFINED);
+    wp_set(ctx, proxy, p, &p->window, JS_UNDEFINED);
     p->doc = doc;
     p->url = proxy_strdup(url);       /* the old strings stay: a parked flow's saved bytes still name them */
     DCHECK(origin != NULL, "a navigable was navigated to a peer's document with no origin — the load computed one");
@@ -820,7 +829,7 @@ void window_proxy_navigate_to_peer(JSContext *ctx, JSValueConst proxy, uint32_t 
    `same-origin` document and a sibling that did not have two answers. */
 OpenerPolicyValue window_proxy_opener_policy(JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "the opener policy of something that is not a WindowProxy was asked for");
     /* A peer's navigable has no answer here, and this crashes rather than reporting `unsafe-none`, a legal value a
@@ -840,7 +849,7 @@ OpenerPolicyValue window_proxy_opener_policy(JSValueConst proxy)
    proxy_of so the answer is the running flow's. */
 bool window_proxy_ever_navigated(JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "something that is not a WindowProxy was asked whether its navigable has been navigated");
     return p->ever_navigated != 0;
@@ -857,7 +866,7 @@ bool window_proxy_ever_navigated(JSValueConst proxy)
  * answers each its own way. */
 void window_proxy_clear_initial_about_blank(JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    ProxyData *p = proxy_for_write(proxy);
 
     DCHECK(p != NULL, "§8.4.1 step 13 cleared the is-initial-about:blank of something that is not a WindowProxy");
     /* A peer's navigable cannot be written from here, for window_proxy_opener_policy's reason: the flag is a fact
@@ -876,7 +885,7 @@ void window_proxy_clear_initial_about_blank(JSValueConst proxy)
    fact no flow can change, so a delta has nothing to isolate. */
 bool window_proxy_created_by_web_content(JSValueConst proxy)
 {
-    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    const ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
 
     DCHECK(p != NULL, "something that is not a WindowProxy was asked whether web content created it");
     return p->created_by_web_content != 0;
@@ -886,14 +895,14 @@ bool window_proxy_created_by_web_content(JSValueConst proxy)
    it is the one case where the realm precedes the proxy. */
 static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *realm)
 {
-    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    ProxyData *p = proxy_for_write(proxy);
 
     DCHECK(p != NULL, "a realm was handed to something that is not a WindowProxy");
     DCHECK(p->realm == NULL, "a navigable was given a second realm through the ADOPT path — it already has an "
                              "active document, and replacing one is window_proxy_navigate, which moves all "
                              "five facts of the binding at once rather than handing this one a second realm");
     p->realm  = realm;   /* borrowed: no agent-held reference owns a realm (see the field) */
-    wp_set(ctx, p, &p->window, JS_GetGlobalObject(realm));
+    wp_set(ctx, proxy, p, &p->window, JS_GetGlobalObject(realm));
 }
 
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
@@ -1214,7 +1223,7 @@ static void remote_nav_record(JSValueConst proxy, uint32_t doc)
 JSContext *window_proxy_realm_of_document(uint32_t doc)
 {
     JSValueConst proxy = live_nav_of_document(doc);
-    ProxyData *p;
+    const ProxyData *p;
 
     /* No navigable of that name is a real answer and the same as an unmaterialized one, which lets this be
        ctx-free: both mean "this timeline has no Document for that name", and only the caller knows whether it can
@@ -1241,7 +1250,7 @@ JSContext *window_proxy_realm_of_document(uint32_t doc)
 WindowProxyDocumentState window_proxy_document_state(uint32_t doc)
 {
     JSValueConst proxy = live_nav_of_document(doc);
-    ProxyData *p;
+    const ProxyData *p;
 
     if (JS_IsUndefined(proxy)) return WP_DOC_NO_NAVIGABLE;
     p = JS_GetOpaque(proxy, g_proxy_class);
@@ -1385,7 +1394,7 @@ JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *or
    in this file goes through here so no member asks only one. */
 bool window_proxy_closed(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "the closed state of something that is not a WindowProxy was read");
     /* §7.2.2.1's or, over the fact rather than the two recorded flags: a frame removed from the tree has a null
@@ -1408,7 +1417,7 @@ long long window_proxy_destroy_releases(void) { return g_step9_releases; }
    before its subtree had. */
 void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor: the whole binding rides the delta */
+    ProxyData *p = proxy_for_write(proxy);
 
     DCHECK(p != NULL, "something that is not a WindowProxy had its browsing context set to null");
     /* Once per document, asserted, because step 7 hands a reference back and a second run would hand back one it
@@ -1431,7 +1440,7 @@ void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
        capture above ran before the write), so releasing the live slot leaves every parked arm's copy intact and
        rewinding this flow restores the binding exactly, as in window_proxy_navigate. That is what lets a
        destruction give memory back without a flow losing the document it stands in. */
-    wp_set(ctx, p, &p->window, JS_UNDEFINED);
+    wp_set(ctx, proxy, p, &p->window, JS_UNDEFINED);
     p->realm  = NULL;
     /* `materialized` now answers that this navigable has no active document; proxy_realm asserts the other side:
        a NULL realm on a destroyed navigable means "there is none", never "not yet". */
@@ -1453,7 +1462,7 @@ void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
    stays open. */
 void window_proxy_discard_browsing_context(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor: the whole binding rides the delta */
+    ProxyData *p = proxy_for_write(proxy);
     (void)ctx;
 
     DCHECK(p != NULL, "something that is not a WindowProxy had its browsing context discarded");
@@ -1478,7 +1487,7 @@ void window_proxy_discard_browsing_context(JSContext *ctx, JSValueConst proxy)
    them is queued. Through proxy_of, so the count belongs to the flow performing the walk. */
 void window_proxy_child_wait_set(JSContext *ctx, JSValueConst proxy, int op, uint32_t n)
 {
-    ProxyData *p = proxy_of(proxy);
+    ProxyData *p = proxy_for_write(proxy);
     (void)ctx;
     DCHECK(p != NULL, "something that is not a WindowProxy was given a subtree-operation count");
     DCHECK(op >= 0 && op < WP_SUBTREE_OP_N,
@@ -1498,7 +1507,7 @@ void window_proxy_child_wait_set(JSContext *ctx, JSValueConst proxy, int op, uin
    raised. */
 int window_proxy_child_wait_report(JSContext *ctx, JSValueConst proxy, int op)
 {
-    ProxyData *p = proxy_of(proxy);
+    ProxyData *p = proxy_for_write(proxy);
     (void)ctx;
     DCHECK(p != NULL, "something that is not a WindowProxy was told a child navigable had finished");
     DCHECK(op >= 0 && op < WP_SUBTREE_OP_N,
@@ -1513,7 +1522,7 @@ int window_proxy_child_wait_report(JSContext *ctx, JSValueConst proxy, int op)
    it. */
 bool window_proxy_closing(JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "the is-closing state of something that is not a WindowProxy was read");
     return p->closing != 0;
 }
@@ -1534,7 +1543,7 @@ bool window_proxy_familiar_with(JSContext *ctx, JSValueConst proxy)
        (§7.2.2.4's setter only severs one), so the chain is finite and acyclic: every opener predates the
        navigable it opened. */
     for (;;) {
-        ProxyData *p = JS_GetOpaque(b, g_proxy_class);
+        const ProxyData *p = JS_GetOpaque(b, g_proxy_class);
         JSValue anc;
 
         CHECK(p != NULL, "§7.3.2.2's B is not a WindowProxy — B is the asked navigable or an opener link");
@@ -1549,7 +1558,7 @@ bool window_proxy_familiar_with(JSContext *ctx, JSValueConst proxy)
            A being that ancestor. */
         anc = JS_DupValue(ctx, p->parent);
         while (!JS_IsUndefined(anc)) {
-            ProxyData *q = JS_GetOpaque(anc, g_proxy_class);
+            const ProxyData *q = JS_GetOpaque(anc, g_proxy_class);
             JSValue up;
 
             CHECK(q != NULL, "a §7.3.2.2 ancestor of B is not a WindowProxy — the loop stops at JS_UNDEFINED");
@@ -1577,7 +1586,7 @@ bool window_proxy_destroyed(JSValueConst proxy)
     /* Through proxy_of like every other read of this record: a child's destruction is written into the
        destroying flow's delta, so a wait that read the baseline would never see the child it had just destroyed
        and would park for ever, depending on which flow ran the child's job. */
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "the destroyed state of something that is not a WindowProxy was read");
     return p->destroyed != 0;
 }
@@ -1585,10 +1594,9 @@ bool window_proxy_destroyed(JSValueConst proxy)
 /* Is this record's realm borrow dangling (see window_proxy.h for the question, and why it is neither `destroyed`
    nor a plain "does it still name this realm")? Capture-free and collection-safe, which is why it is a second
    entry point and not a caller of the accessor above.
-   Not proxy_of, the distinction the collector entries draw: proxy_of captures the record into the running flow's
-   delta because a record a flow has reached is one it may write, and there is no flow here. The caller is
-   quickjs's realm-teardown hook, which fires inside a collection, where a capture would dup this record's
-   JSValues onto an object being torn down. proxy_finalizer and proxy_gc_mark skip the capture for that reason;
+   Not proxy_of, the distinction the collector entries draw: there is no flow here. The caller is quickjs's
+   realm-teardown hook, which fires inside a collection, where a capture would dup this record's JSValues onto an
+   object being torn down. proxy_finalizer and proxy_gc_mark skip the capture for that reason;
    this read is narrower than theirs, two field loads and no reference touched. */
 bool window_proxy_realm_dangling(JSValueConst proxy, JSContext *realm)
 {
@@ -1628,7 +1636,7 @@ bool window_proxy_realm_dangling(JSValueConst proxy, JSContext *realm)
 
 bool window_proxy_browsing_context_null(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);   /* through the accessor, for window_proxy_destroyed's reason */
+    const ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "the browsing context of something that is not a WindowProxy was asked about");
     /* The third writer, and the only synchronous one. Both flags are set by §7.5.10's queued destruction, and a
@@ -1641,15 +1649,15 @@ bool window_proxy_browsing_context_null(JSContext *ctx, JSValueConst proxy)
 
 void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor: this write rides the flow's delta */
+    ProxyData *p = proxy_for_write(proxy);
 
     DCHECK(p != NULL, "something that is not a WindowProxy was asked to disown its opener");
-    wp_set(ctx, p, &p->opener, JS_NULL);
+    wp_set(ctx, proxy, p, &p->opener, JS_NULL);
 }
 
 void window_proxy_set_opener(JSContext *ctx, JSValueConst proxy, JSValueConst opener)
 {
-    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor: this write rides the flow's delta */
+    ProxyData *p = proxy_for_write(proxy);
 
     DCHECK(p != NULL, "something that is not a WindowProxy was given an opener");
     /* §7.2.2.4's `opener` is a navigable's, so the slot stores the opener's proxy, never its Window: a Window here
@@ -1663,19 +1671,19 @@ void window_proxy_set_opener(JSContext *ctx, JSValueConst proxy, JSValueConst op
     /* Null is not this function's to say. §7.2.2.4's null branch disowns, a different state change with a
        different observable (no own property is defined), and has its own entry point above; null here would make
        two spellings of "no opener" that could disagree. */
-    wp_set(ctx, p, &p->opener, JS_DupValue(ctx, opener));
+    wp_set(ctx, proxy, p, &p->opener, JS_DupValue(ctx, opener));
 }
 
 bool window_proxy_materialized(JSValueConst proxy)
 {
-    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    const ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "something that is not a WindowProxy was asked whether its document is materialized");
     return p->realm != NULL;
 }
 
 bool window_proxy_is_remote(JSValueConst proxy)
 {
-    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    const ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "something that is not a WindowProxy was asked whether it is remote");
     /* The two facts must agree, read together on every ask, because a proxy where they disagree hands a
        cross-document read this document's Window and nothing downstream can tell. A proxy over a peer's document
@@ -1689,14 +1697,14 @@ bool window_proxy_is_remote(JSValueConst proxy)
 
 uint32_t window_proxy_doc(JSValueConst proxy)
 {
-    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    const ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "the document of something that is not a WindowProxy was asked for");
     return p->doc;
 }
 
 JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "the Window of something that is not a WindowProxy was asked for");
     /* The seam, which crashes rather than answering. A proxy whose navigable lives in another WASM instance has no
        local Window, and handing back this document's would be a cross-document read that silently succeeded.
@@ -1714,21 +1722,21 @@ JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy)
 
 JSContext *window_proxy_realm(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "the realm of something that is not a WindowProxy was asked for");
     return proxy_realm(ctx, proxy, p);
 }
 
 bool window_proxy_same_origin_of(JSValueConst proxy)
 {
-    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    const ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "the origin of something that is not a WindowProxy was compared");
     return proxy_same_origin(p);
 }
 
 bool window_proxy_same_origin_domain_of(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    const ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "the origin of something that is not a WindowProxy was compared");
     return proxy_same_origin_domain(ctx, p);
 }
@@ -1744,7 +1752,7 @@ bool window_proxy_same_origin_with_top(JSContext *ctx)
 
 const char *window_proxy_name(JSValueConst proxy)
 {
-    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    const ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was asked for");
     /* A destroyed navigable has no name, the answer the `name` getter gives from the same two fields, so named
        access cannot find a frame the page has removed. */
@@ -1762,7 +1770,7 @@ const char *window_proxy_name(JSValueConst proxy)
    flow without losing the value. */
 bool window_proxy_name_is_source(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    const ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
 
     DCHECK(p != NULL, "whether the name is unknown was asked of something that is not a WindowProxy");
     /* HTML §7.2.2 "The Window object": "If this's navigable is null, then return the empty string.", the predicate
@@ -1773,7 +1781,7 @@ bool window_proxy_name_is_source(JSContext *ctx, JSValueConst proxy)
 
 JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was read");
     /* The world's: §7.2.2.1's name is written by whoever navigated this navigable, which is another document and
@@ -1791,17 +1799,17 @@ JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy)
    one into the other would pass neither). Writing it makes the name known: a page that set it determined it. */
 void window_proxy_name_forget(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    ProxyData *p = proxy_for_write(proxy);
 
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was forgotten");
-    wp_set(ctx, p, &p->name_val, JS_UNDEFINED);
+    wp_set(ctx, proxy, p, &p->name_val, JS_UNDEFINED);
     p->name = NULL;
     p->name_known = 0;
 }
 
 JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueConst v)
 {
-    ProxyData *p = proxy_of(proxy);
+    ProxyData *p = proxy_for_write(proxy);
     const char *n;
 
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was written");
@@ -1822,7 +1830,7 @@ JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueCons
                "takes a DOMString, whose ToString would have converted or refused that example where the IDL "
                "argument is taken");
         if (!JS_IsString(ex)) {
-            wp_set(ctx, p, &p->name_val, JS_DupValue(ctx, v));
+            wp_set(ctx, proxy, p, &p->name_val, JS_DupValue(ctx, v));
             p->name = NULL;
             p->name_known = 1;
             return JS_UNDEFINED;
@@ -1830,11 +1838,11 @@ JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueCons
         n = JS_ToCString(ctx, ex);
         JS_FreeValue(ctx, ex);
         if (!n) return JS_EXCEPTION;
-        wp_set(ctx, p, &p->name_val, JS_DupValue(ctx, v));
+        wp_set(ctx, proxy, p, &p->name_val, JS_DupValue(ctx, v));
     } else {
         n = JS_ToCString(ctx, v);
         if (!n) return JS_EXCEPTION;
-        wp_set(ctx, p, &p->name_val, JS_UNDEFINED);
+        wp_set(ctx, proxy, p, &p->name_val, JS_UNDEFINED);
     }
     p->name = proxy_strdup(n);
     p->name_known = 1;
@@ -1847,33 +1855,32 @@ JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueCons
    second fact where there is one. */
 bool window_proxy_is_popup(JSValueConst proxy)
 {
-    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    const ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "the popup state of something that is not a WindowProxy was asked for");
     return p->is_popup != 0;
 }
 
 const Origin *window_proxy_origin(JSValueConst proxy)
 {
-    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    const ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "the origin of something that is not a WindowProxy was asked for");
     DCHECK(p->origin != NULL, "a WindowProxy carries no origin");
     return p->origin;
 }
 
-/* Through the capturing accessor rather than the raw opaque: this is per-flow state, and a flow that reads it is
-   on its way to building a realm under it. */
+/* Per-flow state: a flow that reads it is on its way to building a realm under it. */
 const char *window_proxy_top_level_url(JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "the top-level creation URL of something that is not a WindowProxy was asked for");
     return p->top_level_url;
 }
 
-/* Through the capturing accessor for the same reason: an arm that navigated a top-level traversable moved this
-   field, and its sibling that did not must still read the origin its own world was created under. */
+/* Per-flow state: an arm that navigated a top-level traversable moved this field, and its sibling that did not
+   must still read the origin its own world was created under. */
 const Origin *window_proxy_top_level_origin(JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "the top-level origin of something that is not a WindowProxy was asked for");
     DCHECK(p->top_level_origin != NULL,
            "the TOP-LEVEL ORIGIN of a navigable whose active document lives in a PEER instance was asked for — "
@@ -1882,11 +1889,11 @@ const Origin *window_proxy_top_level_origin(JSValueConst proxy)
     return p->top_level_origin;
 }
 
-/* §7.1.5's creation sandboxing flags for this navigable — through the capturing accessor like every other
-   field of the binding, so an arm that created the navigable and an arm that did not read their own. */
+/* §7.1.5's creation sandboxing flags for this navigable — per-flow like every other field of the binding, so an
+   arm that created the navigable and an arm that did not read their own. */
 SandboxFlags window_proxy_creation_sandbox_flags(JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "the creation sandboxing flags of something that is not a WindowProxy were asked for");
     /* A remote proxy has no set to give, and answering the empty set would be worse than crashing: an empty set
@@ -2510,7 +2517,7 @@ static int proxy_surface_desc(JSContext *ctx, JSPropertyDescriptor *desc, JSAtom
    list is W's whole own-key list).
    Borrowed: the proxy holds it, and its ProxyData rides the COW delta, so the answer is the running flow's: an
    arm that navigated the frame forwards to the Window it navigated to and its sibling to the one it did not. */
-static JSValueConst proxy_target_window(JSContext *ctx, JSValueConst obj, ProxyData *p)
+static JSValueConst proxy_target_window(JSContext *ctx, JSValueConst obj, const ProxyData *p)
 {
     if (!proxy_same_origin(p)) return JS_UNINITIALIZED;
     if (wp_closed(p)) return JS_UNINITIALIZED;
@@ -2540,7 +2547,7 @@ static JSValueConst proxy_target_window(JSContext *ctx, JSValueConst obj, ProxyD
  * inside a collection. */
 static JSValueConst proxy_forwarded_object(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
-    ProxyData *p = proxy_of(obj);
+    const ProxyData *p = proxy_of(obj);
 
     DCHECK(p != NULL, "a WindowProxy class hook ran on an object carrying no navigable record");
     (void)prop;
@@ -2560,7 +2567,7 @@ static JSValueConst proxy_forwarded_object(JSContext *ctx, JSValueConst obj, JSA
    is declared under, as this class's [[GetOwnProperty]] is. */
 static JSValue proxy_get_prototype(JSContext *ctx, JSValueConst obj)
 {
-    ProxyData *p = proxy_of(obj);
+    const ProxyData *p = proxy_of(obj);
     JSValueConst w;
 
     DCHECK(p != NULL, "a WindowProxy class hook ran on an object carrying no navigable record");
@@ -2582,7 +2589,7 @@ static JSValue proxy_get_prototype(JSContext *ctx, JSValueConst obj)
 static int proxy_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueConst val,
                             JSValueConst getter, JSValueConst setter, int flags)
 {
-    ProxyData *p = proxy_of(obj);
+    const ProxyData *p = proxy_of(obj);
     JSValueConst w;
     uint32_t idx;
 
@@ -2627,7 +2634,7 @@ static int proxy_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSVal
    which on this object is always, unless a page defined a property on a closed navigable's proxy (above). */
 static int proxy_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
-    ProxyData *p = proxy_of(obj);
+    const ProxyData *p = proxy_of(obj);
     JSValueConst w;
     uint32_t idx;
 
@@ -2659,7 +2666,7 @@ static int proxy_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
  * puts it there: the list belongs to steps 4-6, which a same-origin W never reaches. */
 static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
 {
-    ProxyData *p = proxy_of(obj);   /* captured: the origin this read is filtered by is per-flow state */
+    const ProxyData *p = proxy_of(obj);   /* the origin this read is filtered by is per-flow state */
     JSValueConst w;
     uint32_t idx;
     int i;
@@ -2777,7 +2784,7 @@ static bool proxy_index_prefix_is_range(JSContext *ctx, const JSPropertyEnum *ta
  * sort of the prefix is the whole of it. */
 static int proxy_own_keys(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj)
 {
-    ProxyData *p = proxy_of(obj);
+    const ProxyData *p = proxy_of(obj);
     JSValueConst w;
     JSPropertyEnum *tab = NULL;
     uint32_t len = 0, i, j, k, n;
@@ -2875,7 +2882,7 @@ static int proxy_prevent_extensions(JSContext *ctx, JSValueConst obj)
    and so does a W whose document another instance holds, whose child navigables this side cannot count. */
 static int proxy_key_domain(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst *pstand)
 {
-    ProxyData *p = proxy_of(obj);
+    const ProxyData *p = proxy_of(obj);
     JSValueConst w;
     char ibuf[16];
 
@@ -2927,7 +2934,7 @@ JSValue window_proxy_top_navigable(JSContext *ctx, JSValueConst self)
     JSValueConst cur = self;
 
     for (;;) {
-        ProxyData *q = JS_GetOpaque(cur, g_proxy_class);
+        const ProxyData *q = JS_GetOpaque(cur, g_proxy_class);
         if (!q || JS_IsUndefined(q->parent)) return JS_DupValue(ctx, cur);
         /* The chain is proxies all the way up, because §7.2.2.4 says `parent` is one, so the walk never reads
            `top` off a Window (a scriptable property read from a C activation, which this interpreter refuses). */
@@ -2979,7 +2986,7 @@ bool window_proxy_navigable_null(JSContext *ctx, JSValueConst proxy)
     JSValueConst cur = proxy;
 
     for (;;) {
-        ProxyData *q = proxy_of(cur);   /* captured: severance is per-flow state this read may precede */
+        const ProxyData *q = proxy_of(cur);   /* severance is per-flow state this read may precede */
         JSValue container;
 
         DCHECK(q != NULL,
@@ -3007,7 +3014,7 @@ bool window_proxy_navigable_null(JSContext *ctx, JSValueConst proxy)
 static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
-    ProxyData *p;
+    const ProxyData *p;
 
     DCHECK(magic >= 0 && magic < WP_MEMBER_N,
            "a WindowProxy member was declared with a magic this component does not name");
@@ -3135,7 +3142,7 @@ JSValue window_proxy_parent(JSContext *ctx, JSValueConst proxy)
    not a WindowProxy; that is the caller's test. */
 JSValue window_proxy_parent_navigable(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "the containing navigable of something that is not a WindowProxy was asked for");
     return JS_DupValue(ctx, p->parent);
 }
@@ -3146,7 +3153,7 @@ JSValue window_proxy_parent_navigable(JSContext *ctx, JSValueConst proxy)
    presents it, which no algorithm in §7.3 does. Asserted. */
 void window_proxy_set_container(JSContext *ctx, JSValueConst proxy, JSValueConst element)
 {
-    ProxyData *p = proxy_of(proxy);
+    ProxyData *p = proxy_for_write(proxy);
 
     DCHECK(p != NULL, "§7.3.1.3's container was set on something that is not a WindowProxy");
     DCHECK(JS_IsObject(element),
@@ -3156,7 +3163,7 @@ void window_proxy_set_container(JSContext *ctx, JSValueConst proxy, JSValueConst
            "a navigable was given a SECOND §7.3.1.3 container — the relation is created once, and §7.3.1.6's "
            "destroy-a-child-navigable severs it by clearing the ELEMENT's content navigable rather than by "
            "moving this one, so a navigable never changes which element presents it");
-    wp_set(ctx, p, &p->container, JS_DupValue(ctx, element));
+    wp_set(ctx, proxy, p, &p->container, JS_DupValue(ctx, element));
 }
 
 /* The same link for a navigable whose container element is in another WASM instance (see the field). Stated after
@@ -3166,7 +3173,7 @@ void window_proxy_set_container(JSContext *ctx, JSValueConst proxy, JSValueConst
    element presents it. */
 void window_proxy_set_remote_container(JSValueConst proxy, const char *serialized_policy)
 {
-    ProxyData *p = proxy_of(proxy);
+    ProxyData *p = proxy_for_write(proxy);
 
     DCHECK(p != NULL, "§7.3.1.3's remote container was stated for something that is not a WindowProxy");
     DCHECK(serialized_policy != NULL && *serialized_policy != '\0',
@@ -3185,7 +3192,7 @@ void window_proxy_set_remote_container(JSValueConst proxy, const char *serialize
 
 const char *window_proxy_remote_container(JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "§7.3.1.3's remote container of something that is not a WindowProxy was asked for");
     return p->remote_container;
@@ -3195,7 +3202,7 @@ const char *window_proxy_remote_container(JSValueConst proxy)
    the field). Written once, with the container link it describes. */
 void window_proxy_set_remote_frame_owner(JSValueConst proxy, const char *serialized_margins)
 {
-    ProxyData *p = proxy_of(proxy);
+    ProxyData *p = proxy_for_write(proxy);
 
     DCHECK(p != NULL, "§15.3.2's container margins were stated for something that is not a WindowProxy");
     DCHECK(serialized_margins != NULL && *serialized_margins != '\0',
@@ -3209,7 +3216,7 @@ void window_proxy_set_remote_frame_owner(JSValueConst proxy, const char *seriali
 
 const char *window_proxy_remote_frame_owner(JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "§15.3.2's remote container margins of something that is not a WindowProxy were asked for");
     return p->remote_frame_owner;
@@ -3222,7 +3229,7 @@ const char *window_proxy_remote_frame_owner(JSValueConst proxy)
    describe a second creation. */
 void window_proxy_set_remote_ancestor_origins(JSValueConst proxy, const char *serialized_list)
 {
-    ProxyData *p = proxy_of(proxy);
+    ProxyData *p = proxy_for_write(proxy);
 
     DCHECK(p != NULL, "§3.1.3's ancestor origins were stated for something that is not a WindowProxy");
     DCHECK(serialized_list != NULL && *serialized_list != '\0',
@@ -3237,7 +3244,7 @@ void window_proxy_set_remote_ancestor_origins(JSValueConst proxy, const char *se
 
 const char *window_proxy_remote_ancestor_origins(JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "§3.1.3's remote ancestor origins of something that is not a WindowProxy were asked for");
     return p->remote_ancestor_origins;
@@ -3251,7 +3258,7 @@ const char *window_proxy_remote_ancestor_origins(JSValueConst proxy)
    recorded pointer with nothing to capture. */
 JSValue window_proxy_container(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
     JSValue held;
 
     DCHECK(p != NULL, "§7.3.1.3's container of something that is not a WindowProxy was asked for");
@@ -3281,7 +3288,7 @@ JSValue window_proxy_opener(JSContext *ctx, JSValueConst proxy)
    origin check and its browsing-context null test, the distinction window_proxy_parent_navigable draws. */
 JSValue window_proxy_opener_navigable(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "the opener navigable of something that is not a WindowProxy was asked for");
     return JS_DupValue(ctx, p->opener);
 }
@@ -3485,7 +3492,7 @@ static JSValue proxy_close(JSContext *ctx, JSValueConst this_val, int argc, JSVa
    the proxy's) must make the same test. */
 bool window_proxy_is_top_level(JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    const ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "something that is not a WindowProxy was asked whether it is a top-level traversable");
     return JS_IsUndefined(p->parent);
 }
@@ -3496,7 +3503,7 @@ bool window_proxy_is_top_level(JSValueConst proxy)
    would otherwise mark a frame closing silently. */
 void window_proxy_set_closing(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
+    ProxyData *p = proxy_for_write(proxy);
     (void)ctx;
     DCHECK(p != NULL, "something that is not a WindowProxy was closed");
     DCHECK(JS_IsUndefined(p->parent),
@@ -3561,7 +3568,7 @@ static int proxy_answer_matches_idl(JSValueConst v, int magic)
    that member's contract). */
 static int proxy_record_member(JSContext *ctx, JSValueConst nav, int magic, JSValue *out)
 {
-    ProxyData *p = JS_GetOpaque(nav, g_proxy_class);
+    const ProxyData *p = JS_GetOpaque(nav, g_proxy_class);
 
     DCHECK(p != NULL, "§7.2.1's record-answerable members were asked of something that is not a WindowProxy");
     DCHECK(out != NULL, "§7.2.1's record-answerable members were asked with nowhere to put the answer");
@@ -3633,7 +3640,7 @@ int window_proxy_record_member_of_document(JSContext *ctx, uint32_t doc, const c
    computes: 0 for `length`, false for an open `closed`. */
 static JSValue proxy_declined_member(JSContext *ctx, JSValueConst nav, int magic, uint32_t req)
 {
-    ProxyData *p = JS_GetOpaque(nav, g_proxy_class);
+    const ProxyData *p = JS_GetOpaque(nav, g_proxy_class);
     JSValue example = JS_UNDEFINED;
     char src[192], shape[196];
     int known, n;
@@ -3663,7 +3670,7 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     ProxyGetState *s = st;
     JSValueConst answer, nav;
     int magic = idl_step_magic(hdr);
-    ProxyData *p;
+    const ProxyData *p;
 
     (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);

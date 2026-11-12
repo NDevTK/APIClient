@@ -102,7 +102,7 @@ const char *window_proxy_top_level_url(JSValueConst proxy);
    "settings's top-level origin" and §3.2 compares two keys with the default permission key comparison
    algorithm, which is "return key1 is same origin with key2" — §7.1.1, whose step 1 is an identity comparison
    a serialization cannot express. BORROWED: an origin lives for the agent (core/url/origin.h), so it sits
-   inside the bytes proxy_of captures exactly as `origin` does, and a navigation REPLACES the pointer rather
+   inside the record a write captures exactly as `origin` does, and a navigation REPLACES the pointer rather
    than mutating what it points at. Asked only of a LOCAL proxy: a remote navigable's environments are built by
    the instance that holds its documents, and that instance answers §5.1 for them. */
 const Origin *window_proxy_top_level_origin(JSValueConst proxy);
@@ -193,7 +193,7 @@ JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc);
  * IT REPLACES AN INSTANCE-GLOBAL ROW, AND THE ROW'S FAILURE IS THE WHOLE ARGUMENT FOR THIS SHAPE. solver/world.c
  * kept one `JSContext *` per document, written by document_install and cleared by document_free, and those two
  * edges are exactly enough to keep it honest against a realm that is GONE and cannot make ONE value right while
- * TWO are live. A realm is per-flow state: `ProxyData`'s own `realm` is a POD field inside the bytes proxy_of
+ * TWO are live. A realm is per-flow state: `ProxyData`'s own `realm` is a POD field inside the record a write
  * captures, so a navigable's initial about:blank is materialized once per TIMELINE that reads through it, and
  * ANY TWO FLOWS suffice — a flow and the LOAD JOB it enqueued are two, with no fork anywhere. The row aborted on
  * the second write, by name, and that crash was doing protective work rather than being over-strict: holding

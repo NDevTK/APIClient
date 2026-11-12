@@ -26,14 +26,10 @@
  * the store key it points at — the pair a page otherwise has to run `openCursor` to see. Which key goes in
  * which field is §6.2's and §6.3's decision, not this file's, which is why the constructor takes all three.
  *
- * THE RECORD IS THE COMPONENT'S OWN AND IT TIME-TRAVELS. Three owned JSValues live behind the class opaque,
- * where no property hook can see a write, so the capture goes in the ACCESSOR every member reaches — a record
- * a flow has reached is one it may write, and there is then no write site left to miss. §4.8 declares every
- * member of this interface readonly and this engine mints a snapshot once and never edits it, so today there
- * is no write; the capture is what makes that a fact nothing has to re-check the day a member is added. The
- * offset list is the SAME list the finalizer frees and the gc_mark walks, which is what makes a field added to
- * one and not the others impossible to miss. Both of those go through JS_GetOpaque instead, deliberately: a
- * capture during collection would dup values on an object being torn down.
+ * The record is the component's own. Three owned JSValues live behind the class opaque. §4.8 declares every
+ * member of this interface readonly and this engine mints a snapshot once and never edits it, so the accessor
+ * answers const and nothing captures it: a member that wrote would need a write accessor, and a write through the
+ * const pointer does not compile. The finalizer and the gc_mark reach the record through JS_GetAnyOpaque.
  *
  * THERE IS NO CONSTRUCTOR. §4.8 declares none, so `new IDBRecord()` is a TypeError — which is also what tells
  * a feature-detecting bundle the interface exists. A snapshot is minted by §6.2's and §6.3's retrieve-multiple
@@ -50,7 +46,6 @@
 #include "core/indexeddb/idb_key.h"
 #include "core/indexeddb/idb_record.h"
 #include "core/realm.h"
-#include "solver/cow.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §2.12's three fields. The two keys are §2.4 key records; the value is a §2.3 value. */
@@ -60,10 +55,6 @@ typedef struct IdbRecordData {
     JSValue value;        /* §2.12's value — a deserialized ECMAScript value, OWNED */
 } IdbRecordData;
 
-static const uint16_t RECORD_VALS[] = { (uint16_t)offsetof(IdbRecordData, key),
-                                        (uint16_t)offsetof(IdbRecordData, primary_key),
-                                        (uint16_t)offsetof(IdbRecordData, value) };
-static const CowRecord RECORD_REC = { sizeof(IdbRecordData), RECORD_VALS, 3 };
 
 static JSClassID g_record_class;
 
@@ -71,20 +62,20 @@ static JSClassID g_record_class;
    fields and a second copy could drift from its twin. */
 enum { IDB_RECORD_SIDE_KEY = 0, IDB_RECORD_SIDE_PRIMARY };
 
-static IdbRecordData *record_of(JSValueConst v)
+/* The accessor every member reaches the record through. The record is written once, by its mint before
+   JS_SetOpaque, and never again, so it answers const, has no write accessor and is never captured. */
+static const IdbRecordData *record_of(JSValueConst v)
 {
-    IdbRecordData *r = JS_GetOpaque(v, g_record_class);
-
-    if (r) cow_capture_host_record(v, r, &RECORD_REC);
+    const IdbRecordData *r = JS_GetOpaque(v, g_record_class);
     return r;
 }
 
 /* WEB IDL §3.7.6 Attributes' BRAND CHECK. `IDBRecord.prototype.key` read off anything else is a TypeError,
    and a page
    tells that apart from `undefined`. */
-static IdbRecordData *record_here(JSContext *ctx, JSValueConst v)
+static const IdbRecordData *record_here(JSContext *ctx, JSValueConst v)
 {
-    IdbRecordData *r = record_of(v);
+    const IdbRecordData *r = record_of(v);
 
     if (!r) {
         JS_ThrowTypeError(ctx, "an IDBRecord member was reached on something that is not an IDBRecord");
@@ -126,7 +117,7 @@ static void record_finalizer(JSRuntime *rt, JSValue val)
 static void record_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    IdbRecordData *r = JS_GetAnyOpaque(val, &id);
+    const IdbRecordData *r = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     DCHECK(r != NULL, "an IDBRecord was marked with no snapshot — its three fields are counted references and "
@@ -168,7 +159,7 @@ JSValue idb_record_new(JSContext *ctx, JSValue key, JSValue primary_key, JSValue
    key." One body over §2.12's two key fields, chosen by the magic the install states. */
 static JSValue js_record_key_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    IdbRecordData *r = record_here(ctx, this_val);
+    const IdbRecordData *r = record_here(ctx, this_val);
 
     if (!r) return JS_EXCEPTION;
     DCHECK(magic == IDB_RECORD_SIDE_KEY || magic == IDB_RECORD_SIDE_PRIMARY,
@@ -180,7 +171,7 @@ static JSValue js_record_key_get(JSContext *ctx, JSValueConst this_val, int magi
    StructuredDeserialize before the snapshot was made, so this hands back the same object every read. */
 static JSValue js_record_value_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    IdbRecordData *r = record_here(ctx, this_val);
+    const IdbRecordData *r = record_here(ctx, this_val);
 
     (void)magic;
     if (!r) return JS_EXCEPTION;

@@ -7,8 +7,8 @@
  * outward from the state, the states are ONE record and every member reads it.
  *
  * WHAT A FLOW OWNS HERE. The record is per-object C behind a class opaque, so it writes where no property hook
- * can see — the same shape §COW's rule is about — and the capture is in the ACCESSOR (`xhr_of`), so a record a
- * flow has reached is one it may write and there is no write site left to miss. Everything the record holds
+ * can see — the same shape §COW's rule is about — so a write takes it through `xhr_of_for_write`, which captures
+ * it first, and a read through `xhr_of` captures nothing. Everything the record holds
  * that a flow can CHANGE is a JSValue: the method, the URL, the two header lists, the received bytes, the
  * response object. A malloc'd string there would be reverted as a POINTER by a context switch and leaked by
  * the arm that allocated it — the leak the runtime's own GC walk cannot see. The header lists are JS Arrays of
@@ -215,9 +215,8 @@ static int g_response_getter_id = -1, g_response_xml_getter_id = -1;
 static int g_run_stepid = -1;      /* the fetch/response lifecycle machine, minted as a closure per send() */
 
 /* THE RECORD TIME-TRAVELS. Every field above is state a flow writes — an arm that sends must not have sent for
-   its sibling — and the capture is in the accessor for the reason the streams and messaging components give:
-   a record a flow has REACHED is one it may write, so there is no write site left to miss. The offset list is
-   the same list the finalizer frees and the gc_mark walks. */
+   its sibling — so a write takes the record through the write accessor, which captures it first. The offset list
+   is the same list the finalizer frees and the gc_mark walks. */
 #define XO(f) (uint16_t)offsetof(XhrData, f)
 static const uint16_t XHR_VALS[] = {
     XO(upload), XO(method), XO(url), XO(url_src), XO(author_headers), XO(request_body), XO(request_body_root),
@@ -340,7 +339,14 @@ static JSValueConst xhr_request_address(const XhrData *d)
     return JS_IsNull(d->url_src) ? d->url : d->url_src;
 }
 
-static XhrData *xhr_of(JSValueConst v)
+static const XhrData *xhr_of(JSValueConst v)
+{
+    const XhrData *d = JS_GetOpaque(v, g_xhr_class);
+    return d;
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static XhrData *xhr_of_for_write(JSValueConst v)
 {
     XhrData *d = JS_GetOpaque(v, g_xhr_class);
     if (d) cow_capture_host_record(v, d, &XHR_REC);
@@ -354,12 +360,19 @@ static XhrData *xhr_of(JSValueConst v)
    release. */
 /* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
    line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
-static void xhr_set_at(JSContext *ctx, XhrData *d, JSValue *slot, JSValue v,
+static void xhr_set_at(JSContext *ctx, JSValueConst owner, XhrData *d, JSValue *slot, JSValue v,
                        const char *file, int line)
 {
-    cow_record_set_at(ctx, d, &XHR_REC, slot, v, file, line);
+    cow_record_set_at(ctx, owner, d, &XHR_REC, slot, v, file, line);
 }
-#define xhr_set(ctx_, d_, slot_, v_) xhr_set_at((ctx_), (d_), (slot_), (v_), __FILE__, __LINE__)
+#define xhr_set(ctx_, owner_, d_, slot_, v_) xhr_set_at((ctx_), (owner_), (d_), (slot_), (v_), __FILE__, __LINE__)
+/* One slot written through the write accessor, for a getter that memoizes: the record is captured at the memo. */
+#define xhr_set_w(ctx_, owner_, field_, v_)                                                              \
+    do {                                                                                                 \
+        XhrData *xhr_set_w_d_ = xhr_of_for_write(owner_);                                                \
+                                                                                                         \
+        xhr_set((ctx_), (owner_), xhr_set_w_d_, &xhr_set_w_d_->field_, (v_));                            \
+    } while (0)
 
 /* The asynchronous send's fetch is over for this object: its timeout wait ends, and with `withdraw` its
    controller is also aborted or terminated (engine_host_withdraw). */
@@ -407,7 +420,7 @@ static void xhr_finalizer(JSRuntime *rt, JSValue val)
 static void xhr_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    XhrData *d = JS_GetAnyOpaque(val, &id);
+    const XhrData *d = JS_GetAnyOpaque(val, &id);
     size_t i;
 
     (void)id;
@@ -654,7 +667,7 @@ static void xhr_mime_stored(MimeType *out, const char *serialized)
 
 /* §3.6.6 "get a response MIME type": Fetch §2.2.2 "Headers"'s "extract a MIME type" over the response's header list, and
    `text/xml` when that is failure. `out` always ends holding a record. */
-static void xhr_response_mime(JSContext *ctx, XhrData *d, MimeType *out)
+static void xhr_response_mime(JSContext *ctx, const XhrData *d, MimeType *out)
 {
     char *ct = hl_get(ctx, d->response_headers, "content-type");
     bool ok = mime_type_extract(out, ct);
@@ -664,7 +677,7 @@ static void xhr_response_mime(JSContext *ctx, XhrData *d, MimeType *out)
 }
 
 /* §3.6.6 "get a final MIME type": the override MIME type if there is one, else the response's. */
-static void xhr_final_mime(JSContext *ctx, XhrData *d, MimeType *out)
+static void xhr_final_mime(JSContext *ctx, const XhrData *d, MimeType *out)
 {
     mime_type_init(out);
     if (!JS_IsNull(d->override_mime)) {
@@ -681,7 +694,7 @@ static void xhr_final_mime(JSContext *ctx, XhrData *d, MimeType *out)
    `null` (returned as -1) when neither names one or the label is not an encoding. The standard's own note says
    this deliberately does not use the final MIME type, "as it would not be web compatible" — so the two records
    are read separately here rather than through xhr_final_mime. */
-static int xhr_final_encoding(JSContext *ctx, XhrData *d)
+static int xhr_final_encoding(JSContext *ctx, const XhrData *d)
 {
     MimeType resp, over;
     const char *label;
@@ -748,18 +761,24 @@ static bool xhr_global_is_window(JSContext *ctx)
 
 /* ---- the receiver check every member performs -------------------------------------------------------------- */
 
-static XhrData *xhr_receiver(JSContext *ctx, JSValueConst this_val)
+static const XhrData *xhr_receiver(JSContext *ctx, JSValueConst this_val)
 {
-    XhrData *d = xhr_of(this_val);
+    const XhrData *d = xhr_of(this_val);
     if (!d) JS_ThrowTypeError(ctx, "not an XMLHttpRequest");
     return d;
+}
+
+/* The same check for a member that writes the record, which it captures first. */
+static XhrData *xhr_receiver_for_write(JSContext *ctx, JSValueConst this_val)
+{
+    return xhr_receiver(ctx, this_val) ? xhr_of_for_write(this_val) : NULL;
 }
 
 /* ---- §3.4 the readyState getter ------------------------------------------------------------------------------ */
 
 static JSValue js_xhr_get_ready_state(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    const XhrData *d = xhr_receiver(ctx, this_val);
     (void)magic;
     if (!d) return JS_EXCEPTION;
     return JS_NewInt32(ctx, d->state);
@@ -792,12 +811,12 @@ static void js_xhr_open_visit(JSContext *ctx, void *st, JSStepVisit *v)
 }
 
 /* §3.5.1 step 11's reset, which is also what a second open() on a sent object performs. */
-static void xhr_reset_request(JSContext *ctx, XhrData *d)
+static void xhr_reset_request(JSContext *ctx, JSValueConst self, XhrData *d)
 {
     d->send_invoked = 0;
-    xhr_set(ctx, d, &d->author_headers, JS_NewArray(ctx));
-    xhr_set(ctx, d, &d->request_body, JS_NULL);
-    xhr_set(ctx, d, &d->request_body_root, JS_NULL);
+    xhr_set(ctx, self, d, &d->author_headers, JS_NewArray(ctx));
+    xhr_set(ctx, self, d, &d->request_body, JS_NULL);
+    xhr_set(ctx, self, d, &d->request_body_root, JS_NULL);
     d->request_body_is_shape = 0;   /* the arm goes with the body it describes */
     d->request_body_class = FETCH_BODY_NONE;
     d->request_prov = -1;           /* …and the grade goes with the request it is about */
@@ -808,11 +827,11 @@ static void xhr_reset_request(JSContext *ctx, XhrData *d)
     d->network_error = 1;
     d->aborted = 0;
     d->status = 0;
-    xhr_set(ctx, d, &d->status_text, JS_NewString(ctx, ""));
-    xhr_set(ctx, d, &d->response_url, JS_NewString(ctx, ""));
-    xhr_set(ctx, d, &d->response_headers, JS_NewArray(ctx));
-    xhr_set(ctx, d, &d->received, JS_NewArrayBufferCopy(ctx, (const uint8_t *)"", 0));
-    xhr_set(ctx, d, &d->response_object, JS_NULL);
+    xhr_set(ctx, self, d, &d->status_text, JS_NewString(ctx, ""));
+    xhr_set(ctx, self, d, &d->response_url, JS_NewString(ctx, ""));
+    xhr_set(ctx, self, d, &d->response_headers, JS_NewArray(ctx));
+    xhr_set(ctx, self, d, &d->received, JS_NewArrayBufferCopy(ctx, (const uint8_t *)"", 0));
+    xhr_set_w(ctx, self, response_object, JS_NULL);
     d->response_object_failure = 0;
 }
 
@@ -998,7 +1017,8 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     JSXhrOpenState *s = st;
-    XhrData *d;
+    const XhrData *d;
+    XhrData *w;
     int r;
 
     if (hdr->stage == OPEN_STEPS) {
@@ -1171,13 +1191,14 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         /* Step 10: "Terminate this's fetch controller. A fetch can be ongoing at this point." The transfer
            ends (engine_host_withdraw) and its response is never delivered, since the rendezvous leaves the
            register with it. */
-        xhr_end_fetch(ctx, d, true);
+        w = xhr_of_for_write(hdr->this_val);
+        xhr_end_fetch(ctx, w, true);
         /* Step 11. */
-        xhr_reset_request(ctx, d);
-        xhr_set(ctx, d, &d->method, mval);
+        xhr_reset_request(ctx, hdr->this_val, w);
+        xhr_set(ctx, hdr->this_val, w, &w->method, mval);
         {
             char *ser = url_serialize(&rec, false);
-            xhr_set(ctx, d, &d->url, JS_NewString(ctx, ser ? ser : ""));
+            xhr_set(ctx, hdr->this_val, w, &w->url, JS_NewString(ctx, ser ? ser : ""));
             free(ser);
         }
         /* AND THE ARGUMENT ITSELF, kept beside the serialization for the @H surface — see `url_src`. Held only
@@ -1186,13 +1207,13 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (JS_IsUninitialized(url_src))
             url_src = concolic_is(xhr_idl_arg(argc, argv, 1)) ? JS_DupValue(ctx, xhr_idl_arg(argc, argv, 1))
                                                               : JS_NULL;
-        xhr_set(ctx, d, &d->url_src, url_src);
+        xhr_set(ctx, hdr->this_val, w, &w->url_src, url_src);
         url_record_free(&rec);
-        d->synchronous = async ? 0 : 1;
-        d->url_address = url_address;
+        w->synchronous = async ? 0 : 1;
+        w->url_address = url_address;
         /* Step 12: only a state that is not already opened fires. */
-        if (d->state == XHR_OPENED) { *presult = JS_UNDEFINED; return 0; }
-        d->state = XHR_OPENED;
+        if (w->state == XHR_OPENED) { *presult = JS_UNDEFINED; return 0; }
+        w->state = XHR_OPENED;
         s->ev = event_new(ctx, "readystatechange", /*bubbles*/ false, /*cancelable*/ false);
         if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
         STEP_GOTO(hdr->stage, OPEN_FIRE, &s->phase, NULL);
@@ -1217,7 +1238,7 @@ static const IdlStepDecl XHR_OPEN_DECL = {
 static JSValue js_xhr_set_request_header(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                          int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    const XhrData *d = xhr_receiver(ctx, this_val);
     const char *name, *value;
     char *norm;
     size_t norm_len = 0, name_len = 0, value_len = 0;
@@ -1271,7 +1292,7 @@ static JSValue js_xhr_set_request_header(JSContext *ctx, JSValueConst this_val, 
 
 static JSValue js_xhr_get_timeout(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    const XhrData *d = xhr_receiver(ctx, this_val);
     (void)magic;
     if (!d) return JS_EXCEPTION;
     return JS_NewUint32(ctx, d->timeout);
@@ -1279,7 +1300,7 @@ static JSValue js_xhr_get_timeout(JSContext *ctx, JSValueConst this_val, int mag
 
 static JSValue js_xhr_set_timeout(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    XhrData *d = xhr_receiver_for_write(ctx, this_val);
     uint32_t n = 0;
 
     (void)magic;
@@ -1295,7 +1316,7 @@ static JSValue js_xhr_set_timeout(JSContext *ctx, JSValueConst this_val, JSValue
 
 static JSValue js_xhr_get_with_credentials(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    const XhrData *d = xhr_receiver(ctx, this_val);
     (void)magic;
     if (!d) return JS_EXCEPTION;
     return JS_NewBool(ctx, d->cross_origin_credentials);
@@ -1303,7 +1324,7 @@ static JSValue js_xhr_get_with_credentials(JSContext *ctx, JSValueConst this_val
 
 static JSValue js_xhr_set_with_credentials(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    XhrData *d = xhr_receiver_for_write(ctx, this_val);
 
     (void)magic;
     if (!d) return JS_EXCEPTION;
@@ -1318,7 +1339,7 @@ static JSValue js_xhr_set_with_credentials(JSContext *ctx, JSValueConst this_val
 
 static JSValue js_xhr_get_upload(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    const XhrData *d = xhr_receiver(ctx, this_val);
     (void)magic;
     if (!d) return JS_EXCEPTION;
     return JS_DupValue(ctx, d->upload);
@@ -1332,7 +1353,7 @@ static JSValue js_xhr_get_upload(JSContext *ctx, JSValueConst this_val, int magi
    identity this reply's bytes carry and the address the page reads are one answer. */
 static JSValue js_xhr_get_response_url(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    const XhrData *d = xhr_receiver(ctx, this_val);
     (void)magic;
     if (!d) return JS_EXCEPTION;
     return JS_DupValue(ctx, d->response_url);
@@ -1340,7 +1361,7 @@ static JSValue js_xhr_get_response_url(JSContext *ctx, JSValueConst this_val, in
 
 static JSValue js_xhr_get_status(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    const XhrData *d = xhr_receiver(ctx, this_val);
     (void)magic;
     if (!d) return JS_EXCEPTION;
     return JS_NewInt32(ctx, d->network_error ? 0 : d->status);
@@ -1348,7 +1369,7 @@ static JSValue js_xhr_get_status(JSContext *ctx, JSValueConst this_val, int magi
 
 static JSValue js_xhr_get_status_text(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    const XhrData *d = xhr_receiver(ctx, this_val);
     (void)magic;
     if (!d) return JS_EXCEPTION;
     return d->network_error ? JS_NewString(ctx, "") : JS_DupValue(ctx, d->status_text);
@@ -1357,7 +1378,7 @@ static JSValue js_xhr_get_status_text(JSContext *ctx, JSValueConst this_val, int
 static JSValue js_xhr_get_response_header(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                           int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    const XhrData *d = xhr_receiver(ctx, this_val);
     const char *name;
     char *got;
     JSValue out;
@@ -1387,7 +1408,7 @@ static int hl_legacy_cmp(const char *a, const char *b)
 static JSValue js_xhr_get_all_response_headers(JSContext *ctx, JSValueConst this_val, int argc,
                                                JSValueConst *argv, int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    const XhrData *d = xhr_receiver(ctx, this_val);
     uint32_t n, i;
     char **names = NULL;
     int nn = 0, k;
@@ -1443,7 +1464,7 @@ static JSValue js_xhr_get_all_response_headers(JSContext *ctx, JSValueConst this
 static JSValue js_xhr_override_mime_type(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                          int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    XhrData *d = xhr_receiver_for_write(ctx, this_val);
     const char *mime;
     MimeType m;
     char *ser;
@@ -1461,7 +1482,7 @@ static JSValue js_xhr_override_mime_type(JSContext *ctx, JSValueConst this_val, 
     if (!mime_type_parse(&m, mime, strlen(mime)))
         xhr_mime_literal(&m, "application/octet-stream");
     ser = mime_type_serialize(&m);
-    xhr_set(ctx, d, &d->override_mime, JS_NewString(ctx, ser));
+    xhr_set(ctx, this_val, d, &d->override_mime, JS_NewString(ctx, ser));
     free(ser);
     mime_type_free(&m);
     JS_FreeCString(ctx, mime);
@@ -1470,7 +1491,7 @@ static JSValue js_xhr_override_mime_type(JSContext *ctx, JSValueConst this_val, 
 
 static JSValue js_xhr_get_response_type(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    const XhrData *d = xhr_receiver(ctx, this_val);
     (void)magic;
     if (!d) return JS_EXCEPTION;
     return JS_NewString(ctx, RT_NAME[d->response_type]);
@@ -1478,7 +1499,7 @@ static JSValue js_xhr_get_response_type(JSContext *ctx, JSValueConst this_val, i
 
 static JSValue js_xhr_set_response_type(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    XhrData *d = xhr_receiver_for_write(ctx, this_val);
     const char *s;
     int k, found = -1;
 
@@ -1526,7 +1547,7 @@ static JSValue js_xhr_set_response_type(JSContext *ctx, JSValueConst this_val, J
  * THE NAME IS core/fetch/reply_source.h's, NOT THIS FILE'S. `fetch()` and this component are two doors onto
  * one fact and a name minted at each door is two names for one unknown; the address they name it after is
  * §3.6.1 The responseURL getter's on this side and `response.url` on the other. */
-static JSValue xhr_reply_content(JSContext *ctx, XhrData *d, unsigned types, JSValue value)
+static JSValue xhr_reply_content(JSContext *ctx, const XhrData *d, unsigned types, JSValue value)
 {
     const char *url;
     size_t ulen = 0;
@@ -1585,7 +1606,7 @@ static JSValue xhr_reply_content(JSContext *ctx, XhrData *d, unsigned types, JSV
    `eval(xhr.responseText)` would have compiled — and a concolic is not a program: handing the compiler one
    would ask it to parse a DISPLAY SHAPE. The wrap belongs to the two members whose VALUE is the content,
    which is what the paragraph above this pair is about, and a program is not one of them. */
-static JSValue xhr_decode_text(JSContext *ctx, XhrData *d)
+static JSValue xhr_decode_text(JSContext *ctx, const XhrData *d)
 {
     const uint8_t *bytes;
     size_t len = 0;
@@ -1611,7 +1632,7 @@ static JSValue xhr_decode_text(JSContext *ctx, XhrData *d)
 /* …AND THE SAME CHARACTERS AS A VALUE THE PAGE READS, which is where the provenance question is asked and
    the only place it may be: §3.6.9 The response getter's text arm and §3.6.10 The responseText getter are the
    two readers whose result the page computes with. */
-static JSValue xhr_text_response(JSContext *ctx, XhrData *d)
+static JSValue xhr_text_response(JSContext *ctx, const XhrData *d)
 {
     /* §3.6.6 "get a text response" step 1: "If xhr's response's body is null, then return the empty string."
        A network error's empty string is no server's bytes, so it is answered before the provenance wrap,
@@ -1625,7 +1646,7 @@ static JSValue xhr_text_response(JSContext *ctx, XhrData *d)
 /* §3.6.6 "set a document response". The HTML arm is lexbor's parser over a document with NO browsing context —
    which is what "with scripting disabled" means here rather than a flag: a document.c document has no
    navigable, no Window and therefore nothing to run a script in. */
-static void xhr_set_document_response(JSContext *ctx, XhrData *d)
+static void xhr_set_document_response(JSContext *ctx, JSValueConst self, const XhrData *d)
 {
     MimeType final_mime;
     char *content_type;
@@ -1680,7 +1701,7 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
            anywhere in that standard, so `xhr.responseXML instanceof XMLDocument` is false — the same split
            HTML §8.5.1's parseFromString makes, and the reason core/dom/document.h states the interface
            separately from the type. */
-        xhr_set(ctx, d, &d->response_object,
+        xhr_set_w(ctx, self, response_object,
                 document_new(ctx, dom, url ? url : "", DOCUMENT_IFACE_DOCUMENT,
                              document_kind(/*is_xml*/true, content_type)));
         if (url) JS_FreeCString(ctx, url);
@@ -1716,7 +1737,7 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
        fact the content type cannot stand in for, because step 9 sets that to finalMIME's essence and an HTML
        MIME type is not only "text/html" (`application/xhtml+xml` is an XML MIME type and takes the arm
        above, but `text/html;charset=…`'s essence is what lands here). */
-    xhr_set(ctx, d, &d->response_object,
+    xhr_set_w(ctx, self, response_object,
             document_new(ctx, dom, url ? url : "", DOCUMENT_IFACE_DOCUMENT,
                          document_kind(/*is_xml*/false, content_type)));
     if (url) JS_FreeCString(ctx, url);
@@ -1755,7 +1776,7 @@ static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     JSXhrResponseState *s = st;
-    XhrData *d;
+    const XhrData *d;
 
     (void)argc; (void)argv;
     DCHECK(hdr->stage == RESPONSE_BUILD || hdr->stage == RESPONSE_JSON,
@@ -1789,11 +1810,11 @@ static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         if (JS_IsException(buf)) {
             /* "If this throws an exception, then set this's response object to failure and return null." */
             JS_FreeValue(ctx, JS_GetException(ctx));
-            d->response_object_failure = 1;
+            xhr_of_for_write(hdr->this_val)->response_object_failure = 1;
             *presult = JS_NULL;
             return 0;
         }
-        xhr_set(ctx, d, &d->response_object, buf);
+        xhr_set_w(ctx, hdr->this_val, response_object, buf);
     } else if (d->response_type == RT_BLOB) {
         size_t len = 0;
         const uint8_t *bytes = fetch_body_bytes(ctx, d->received, &len);
@@ -1805,10 +1826,10 @@ static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         xhr_final_mime(ctx, d, &m);
         type = mime_type_serialize(&m);
         mime_type_free(&m);
-        xhr_set(ctx, d, &d->response_object, blob_new(ctx, (const char *)bytes, len, type));
+        xhr_set_w(ctx, hdr->this_val, response_object, blob_new(ctx, (const char *)bytes, len, type));
         free(type);
     } else if (d->response_type == RT_DOCUMENT) {
-        xhr_set_document_response(ctx, d);
+        xhr_set_document_response(ctx, hdr->this_val, d);
     } else {
         size_t len = 0;
         const uint8_t *bytes;
@@ -1850,7 +1871,7 @@ json:
            object once it is set, so `xhr.response === xhr.response` — minting per read would hand the page two
            records where the spec gives it one, and only the first read's would be the one a later gate is
            deciding about. */
-        xhr_set(ctx, d, &d->response_object, xhr_reply_content(ctx, d, CONCOLIC_TYF_JSON, parsed));
+        xhr_set_w(ctx, hdr->this_val, response_object, xhr_reply_content(ctx, d, CONCOLIC_TYF_JSON, parsed));
         *presult = JS_DupValue(ctx, d->response_object);
         return 0;
     }
@@ -1865,7 +1886,7 @@ static const IdlStepDecl XHR_RESPONSE_DECL = {
 /* §3.6.10 responseText. */
 static JSValue js_xhr_get_response_text(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    XhrData *d = xhr_receiver(ctx, this_val);
+    const XhrData *d = xhr_receiver(ctx, this_val);
 
     (void)magic;
     if (!d) return JS_EXCEPTION;
@@ -1893,7 +1914,7 @@ static void js_xhr_response_xml_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static int js_xhr_response_xml_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                     JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    XhrData *d;
+    const XhrData *d;
 
     (void)st; (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
@@ -1907,7 +1928,7 @@ static int js_xhr_response_xml_step(JSContext *ctx, JSStepHdr *hdr, void *st, in
     DCHECK(!d->response_object_failure, "responseXML was read on an object whose response object is failure — "
                                         "§3.6.11 asserts that cannot happen, and only the arraybuffer arm sets "
                                         "it");
-    if (JS_IsNull(d->response_object)) xhr_set_document_response(ctx, d);
+    if (JS_IsNull(d->response_object)) xhr_set_document_response(ctx, hdr->this_val, d);
     *presult = JS_DupValue(ctx, d->response_object);
     return 0;
 }
@@ -2035,7 +2056,7 @@ static int xhr_fire_run(JSContext *ctx, JSXhrRunState *s, JSValueConst target, c
 
 /* Fetch §3.4 `Content-Length` header's "extract a length from a header list", which XHR §3.5.6 The send()
    method runs over "this's response's header list": `Content-Length`, or 0 when it is not an integer. */
-static double xhr_response_length(JSContext *ctx, XhrData *d)
+static double xhr_response_length(JSContext *ctx, const XhrData *d)
 {
     char *v = hl_get(ctx, d->response_headers, "content-length");
     double n = 0;
@@ -2092,7 +2113,7 @@ static int xhr_method_nulls_body(JSContext *ctx, const XhrData *d)
 
 /* §3.5.6 "handle errors": which request error the response calls for, or 0 for none. */
 enum { XHR_ERR_NONE = 0, XHR_ERR_TIMEOUT, XHR_ERR_ABORT, XHR_ERR_NETWORK };
-static int xhr_handle_errors(XhrData *d)
+static int xhr_handle_errors(const XhrData *d)
 {
     if (!d->send_invoked) return XHR_ERR_NONE;
     if (d->timed_out) return XHR_ERR_TIMEOUT;
@@ -2142,7 +2163,7 @@ static int xhr_request_driven(const XhrData *d)
 
 /* Take the host's reply onto the record. A null reply — or none at all — leaves the response a network error,
    which is what §5.5's network error is on the Fetch side too. */
-static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
+static void xhr_take_reply(JSContext *ctx, JSValueConst self, XhrData *d, JSValueConst reply)
 {
     JSValue st_v, hs_v, bd_v;
     uint32_t hn = 0, i;
@@ -2183,10 +2204,10 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
               "XMLHttpRequest read a NULL status message off a reply that is not a network error — "
               "core/fetch/fetch.h's fetch_reply_status_text answers NULL for the JSON `null` alone, and "
               "xhr_take_reply returns above for anything that is not an object carrying a body");
-        xhr_set(ctx, d, &d->status_text, JS_NewString(ctx, stx));
+        xhr_set(ctx, self, d, &d->status_text, JS_NewString(ctx, stx));
         free(stx);
     }
-    xhr_set(ctx, d, &d->response_headers, JS_NewArray(ctx));
+    xhr_set(ctx, self, d, &d->response_headers, JS_NewArray(ctx));
     {
         JSValue len_v = JS_GetPropertyStr(ctx, hs_v, "length");
         JS_ToUint32(ctx, &hn, len_v);
@@ -2196,7 +2217,7 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
         JSValue pair = JS_GetPropertyUint32(ctx, hs_v, i);
         JS_SetPropertyUint32(ctx, d->response_headers, i, pair);
     }
-    xhr_set(ctx, d, &d->received, JS_DupValue(ctx, bd_v));
+    xhr_set(ctx, self, d, &d->received, JS_DupValue(ctx, bd_v));
     /* No redirect is modelled here, so the response's URL is the request's — see the file comment.
        IT IS SERIALIZED WITHOUT ITS FRAGMENT, HERE AND NOT AT THE GETTER. §3.6.1 The responseURL getter says
        "otherwise its serialization with the exclude fragment flag set", and §3.5.1 The open() method keeps the
@@ -2225,7 +2246,7 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
                    "SERIALIZATION of it, so a refusal here is that serialization and that parser disagreeing");
         ser = ok ? url_serialize(&rec, /*exclude_fragment*/ true) : NULL;
         url_record_free(&rec);
-        xhr_set(ctx, d, &d->response_url, JS_NewString(ctx, ser ? ser : ""));
+        xhr_set(ctx, self, d, &d->response_url, JS_NewString(ctx, ser ? ser : ""));
         free(ser);
     }
     d->network_error = 0;
@@ -2437,7 +2458,7 @@ static FetchCredentialsMode xhr_credentials_mode(const XhrData *d)
    answered through the mapping that already owns the vocabulary. What it buys is the field's whole reason —
    the REPLY is graded by what the request was FIRED at, so the grade the chokepoint made its firing decision
    from and the grade the engine learns the body under cannot be two different readings of one path. */
-static char *xhr_request_op(JSContext *ctx, XhrData *d)
+static char *xhr_request_op(JSContext *ctx, const XhrData *d)
 {
     JsonBuf b = { 0 };
     uint32_t n = hl_len(ctx, d->author_headers), i;
@@ -2575,7 +2596,7 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
  * author request headers (the `text/html;charset=UTF-8` / `application/xml;charset=UTF-8` /
  * extractedContentType branches), so by this line the list is the whole answer and a second source would be a
  * second way of being right. */
-static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
+static void xhr_record_endpoint(JSContext *ctx, const XhrData *d)
 {
     uint32_t n = hl_len(ctx, d->author_headers), i;
     EndpointHeader *eh = NULL;
@@ -2706,7 +2727,7 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
  * can fetch nothing but an HTTP(S) scheme. Two copies of one switch is what that asymmetry IS. §4.3 is
  * core/fetch/scheme_fetch.c now, with its own parse, and this component runs it rather than restating it: an
  * arm added there is answered here at the same instant, which is the whole reason it is one component. */
-static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
+static bool xhr_main_fetch_local(JSContext *ctx, JSValueConst self, XhrData *d)
 {
     const char *u;
     const char *m;
@@ -2892,7 +2913,7 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
     switch (scheme_fetch(ctx, &req, JS_UNDEFINED, &reply)) {
     case SCHEME_FETCH_RESPONSE:
         /* Through the ONE reply object every answer to this component takes, exactly as a host reply is. */
-        xhr_take_reply(ctx, d, reply);
+        xhr_take_reply(ctx, self, d, reply);
         JS_FreeValue(ctx, reply);
         local = true;
         break;
@@ -2915,7 +2936,7 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
 {
     JSXhrRunState *s = st;
     JSValueConst self = JS_StepClosureData(&s->hdr, XHR_CD_OBJECT);
-    XhrData *d = xhr_of(self);
+    XhrData *d = xhr_of_for_write(self);
     JSValue in = cb_result;
     int r, err;
 
@@ -2948,7 +2969,7 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
                 DCHECK(d->controller != 0 && !d->synchronous,
                        "an asynchronous send's response was delivered to an object with no fetch controller — "
                        "abort() and open() withdraw the rendezvous, so a delivery means the controller stands");
-                xhr_take_reply(ctx, d, s->hdr.argv[0]);
+                xhr_take_reply(ctx, self, d, s->hdr.argv[0]);
                 d->controller = 0;
                 xhr_end_fetch(ctx, d, false);
             } else if (!d->send_invoked) {
@@ -2983,7 +3004,7 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         /* Fetch §4.1: main fetch decides WHO answers. A request this agent answers itself — a port §2.9 blocks,
            or a scheme §4.3 resolves here — has its response on the record already and owes the host nothing, so
            the wait below has nothing to wait for. */
-        if (xhr_main_fetch_local(ctx, d)) {
+        if (xhr_main_fetch_local(ctx, self, d)) {
             s->req = 0;
             if (!d->synchronous) {
                 /* Answered here, and still processResponse is a task queued on the networking task source
@@ -3050,7 +3071,7 @@ wait:
         if (s->req) {
             if (!engine_host_answered(s->req, &answer))
                 return JS_STEP_YIELD;
-            xhr_take_reply(ctx, d, answer);
+            xhr_take_reply(ctx, self, d, answer);
             {
                 /* §3.5.6's fetch is answered by the trusted zone out of the network, not by a peer running a
                    program, so its completion is normal or the host answered a question nobody asked. A network
@@ -3533,7 +3554,7 @@ static int js_xhr_send_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
                               JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     JSXhrSendState *s = st;
-    XhrData *d = xhr_of(hdr->this_val);
+    XhrData *d = xhr_of_for_write(hdr->this_val);
     JSValue in = cb_result;
     int r;
 
@@ -3610,8 +3631,8 @@ static int js_xhr_send_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
     if (hdr->stage == SEND_BODY) {
         JS_FreeValue(ctx, in);
         in = JS_UNDEFINED;
-        xhr_set(ctx, d, &d->request_body, JS_NULL);
-        xhr_set(ctx, d, &d->request_body_root, JS_NULL);
+        xhr_set(ctx, hdr->this_val, d, &d->request_body, JS_NULL);
+        xhr_set(ctx, hdr->this_val, d, &d->request_body_root, JS_NULL);
         d->request_body_is_shape = 0;   /* the arm goes with the body it describes */
         d->request_body_class = FETCH_BODY_NONE;
         s->body_len = 0;
@@ -3636,13 +3657,13 @@ static int js_xhr_send_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
                whose progress events carry the byte count of a display shape. */
             d->request_body_is_shape = (body_state_content(&b, &bbytes, &blen) == BODY_SHAPE);
             d->request_body_class = (uint8_t)fetch_body_class_of(&b, false);
-            xhr_set(ctx, d, &d->request_body,
+            xhr_set(ctx, hdr->this_val, d, &d->request_body,
                     JS_NewArrayBufferCopy(ctx, (const uint8_t *)(bbytes ? bbytes : ""), blen));
             CHECK(!JS_IsException(d->request_body), "XMLHttpRequest: OOM holding a request body's bytes");
             {
                 const char *root = d->request_body_is_shape ? concolic_root_c(b.unknown) : NULL;
 
-                xhr_set(ctx, d, &d->request_body_root, root ? JS_NewString(ctx, root) : JS_NULL);
+                xhr_set(ctx, hdr->this_val, d, &d->request_body_root, root ? JS_NewString(ctx, root) : JS_NULL);
             }
             s->body_len = (double)blen;
             body_state_free(JS_GetRuntime(ctx), &b);
@@ -3817,7 +3838,7 @@ static int js_xhr_abort_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     JSXhrAbortState *s = st;
-    XhrData *d = xhr_of(hdr->this_val);
+    XhrData *d = xhr_of_for_write(hdr->this_val);
     JSValue in = cb_result;
     int r;
 

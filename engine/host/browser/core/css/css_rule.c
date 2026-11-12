@@ -7,9 +7,10 @@
  * CSSOM §6.4.3's `style` writes the declaration block back through this record, CSSOM §6.4.5's
  * `insertRule`/`deleteRule` mutate the child list and CSS Conditional 3 §7.3's `media` is `[PutForwards=mediaText]`.
  * Every one of those lands in a C record behind a class opaque where no property hook can see it, so one arm of a fork
- * retargeting a rule would have retargeted it for its sibling and for every flow the frontier resumes afterwards. The
- * capture is in the ACCESSOR every member goes through, so a record a flow has REACHED is one it may write and there
- * is no write site to miss. RULE_VALS is the same list rule_finalizer frees and rule_gc_mark marks — read the three
+ * retargeting a rule would have retargeted it for its sibling and for every flow the frontier resumes afterwards. A
+ * read goes through `rule_of`, which answers a const record and captures nothing; every write goes through `rule_set`,
+ * which captures through `rule_for_write` before it publishes. RULE_VALS is the same list rule_finalizer frees and
+ * rule_gc_mark marks — read the three
  * together, because a field added to one and not the others is exactly the bug the layout exists to prevent. */
 #include <stdbool.h>
 #include <stddef.h>
@@ -338,8 +339,14 @@ static const uint16_t RULE_VALS[] = {
 static const CowRecord RULE_REC = { sizeof(CssRuleData), RULE_VALS,
                                     (int)(sizeof(RULE_VALS) / sizeof(RULE_VALS[0])) };
 
-/* THE ACCESSOR, AND THEREFORE THE CAPTURE POINT. */
-static CssRuleData *rule_of(JSValueConst v)
+/* The read accessor: the flow's view of the record, captured by nothing. */
+static const CssRuleData *rule_of(JSValueConst v)
+{
+    return JS_GetOpaque(v, g_rule_class);
+}
+
+/* The write accessor: captures the record into the running flow's head before answering it mutable. */
+static CssRuleData *rule_for_write(JSValueConst v)
 {
     CssRuleData *r = JS_GetOpaque(v, g_rule_class);
 
@@ -364,7 +371,7 @@ static CssRuleData *rule_of(JSValueConst v)
    ONE MINT. `JS_NewString` reaches JS_EXCEPTION by two arms — `js_alloc_string` failing, which throws
    OutOfMemory, and a length past JS_STRING_LEN_MAX, which throws RangeError — and `cow_record_set` stores
    whatever it is handed: its three asserts are all about the SLOT (inside the record, named by the layout) and
-   none is about the value. So `rule_set(ctx, r, &r->f, JS_NewString(ctx, …))` written bare PUBLISHES the
+   none is about the value. So `rule_set(ctx, owner, f, JS_NewString(ctx, …))` written bare PUBLISHES the
    failure into the record, and that is a different failure from an allocation that gets propagated. The record
    OUTLIVES THE FRAME: the COW delta captures it, rule_gc_mark walks it, rule_finalizer frees it, and every
    later serialization reads it. `rule_text_copy` then answers NULL for the field — the same NULL it answers for
@@ -396,15 +403,16 @@ static lxb_dom_document_t *rule_rec_document(const CssRuleData *r)
 
 lxb_dom_document_t *css_rule_node_document(JSValueConst rule)
 {
-    CssRuleData *r = rule_of(rule);
+    const CssRuleData *r = rule_of(rule);
 
     DCHECK(r != NULL, "a node document was asked of something that is not a CSS rule");
     return rule_rec_document(r);
 }
 
-#define rule_set(ctx_, r_, slot_, v_)                                                                          \
+#define rule_set(ctx_, owner_, field_, v_)                                                                     \
     do {                                                                                                       \
         JSValue rule_set_v_ = (v_);                                                                            \
+        CssRuleData *rule_set_r_ = rule_for_write(owner_);                                                     \
                                                                                                                \
         /* A RULE RECORD IS A CASCADE INPUT, and core/css/css_cascade_pass.h's record is sound only over a  */ \
         /* span in which those do not move. It expands at the SITE rather than sitting inside a function    */ \
@@ -431,8 +439,9 @@ lxb_dom_document_t *css_rule_node_document(JSValueConst rule)
                "not, this is the allocation wall itself",                                                       \
                #v_);                                                                                            \
         /* A visible effect (core/rendering/visual_update.h), resolved before the write moves the parent.   */ \
-        visual_update_document_changed(rule_rec_document(r_));                                                 \
-        cow_record_set((ctx_), (r_), &RULE_REC, (slot_), rule_set_v_);                                          \
+        DCHECK(rule_set_r_ != NULL, "a CSS rule record was written through something that is not a CSS rule"); \
+        visual_update_document_changed(rule_rec_document(rule_set_r_));                                        \
+        cow_record_set((ctx_), (owner_), rule_set_r_, &RULE_REC, &rule_set_r_->field_, rule_set_v_);           \
     } while (0)
 
 /* THE SAME INVARIANT FOR THE OTHER VESSEL — an ELEMENT of one of the record's collections, which is where the
@@ -488,9 +497,9 @@ lxb_dom_document_t *css_rule_node_document(JSValueConst rule)
                (unsigned)rule_array_set_i_, #v_);                                                              \
     } while (0)
 
-static CssRuleData *rule_here(JSContext *ctx, JSValueConst v)
+static const CssRuleData *rule_here(JSContext *ctx, JSValueConst v)
 {
-    CssRuleData *r = rule_of(v);
+    const CssRuleData *r = rule_of(v);
 
     if (!r) {
         JS_ThrowTypeError(ctx, "not a CSSRule");
@@ -504,9 +513,9 @@ static CssRuleData *rule_here(JSContext *ctx, JSValueConst v)
    and `findRule` alike, and the two sections state the same receiver step for the two member kinds. A page
    can read `CSSMediaRule.prototype.media` and apply it to a style rule, and the answer is a TypeError rather
    than a read of a JS_NULL slot. The interface a rule IS is its stored type — see css_rule.h. */
-static CssRuleData *rule_here_typed(JSContext *ctx, JSValueConst v, uint16_t type, const char *iface)
+static const CssRuleData *rule_here_typed(JSContext *ctx, JSValueConst v, uint16_t type, const char *iface)
 {
-    CssRuleData *r = rule_of(v);
+    const CssRuleData *r = rule_of(v);
 
     if (!r || r->type != type) {
         JS_ThrowTypeError(ctx, "a %s member was reached on something that is not a %s", iface, iface);
@@ -525,12 +534,11 @@ bool css_rule_is(JSValueConst v)
    CSSStyleSheet step 3 asks of every rule a parse produced. THE PREDICATE IS EXPORTED AND THE NUMBERING IS NOT:
    CSSOM §6.4.2 "The CSSRule Interface"'s type constants are this file's own enum, and a caller comparing
    against a `3` of its own would be a second copy of a table CSSOM §6.4.4 "The CSSImportRule Interface" owns.
-   Through the capturing accessor like every other read of a rule's state.
    THE BRAND IS ASSERTED, NOT ANSWERED FALSE: the one caller walks a list this file's own build filled, and
    `rule_type_at` asserts the same premise from the other side. */
 bool css_rule_is_import(JSValueConst v)
 {
-    CssRuleData *r = rule_of(v);
+    const CssRuleData *r = rule_of(v);
 
     DCHECK(r != NULL, "CSSOM §6.1.2's step 3 asked whether something that is not a CSS rule is an @import rule "
                       "— the list it walks is one css_rule_build_sheet filled, and nothing else goes into one");
@@ -587,7 +595,7 @@ static void rule_finalizer(JSRuntime *rt, JSValue val)
 static void rule_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    CssRuleData *r = JS_GetAnyOpaque(val, &id);
+    const CssRuleData *r = JS_GetAnyOpaque(val, &id);
 
     (void)id;
 
@@ -700,7 +708,7 @@ static bool rule_type_is_grouping(uint16_t type)
 /* CSSOM §6.4.5's CHILD CSS RULES — the very Array a grouping rule's `cssRules` shares. OWNED. */
 static JSValue rule_child_rules(JSContext *ctx, JSValueConst rule)
 {
-    CssRuleData *r = rule_of(rule);
+    const CssRuleData *r = rule_of(rule);
 
     DCHECK(r != NULL, "a rule's child CSS rules were read off something that is not a CSS rule");
     DCHECK(rule_type_has_child_rules(r->type),
@@ -716,9 +724,9 @@ static JSValue rule_child_rules(JSContext *ctx, JSValueConst rule)
 }
 
 /* The receiver of a CSSOM §6.4.5 member, brand-checked against the interface that DECLARES it. */
-static CssRuleData *rule_here_grouping(JSContext *ctx, JSValueConst v)
+static const CssRuleData *rule_here_grouping(JSContext *ctx, JSValueConst v)
 {
-    CssRuleData *r = rule_of(v);
+    const CssRuleData *r = rule_of(v);
 
     if (!r || !rule_type_is_grouping(r->type)) {
         JS_ThrowTypeError(ctx, "a CSSGroupingRule member was reached on something that is not a grouping rule");
@@ -816,7 +824,7 @@ static JSValue style_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, J
                               const char *selector_text, const char *block_text)
 {
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
 
     DCHECK(selector_text != NULL && block_text != NULL,
            "a CSSStyleRule was built without both of the texts it IS — a rule with no selector matches nothing "
@@ -824,8 +832,8 @@ static JSValue style_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, J
     obj = rule_new(ctx, PROTO_STYLE, RULE_TYPE_STYLE, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) return obj;
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->selector_text, JS_NewString(ctx, selector_text));
-    rule_set(ctx, r, &r->block_text, JS_NewString(ctx, block_text));
+    rule_set(ctx, obj, selector_text, JS_NewString(ctx, selector_text));
+    rule_set(ctx, obj, block_text, JS_NewString(ctx, block_text));
     return obj;
 }
 
@@ -837,14 +845,14 @@ static JSValue media_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, J
                               const char *prelude)
 {
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
 
     DCHECK(prelude != NULL, "a CSSMediaRule was built with no prelude — `@media {}` has an EMPTY media query "
                             "list, which is the empty string and not the absence of one");
     obj = rule_new(ctx, PROTO_MEDIA, RULE_TYPE_MEDIA, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) return obj;
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->media, media_list_new(ctx, prelude, obj));
+    rule_set(ctx, obj, media, media_list_new(ctx, prelude, obj));
     return obj;
 }
 
@@ -855,7 +863,7 @@ static JSValue media_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, J
    record whose every field is an obligation at the clone, the finalizer, the gc_mark and the COW layout — for a value
    that is a pure function of a string this record already holds and that therefore cannot disagree with itself however
    often it is derived. */
-static bool rule_supports_matches(JSContext *ctx, CssRuleData *r)
+static bool rule_supports_matches(JSContext *ctx, const CssRuleData *r)
 {
     const char *text;
     bool matched = false, valid;
@@ -893,7 +901,7 @@ static JSValue supports_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
                                  const char *prelude)
 {
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
     bool matched = false;
 
     DCHECK(prelude != NULL, "a CSSSupportsRule was built with no prelude — `@supports {}` has an EMPTY "
@@ -904,7 +912,7 @@ static JSValue supports_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
     obj = rule_new(ctx, PROTO_SUPPORTS, RULE_TYPE_SUPPORTS, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) return obj;
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->supports_text, JS_NewString(ctx, prelude));
+    rule_set(ctx, obj, supports_text, JS_NewString(ctx, prelude));
     return obj;
 }
 
@@ -949,7 +957,7 @@ static JSValue container_rule_new(JSContext *ctx, JSValueConst parent_style_shee
 {
     CssContainerConditions conds = { NULL, 0 };
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
 
     DCHECK(prelude != NULL,
            "a CSSContainerRule was built with no prelude — `@container {}` has an EMPTY one, which "
@@ -960,7 +968,7 @@ static JSValue container_rule_new(JSContext *ctx, JSValueConst parent_style_shee
     obj = rule_new(ctx, PROTO_CONTAINER, RULE_TYPE_CONTAINER, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { css_container_conditions_free(&conds); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->container_conditions, container_conditions_array(ctx, &conds));
+    rule_set(ctx, obj, container_conditions, container_conditions_array(ctx, &conds));
     css_container_conditions_free(&conds);
     return obj;
 }
@@ -976,19 +984,19 @@ static JSValue import_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, 
 {
     CssImportPrelude p;
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
 
     DCHECK(prelude != NULL, "a CSSImportRule was built with no prelude");
     if (!css_prelude_import(prelude, strlen(prelude), &p)) return JS_UNDEFINED;
     obj = rule_new(ctx, PROTO_IMPORT, RULE_TYPE_IMPORT, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { css_import_prelude_free(&p); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->href, JS_NewString(ctx, p.href));
-    if (p.layer_name) rule_set(ctx, r, &r->layer_name, JS_NewString(ctx, p.layer_name));
+    rule_set(ctx, obj, href, JS_NewString(ctx, p.href));
+    if (p.layer_name) rule_set(ctx, obj, layer_name, JS_NewString(ctx, p.layer_name));
     if (p.supports_text) {
-        rule_set(ctx, r, &r->supports_text, JS_NewString(ctx, p.supports_text));
+        rule_set(ctx, obj, supports_text, JS_NewString(ctx, p.supports_text));
     }
-    rule_set(ctx, r, &r->media, media_list_new(ctx, p.media_text, obj));
+    rule_set(ctx, obj, media, media_list_new(ctx, p.media_text, obj));
     css_import_prelude_free(&p);
     return obj;
 }
@@ -1002,15 +1010,15 @@ static JSValue namespace_rule_new(JSContext *ctx, JSValueConst parent_style_shee
 {
     char *prefix = NULL, *uri = NULL;
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
 
     DCHECK(prelude != NULL, "a CSSNamespaceRule was built with no prelude");
     if (!css_prelude_namespace(prelude, strlen(prelude), &prefix, &uri)) return JS_UNDEFINED;
     obj = rule_new(ctx, PROTO_NAMESPACE, RULE_TYPE_NAMESPACE, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { free(prefix); free(uri); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->prefix, JS_NewString(ctx, prefix));
-    rule_set(ctx, r, &r->namespace_uri, JS_NewString(ctx, uri));
+    rule_set(ctx, obj, prefix, JS_NewString(ctx, prefix));
+    rule_set(ctx, obj, namespace_uri, JS_NewString(ctx, uri));
     free(prefix);
     free(uri);
     return obj;
@@ -1024,7 +1032,7 @@ static JSValue font_face_rule_new(JSContext *ctx, JSValueConst parent_style_shee
                                   const char *block_text)
 {
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
     char *decls;
 
     DCHECK(block_text != NULL,
@@ -1040,7 +1048,7 @@ static JSValue font_face_rule_new(JSContext *ctx, JSValueConst parent_style_shee
        PROPERTY's grammar while `css_rule_set_block_text` answered the descriptor's, which is a block whose
        `cssText` disagrees with itself depending on whether a page has written to it. */
     decls = cssom_serialize_declarations(block_text, strlen(block_text), CSSOM_BLOCK_FONT_FACE);
-    rule_set(ctx, r, &r->block_text, JS_NewString(ctx, decls ? decls : ""));
+    rule_set(ctx, obj, block_text, JS_NewString(ctx, decls ? decls : ""));
     free(decls);
     return obj;
 }
@@ -1058,7 +1066,7 @@ static JSValue font_feature_values_rule_new(JSContext *ctx, JSValueConst parent_
 {
     char *family;
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
 
     DCHECK(prelude != NULL, "a `@font-feature-values` rule was built with no prelude — cssom_parse_rules reports "
                             "the empty string for an at-rule that declares none, which is a prelude outside "
@@ -1069,7 +1077,7 @@ static JSValue font_feature_values_rule_new(JSContext *ctx, JSValueConst parent_
                    parent_rule);
     if (JS_IsException(obj)) { free(family); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->font_family, JS_NewString(ctx, family));
+    rule_set(ctx, obj, font_family, JS_NewString(ctx, family));
     free(family);
     return obj;
 }
@@ -1083,7 +1091,7 @@ static JSValue font_feature_values_rule_new(JSContext *ctx, JSValueConst parent_
 static bool rule_consume_feature_block(JSContext *ctx, JSValueConst rule, const char *at_name,
                                        const char *block)
 {
-    CssRuleData *r = rule_of(rule);
+    const CssRuleData *r = rule_of(rule);
     unsigned i;
 
     DCHECK(r != NULL && r->type == RULE_TYPE_FONT_FEATURE_VALUES,
@@ -1146,7 +1154,7 @@ static JSValue page_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JS
 {
     char *selectors, *decls;
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
 
     DCHECK(prelude != NULL && block_text != NULL,
            "a CSSPageRule was built without both of the texts it IS — `@page {}` has an EMPTY page selector "
@@ -1156,10 +1164,10 @@ static JSValue page_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JS
     obj = rule_new(ctx, PROTO_PAGE, RULE_TYPE_PAGE, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { free(selectors); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->selector_text, JS_NewString(ctx, selectors));
+    rule_set(ctx, obj, selector_text, JS_NewString(ctx, selectors));
     free(selectors);
     decls = cssom_serialize_declarations(block_text, strlen(block_text), CSSOM_BLOCK_PAGE);
-    rule_set(ctx, r, &r->block_text, JS_NewString(ctx, decls ? decls : ""));
+    rule_set(ctx, obj, block_text, JS_NewString(ctx, decls ? decls : ""));
     free(decls);
     return obj;
 }
@@ -1172,7 +1180,7 @@ static JSValue margin_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, 
 {
     char *decls;
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
 
     DCHECK(name != NULL && css_page_margin_at_rule(name),
            "a CSSMarginRule was built for an at-rule that is not one of CSS Paged Media §4.3's sixteen margin "
@@ -1184,9 +1192,9 @@ static JSValue margin_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, 
     obj = rule_new(ctx, PROTO_MARGIN, RULE_TYPE_MARGIN, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) return obj;
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->at_name, JS_NewString(ctx, name));
+    rule_set(ctx, obj, at_name, JS_NewString(ctx, name));
     decls = cssom_serialize_declarations(block_text, strlen(block_text), CSSOM_BLOCK_MARGIN);
-    rule_set(ctx, r, &r->block_text, JS_NewString(ctx, decls ? decls : ""));
+    rule_set(ctx, obj, block_text, JS_NewString(ctx, decls ? decls : ""));
     free(decls);
     return obj;
 }
@@ -1261,7 +1269,7 @@ static JSValue keyframes_rule_new(JSContext *ctx, JSValueConst parent_style_shee
 {
     char *name;
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
 
     DCHECK(prelude != NULL, "a CSSKeyframesRule was built with no prelude — `<keyframes-name>` is REQUIRED by "
                             "CSS Animations 1 §3's grammar, so an empty prelude is a rule that does not match it "
@@ -1282,8 +1290,8 @@ static JSValue keyframes_rule_new(JSContext *ctx, JSValueConst parent_style_shee
     obj = rule_new(ctx, PROTO_KEYFRAMES, RULE_TYPE_KEYFRAMES, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { free(name); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->keyframes_name, JS_NewString(ctx, name));
-    rule_set(ctx, r, &r->at_name, JS_NewString(ctx, at_keyword));
+    rule_set(ctx, obj, keyframes_name, JS_NewString(ctx, name));
+    rule_set(ctx, obj, at_name, JS_NewString(ctx, at_keyword));
     free(name);
     return obj;
 }
@@ -1300,7 +1308,7 @@ static JSValue keyframe_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
 {
     char *keys, *decls;
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
 
     DCHECK(prelude != NULL && block_text != NULL,
            "a CSSKeyframeRule was built without both of the texts it IS — `0% {}` declares NOTHING, which is "
@@ -1310,10 +1318,10 @@ static JSValue keyframe_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
     obj = rule_new(ctx, PROTO_KEYFRAME, RULE_TYPE_KEYFRAME, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { free(keys); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->selector_text, JS_NewString(ctx, keys));
+    rule_set(ctx, obj, selector_text, JS_NewString(ctx, keys));
     free(keys);
     decls = cssom_serialize_declarations(block_text, strlen(block_text), CSSOM_BLOCK_KEYFRAME);
-    rule_set(ctx, r, &r->block_text, JS_NewString(ctx, decls ? decls : ""));
+    rule_set(ctx, obj, block_text, JS_NewString(ctx, decls ? decls : ""));
     free(decls);
     return obj;
 }
@@ -1351,7 +1359,7 @@ static JSValue layer_block_rule_new(JSContext *ctx, JSValueConst parent_style_sh
 {
     CssLayerNames names = { NULL, 0 };
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
 
     DCHECK(prelude != NULL,
            "a CSSLayerBlockRule was built with no prelude — `@layer { }` declares the ANONYMOUS layer, which is "
@@ -1361,7 +1369,7 @@ static JSValue layer_block_rule_new(JSContext *ctx, JSValueConst parent_style_sh
     obj = rule_new(ctx, PROTO_LAYER_BLOCK, RULE_TYPE_LAYER_BLOCK, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { css_layer_names_free(&names); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->layer_names, layer_names_array(ctx, &names));
+    rule_set(ctx, obj, layer_names, layer_names_array(ctx, &names));
     css_layer_names_free(&names);
     return obj;
 }
@@ -1378,7 +1386,7 @@ static JSValue layer_statement_rule_new(JSContext *ctx, JSValueConst parent_styl
 {
     CssLayerNames names = { NULL, 0 };
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
 
     DCHECK(prelude != NULL, "a CSSLayerStatementRule was built with no prelude");
     if (!css_prelude_layer_names(prelude, strlen(prelude), &names)) return JS_UNDEFINED;
@@ -1386,7 +1394,7 @@ static JSValue layer_statement_rule_new(JSContext *ctx, JSValueConst parent_styl
     obj = rule_new(ctx, PROTO_LAYER_STATEMENT, RULE_TYPE_LAYER_STATEMENT, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { css_layer_names_free(&names); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->layer_names, layer_names_array(ctx, &names));
+    rule_set(ctx, obj, layer_names, layer_names_array(ctx, &names));
     css_layer_names_free(&names);
     return obj;
 }
@@ -1457,7 +1465,7 @@ static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
     CssPropertyNames names = { NULL, 0 };
     CssSyntaxDefinition def = { NULL, 0, false };
     JSValue obj;
-    CssRuleData *r;
+    const CssRuleData *r;
     size_t bl;
     char *declared, *syntax = NULL;
     bool inherits = true, star;
@@ -1470,7 +1478,7 @@ static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
     obj = rule_new(ctx, PROTO_PROPERTY, RULE_TYPE_PROPERTY, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { css_property_names_free(&names); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->property_names, property_names_array(ctx, &names));
+    rule_set(ctx, obj, property_names, property_names_array(ctx, &names));
     css_property_names_free(&names);
     bl = strlen(block_text);
 
@@ -1513,7 +1521,7 @@ static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
            "CSS Properties and Values API 1 §3.1 \"The syntax Descriptor\"'s initial `\"*\"`, which IS the universal "
            "syntax definition "
            "CSS Properties and Values API 1 §5.4.1 \"Definitions\" defines");
-    rule_set(ctx, r, &r->property_syntax, JS_NewString(ctx, syntax ? syntax : "*"));
+    rule_set(ctx, obj, property_syntax, JS_NewString(ctx, syntax ? syntax : "*"));
     free(syntax);
 
     /* CSS Properties and Values API 1 §3.2 "The inherits Descriptor" — `Value: true | false`, `Initial: true`. A value
@@ -1523,7 +1531,7 @@ static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
         css_property_descriptor_inherits(declared, strlen(declared), &inherits);
         free(declared);
     }
-    rule_set(ctx, r, &r->property_inherits, JS_NewBool(ctx, inherits));
+    rule_set(ctx, obj, property_inherits, JS_NewBool(ctx, inherits));
 
     /* CSS Properties and Values API 1 §3.3 "The initial-value Descriptor" — `Value: <declaration-value>?`, `Initial:
        the guaranteed-invalid value`, which CSS Properties and Values API 1 §6.1 answers as its nullable
@@ -1543,10 +1551,10 @@ static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
        CSS Properties and Values API 1 §3 says an invalid descriptor is "invalid and ignored" and only the prelude can
        drop an `@property`. */
     declared = cssom_declared_value(block_text, bl, "initial-value");
-    rule_set(ctx, r, &r->property_initial_value, JS_NULL);
+    rule_set(ctx, obj, property_initial_value, JS_NULL);
     if (declared) {
         if (def.universal || css_property_syntax_matches(&def, declared, strlen(declared)))
-            rule_set(ctx, r, &r->property_initial_value, JS_NewString(ctx, declared));
+            rule_set(ctx, obj, property_initial_value, JS_NewString(ctx, declared));
         free(declared);
     }
     css_syntax_definition_free(&def);
@@ -1558,11 +1566,11 @@ static void rule_orphan(JSContext *ctx, JSValueConst rule)
     /* THE BRAND IS ASSERTED, NOT THROWN: this is an algorithm CSSOM §6.4 invokes on a rule it already holds, never a
        member a page can apply to a stranger, and a TypeError here would leave a pending exception in a C
        caller with no member to return it from. */
-    CssRuleData *r = rule_of(rule);
+    const CssRuleData *r = rule_of(rule);
 
     DCHECK(r != NULL, "CSSOM §6.4's remove a CSS rule was invoked on something that is not a CSS rule");
-    rule_set(ctx, r, &r->parent_style_sheet, JS_NULL);
-    rule_set(ctx, r, &r->parent_rule, JS_NULL);
+    rule_set(ctx, rule, parent_style_sheet, JS_NULL);
+    rule_set(ctx, rule, parent_rule, JS_NULL);
 }
 
 /* ---- building the objects a PARSE produced ---------------------------------------------------------------- */
@@ -1704,7 +1712,7 @@ static bool at_rule_dropped(const char *name)
    it — CSS Syntax's rules are context-sensitive and CSS Paged Media §4.3 states two of them outright. */
 static uint16_t enclosing_rule_type(JSValueConst parent_rule)
 {
-    CssRuleData *r;
+    const CssRuleData *r;
 
     if (JS_IsNull(parent_rule)) return 0;
     r = rule_of(parent_rule);
@@ -1726,7 +1734,7 @@ static JSValueConst rule_nesting_parent(JSValueConst parent_rule)
     JSValueConst cur = parent_rule;
 
     while (!JS_IsNull(cur)) {
-        CssRuleData *r = rule_of(cur);
+        const CssRuleData *r = rule_of(cur);
 
         DCHECK(r != NULL, "a rule's enclosing chain holds something that is not a CSS rule");
         if (!r) return JS_NULL;
@@ -2220,7 +2228,7 @@ bool css_rule_build_sheet_step(JSContext *ctx, JSValueConst list, JSValueConst p
 static uint16_t rule_type_at(JSContext *ctx, JSValueConst list, uint32_t i)
 {
     JSValue rule = JS_GetPropertyUint32(ctx, list, i);
-    CssRuleData *r = rule_of(rule);
+    const CssRuleData *r = rule_of(rule);
     uint16_t type;
 
     DCHECK(r != NULL, "a CSS rule list holds something that is not a CSS rule — CSSOM §6.4's insert is the one thing "
@@ -2374,7 +2382,7 @@ JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst par
     DCHECK(css_rule_is(built),
            "CSSOM §6.4's insert a CSS rule reached its constraint steps with something that is not a CSS rule");
     {
-        CssRuleData *nr = rule_of(built);
+        const CssRuleData *nr = rule_of(built);
 
         DCHECK(nr != NULL, "CSSOM §6.4's insert a CSS rule lost the rule it just parsed");
         /* CSSOM §6.1.2 "The CSSStyleSheet Interface"'s `insertRule(rule, index)` STEP 5 — "If parsed rule is an @import
@@ -2636,7 +2644,7 @@ static void serialized_free(char **v, unsigned n)
    `@page {}` and `@page :left { }` for `@page :left {}`, which is what css/cssom/cssom-pagerule.html asserts
    byte for byte and what every engine emits. So the two arms differ only in step 1's `s`, which is the caller's
    to build: a selector list for CSSOM §6.4.3 and `@page` plus its page selector list for CSSOM §6.4.7. */
-static bool decls_and_rules_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule,
+static bool decls_and_rules_serialize(JSContext *ctx, const CssRuleData *r, JSValueConst rule,
                                       const char *prefix, size_t prefix_len, RBuf *out)
 {
     size_t bl = 0;
@@ -2672,7 +2680,7 @@ static bool decls_and_rules_serialize(JSContext *ctx, CssRuleData *r, JSValueCon
    a group of selectors on the rule's associated selectors" — the steps are CSSOM §6.4's and not §6.4.3's, which
    declares the interface and no serialization of its own. That is the text the parse kept and `selectorText =`
    replaces. */
-static bool style_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+static bool style_rule_serialize(JSContext *ctx, const CssRuleData *r, JSValueConst rule, RBuf *out)
 {
     size_t sl = 0;
     char *sel = rule_text_copy(ctx, r->selector_text, &sl);
@@ -2691,7 +2699,7 @@ static bool style_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst ru
 /* CSSOM §6.4.7's step 1: `@page`, then — when the rule declares one — a SPACE and the PAGE SELECTOR LIST, which the
    record keeps in the canonical form core/css/css_at_rule_prelude.h produced. The space is inside the
    conditional, which is the whole of why `@page {}` reads back as `@page { }` and not as `@page  { }`. */
-static bool page_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+static bool page_rule_serialize(JSContext *ctx, const CssRuleData *r, JSValueConst rule, RBuf *out)
 {
     size_t sl = 0;
     char *sel = rule_text_copy(ctx, r->selector_text, &sl);
@@ -2733,7 +2741,7 @@ static bool page_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rul
  * `cssText` that does not round-trip through the parse it came from; real Chrome 148.0.7778.167 emits the written
  * spelling for exactly that reason. So the piece is the rule's OWN at-keyword, which is the same string the literal
  * names for every rule that was written unprefixed. */
-static bool keyframes_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+static bool keyframes_rule_serialize(JSContext *ctx, const CssRuleData *r, JSValueConst rule, RBuf *out)
 {
     size_t nl = 0, kwl = 0;
     char *name = rule_text_copy(ctx, r->keyframes_name, &nl);
@@ -2782,7 +2790,7 @@ static bool keyframes_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueCons
    what css/cssom/CSSRuleList-appendRule-keyframe-001-crash.html appends.
    THE CONDITIONAL SPACE IS THE WHOLE OF WHY THIS IS NOT THE `@font-face` ARM: there the space belongs to the
    declarations and here it belongs to the closing brace, so an empty block is `0% { }` and not `0% {  }`. */
-static bool keyframe_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
+static bool keyframe_rule_serialize(JSContext *ctx, const CssRuleData *r, RBuf *out)
 {
     size_t kl = 0, bl = 0;
     char *keys = rule_text_copy(ctx, r->selector_text, &kl);
@@ -2839,7 +2847,7 @@ static bool group_rules_serialize(JSContext *ctx, JSValueConst rule, const char 
 }
 
 /* HOW MANY `<container-condition>`s the rule declares — the flat Array's length halved, asserted even. */
-static uint32_t container_count(JSContext *ctx, CssRuleData *r)
+static uint32_t container_count(JSContext *ctx, const CssRuleData *r)
 {
     uint32_t n = array_len(ctx, r->container_conditions);
 
@@ -2854,7 +2862,7 @@ static uint32_t container_count(JSContext *ctx, CssRuleData *r)
 }
 
 /* One half of condition `i` — `half` 0 for CSS Conditional 5 §9.1's `name` and 1 for its `query`. OWNED. */
-static char *container_part(JSContext *ctx, CssRuleData *r, uint32_t i, unsigned half)
+static char *container_part(JSContext *ctx, const CssRuleData *r, uint32_t i, unsigned half)
 {
     JSValue v = JS_GetPropertyUint32(ctx, r->container_conditions, 2 * i + half);
     size_t l = 0;
@@ -2899,7 +2907,7 @@ failed:
    rather than storing the span: the name comes back through CSSOM §2.1's serialize-an-identifier and the separators
    are normalised, so `@container CARD ( width > 0px ),foo` reads back with one space after the name and ", " between
    the conditions while the query inside each keeps every byte the author typed. OWNED. */
-static char *container_condition_text(JSContext *ctx, CssRuleData *r)
+static char *container_condition_text(JSContext *ctx, const CssRuleData *r)
 {
     uint32_t n = container_count(ctx, r), i;
     RBuf out = { NULL, 0, 0 };
@@ -2933,7 +2941,7 @@ static char *container_condition_text(JSContext *ctx, CssRuleData *r)
    where CSSOM §6.4.7's and CSS Cascade 5 §8.1's are not, and the grammars are why: `@media`'s `<media-query-list>`
    always exists (an absent one is the EMPTY list, which is what `@media {}`'s two spaces are), while a page selector
    list and a `<layer-name>` are `?` — optional productions with no separator to write when they are not there. */
-static bool media_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+static bool media_rule_serialize(JSContext *ctx, const CssRuleData *r, JSValueConst rule, RBuf *out)
 {
     char *text = media_list_text(ctx, r->media);
     RBuf prefix = { NULL, 0, 0 };
@@ -2953,7 +2961,7 @@ static bool media_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst ru
    is the return value and not an empty list: a caller that read "no names" out of a string conversion that threw would
    print `@layer {` for a rule that declares one, and that is a plausible datum rather than a crash. False leaves the
    caller's pending exception. OWNED on true: the caller frees the array and its entries. */
-static bool rule_layer_names(JSContext *ctx, CssRuleData *r, char ***pv, unsigned *pn)
+static bool rule_layer_names(JSContext *ctx, const CssRuleData *r, char ***pv, unsigned *pn)
 {
     uint32_t n = array_len(ctx, r->layer_names), i;
     char **out;
@@ -2997,7 +3005,7 @@ static bool rule_layer_names(JSContext *ctx, CssRuleData *r, char ***pv, unsigne
    from: CSS Conditional 5 §9.1 defines that algorithm to reproduce a `<container-condition>#`, name through
    CSSOM §2.1's serialize-an-identifier and conditions joined by CSSOM §2.1's ", ", so running it is how the
    serialization and the attribute cannot disagree about one rule. */
-static bool container_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+static bool container_rule_serialize(JSContext *ctx, const CssRuleData *r, JSValueConst rule, RBuf *out)
 {
     RBuf prefix = { NULL, 0, 0 };
     char *text = container_condition_text(ctx, r);
@@ -3019,7 +3027,7 @@ static bool container_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueCons
    with step 1's prefix replaced. The prefix is the at-keyword, a SPACE and the condition: `@supports`'s
    `<supports-condition>` is not an optional production (`@supports {}` matches no arm of CSS Conditional 3 §6's
    grammar and is dropped before it can be serialized), so the space is unconditional exactly as `@media`'s is. */
-static bool supports_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+static bool supports_rule_serialize(JSContext *ctx, const CssRuleData *r, JSValueConst rule, RBuf *out)
 {
     RBuf prefix = { NULL, 0, 0 };
     const char *text = JS_ToCString(ctx, r->supports_text);
@@ -3034,7 +3042,7 @@ static bool supports_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst
     return ok;
 }
 
-static bool layer_block_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+static bool layer_block_rule_serialize(JSContext *ctx, const CssRuleData *r, JSValueConst rule, RBuf *out)
 {
     RBuf prefix = { NULL, 0, 0 };
     char **names;
@@ -3058,7 +3066,7 @@ static bool layer_block_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueCo
    CSSOM §2.1's serialize-a-comma-separated-list (", "), and the SEMICOLON that makes it a statement at-rule. The space
    is unconditional here and conditional in the arm above because the multipliers differ: `#` has no zero-length arm,
    so a statement rule always declares at least one name and its creator refuses a prelude that does not. */
-static bool layer_statement_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
+static bool layer_statement_rule_serialize(JSContext *ctx, const CssRuleData *r, RBuf *out)
 {
     char **names;
     unsigned n, i;
@@ -3109,7 +3117,7 @@ static bool starting_style_rule_serialize(JSContext *ctx, JSValueConst rule, RBu
  * browser prints: a rule whose `@annotation` is empty does not serialize `@annotation { }`. A rule ALL of whose
  * maps are empty therefore serializes as the at-keyword, the prelude and an empty body, which is the same shape
  * `@media print { }` takes. */
-static bool font_feature_values_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
+static bool font_feature_values_rule_serialize(JSContext *ctx, const CssRuleData *r, RBuf *out)
 {
     unsigned i;
 
@@ -3148,7 +3156,7 @@ static bool font_feature_values_rule_serialize(JSContext *ctx, CssRuleData *r, R
  * CSS Properties and Values API 1 §6.1's `name` attribute and CSS Properties and Values API 1 §6.1's serialization arm
  * ask the identical question, and because that question has an unresolved answer for one shape of rule, which must
  * therefore be stated once. OWNED (a string). */
-static JSValue property_rule_name(JSContext *ctx, CssRuleData *r)
+static JSValue property_rule_name(JSContext *ctx, const CssRuleData *r)
 {
     DCHECK(JS_IsArray(r->property_names),
            "an `@property` rule's custom property name list is not an Array — the one creator builds one before "
@@ -3185,7 +3193,7 @@ static JSValue property_rule_name(JSContext *ctx, CssRuleData *r)
  * `<declaration-value>?`, which has no parsed form to re-serialize from — the value is whatever tokens the author
  * wrote — so what is emitted is what was declared, which is also what makes `initial-value: red, blue` come back with
  * its comma. */
-static bool property_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
+static bool property_rule_serialize(JSContext *ctx, const CssRuleData *r, RBuf *out)
 {
     JSValue name_val = property_rule_name(ctx, r);
     size_t nl = 0, sl = 0, il = 0;
@@ -3252,7 +3260,7 @@ static char *rule_opt_text(JSContext *ctx, JSValueConst v)
    the one property every serialize-a-CSS-rule arm has to have, and which the author cascade's round-trip
    assertion checks from the other side. They go where the GRAMMAR puts them, between the URL and the media
    query list, which is also what css/cssom/cssimportrule.html pins byte for byte. */
-static bool import_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
+static bool import_rule_serialize(JSContext *ctx, const CssRuleData *r, RBuf *out)
 {
     size_t hl = 0;
     char *href = rule_text_copy(ctx, r->href, &hl);
@@ -3294,7 +3302,7 @@ static bool import_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
 /* CSSOM §6.4's CSSNamespaceRule arm, stated in one sentence: `@namespace`, a SPACE, the serialization AS AN
    IDENTIFIER of the prefix if there is one, a SPACE if there is one, the serialization AS URL of the
    namespaceURI, and `;`. */
-static bool namespace_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
+static bool namespace_rule_serialize(JSContext *ctx, const CssRuleData *r, RBuf *out)
 {
     size_t pl = 0, ul = 0;
     char *prefix = rule_text_copy(ctx, r->prefix, &pl);
@@ -3333,7 +3341,7 @@ static bool namespace_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
    at-rule's body is CSS Paged Media §4.3's `<declaration-list>` — declarations and nothing else, which is the shape
    this arm IS. The at-keyword is the only difference, so it is a parameter: `@font-face` and `@top-left` are one
    algorithm over two names, and a second copy could only disagree about the spacing. */
-static bool decl_body_rule_serialize(JSContext *ctx, CssRuleData *r, const char *at_name, RBuf *out)
+static bool decl_body_rule_serialize(JSContext *ctx, const CssRuleData *r, const char *at_name, RBuf *out)
 {
     size_t bl = 0;
     char *block = rule_text_copy(ctx, r->block_text, &bl);
@@ -3361,7 +3369,7 @@ static bool decl_body_rule_serialize(JSContext *ctx, CssRuleData *r, const char 
 
 /* CSSOM §6.4.8's `name` as the at-keyword it serializes back to. It is the record's own string, so a margin rule
    whose name is missing is this file disagreeing with its own creator rather than a shape a page can make. */
-static bool margin_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
+static bool margin_rule_serialize(JSContext *ctx, const CssRuleData *r, RBuf *out)
 {
     size_t nl = 0;
     char *name = rule_text_copy(ctx, r->at_name, &nl);
@@ -3378,7 +3386,7 @@ static bool margin_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
 
 static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
 {
-    CssRuleData *r = rule_of(rule);
+    const CssRuleData *r = rule_of(rule);
 
     DCHECK(r != NULL, "CSSOM §6.4's serialize a CSS rule was invoked on something that is not a CSS rule");
     if (!r) return false;
@@ -3423,16 +3431,16 @@ enum { CR_PARENT_RULE = 0, CR_PARENT_STYLE_SHEET, CR_TYPE, CR_CSS_TEXT, CR_SELEC
    collection is remembered on the record because both are [SameObject], and it SHARES the very Array the
    children live in, which is what its liveness IS. Two attributes of two interfaces, one body: what differs is
    the BRAND their getters check, which is the caller's. */
-static JSValue rule_css_rules(JSContext *ctx, CssRuleData *r)
+static JSValue rule_css_rules(JSContext *ctx, JSValueConst owner, const CssRuleData *r)
 {
     if (!JS_IsObject(r->rule_list))
-        rule_set(ctx, r, &r->rule_list, css_rule_list_new(ctx, JS_DupValue(ctx, r->child_rules)));
+        rule_set(ctx, owner, rule_list, css_rule_list_new(ctx, JS_DupValue(ctx, r->child_rules)));
     return JS_DupValue(ctx, r->rule_list);
 }
 
 static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    CssRuleData *r;
+    const CssRuleData *r;
 
     switch (magic) {
     /* "The parentRule attribute must return the parent CSS rule" — null for a top-level rule, and a real rule
@@ -3603,7 +3611,7 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
        this interface and shares the one body with it. */
     case CR_KEYFRAMES_CSS_RULES:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
-        return r ? rule_css_rules(ctx, r) : JS_EXCEPTION;
+        return r ? rule_css_rules(ctx, this_val, r) : JS_EXCEPTION;
     /* CSS Animations §6.3.2: "This attribute is the number of keyframes in the list." It is the length of the
        child list itself and never a second count, which is also what makes it the `length` Web IDL §3.7.9's
        step 1.1 pairs with the indexed getter below. */
@@ -3776,7 +3784,7 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
        is what its liveness IS. */
         DCHECK(magic == CR_CSS_RULES, "a CSS rule attribute ran with a magic CSSOM §6.4 does not declare");
         r = rule_here_grouping(ctx, this_val);
-        return r ? rule_css_rules(ctx, r) : JS_EXCEPTION;
+        return r ? rule_css_rules(ctx, this_val, r) : JS_EXCEPTION;
     }
 }
 
@@ -3842,7 +3850,7 @@ static char *selector_list_reserialize(const char *sel, size_t len)
    invalid string, which is why the value goes back through the parser rather than into the slot. */
 static JSValue js_rule_set_selector(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_STYLE, "CSSStyleRule");
+    const CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_STYLE, "CSSStyleRule");
     const char *v;
     char *reserialized;
     JSValue text;
@@ -3895,7 +3903,7 @@ static JSValue js_rule_set_selector(JSContext *ctx, JSValueConst this_val, JSVal
         text = JS_NewString(ctx, reserialized);
         free(reserialized);
         if (JS_IsException(text)) return text;
-        rule_set(ctx, r, &r->selector_text, text);
+        rule_set(ctx, this_val, selector_text, text);
         return JS_UNDEFINED;
     }
     return JS_UNDEFINED;
@@ -3913,7 +3921,7 @@ static JSValue js_rule_set_selector(JSContext *ctx, JSValueConst this_val, JSVal
    admits it. */
 static JSValue js_rule_set_page_selector(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_PAGE, "CSSPageRule");
+    const CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_PAGE, "CSSPageRule");
     const char *v;
     char *parsed;
     JSValue text;
@@ -3930,7 +3938,7 @@ static JSValue js_rule_set_page_selector(JSContext *ctx, JSValueConst this_val, 
         text = JS_NewString(ctx, parsed);
         free(parsed);
         if (JS_IsException(text)) return text;
-        rule_set(ctx, r, &r->selector_text, text);
+        rule_set(ctx, this_val, selector_text, text);
     }
     return JS_UNDEFINED;
 }
@@ -3941,7 +3949,7 @@ static JSValue js_rule_set_page_selector(JSContext *ctx, JSValueConst this_val, 
    them would have to carry the difference in a flag, and the flag is the sentence. */
 static JSValue js_rule_set_key_text(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAME, "CSSKeyframeRule");
+    const CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAME, "CSSKeyframeRule");
     const char *v;
     char *parsed;
     JSValue text;
@@ -3961,7 +3969,7 @@ static JSValue js_rule_set_key_text(JSContext *ctx, JSValueConst this_val, JSVal
     text = JS_NewString(ctx, parsed);
     free(parsed);
     if (JS_IsException(text)) return text;
-    rule_set(ctx, r, &r->selector_text, text);
+    rule_set(ctx, this_val, selector_text, text);
     return JS_UNDEFINED;
 }
 
@@ -3974,7 +3982,7 @@ static JSValue js_rule_set_key_text(JSContext *ctx, JSValueConst this_val, JSVal
    writes the excluded keywords AS A STRING. */
 static JSValue js_rule_set_keyframes_name(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
+    const CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
 
     (void)magic;
     if (!r) return JS_EXCEPTION;
@@ -3983,7 +3991,7 @@ static JSValue js_rule_set_keyframes_name(JSContext *ctx, JSValueConst this_val,
            "declaration runs "
            "the CSSOMString conversion (and parks on the page's `toString` if there is one) before the body "
            "is entered, so what arrives here is always the converted value");
-    rule_set(ctx, r, &r->keyframes_name, JS_DupValue(ctx, val));
+    rule_set(ctx, this_val, keyframes_name, JS_DupValue(ctx, val));
     return JS_UNDEFINED;
 }
 
@@ -3999,7 +4007,7 @@ static JSValue js_rule_set_keyframes_name(JSContext *ctx, JSValueConst this_val,
    cascade would then have to refuse. */
 static JSValue js_rule_set_font_family(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_FONT_FEATURE_VALUES, "CSSFontFeatureValuesRule");
+    const CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_FONT_FEATURE_VALUES, "CSSFontFeatureValuesRule");
     const char *v;
     char *family;
 
@@ -4014,7 +4022,7 @@ static JSValue js_rule_set_font_family(JSContext *ctx, JSValueConst this_val, JS
     family = css_font_family_name_list_value(v);
     JS_FreeCString(ctx, v);
     if (!family) return JS_UNDEFINED;
-    rule_set(ctx, r, &r->font_family, JS_NewString(ctx, family));
+    rule_set(ctx, this_val, font_family, JS_NewString(ctx, family));
     free(family);
     return JS_UNDEFINED;
 }
@@ -4030,7 +4038,7 @@ static JSValue js_rule_set_font_family(JSContext *ctx, JSValueConst this_val, JS
    because a keyframe selector list is a LIST and not a set of keys. Answers the index of the LAST match — "the last
    declared CSSKeyframeRule matching" — or -1, which covers both "no rule matches" and "`select` is not a keyframe
    selector list at all". */
-static int keyframes_match_last(JSContext *ctx, CssRuleData *r, const char *select)
+static int keyframes_match_last(JSContext *ctx, const CssRuleData *r, const char *select)
 {
     char *want = css_prelude_keyframe_selectors(select, strlen(select));
     uint32_t n, i;
@@ -4040,7 +4048,7 @@ static int keyframes_match_last(JSContext *ctx, CssRuleData *r, const char *sele
     n = array_len(ctx, r->child_rules);
     for (i = 0; i < n; i++) {
         JSValue kid = JS_GetPropertyUint32(ctx, r->child_rules, i);
-        CssRuleData *kr = rule_of(kid);
+        const CssRuleData *kr = rule_of(kid);
         size_t kl = 0;
         char *have;
 
@@ -4069,7 +4077,7 @@ static int keyframes_match_last(JSContext *ctx, CssRuleData *r, const char *sele
 static JSValue js_rule_append_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                    int magic)
 {
-    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
+    const CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
     RuleBuild b;
     JSValue scratch, built;
     const char *text;
@@ -4110,7 +4118,7 @@ static JSValue js_rule_append_rule(JSContext *ctx, JSValueConst this_val, int ar
 static JSValue js_rule_kf_delete_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                       int magic)
 {
-    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
+    const CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
     const char *select;
     JSValue old;
     int at;
@@ -4137,7 +4145,7 @@ static JSValue js_rule_kf_delete_rule(JSContext *ctx, JSValueConst this_val, int
 static JSValue js_rule_find_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                  int magic)
 {
-    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
+    const CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
     const char *select;
     int at;
 
@@ -4166,7 +4174,7 @@ static JSValue js_rule_find_rule(JSContext *ctx, JSValueConst this_val, int argc
  * as "not an indexed interface" and which leaves an ordinary property lookup exactly as it was. */
 static uint32_t keyframes_indexed_length(JSContext *ctx, JSValueConst self)
 {
-    CssRuleData *r = rule_of(self);
+    const CssRuleData *r = rule_of(self);
 
     DCHECK(r != NULL && r->type == RULE_TYPE_KEYFRAMES,
            "CSS Animations 1 §6.3.3's indexed getter was asked for its length by something that is not a "
@@ -4177,7 +4185,7 @@ static uint32_t keyframes_indexed_length(JSContext *ctx, JSValueConst self)
 
 static JSValue keyframes_indexed_item(JSContext *ctx, JSValueConst self, uint32_t i)
 {
-    CssRuleData *r = rule_of(self);
+    const CssRuleData *r = rule_of(self);
     JSValue kid;
 
     DCHECK(r != NULL && r->type == RULE_TYPE_KEYFRAMES,
@@ -4196,13 +4204,10 @@ static const IdlIndexedDecl KEYFRAMES_INDEXED = { "CSSKeyframesRule", keyframes_
 
 /* The decl for THIS object, or NULL — the one place the "is this the interface with the indexed getter"
    question is asked, so the two hooks below cannot answer it differently.
-   THROUGH JS_GetOpaque AND NOT THE ACCESSOR, which is the one place in this file that is right. The hooks run
-   on every own-property MISS on every rule object, and a miss is not a reach: capturing there would put a
-   record into the running flow's delta because a page read `styleRule.foo`. The two callbacks above do use the
-   accessor, because they run only for a real index on a real `@keyframes`, which IS a reach. */
+   It runs on every own-property miss on every rule object and reads only the type. */
 static const IdlIndexedDecl *rule_indexed_decl(JSValueConst obj)
 {
-    CssRuleData *r = JS_GetOpaque(obj, g_rule_class);
+    const CssRuleData *r = JS_GetOpaque(obj, g_rule_class);
 
     return (r && r->type == RULE_TYPE_KEYFRAMES) ? &KEYFRAMES_INDEXED : NULL;
 }
@@ -4261,7 +4266,7 @@ static JSClassExoticMethods g_rule_exotic = {
 static JSValue js_rule_insert_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                    int magic)
 {
-    CssRuleData *r = rule_here_grouping(ctx, this_val);
+    const CssRuleData *r = rule_here_grouping(ctx, this_val);
     const char *text;
     uint32_t index = 0;
     JSValue list, out;
@@ -4395,7 +4400,7 @@ static const IdlStepDecl RD_DECL = {
    flag unset, declarations the declared declarations in the rule in specified order, parent CSS rule the
    context object, owner node null"), and its IDL types it `CSSStyleProperties` — the editor's draft and the
    @webref/idl corpus agree on that word, so there is no third interface here and no disagreement to settle.
-   IT IS MINTED THROUGH THE CAPTURING ACCESSOR, which is what makes the memo per-flow: the block belongs to the
+   The memo is per-flow because `rule_set` captures the record before it stores the block: the block belongs to the
    flow that first asked for it, and a sibling that asks gets its own over the same declarations. */
 enum { STYLE_OF_STYLE_RULE = 0, STYLE_OF_FONT_FACE, STYLE_OF_PAGE, STYLE_OF_MARGIN, STYLE_OF_KEYFRAME };
 
@@ -4412,7 +4417,7 @@ static JSValue js_rule_style(JSContext *ctx, JSValueConst this_val, int magic)
         { RULE_TYPE_MARGIN,    "CSSMarginRule",   cssom_style_properties_for_rule },
         { RULE_TYPE_KEYFRAME,  "CSSKeyframeRule", cssom_style_properties_for_rule },
     };
-    CssRuleData *r;
+    const CssRuleData *r;
 
     DCHECK(magic >= 0 && magic < (int)(sizeof(OF) / sizeof(OF[0])),
            "a `style` attribute ran with a magic no interface in this table declares — the magic is written by "
@@ -4428,7 +4433,7 @@ static JSValue js_rule_style(JSContext *ctx, JSValueConst this_val, int magic)
         JSValue block = OF[magic].create(ctx, this_val);
 
         if (JS_IsException(block)) return block;
-        rule_set(ctx, r, &r->style, block);
+        rule_set(ctx, this_val, style, block);
     }
     return JS_DupValue(ctx, r->style);
 }
@@ -4439,7 +4444,7 @@ static JSValue js_rule_style(JSContext *ctx, JSValueConst this_val, int magic)
    OWNED: the caller frees. NULL for a rule whose body is empty and for one that has no body at all. */
 char *css_rule_block_text(JSContext *ctx, JSValueConst rule, size_t *plen)
 {
-    CssRuleData *r = rule_of(rule);
+    const CssRuleData *r = rule_of(rule);
     char *out;
 
     DCHECK(r != NULL, "a rule's declaration block was read off something that is not a CSS rule");
@@ -4449,12 +4454,11 @@ char *css_rule_block_text(JSContext *ctx, JSValueConst rule, size_t *plen)
     return out;
 }
 
-/* The write half. It goes through `rule_of`, so the per-flow COW delta has already taken a copy of the record
-   and one arm's `rule.style.color = 'red'` is invisible to its sibling and to every flow the frontier resumes
-   afterwards — the same guarantee `selectorText`'s setter has, for the same reason and at the same site. */
+/* The write half. Its `rule_set` captures the record before it publishes, so one arm's `rule.style.color = 'red'`
+   is invisible to its sibling and to every flow the frontier resumes afterwards. */
 void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text, size_t len)
 {
-    CssRuleData *r = rule_of(rule);
+    const CssRuleData *r = rule_of(rule);
 
     DCHECK(r != NULL, "a rule's declaration block was written on something that is not a CSS rule");
     DCHECK(text != NULL, "a rule's declaration block was written with no text — an emptied block is the empty "
@@ -4475,11 +4479,11 @@ void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text
     if (rule_block_context(r->type) != CSSOM_BLOCK_UNRESTRICTED) {
         char *kept = cssom_serialize_declarations(text, len, rule_block_context(r->type));
 
-        rule_set(ctx, r, &r->block_text, JS_NewString(ctx, kept ? kept : ""));
+        rule_set(ctx, rule, block_text, JS_NewString(ctx, kept ? kept : ""));
         free(kept);
         return;
     }
-    rule_set(ctx, r, &r->block_text, JS_NewStringLen(ctx, text, len));
+    rule_set(ctx, rule, block_text, JS_NewStringLen(ctx, text, len));
 }
 
 /* ---- the AUTHOR CASCADE's view ----------------------------------------------------------------------------- */
@@ -4541,7 +4545,7 @@ static void cascade_emit_mark(CascadeEmit *e, const CssLayerNode *layer, const C
 }
 
 /* CSS Conditional 5 §5.4's condition of the `@container` rule `r`, nested in `up`, owned by `e`. */
-static const ContainerQuery *cascade_container_query(JSContext *ctx, CascadeEmit *e, CssRuleData *r,
+static const ContainerQuery *cascade_container_query(JSContext *ctx, CascadeEmit *e, const CssRuleData *r,
                                                      const ContainerQuery *up)
 {
     CssContainerConditions conds;
@@ -4664,7 +4668,7 @@ static void cascade_frame_free(JSContext *ctx, CascadeFrame *f)
 static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, CssLayerNode *cur,
                              const CascadeNest *nest, const ContainerQuery *cq, CascadeFrame **descend)
 {
-    CssRuleData *r = rule_of(rule);
+    const CssRuleData *r = rule_of(rule);
     size_t sl = 0, bl = 0;
     char *sel, *block;
 

@@ -3905,8 +3905,8 @@ static char *cssd_declarations_text(JSContext *ctx, JSValueConst block, size_t *
 
 /* §6.6's UPDATE STYLE ATTRIBUTE, generalized to the backing the block actually has. For an element it goes
    through setAttribute's own chokepoint, so the write is captured by the per-flow delta like every other DOM
-   write; for a rule it goes through the rule record's capturing accessor, which is the same guarantee one
-   component along. */
+   write; for a rule it goes through the rule record's write accessor, which is the same guarantee one component
+   along. */
 static void cssd_declarations_write(JSContext *ctx, JSValueConst block, const char *text, size_t len)
 {
     JSValue rule = cssd_parent_rule(ctx, block);

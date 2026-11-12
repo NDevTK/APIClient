@@ -23,19 +23,11 @@ static int g_id_tojson = -1;   /* §3's `[Default] object toJSON()` */
    one of them: §3 gives it GETTER STEPS that compute, so it is its own body below. */
 enum { PE_NAME = 0, PE_ENTRY_TYPE, PE_START_TIME };
 
-PerfEntry *performance_entry_of(JSValueConst v)
+const PerfEntry *performance_entry_of(JSValueConst v)
 {
-    PerfEntry *e = g_entry_class ? JS_GetOpaque(v, g_entry_class) : NULL;
-
-    /* THE CAPTURE IS IN THE ACCESSOR every member reaches, which is the rule for a component's own C record:
-       a record a flow has REACHED is one it may write, the delta dedups to one entry, and there is then no
-       write site left to miss. Every attribute §3 and its derived interfaces declare is READONLY and this
-       engine writes an entry once at its mint, so today there is no write for the capture to catch — it is
-       what makes that a fact nothing has to re-check the day a member is added. The layout is the DERIVED
-       struct's, taken from the record itself, because the base has no way to know how much of an entry it is
-       looking at; performance_entry_new is where the two are checked against each other. */
-    if (e) cow_capture_host_record(v, e, e->cls->rec);
-    return e;
+    /* Every attribute §3 and its derived interfaces declare is readonly and an entry is written once, at its
+       mint, so the record answers const and nothing captures it. */
+    return g_entry_class ? JS_GetOpaque(v, g_entry_class) : NULL;
 }
 
 bool performance_entry_is(JSValueConst v)
@@ -179,9 +171,9 @@ static void entry_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
  * nowhere else to put it and because an attribute's getter has nothing to convert, so there is no ordering
  * hazard. A real TypeError and not an assert: a feature detector that pulls the descriptor and applies the
  * getter to a bare object reads the throw as "this is a real interface", and tells it apart from `undefined`. */
-static PerfEntry *entry_here(JSContext *ctx, JSValueConst v)
+static const PerfEntry *entry_here(JSContext *ctx, JSValueConst v)
 {
-    PerfEntry *e = performance_entry_of(v);
+    const PerfEntry *e = performance_entry_of(v);
 
     if (!e) {
         JS_ThrowTypeError(ctx, "a PerformanceEntry member was reached on something that is not a "
@@ -195,7 +187,7 @@ static PerfEntry *entry_here(JSContext *ctx, JSValueConst v)
    `startTime`. One body, chosen by the magic the install states. */
 static JSValue js_entry_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    PerfEntry *e = entry_here(ctx, this_val);
+    const PerfEntry *e = entry_here(ctx, this_val);
 
     if (!e) return JS_EXCEPTION;
     switch (magic) {
@@ -219,7 +211,7 @@ static JSValue js_entry_get(JSContext *ctx, JSValueConst this_val, int magic)
    BECAUSE the mark's end time is 0, not instead of it. */
 static JSValue js_entry_get_duration(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    PerfEntry *e = entry_here(ctx, this_val);
+    const PerfEntry *e = entry_here(ctx, this_val);
     double start = 0;
 
     (void)magic;

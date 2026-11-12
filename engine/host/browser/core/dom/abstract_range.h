@@ -44,9 +44,11 @@ int boundary_position(lxb_dom_node_t *a, uint32_t ao, lxb_dom_node_t *b, uint32_
    therefore serve both interfaces — can find the bounds on either. Two of them exist and the platform has no
    third, which the registration asserts. */
 void abstract_range_claim_class(JSClassID cls);
-/* The bounds behind any §5 range object, or NULL. Captures the record into the running flow's delta, which is
-   what makes one flow's `setStart` invisible to a sibling. */
-RangeBounds *abstract_range_of(JSValueConst v);
+/* The bounds behind any §5 range object, or NULL, as the running flow sees them; captures nothing. */
+const RangeBounds *abstract_range_of(JSValueConst v);
+/* The same bounds for a write: captures the record into the running flow's delta first, which is what makes one
+   flow's `setStart` invisible to a sibling. */
+RangeBounds *abstract_range_of_for_write(JSValueConst v);
 
 /* §5.4's "a new StaticRange" REACHED FROM C, with its four boundary-point components already decided. §5.4's
    own constructor is `new StaticRange(init)` and runs a dictionary conversion before it gets here; an

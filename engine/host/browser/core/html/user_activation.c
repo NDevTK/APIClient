@@ -18,7 +18,6 @@
 #include "core/html/user_activation.h"
 #include "core/timing/hr_time.h"
 #include "solver/concolic.h"
-#include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §6.4.1's TWO PER-WINDOW VALUES, and the initial value of each is the whole of what "never activated" means.
@@ -616,9 +615,6 @@ typedef struct {
     JSValue    global;   /* "this's relevant global object" — OWNED, and what holds `realm` up */
 } UserActivationRec;
 
-/* THE ONE STATEMENT OF WHAT THE RECORD OWNS — the same list the finalizer frees and the gc_mark walks. */
-static const uint16_t UA_VAL_OFF[] = { (uint16_t)offsetof(UserActivationRec, global) };
-static const CowRecord UA_REC = { sizeof(UserActivationRec), UA_VAL_OFF, 1 };
 
 /* WEB IDL §3.7.6 Attributes' BRAND CHECK. `UserActivation.prototype.isActive` read off a plain object is a
    TypeError, and
@@ -634,16 +630,11 @@ static bool ua_brand(JSContext *ctx, JSValueConst this_val)
     return false;
 }
 
-/* THE ACCESSOR EVERY MEMBER REACHES THE RECORD THROUGH, and the capture is IN it for solver/cow.h's reason: a
-   record a flow has REACHED is one it may write, the delta dedups to one entry per (flow, object), and there
-   is then no write site left to miss. Bounded by §6.4.4's own shape — one UserActivation per realm.
-   NOT ua_brand: a brand check is a QUESTION, asked of values that are not UserActivations at all, and a
-   question must not capture. */
-static UserActivationRec *ua_rec(JSValueConst v)
+/* The accessor every member reaches the record through. The record is written once, by its mint before
+   JS_SetOpaque, and never again, so it answers const, has no write accessor and is never captured. */
+static const UserActivationRec *ua_rec(JSValueConst v)
 {
-    UserActivationRec *r = g_ua_class ? JS_GetOpaque(v, g_ua_class) : NULL;
-
-    if (r) cow_capture_host_record(v, r, &UA_REC);
+    const UserActivationRec *r = g_ua_class ? JS_GetOpaque(v, g_ua_class) : NULL;
     return r;
 }
 
@@ -664,7 +655,7 @@ static void ua_finalizer(JSRuntime *rt, JSValue val)
 static void ua_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     JSClassID id = 0;
-    UserActivationRec *r = JS_GetAnyOpaque(val, &id);
+    const UserActivationRec *r = JS_GetAnyOpaque(val, &id);
 
     (void)id;
     DCHECK(r != NULL, "a UserActivation was marked with no record — its global is a counted reference and an "
@@ -678,7 +669,7 @@ static void ua_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
    thing a DCHECK may stand on; the receiver's own brand is a TypeError one line above every caller. */
 static JSContext *ua_environment(JSValueConst this_val)
 {
-    UserActivationRec *r = ua_rec(this_val);
+    const UserActivationRec *r = ua_rec(this_val);
 
     DCHECK(r != NULL, "a UserActivation reached a getter with no record — the brand is the class and the mint "
                       "attaches the record before the object leaves it, so a branded object without one came "
