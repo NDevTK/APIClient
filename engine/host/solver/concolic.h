@@ -1774,6 +1774,20 @@ void        concolic_pins_blob_free(void *blob);
    resumes rather than enters it) and has learned nothing yet in this session — it re-derives every pin and every
    decided predicate as it replays the gates that produced them. See the definition. */
 void       *concolic_pins_blob_empty(void);
+/* A parked flow's path constraint in the cross-session form (solver/cold.c's 'q' and 'n' records): its frozen
+   segments, each written once per document over the segment below it, and its blob's per-flow facts and head
+   over its top segment. The bytes hold no address, so another process of the same build reads them; only that
+   build does, since numbers are written as their bytes. Writers return malloc'd bytes the caller frees. The
+   readers take input bytes and answer NULL when they are malformed; each takes a reference on the segment it is
+   built over, and a segment read is released with concolic_pins_seg_release, a blob with concolic_pins_blob_free. */
+const void *concolic_pins_blob_chain(const void *blob);
+const void *concolic_pins_seg_below(const void *seg);
+uint64_t    concolic_pins_seg_serial(const void *seg);   /* nonzero, unique to the segment for the process's life */
+uint8_t    *concolic_pins_seg_write(const void *seg, size_t *len);
+uint8_t    *concolic_pins_blob_write(const void *blob, size_t *len);
+void       *concolic_pins_seg_read(const uint8_t *bytes, size_t len, void *below);
+void       *concolic_pins_blob_read(const uint8_t *bytes, size_t len, void *seg);
+void        concolic_pins_seg_release(void *seg);
 /* WHAT THE FROZEN CONSTRAINT CHAIN IS HOLDING — the third of the three chains built on cow.c's refcounted
    immutable segment, reported beside the other two for the reason they are reported beside each other: a
    per-flow allocation nobody released looks identical from any one of them, and only the number that CLIMBS

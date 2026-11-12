@@ -32823,9 +32823,20 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
     /* The heap slots in the cross-session form: written at the park (some member's head) and, at the resume of
        the same build, every such record read against the fresh seal and written again byte for byte. */
     int cold_park_cross_slots = g_sess == SESS_PARK && g_cp.heads > 0;
+    long tf_cross_read = g_cr.born + g_cr.heapsegs + g_cr.heads + g_cr.pin_segs + g_cr.pin_blobs + g_cr.registers;
     int cold_resumed_cross_slots = g_sess == SESS_RESUME && g_cr.same_build && g_cr.heads > 0 &&
-                                   g_cr.cross_identical == g_cr.born + g_cr.heapsegs + g_cr.heads &&
+                                   g_cr.cross_identical == tf_cross_read &&
                                    g_cr.cross_differs == 0 && g_cr.cross_refused == 0;
+    /* The path constraint in the cross-session form, at both ends in the same way: members' blobs written at the
+       park, and at the resume of the same build every 'q' and 'n' record rebuilt and written again byte for byte. */
+    int cold_park_cross_pins = g_sess == SESS_PARK && g_cp.pinblobs > 0;
+    int cold_park_cross_reg = g_sess == SESS_PARK && g_cp.registers > 0;
+    int cold_resumed_cross_pins = g_sess == SESS_RESUME && g_cr.same_build && g_cr.pin_blobs > 0 &&
+                                  g_cr.cross_identical == tf_cross_read &&
+                                  g_cr.cross_differs == 0 && g_cr.cross_refused == 0;
+    int cold_resumed_cross_reg = g_sess == SESS_RESUME && g_cr.same_build && g_cr.registers > 0 &&
+                                 g_cr.cross_identical == tf_cross_read &&
+                                 g_cr.cross_differs == 0 && g_cr.cross_refused == 0;
     /* The programs whose bodies the cross-session records name, written at the park. Their read by locator is
        flow_graph_cross_body_selftest's, in every session: this fixture writes no record holding a body yet, since
        each such record has another gap. */
@@ -33437,11 +33448,16 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
         { "park-cand", cold_park_cand, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "park-cross-replays", cold_park_cross_rp, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "park-cross-slots", cold_park_cross_slots, "state.code", SESS_PARK, .gate = "park-wrote" },
+        { "park-cross-pins", cold_park_cross_pins, "state.code", SESS_PARK, .gate = "park-wrote" },
+        { "park-cross-register", cold_park_cross_reg, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "park-scripts", cold_park_scripts, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "resumed", cold_resumed_any, "state.code", SESS_RESUME },
         { "resumed-segs", cold_resumed_segs, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-same-build", cold_resumed_same, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-cross-slots", cold_resumed_cross_slots, "state.code", SESS_RESUME, .gate = "resumed-same-build" },
+        { "resumed-cross-pins", cold_resumed_cross_pins, "state.code", SESS_RESUME, .gate = "resumed-same-build" },
+        { "resumed-cross-register", cold_resumed_cross_reg, "state.code", SESS_RESUME,
+          .gate = "resumed-same-build" },
         { "resumed-cand", cold_resumed_cand, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-fired", cold_fired, "state.code", SESS_RESUME },
         { "resumed-keyed-fired", cold_kfired, "state.code", SESS_RESUME },
@@ -49407,11 +49423,13 @@ int main(int argc, char **argv) {
                "\"commits\":%ld,\"delivers\":%ld,\"counters\":%ld,\"orphansMet\":%ld,\"orphansUnmet\":%ld,"
                "\"standArmed\":%ld,\"standMet\":%ld,\"standLeft\":%ld,\"crossIdentical\":%ld,"
                "\"crossDiffers\":%ld,\"crossRefused\":%ld,\"crossSkipped\":%ld,\"scripts\":%ld,"
-               "\"scriptsCompiled\":%ld,\"scriptsRefused\":%ld,\"scriptsSkipped\":%ld,\"bodies\":%ld}\n",
+               "\"scriptsCompiled\":%ld,\"scriptsRefused\":%ld,\"scriptsSkipped\":%ld,\"bodies\":%ld,"
+               "\"pinSegs\":%ld,\"pinBlobs\":%ld,\"registers\":%ld}\n",
                g_cr.segs, g_cr.flows, g_cr.cands, g_cr.orphans, g_cr.worlds,
                g_cr.commits, g_cr.delivers, g_cr.counters, met, unmet, stand_armed, stand_met, stand_left,
                g_cr.cross_identical, g_cr.cross_differs, g_cr.cross_refused, g_cr.cross_skipped, g_cr.scripts,
-               g_cr.scripts_compiled, g_cr.scripts_refused, g_cr.scripts_skipped, g_cr.bodies);
+               g_cr.scripts_compiled, g_cr.scripts_refused, g_cr.scripts_skipped, g_cr.bodies, g_cr.pin_segs,
+               g_cr.pin_blobs, g_cr.registers);
     }
 
     /* One result document — both surfaces and the scheduler's interleave count — serialized directly from the

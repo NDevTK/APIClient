@@ -723,6 +723,10 @@ typedef struct {
        bounded by the members; a 'p' is a field of the flow record before it, at most one per member. */
     long born, heapsegs, heads;
     long scripts;   /* 'j': the compiled programs whose bodies those records name, once per document */
+    /* 'q' and 'n': the path constraint in the cross-session form (cold.c's park_pins) — frozen segments, once per
+       document, and members' blobs, a field of the flow record before it, one per member that holds one. */
+    long pinsegs, pinblobs;
+    long registers;   /* 'e': members' pending registers (cold.c's park_register), one per member that holds one */
 } ColdParked;
 void cold_parked(ColdParked *out);
 
@@ -1000,6 +1004,10 @@ typedef struct {
        member. Next diff builds: the member's delta rebuilt from them once every part has a writer. Absence shows
        as: `parkCrossRestorable` members still replaying in the session that resumes them. */
     long born, heapsegs, heads;
+    /* …and the 'q' and 'n' records, the path constraint's segments and members' blobs, whose outcomes are
+       summands of the same four: read, written again (concolic_pins_seg_write) and compared. */
+    long pin_segs, pin_blobs;
+    long registers;   /* …and the 'e' records, members' pending registers, read as a 'p' is */
     long cross_identical, cross_differs, cross_refused, cross_skipped;
     /* The 'j' records read: under the same build, each parsed again in its realm or refused (a realm this seal
        does not name, a parse that failed); under another build, skipped. `bodies` counts the bodies the 'b', 'h'

@@ -909,17 +909,19 @@ static void park_doc_agrees(void)
     long sum = gen + g_parked_census.segs + g_parked_census.flows + g_parked_census.cands +
                g_parked_census.worlds + g_parked_census.orphans + g_parked_census.commits +
                g_parked_census.delivers + g_parked_census.counters + g_parked_census.born +
-               g_parked_census.heapsegs + g_parked_census.heads + g_parked_census.scripts;
+               g_parked_census.heapsegs + g_parked_census.heads + g_parked_census.scripts +
+               g_parked_census.pinsegs + g_parked_census.pinblobs + g_parked_census.registers;
 
     DCHECKF(g_park_recs == sum,
             "the park document holds %ld record(s) and its census accounts for %ld — g %ld, s %ld, f %ld, "
-            "c %ld, w %ld, o %ld, r %ld, m %ld, k %ld, b %ld, h %ld, p %ld, j %ld. A record kind was written "
-            "without counting itself, so every host that asks what this residue carries is told a kind that ran did "
-            "not, and a census nobody can check is a census anybody can state",
+            "c %ld, w %ld, o %ld, r %ld, m %ld, k %ld, b %ld, h %ld, p %ld, j %ld, q %ld, n %ld, e %ld. A record kind "
+            "was written without counting itself, so every host that asks what this residue carries is told a "
+            "kind that ran did not, and a census nobody can check is a census anybody can state",
             g_park_recs, sum, gen, g_parked_census.segs, g_parked_census.flows, g_parked_census.cands,
             g_parked_census.worlds, g_parked_census.orphans, g_parked_census.commits,
             g_parked_census.delivers, g_parked_census.counters, g_parked_census.born, g_parked_census.heapsegs,
-            g_parked_census.heads, g_parked_census.scripts);
+            g_parked_census.heads, g_parked_census.scripts, g_parked_census.pinsegs, g_parked_census.pinblobs,
+            g_parked_census.registers);
 }
 
 /* EMIT `seg` AND EVERY UNEMITTED SEGMENT BELOW IT, base first, and answer its ordinal. Iterative and not
@@ -1658,8 +1660,10 @@ static bool park_born_name_all(const ParkVals *pv, uint32_t floor, ParkCrossKind
     return ok;
 }
 
-/* Survey and write `pv` at `floor` after naming what it shares; the bytes are the caller's, NULL on a gap. */
-static uint8_t *park_slot_bytes(const ParkVals *pv, uint32_t floor, ParkCrossKinds *k, size_t *len)
+/* Survey and write `pv` at `floor` after naming what it shares; the bytes are the caller's, NULL on a gap, whose
+   kinds go to `k` under `prefix`. */
+static uint8_t *park_slot_bytes(const ParkVals *pv, uint32_t floor, const char *prefix, ParkCrossKinds *k,
+                                size_t *len)
 {
     JSContext *ctx = pending_ctx();
     const JSFlowGraphCross x = { park_born_name, NULL, NULL, &g_park_born, false, park_script_name, NULL };
@@ -1668,7 +1672,7 @@ static uint8_t *park_slot_bytes(const ParkVals *pv, uint32_t floor, ParkCrossKin
 
     if (!park_born_name_all(pv, floor, k)) return NULL;
     s = JS_FlowGraphCrossSurvey(ctx, pv->v, pv->n, floor, &x);
-    ok = park_cross_survey_gaps(s, "heap slot", k) == 0;
+    ok = park_cross_survey_gaps(s, prefix, k) == 0;
     JS_FlowGraphFree(ctx, s);
     return ok ? JS_FlowGraphCrossWrite(ctx, pv->v, pv->n, floor, &x, len) : NULL;
 }
@@ -1719,7 +1723,7 @@ static uint32_t park_heap_chain(const void *seg, ParkCrossKinds *k)
         size_t len = 0;
 
         cow_slot_each(NULL, s, park_slot_roots, &pv);
-        b = park_slot_bytes(&pv, UINT32_MAX, &own, &len);
+        b = park_slot_bytes(&pv, UINT32_MAX, "heap slot", &own, &len);
         park_vals_free(&pv);
         if (b) {
             char head[64];
@@ -1778,9 +1782,85 @@ static bool park_heap_slots(Flow *f, ParkCrossKinds *k, uint8_t **head, size_t *
     chain_ok = !top || !park_map_get(&g_park_chain_fail, top);
     if (top && !*chain_id) *chain_id = PARK_SEG_UNWRITABLE;
     cow_slot_each(d, NULL, park_slot_roots, &pv);
-    *head = park_slot_bytes(&pv, cow_delta_fork_gen(d), k, head_len);
+    *head = park_slot_bytes(&pv, cow_delta_fork_gen(d), "heap slot", k, head_len);
     park_vals_free(&pv);
     return chain_ok && *head != NULL;
+}
+
+/* The member's pending register (flow.h's `pending`) in the cross-session form, `e<hex>`, a field of the flow
+   record before it: one JS_FlowGraphCrossWrite over the register array at the head's floor. NULL, with the gap
+   kinds in `k`, when a part of it has no name; an empty register is not written. */
+static uint8_t *park_register(Flow *f, ParkCrossKinds *k, size_t *len)
+{
+    ParkVals pv = { 0 };
+    uint8_t *b;
+
+    if (JS_IsUndefined(f->pending) || pending_count(f->pending) == 0) return NULL;
+    park_vals_put(&pv, JS_DupValue(pending_ctx(), f->pending));
+    b = park_slot_bytes(&pv, f->delta ? cow_delta_fork_gen((const CowDelta *)f->delta) : 0, "register", k, len);
+    park_vals_free(&pv);
+    if (!b) park_cross_kind(k, "register");
+    return b;
+}
+
+/* The path constraint in the cross-session form (concolic.h's concolic_pins_seg_write): each frozen segment once
+   per document as `q<id>,<base-id|->,<hex>`, base first, and the member's blob as `n<seg-id|->,<hex>`, a field
+   of the flow record before it. The table is keyed by the segment's serial, never its address, which a freed
+   segment hands to a later one within the document's life. */
+static ParkPtrMap g_park_pin_segs;
+static long g_park_pin_seg_n;
+#define PARK_PIN_KEY(s) ((const void *)(uintptr_t)concolic_pins_seg_serial(s))
+
+static uint32_t park_pin_chain(const void *seg)
+{
+    const void **walk = NULL;
+    long n = 0, cap = 0;
+
+    for (const void *s = seg; s && !park_map_get(&g_park_pin_segs, PARK_PIN_KEY(s));
+         s = concolic_pins_seg_below(s)) {
+        if (n == cap) {
+            cap = cap ? cap * 2 : 32;
+            walk = realloc(walk, sizeof *walk * (size_t)cap);
+            CHECK(walk != NULL, "the cold tier could not grow its path constraint chain walk");
+        }
+        walk[n++] = s;
+    }
+    while (n) {
+        const void *s = walk[--n], *below = concolic_pins_seg_below(s);
+        uint32_t bid = below ? park_map_get(&g_park_pin_segs, PARK_PIN_KEY(below)) : 0;
+        char head[64];
+        size_t len;
+        uint8_t *b = concolic_pins_seg_write(s, &len);
+
+        DCHECK(!below || bid, "a path constraint segment was written before the segment below it");
+        park_map_put(&g_park_pin_segs, PARK_PIN_KEY(s), (uint32_t)++g_park_pin_seg_n);
+        if (bid) snprintf(head, sizeof head, "q%ld,%u,", g_park_pin_seg_n - 1, bid - 1);
+        else snprintf(head, sizeof head, "q%ld,-,", g_park_pin_seg_n - 1);
+        park_open_rec();
+        park_str(head);
+        park_hex_bytes(b, len);
+        free(b);
+        g_parked_census.pinsegs++;
+    }
+    free(walk);
+    return seg ? park_map_get(&g_park_pin_segs, PARK_PIN_KEY(seg)) : 0;
+}
+
+/* The member's path constraint: its chain's segments, then its blob over the top one. */
+static void park_pins(Flow *f)
+{
+    uint32_t id = park_pin_chain(concolic_pins_blob_chain(f->pin_blob));
+    char head[32];
+    size_t len;
+    uint8_t *b = concolic_pins_blob_write(f->pin_blob, &len);
+
+    if (id) snprintf(head, sizeof head, "n%u,", id - 1);
+    else snprintf(head, sizeof head, "n-,");
+    park_open_rec();
+    park_str(head);
+    park_hex_bytes(b, len);
+    free(b);
+    g_parked_census.pinblobs++;
 }
 
 /* One member into the census: `k` holds the kinds its writers already found unwritten, `slots` whether its heap
@@ -1801,15 +1881,18 @@ static void park_cross_census(Flow *f, ParkCrossKinds *kinds, bool slots)
         if (c.cells) park_cross_kind(&k, "heap cell");
         if (c.coro) park_cross_kind(&k, "heap coro");
         if (c.maps) park_cross_kind(&k, "heap map");
-        if (states) park_cross_kind(&k, "heap state");
+        for (int i = 0; states && i < cow_state_kind_count(); i++)
+            if (c.states[i]) {
+                char sk[48];
+                snprintf(sk, sizeof sk, "heap state %s", cow_state_kind_name(i));
+                park_cross_kind(&k, sk);
+            }
     }
     if (f->dom_n || f->dom_base) park_cross_kind(&k, "dom");
     if (f->parked) park_cross_kind(&k, "frame");
     for (int a = 0; a < f->n_agents; a++)
         if (f->agents[a].frame || f->agents[a].parked) park_cross_kind(&k, "frame");
     if (f->n_agents != 1) park_cross_kind(&k, "agents");
-    if (!JS_IsUndefined(f->pending) && pending_count(f->pending) > 0) park_cross_kind(&k, "register");
-    if (f->pin_blob) park_cross_kind(&k, "pins");
     {
         JSValue vals[3 + 8];
         int n = 0;
@@ -1876,8 +1959,8 @@ void cold_park_flow(Flow *f)
     char rec[64];
     ParkCrossKinds cross_kinds = { .n = 0 };
     bool slots = true;
-    uint8_t *slot_head = NULL;
-    size_t slot_head_len = 0;
+    uint8_t *slot_head = NULL, *reg = NULL;
+    size_t slot_head_len = 0, reg_len = 0;
     uint32_t slot_chain = 0;
 
     DCHECK(f != NULL, "the cold tier was asked to write the recipe of no flow at all");
@@ -1963,6 +2046,7 @@ void cold_park_flow(Flow *f)
     id = seg ? park_emit_chain(seg) : -1;
     /* The heap slots it stands on, in the cross-session form: shared parts before its record, its head after. */
     if (f->started) slots = park_heap_slots(f, &cross_kinds, &slot_head, &slot_head_len, &slot_chain);
+    if (f->started) reg = park_register(f, &cross_kinds, &reg_len);
     /* THE REWARD TRAVELS WITH THE FLOW because the ONE global frontier is ordered by it across sessions —
        §scheduler's "a high-value flow suspended last week resumes ahead of a low-value fresh one today".
        It is what the flow's fork FAMILY emitted (solver/flow.h's flow_reward), which is history and not a live
@@ -2107,6 +2191,14 @@ void cold_park_flow(Flow *f)
         free(slot_head);
         g_parked_census.heads++;
     }
+    if (reg) {
+        park_open_rec();
+        park_str("e");
+        park_hex_bytes(reg, reg_len);
+        free(reg);
+        g_parked_census.registers++;
+    }
+    if (f->pin_blob) park_pins(f);
     park_doc_agrees();
     park_cross_census(f, &cross_kinds, slots);
     f->paged = 1;   /* its recipe exists: flow_release may now let its parked continuation go (flow.h) */
@@ -2594,7 +2686,8 @@ static void park_slot_check(JSContext *ctx, char kind, const char *q, const char
     int commas = kind == 'h' ? 2 : kind == 'p' ? 1 : 0;
 
     while (commas && hex < end) if (*hex++ == ',') commas--;
-    if (kind == 'b') c->born++; else if (kind == 'h') c->heapsegs++; else c->heads++;
+    if (kind == 'b') c->born++; else if (kind == 'h') c->heapsegs++; else if (kind == 'e') c->registers++;
+    else c->heads++;
     if (!c->same_build) { c->cross_skipped++; return; }
     bytes = (uint8_t *)park_unhex(hex, end);
     len = (size_t)(end - hex) / 2;
@@ -2637,6 +2730,60 @@ static void park_slot_check(JSContext *ctx, char kind, const char *q, const char
     for (uint32_t i = 0; i < n_roots; i++) JS_FreeValue(ctx, roots[i]);
     free(roots);
     free(bytes);
+}
+
+/* The path constraint segments the 'q' records rebuilt, by document ordinal, for the records after them. */
+typedef struct { void **seg; long n, cap; } ParkPinSegs;
+
+/* A 'q' or 'n' record read at a resume (cold.h's ColdResumed): under the same build, rebuilt over the segment
+   it names, written again and compared with the record's bytes. A segment is kept for the records after it and
+   a blob is dropped after the comparison. A malformed field or a segment no earlier record built is a refusal. */
+static void park_pins_check(char kind, const char *q, const char *end, ParkPinSegs *ps, ColdResumed *c)
+{
+    void *below = NULL, *built;
+    uint8_t *bytes, *again;
+    size_t len, again_len = 0;
+    const char *hex;
+    long id = -1;
+    char *ep;
+
+    if (kind == 'q') {
+        c->pin_segs++;
+        id = strtol(q, &ep, 10);
+        q = ep < end && *ep == ',' ? ep + 1 : end;
+    } else {
+        c->pin_blobs++;
+    }
+    if (!c->same_build) { c->cross_skipped++; return; }
+    for (hex = q; hex < end && *hex != ','; hex++)
+        ;
+    if (kind == 'q' && id != ps->n) { c->cross_refused++; return; }
+    if (hex == end || ((end - hex - 1) & 1)) { c->cross_refused++; return; }
+    if (*q != '-') {
+        long b = strtol(q, &ep, 10);
+        if (ep != hex || b < 0 || b >= ps->n) { c->cross_refused++; return; }
+        below = ps->seg[b];
+    } else if (q + 1 != hex) {
+        c->cross_refused++;
+        return;
+    }
+    hex++;
+    bytes = (uint8_t *)park_unhex(hex, end);
+    len = (size_t)(end - hex) / 2;
+    built = kind == 'q' ? concolic_pins_seg_read(bytes, len, below) : concolic_pins_blob_read(bytes, len, below);
+    if (!built) { free(bytes); c->cross_refused++; return; }
+    again = kind == 'q' ? concolic_pins_seg_write(built, &again_len) : concolic_pins_blob_write(built, &again_len);
+    if (again_len == len && !memcmp(again, bytes, len)) c->cross_identical++;
+    else c->cross_differs++;
+    free(again);
+    free(bytes);
+    if (kind == 'n') { concolic_pins_blob_free(built); return; }
+    if (ps->n == ps->cap) {
+        ps->cap = ps->cap ? ps->cap * 2 : 32;
+        ps->seg = realloc(ps->seg, sizeof *ps->seg * (size_t)ps->cap);
+        CHECK(ps->seg != NULL, "the cold tier could not hold its rebuilt path constraint segments");
+    }
+    ps->seg[ps->n++] = built;
 }
 
 /* A 'j' record (park_scripts_flush): under the same build, the program parsed again in its realm and held at its
@@ -2717,6 +2864,8 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
     ParkBorn born = { 0 };
     /* The programs the 'j' records parsed again, by document ordinal, which name the bodies those records reach. */
     ParkPrograms programs = { 0 };
+    /* The path constraint segments the 'q' records rebuilt. */
+    ParkPinSegs pins = { 0 };
 
     /* THIS IS AN APPEND, NOT A SEED, and the two used to be one act. It asserted the frontier was EMPTY and
        assigned its park-local ordinals into it as though the document were the whole of what exists — which is
@@ -3049,9 +3198,13 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
             c->orphans++;
         } else if (kind == 'j') {
             park_program(ctx, q, end, &programs, c);
-        } else if (kind == 'b' || kind == 'h' || kind == 'p') {
-            DCHECK(kind != 'p' || last_flow != NULL, "a member's heap head record precedes every flow record");
+        } else if (kind == 'b' || kind == 'h' || kind == 'p' || kind == 'e') {
+            DCHECK((kind != 'p' && kind != 'e') || last_flow != NULL,
+                   "a member's heap head or register record precedes every flow record");
             park_slot_check(ctx, kind, q, end, &born, c);
+        } else if (kind == 'q' || kind == 'n') {
+            DCHECK(kind != 'n' || last_flow != NULL, "a member's path constraint record precedes every flow record");
+            park_pins_check(kind, q, end, &pins, c);
         } else if (kind == 'v') {
             /* A WITNESS VERIFICATION COMES BACK AS ITS SUBSTITUTION, ITS KEY AND ITS PATH — park_rec_vfy's
                fields, rebuilt as a 'c' record's flow is. It needs no re-binding: it is no search's, and its key
@@ -3361,6 +3514,8 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
        whole suspended frontier to it. FORMATTED, because the nine numbers are what localize it: the kind
        whose counter is short is the one whose row does not account for the gap. */
     park_born_free(&born);
+    for (long i = 0; i < pins.n; i++) concolic_pins_seg_release(pins.seg[i]);
+    free(pins.seg);
     c->bodies += programs.bodies;
     for (uint32_t i = 0; i < programs.n; i++) JS_FreeValue(ctx, programs.prog[i]);
     free(programs.prog);
@@ -3368,24 +3523,25 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
     DCHECKF(c->scripts == c->scripts_compiled + c->scripts_refused + c->scripts_skipped,
             "the rebuild read %ld program record(s) and accounts for %ld outcomes", c->scripts,
             c->scripts_compiled + c->scripts_refused + c->scripts_skipped);
-    DCHECKF(c->born + c->heapsegs + c->heads ==
+    DCHECKF(c->born + c->heapsegs + c->heads + c->pin_segs + c->pin_blobs + c->registers ==
                 c->cross_identical + c->cross_differs + c->cross_refused + c->cross_skipped,
             "the rebuild read %ld cross-session record(s) and accounts for %ld outcomes",
-            c->born + c->heapsegs + c->heads,
+            c->born + c->heapsegs + c->heads + c->pin_segs + c->pin_blobs + c->registers,
             c->cross_identical + c->cross_differs + c->cross_refused + c->cross_skipped);
     DCHECKF(recs == c->segs + c->flows + c->cands + c->cands_withdrawn +
                     c->worlds + c->orphans + c->commits + c->delivers + c->counters + c->born + c->heapsegs +
-                    c->heads + c->scripts,
+                    c->heads + c->scripts + c->pin_segs + c->pin_blobs + c->registers,
             "the rebuild read %ld record(s) and its census accounts for %ld — s %ld, f %ld, c %ld "
-            "(+%ld withdrawn), w %ld, o %ld, r %ld, m %ld, k %ld, b %ld, h %ld, p %ld, j %ld. A record kind was "
-            "parsed without counting itself, so every host asking which arms of this grammar ran is told a kind "
-            "that ran did not, and a census nobody can check is a census anybody can state",
+            "(+%ld withdrawn), w %ld, o %ld, r %ld, m %ld, k %ld, b %ld, h %ld, p %ld, j %ld, q %ld, n %ld, e %ld. A "
+            "record kind was parsed without counting itself, so every host asking which arms of this grammar ran "
+            "is told a kind that ran did not, and a census nobody can check is a census anybody can state",
             recs,
             c->segs + c->flows + c->cands + c->cands_withdrawn + c->worlds + c->orphans + c->commits +
-                c->delivers + c->counters + c->born + c->heapsegs + c->heads + c->scripts,
+                c->delivers + c->counters + c->born + c->heapsegs + c->heads + c->scripts + c->pin_segs +
+                c->pin_blobs + c->registers,
             c->segs, c->flows, c->cands, c->cands_withdrawn,
             c->worlds, c->orphans, c->commits, c->delivers, c->counters, c->born, c->heapsegs, c->heads,
-            c->scripts);
+            c->scripts, c->pin_segs, c->pin_blobs, c->registers);
     DCHECK(c->counters == flows,
            "the rebuild landed a flow without its path counters, or read counters for no flow — the park writes "
            "one 'k' record after every flow's own record");
@@ -3474,6 +3630,8 @@ void cold_free(void)
     g_park_scripts_n = 0;
     park_map_free(&g_park_heap_segs);
     g_park_heap_seg_n = 0;
+    park_map_free(&g_park_pin_segs);
+    g_park_pin_seg_n = 0;
     park_map_free(&g_park_chain_fail);
     for (uint32_t i = 0; i < g_park_chain_gaps_n; i++) park_kinds_free(&g_park_chain_gaps[i]);
     free(g_park_chain_gaps); g_park_chain_gaps = NULL; g_park_chain_gaps_n = 0;

@@ -1119,7 +1119,11 @@ static long cons_entry_bytes(const Cons *e) {
    writing through into a segment a sibling reads. */
 /* `bytes` is the segment's cost, computed once at the freeze, so a census is not O(chain). The cold tier reads
    it, counting a shared segment once for the whole frontier, never once per flow. */
-typedef struct ConsSeg { Cons *e; int n; int *hash; int hash_cap; struct ConsSeg *base; int refcount; long bytes; } ConsSeg;
+/* `serial` names the segment for the life of the process, never reused, so a table keyed by it (solver/cold.c's
+   park document) cannot mistake a later segment for a freed one at the same address. */
+typedef struct ConsSeg { Cons *e; int n; int *hash; int hash_cap; struct ConsSeg *base; int refcount; long bytes;
+                         uint64_t serial; } ConsSeg;
+static uint64_t g_cons_seg_serial;
 /* The frozen constraint chain's own census, the twin of cow.c's and dom_cow.c's, counted where a segment's
    lifetime begins and ends. */
 static long g_cons_seg_live, g_cons_seg_entries_live, g_cons_seg_bytes_live;
@@ -1923,6 +1927,7 @@ void *concolic_pins_suspend(void) {
         CHECK(s, "concolic: OOM freezing the path constraint into a shared segment");
         s->e = g_pins; s->n = g_pins_n; s->hash = g_pins_hash; s->hash_cap = g_pins_hash_cap;
         s->base = g_pins_base; s->refcount = 2;   /* the running flow + this blob */
+        s->serial = ++g_cons_seg_serial;
         {   /* what this segment costs, measured where it is frozen — see the struct */
             int k;
             s->bytes = (long)sizeof *s + (long)s->n * (long)sizeof(Cons)
@@ -2006,6 +2011,276 @@ void concolic_pins_blob_free(void *blob) {
     free(b->head); free(b->head_hash);
     cons_seg_unref(b->seg);
     free(b);
+}
+
+/* The path constraint in the cross-session form (concolic.h). Every Cons field is written in declaration order,
+   so a field added to Cons is written in pin_cons, read in pin_gcons and freed in cons_entry_free. A string is
+   its length plus one (0 for NULL) and its bytes; a number is its bytes, since only the build that wrote them
+   reads them. An index is written as the slots it holds, so a resumed lookup probes what the parked one would. */
+typedef struct { uint8_t *b; size_t n, cap; } PinBytes;
+static void pin_put(PinBytes *o, const void *p, size_t n) {
+    if (o->n + n > o->cap) {
+        size_t c = o->cap ? o->cap : 256;
+        uint8_t *g;
+        while (c < o->n + n) c *= 2;
+        g = realloc(o->b, c);
+        CHECK(g != NULL, "concolic: OOM writing a path constraint in the cross-session form");
+        o->b = g; o->cap = c;
+    }
+    memcpy(o->b + o->n, p, n);
+    o->n += n;
+}
+#define PIN_PUT(o, v) pin_put((o), &(v), sizeof (v))
+static void pin_str(PinBytes *o, const char *s) {
+    uint32_t l = s ? (uint32_t)strlen(s) + 1 : 0;
+    PIN_PUT(o, l);
+    if (l) pin_put(o, s, l - 1);
+}
+static void pin_side(PinBytes *o, const BoundSide *s) {
+    PIN_PUT(o, s->num); pin_str(o, s->txt); PIN_PUT(o, s->present); PIN_PUT(o, s->inclusive);
+}
+static void pin_cons(PinBytes *o, const Cons *e) {
+    uint8_t has;
+    pin_str(o, e->key); pin_str(o, e->val); PIN_PUT(o, e->valkind); PIN_PUT(o, e->val_assumed);
+    PIN_PUT(o, e->nexcl);
+    for (int i = 0; i < e->nexcl; i++) pin_str(o, e->excl[i]);
+    has = e->bnd != NULL; PIN_PUT(o, has);
+    if (has) { pin_side(o, &e->bnd->lo); pin_side(o, &e->bnd->hi); }
+    PIN_PUT(o, e->npred);
+    for (int i = 0; i < e->npred; i++) {
+        pin_str(o, e->pred[i].method); PIN_PUT(o, e->pred[i].nargs);
+        for (int k = 0; k < e->pred[i].nargs; k++) pin_str(o, e->pred[i].args[k]);
+        PIN_PUT(o, e->pred[i].holds);
+    }
+    PIN_PUT(o, e->nleq);
+    for (int i = 0; i < e->nleq; i++) { pin_str(o, e->leq[i].tok); PIN_PUT(o, e->leq[i].kind); }
+    PIN_PUT(o, e->nppin);
+    for (int i = 0; i < e->nppin; i++) {
+        pin_str(o, e->ppin[i].subject); pin_str(o, e->ppin[i].tok);
+        PIN_PUT(o, e->ppin[i].kind); PIN_PUT(o, e->ppin[i].loose);
+    }
+    PIN_PUT(o, e->nptok);
+    for (int i = 0; i < e->nptok; i++) pin_str(o, e->ptok[i]);
+    PIN_PUT(o, e->truth); PIN_PUT(o, e->truth_seen); PIN_PUT(o, e->ex_contra);
+    pin_str(o, e->adec); PIN_PUT(o, e->adec_arm); PIN_PUT(o, e->adec_what); PIN_PUT(o, e->adec_neg);
+    pin_str(o, e->tostr);
+    PIN_PUT(o, e->types_out); PIN_PUT(o, e->lang_in); PIN_PUT(o, e->lang_out);
+    has = e->srange != NULL; PIN_PUT(o, has);
+    if (has) {
+        PIN_PUT(o, e->srange->lo); PIN_PUT(o, e->srange->hi); PIN_PUT(o, e->srange->nex);
+        if (e->srange->nex) pin_put(o, e->srange->ex, (size_t)e->srange->nex * sizeof(double));
+    }
+    PIN_PUT(o, e->nsub);
+    for (int i = 0; i < e->nsub; i++) {
+        pin_str(o, e->sub[i].tok); PIN_PUT(o, e->sub[i].holds); PIN_PUT(o, e->sub[i].last);
+        PIN_PUT(o, e->sub[i].lo); PIN_PUT(o, e->sub[i].hi);
+    }
+}
+static void pin_entries(PinBytes *o, const Cons *e, int n, const int *hash, int hash_cap) {
+    PIN_PUT(o, n);
+    for (int i = 0; i < n; i++) pin_cons(o, &e[i]);
+    PIN_PUT(o, hash_cap);
+    if (hash_cap) pin_put(o, hash, (size_t)hash_cap * sizeof(int));
+}
+
+/* The reader's side: the bytes are input (a residue the trusted zone stored), so a short or malformed field
+   refuses the whole record and nothing it built survives. */
+typedef struct { const uint8_t *p, *end; int bad; } PinIn;
+static void pin_get(PinIn *in, void *d, size_t n) {
+    if (in->bad || (size_t)(in->end - in->p) < n) { in->bad = 1; memset(d, 0, n); return; }
+    memcpy(d, in->p, n);
+    in->p += n;
+}
+#define PIN_GET(in, v) pin_get((in), &(v), sizeof (v))
+static void *pin_zalloc(PinIn *in, size_t n) {
+    void *p;
+    if (in->bad || n == 0) return NULL;
+    p = reclaim_malloc(n);
+    CHECK(p != NULL, "concolic: OOM reading a path constraint in the cross-session form");
+    memset(p, 0, n);
+    return p;
+}
+/* A count of items each at least `unit` bytes long, refused when the rest of the record cannot hold them. */
+static int pin_count(PinIn *in, size_t unit) {
+    int n;
+    PIN_GET(in, n);
+    if (n < 0 || (size_t)n > (size_t)(in->end - in->p) / unit) { in->bad = 1; return 0; }
+    return n;
+}
+static char *pin_gstr(PinIn *in) {
+    uint32_t l;
+    char *s;
+    PIN_GET(in, l);
+    if (in->bad || l == 0) return NULL;
+    if ((size_t)(in->end - in->p) < (size_t)l - 1) { in->bad = 1; return NULL; }
+    s = pin_zalloc(in, l);
+    memcpy(s, in->p, l - 1);
+    in->p += l - 1;
+    if (strlen(s) != l - 1) in->bad = 1;
+    return s;
+}
+static void pin_gside(PinIn *in, BoundSide *s) {
+    PIN_GET(in, s->num); s->txt = pin_gstr(in); PIN_GET(in, s->present); PIN_GET(in, s->inclusive);
+    if (!s->present != !s->txt) in->bad = 1;
+}
+static void pin_gcons(PinIn *in, Cons *e) {
+    uint8_t has;
+    e->key = pin_gstr(in); e->val = pin_gstr(in); PIN_GET(in, e->valkind); PIN_GET(in, e->val_assumed);
+    if (!e->key) in->bad = 1;
+    e->nexcl = pin_count(in, 4); e->excl = pin_zalloc(in, (size_t)e->nexcl * sizeof(char *));
+    for (int i = 0; i < e->nexcl && !in->bad; i++) if (!(e->excl[i] = pin_gstr(in))) in->bad = 1;
+    PIN_GET(in, has);
+    if (has && !in->bad) {
+        e->bnd = pin_zalloc(in, sizeof *e->bnd);
+        pin_gside(in, &e->bnd->lo); pin_gside(in, &e->bnd->hi);
+    }
+    e->npred = pin_count(in, 9); e->pred = pin_zalloc(in, (size_t)e->npred * sizeof *e->pred);
+    for (int i = 0; i < e->npred && !in->bad; i++) {
+        if (!(e->pred[i].method = pin_gstr(in))) in->bad = 1;
+        e->pred[i].nargs = pin_count(in, 4);
+        e->pred[i].args = pin_zalloc(in, (size_t)e->pred[i].nargs * sizeof(char *));
+        for (int k = 0; k < e->pred[i].nargs && !in->bad; k++)
+            if (!(e->pred[i].args[k] = pin_gstr(in))) in->bad = 1;
+        PIN_GET(in, e->pred[i].holds);
+    }
+    e->nleq = pin_count(in, 5); e->leq = pin_zalloc(in, (size_t)e->nleq * sizeof *e->leq);
+    for (int i = 0; i < e->nleq && !in->bad; i++) {
+        if (!(e->leq[i].tok = pin_gstr(in))) in->bad = 1;
+        PIN_GET(in, e->leq[i].kind);
+    }
+    e->nppin = pin_count(in, 10); e->ppin = pin_zalloc(in, (size_t)e->nppin * sizeof *e->ppin);
+    for (int i = 0; i < e->nppin && !in->bad; i++) {
+        e->ppin[i].subject = pin_gstr(in);
+        if (!(e->ppin[i].tok = pin_gstr(in))) in->bad = 1;
+        PIN_GET(in, e->ppin[i].kind); PIN_GET(in, e->ppin[i].loose);
+    }
+    e->nptok = pin_count(in, 4); e->ptok = pin_zalloc(in, (size_t)e->nptok * sizeof(char *));
+    for (int i = 0; i < e->nptok && !in->bad; i++) if (!(e->ptok[i] = pin_gstr(in))) in->bad = 1;
+    PIN_GET(in, e->truth); PIN_GET(in, e->truth_seen); PIN_GET(in, e->ex_contra);
+    e->adec = pin_gstr(in); PIN_GET(in, e->adec_arm); PIN_GET(in, e->adec_what); PIN_GET(in, e->adec_neg);
+    e->tostr = pin_gstr(in);
+    PIN_GET(in, e->types_out); PIN_GET(in, e->lang_in); PIN_GET(in, e->lang_out);
+    PIN_GET(in, has);
+    if (has && !in->bad) {
+        e->srange = pin_zalloc(in, sizeof *e->srange);
+        PIN_GET(in, e->srange->lo); PIN_GET(in, e->srange->hi);
+        e->srange->nex = pin_count(in, sizeof(double));
+        e->srange->ex = pin_zalloc(in, (size_t)e->srange->nex * sizeof(double));
+        if (e->srange->nex && !in->bad) pin_get(in, e->srange->ex, (size_t)e->srange->nex * sizeof(double));
+    }
+    e->nsub = pin_count(in, 6); e->sub = pin_zalloc(in, (size_t)e->nsub * sizeof *e->sub);
+    for (int i = 0; i < e->nsub && !in->bad; i++) {
+        if (!(e->sub[i].tok = pin_gstr(in))) in->bad = 1;
+        PIN_GET(in, e->sub[i].holds); PIN_GET(in, e->sub[i].last);
+        PIN_GET(in, e->sub[i].lo); PIN_GET(in, e->sub[i].hi);
+    }
+}
+/* Entries and their index, as pin_entries wrote them. The index must be a power of two with a free slot and name
+   every entry exactly once, or a probe would loop or answer an entry it does not hold. */
+static Cons *pin_gentries(PinIn *in, int *n_out, int **hash_out, int *cap_out) {
+    int n = pin_count(in, 4), cap, *hash = NULL, seen = 0;
+    Cons *e = pin_zalloc(in, (size_t)n * sizeof(Cons));
+    int got = 0;
+    uint8_t *mark;
+
+    for (; got < n && !in->bad; got++) pin_gcons(in, &e[got]);
+    cap = pin_count(in, sizeof(int));
+    if (!in->bad && (cap ? (cap & (cap - 1)) || cap <= n : n != 0)) in->bad = 1;
+    hash = pin_zalloc(in, (size_t)cap * sizeof(int));
+    if (cap && !in->bad) pin_get(in, hash, (size_t)cap * sizeof(int));
+    mark = pin_zalloc(in, (size_t)n + 1);
+    for (int i = 0; i < cap && !in->bad; i++) {
+        if (hash[i] < 0 || hash[i] > n || (hash[i] && mark[hash[i]]++)) in->bad = 1;
+        seen += hash[i] != 0;
+    }
+    free(mark);
+    if (!in->bad && seen != n) in->bad = 1;
+    if (in->bad) {
+        for (int i = 0; i < got && e; i++) cons_entry_free(&e[i]);
+        free(e); free(hash);
+        return NULL;
+    }
+    *n_out = n; *hash_out = hash; *cap_out = cap;
+    return e;
+}
+
+const void *concolic_pins_blob_chain(const void *blob) { return ((const PinBlob *)blob)->seg; }
+const void *concolic_pins_seg_below(const void *seg) { return ((const ConsSeg *)seg)->base; }
+uint64_t concolic_pins_seg_serial(const void *seg) { return ((const ConsSeg *)seg)->serial; }
+
+uint8_t *concolic_pins_seg_write(const void *seg, size_t *len) {
+    const ConsSeg *s = seg;
+    PinBytes o = { 0 };
+    pin_entries(&o, s->e, s->n, s->hash, s->hash_cap);
+    *len = o.n;
+    return o.b;
+}
+
+uint8_t *concolic_pins_blob_write(const void *blob, size_t *len) {
+    const PinBlob *b = blob;
+    PinBytes o = { 0 };
+    PIN_PUT(&o, b->delivered); PIN_PUT(&o, b->mint_ord);
+    PIN_PUT(&o, b->ex_contra_any); PIN_PUT(&o, b->pin_any); PIN_PUT(&o, b->type_facet_any);
+    PIN_PUT(&o, b->head_cap);
+    pin_entries(&o, b->head, b->head_n, b->head_hash, b->head_hash_cap);
+    *len = o.n;
+    return o.b;
+}
+
+void *concolic_pins_seg_read(const uint8_t *bytes, size_t len, void *below) {
+    PinIn in = { bytes, bytes + len, 0 };
+    ConsSeg *s;
+    int n = 0, cap = 0, *hash = NULL;
+    Cons *e = pin_gentries(&in, &n, &hash, &cap);
+
+    /* A segment is frozen only over a head holding entries (concolic_pins_suspend), so an empty one is refused. */
+    if (in.bad || in.p != in.end || n == 0) {
+        if (e) { for (int i = 0; i < n; i++) cons_entry_free(&e[i]); free(e); free(hash); }
+        return NULL;
+    }
+    s = reclaim_malloc(sizeof *s);
+    CHECK(s != NULL, "concolic: OOM rebuilding a frozen path constraint segment");
+    s->e = e; s->n = n; s->hash = hash; s->hash_cap = cap;
+    s->base = below; s->refcount = 1;
+    s->serial = ++g_cons_seg_serial;
+    if (below) ((ConsSeg *)below)->refcount++;
+    s->bytes = (long)sizeof *s + (long)n * (long)sizeof(Cons) + (long)cap * (long)sizeof(int);
+    for (int k = 0; k < n; k++) s->bytes += cons_entry_bytes(&e[k]);
+    g_cons_seg_live++; g_cons_seg_entries_live += n; g_cons_seg_bytes_live += s->bytes;
+    return s;
+}
+
+void concolic_pins_seg_release(void *seg) { cons_seg_unref(seg); }
+
+void *concolic_pins_blob_read(const uint8_t *bytes, size_t len, void *seg) {
+    PinIn in = { bytes, bytes + len, 0 };
+    PinBlob *b = reclaim_malloc(sizeof *b);
+    int n = 0, cap = 0, *hash = NULL;
+    Cons *e;
+
+    CHECK(b != NULL, "concolic: OOM rebuilding a parked path constraint");
+    memset(b, 0, sizeof *b);
+    PIN_GET(&in, b->delivered); PIN_GET(&in, b->mint_ord);
+    PIN_GET(&in, b->ex_contra_any); PIN_GET(&in, b->pin_any); PIN_GET(&in, b->type_facet_any);
+    PIN_GET(&in, b->head_cap);
+    e = pin_gentries(&in, &n, &hash, &cap);
+    if (in.bad || in.p != in.end || b->head_cap < n) {
+        if (e) { for (int i = 0; i < n; i++) cons_entry_free(&e[i]); free(e); free(hash); }
+        free(b);
+        return NULL;
+    }
+    /* At the capacity the parked head had, so the head grows when the parked one would have. */
+    if (b->head_cap > n) {
+        Cons *g = reclaim_realloc(e, (size_t)b->head_cap * sizeof(Cons));
+        CHECK(g != NULL, "concolic: OOM rebuilding a parked path constraint's head");
+        e = g;
+    }
+    b->head = e; b->head_n = n; b->head_hash = hash; b->head_hash_cap = cap;
+    for (int k = 0; k < n; k++) b->head_bytes += cons_entry_bytes(&e[k]);
+    g_cons_parked_entries_live += n; g_cons_parked_bytes_live += b->head_bytes;
+    b->seg = seg;
+    if (seg) ((ConsSeg *)seg)->refcount++;
+    return b;
 }
 
 /* The ordinal half of a creation name, answered at the engine's creation seam (JSConcolicHooks.mint_ordinal).
