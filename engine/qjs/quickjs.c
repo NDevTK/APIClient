@@ -47341,7 +47341,9 @@ void JS_FlowReachEnd(JSFlowReach *out)
 /* JS_FlowGraph* — see quickjs.h. Host memory throughout, spelled `(free)`/`(realloc)` for the reason the reach
    census gives: a write runs where a runtime allocation could ask for a sale. */
 enum { FG_PLAIN = 1, FG_ARRAY = 2, FG_ERROR = 3, FG_RECORD = 4, FG_CLOSURE = 5, FG_BRAND = 6, FG_PROMISE = 7,
-       FG_RESOLVER = 8, FG_CDATA = 9 };
+       FG_RESOLVER = 8, FG_CDATA = 9, FG_MAP = 10 };
+/* A Map's or Set's [[MapData]] slot, made as the constructor makes it (defined with the collections). */
+static int js_map_state_init(JSContext *ctx, JSValueConst obj, int magic);
 /* Whether `id` is a class whose objects are a brand over ordinary properties: registered by the host, with no
    finalizer, mark, record, call or exotic methods. Host classes only, because a predefined class keeps state in
    the object's union whether or not it declares a hook, and a host class's only state outside its properties is
@@ -48002,6 +48004,7 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
                          : p->class_id == JS_CLASS_PROMISE_RESOLVE_FUNCTION ||
                            p->class_id == JS_CLASS_PROMISE_REJECT_FUNCTION ? FG_RESOLVER
                          : p->class_id == JS_CLASS_C_FUNCTION_DATA ? FG_CDATA
+                         : p->class_id == JS_CLASS_MAP || p->class_id == JS_CLASS_SET ? FG_MAP
                          : w->ctx->rt->class_array[p->class_id].record ? FG_RECORD
                          : fg_class_is_brand(w->ctx->rt, p->class_id) && p->u.opaque == NULL ? FG_BRAND : 0;
             if (kind == 0 && w->survey) { fg_gap(w, out, FG_GAP_CLASS, p->class_id); return; }
@@ -48069,10 +48072,12 @@ static uint32_t fg_realm(FGWriter *w, JSContext *realm)
     return g->n_realms++;
 }
 
+/* A closure cell, defined beside the closures that hold them. */
+static void fg_cell(FGWriter *w, FGBuf *out, JSVarRef *vr);
 /* The own properties of `p` from shape slot `from` on, in shape order: the live count, then each key, its three
-   attributes, and its storage: a value ('V'), an accessor's getter and setter ('G'), or a function's lazily built
-   prototype and the realm it is built in ('L'). A variable reference or another lazy initializer has no writer
-   yet. */
+   attributes, and its storage: a value ('V'), an accessor's getter and setter ('G'), a function's lazily built
+   prototype and the realm it is built in ('L'), or a variable reference's cell ('R', fg_cell). A lazy initializer
+   other than a prototype has no writer yet. */
 static void fg_props(FGWriter *w, FGBuf *out, JSObject *p, int from)
 {
     JSShape *sh = p->shape;
@@ -48085,15 +48090,15 @@ static void fg_props(FGWriter *w, FGBuf *out, JSObject *p, int from)
         if (prs->atom == JS_ATOM_NULL) continue;
         int kind = prs->flags & JS_PROP_TMASK;
         bool lazy_proto = kind == JS_PROP_AUTOINIT && js_autoinit_get_id(&p->prop[i]) == JS_AUTOINIT_ID_PROTOTYPE;
+        bool written = kind == 0 || kind == JS_PROP_GETSET || kind == JS_PROP_VARREF || lazy_proto;
 
-        if (kind != 0 && kind != JS_PROP_GETSET && !lazy_proto && w->survey) {
+        if (!written && w->survey) {
             fg_gap(w, out, FG_GAP_PROP_KIND, kind);
             continue;
         }
-        if (kind != 0 && kind != JS_PROP_GETSET && !lazy_proto) {
-            DCHECKF(false, "flow graph: a private object on a parked graph holds a property of kind %d (a variable "
-                   "reference, or a lazy initializer other than a function's prototype), which has no writer yet",
-                   kind);
+        if (!written) {
+            DCHECKF(false, "flow graph: a private object on a parked graph holds a property of kind %d (a lazy "
+                   "initializer other than a function's prototype), which has no writer yet", kind);
             FG_NO_WRITER();
         }
         fg_key(w, out, prs->atom);
@@ -48106,6 +48111,9 @@ static void fg_props(FGWriter *w, FGBuf *out, JSObject *p, int from)
         } else if (lazy_proto) {
             fg_u8(out, 'L');
             fg_u32(out, fg_realm(w, js_autoinit_get_realm(&p->prop[i])));
+        } else if (kind == JS_PROP_VARREF) {
+            fg_u8(out, 'R');
+            fg_cell(w, out, p->prop[i].u.var_ref);
         } else {
             fg_u8(out, 'V');
             fg_value(w, out, p->prop[i].u.value);
@@ -48257,13 +48265,36 @@ static void fg_cdata(FGWriter *w, FGBuf *out, JSObject *p)
     for (int i = 0; i < s->data_len; i++) fg_value(w, out, s->data[i]);
 }
 
+/* A Map's or Set's [[MapData]] (ECMA-262 §24.1 Map Objects, §24.2 Set Objects): its live records in insertion order,
+   each key and value (a Set's value is undefined). A record a live iterator still holds after its deletion is not
+   data; the iterator object is its own class. */
+static void fg_map(FGWriter *w, FGBuf *out, JSObject *p)
+{
+    JSMapState *s = p->u.map_state;
+    struct list_head *el;
+    uint32_t n = 0;
+
+    DCHECK(s != NULL && !s->is_weak, "flow graph: a Map or Set holds no [[MapData]], or a weak one");
+    fg_u32(out, s->record_count);
+    list_for_each(el, &s->records) {
+        JSMapRecord *mr = list_entry(el, JSMapRecord, link);
+        if (mr->empty) continue;
+        fg_value(w, out, mr->key);
+        fg_value(w, out, mr->value);
+        n++;
+    }
+    DCHECKF(n == s->record_count, "flow graph: a Map or Set counts %u live records and lists %u",
+            s->record_count, n);
+}
+
 /* An object's body: its prototype, whether it is extensible, and its own data properties (fg_props). An array
    writes first whether its elements are dense ('F': stored apart, written as a count and the values) or ordinary
    properties ('S'), then its length's attributes and value, then the properties after the length slot. An Error
    follows its properties with its uncatchable flag and its stack slot, and an object of a class with a record
    layout writes its record ahead of them, so a rebuilt one holds it before its exotic methods are asked. A
    branded host object (fg_class_is_brand) is its class and its properties, and a Promise or a promise resolving
-   function writes its record first (fg_promise, fg_resolver). A weak key or target has no writer yet. */
+   function writes its record first (fg_promise, fg_resolver), a Map or Set its records (fg_map). A weak key or
+   target has no writer yet. */
 static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
 {
     JSObject *p = w->order[id];
@@ -48301,6 +48332,7 @@ static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
         DCHECK(p->u.opaque != NULL, "flow graph: an object of a class with a record layout holds no record");
         fg_record(w, out, p->u.opaque, w->ctx->rt->class_array[p->class_id].record);
     }
+    if (w->kinds[id] == FG_MAP) fg_map(w, out, p);
     fg_props(w, out, p, 0);
     if (w->kinds[id] == FG_ERROR) {
         /* its stack: undefined, the formatted string, or the pending [prepareStackTrace, callsites] pair */
@@ -48887,6 +48919,8 @@ static JSAtom fg_rkey(FGReader *r)
     return a;
 }
 
+/* A cell fg_cell wrote, defined beside the closures that hold them. */
+static JSVarRef *fg_rcell(FGReader *r);
 /* fg_props' record: the live count, then each key, its attributes and its value, defined on `o` in order. */
 /* `extra` is JS_PROP_NO_EXOTIC for a record object, whose own slots are written as the shape holds them. */
 static void fg_rprops(FGReader *r, JSValueConst o, int extra)
@@ -48913,6 +48947,20 @@ static void fg_rprops(FGReader *r, JSValueConst o, int extra)
             CHECK(ri < r->g->n_realms, "flow graph: a lazily built property names no realm the graph holds");
             CHECK(JS_DefineAutoInitProperty(r->g->realms[ri], o, key, JS_AUTOINIT_ID_PROTOTYPE, NULL, fl) >= 0,
                   "flow graph: a rebuilt function refused its lazily built prototype");
+            JS_FreeAtom(r->ctx, key);
+            continue;
+        }
+        if (how == 'R') {
+            JSVarRef *vr = fg_rcell(r);
+            JSProperty *pr;
+
+            CHECK(vr != NULL, "flow graph: a variable reference property names no cell");
+            CHECK(find_own_property(&pr, JS_VALUE_GET_OBJ(o), key) == NULL,
+                  "flow graph: a rebuilt object holds one key twice");
+            pr = add_property(r->ctx, JS_VALUE_GET_OBJ(o), key,
+                              (fl & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE | JS_PROP_ENUMERABLE)) | JS_PROP_VARREF);
+            CHECK(pr != NULL, "flow graph: OOM rebuilding a variable reference property");
+            pr->u.var_ref = vr;   /* fg_rcell's reference */
             JS_FreeAtom(r->ctx, key);
             continue;
         }
@@ -48986,6 +49034,24 @@ static void fg_rclosure(FGReader *r, JSObject *p)
     CHECK(p->u.func.var_refs != NULL, "flow graph: OOM rebuilding a closure's cells");
     for (int i = 0; i < b->closure_var_count; i++) p->u.func.var_refs[i] = fg_rcell(r);
 }
+/* fg_map's records, appended in the order written. */
+static void fg_rmap(FGReader *r, JSObject *p)
+{
+    JSMapState *s = p->u.map_state;
+    uint32_t n = fg_r32(r);
+
+    for (uint32_t k = 0; k < n; k++) {
+        JSValue key = map_normalize_key(r->ctx, fg_rvalue(r)), val = fg_rvalue(r);
+        JSMapRecord *mr;
+
+        CHECK(map_find_record(r->ctx, s, key) == NULL, "flow graph: a rebuilt Map or Set holds one key twice");
+        mr = map_add_record(r->ctx, s, key, JS_MAP_POS_TAIL);
+        CHECK(mr != NULL, "flow graph: OOM rebuilding a Map's or Set's record");
+        JS_FreeValue(r->ctx, key);   /* the record holds its own */
+        mr->value = val;
+    }
+}
+
 static void fg_rcdata(FGReader *r, JSObject *p)
 {
     JSCFunctionData *func;
@@ -49535,7 +49601,7 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
     for (uint32_t i = 0; i < r.n_objs; i++) {
         JSClassID cid = kinds[i] == FG_ERROR ? JS_CLASS_ERROR : JS_CLASS_OBJECT;
 
-        CHECK(kinds[i] >= FG_PLAIN && kinds[i] <= FG_CDATA, "flow graph: an object kind this reader does not know");
+        CHECK(kinds[i] >= FG_PLAIN && kinds[i] <= FG_MAP, "flow graph: an object kind this reader does not know");
         if (kinds[i] >= FG_RECORD) {
             cid = fg_r32(&r);
             CHECK(cid < ctx->rt->class_count &&
@@ -49545,6 +49611,7 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
                        : kinds[i] == FG_RESOLVER ? cid == JS_CLASS_PROMISE_RESOLVE_FUNCTION ||
                                                    cid == JS_CLASS_PROMISE_REJECT_FUNCTION
                        : kinds[i] == FG_CDATA ? cid == JS_CLASS_C_FUNCTION_DATA
+                       : kinds[i] == FG_MAP ? cid == JS_CLASS_MAP || cid == JS_CLASS_SET
                        : fg_class_is_brand(ctx->rt, cid)),
                   "flow graph: an object names a class its kind does not allow in this runtime");
         }
@@ -49557,6 +49624,10 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
             fp->u.func.var_refs = NULL;
         }
         CHECK(!JS_IsException(r.objs[i]), "flow graph: OOM rebuilding an object");
+        /* a collection may mark the shell before its body is read, and the mark reads [[MapData]] */
+        if (kinds[i] == FG_MAP)
+            CHECK(js_map_state_init(ctx, r.objs[i], (int)(cid - JS_CLASS_MAP)) == 0,
+                  "flow graph: OOM rebuilding a Map's or Set's [[MapData]]");
         if (scratch && g->named_objs[i]) {
             scratch[i] = r.objs[i];
             r.objs[i] = js_dup(JS_MKPTR(JS_TAG_OBJECT, g->named_objs[i]));
@@ -49586,6 +49657,7 @@ static int fg_read(JSContext *ctx, const JSFlowGraph *g, JSValue *roots, JSValue
             JSObject *rp = JS_VALUE_GET_OBJ(o);
             rp->u.opaque = fg_rrecord(&r, ctx->rt->class_array[rp->class_id].record);
         }
+        if (kinds[i] == FG_MAP) fg_rmap(&r, JS_VALUE_GET_OBJ(o));
         CHECK(JS_SetPrototypeInternal(ctx, o, proto, false) >= 0, "flow graph: a rebuilt object refused its prototype");
         JS_FreeValue(ctx, proto);
         if (kinds[i] == FG_ARRAY) {
