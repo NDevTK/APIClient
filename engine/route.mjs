@@ -92,13 +92,21 @@ const boot = factory.default ?? factory;
    AND ONE READ COMES FIRST, BEFORE THE FORK, WHICH IS WHAT MAKES THE ANCESTRY FORK REACHABLE AT ALL. A read
    and a post in the ROOT world, taken before the branch, put that world's segment at the peer before either
    child world arrives; the two arms then name it as their nearest ancestor and world_segment forks it. The
-   fixture has to CREATE the precondition its own `forkedFromAncestor` check is about. */
+   fixture has to CREATE the precondition its own `forkedFromAncestor` check is about.
+   `a` posts once `b` says it has loaded. Until the navigation commits, `w` shows its initial about:blank (HTML
+   §7.2.2.1 step 15 navigates after open returns), and a message posted to that Window is never delivered to
+   the document the navigation loads (§9.3.3 step 8 queues the task given targetWindow). `/hold` keeps `a`'s boot
+   timeline live to receive the message; `e.source` is a concrete identity, so the guard forks nothing. */
 const HTML_A = `<!doctype html><script>
   var w = window.open("https://b.test/child", "child");
-  w.postMessage({hello:"root", n: w.length}, "*");
-  if (__FLAGS.role === "admin") { w.postMessage({hello:"admin"}, "*"); } else { w.postMessage({hello:"public"}, "*"); }
-  w.postMessage({hello:"length", n: w.length}, "*");
-  fetch("/resume").then(function () { fetch("/closed?v=" + (typeof w.closed) + ":" + w.closed); });
+  fetch("/hold");
+  window.addEventListener("message", function (e) {
+    if (e.source !== w) return;
+    w.postMessage({hello:"root", n: w.length}, "*");
+    if (__FLAGS.role === "admin") { w.postMessage({hello:"admin"}, "*"); } else { w.postMessage({hello:"public"}, "*"); }
+    w.postMessage({hello:"length", n: w.length}, "*");
+    fetch("/resume").then(function () { fetch("/closed?v=" + (typeof w.closed) + ":" + w.closed); });
+  }, { once: true });
 </script>`;
 /* `/hold` is NEVER answered, and that is the point: `b`'s boot flow stays live and owed, so the second and
    third arrivals have a timeline to arrive in. A document whose every flow has finished cannot receive, and
@@ -114,6 +122,7 @@ const HTML_A = `<!doctype html><script>
    COMPUTE, `closed` is a fact `a` is confidently WRONG about, and only the second one fails silently. */
 const HTML_B = `<!doctype html><script>
   fetch("/hold");
+  opener.postMessage("ready", "*");
   window.addEventListener("message", function (e) {
     fetch("/got?origin=" + e.origin + "&hello=" + e.data.hello + "&n=" + (typeof e.data.n) + ":" + e.data.n);
     if (e.data.hello === "length") window.close();
