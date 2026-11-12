@@ -32766,11 +32766,10 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
     int cold_resumed_cross_slots = g_sess == SESS_RESUME && g_cr.same_build && g_cr.heads > 0 &&
                                    g_cr.cross_identical == g_cr.born + g_cr.heapsegs + g_cr.heads &&
                                    g_cr.cross_differs == 0 && g_cr.cross_refused == 0;
-    /* The bodies born after the seal: their programs written at the park, and at the resume of the same build each
-       parsed again with nothing refused, and some record's body taken from them by its locator. */
+    /* The programs whose bodies the cross-session records name, written at the park. Their read by locator is
+       flow_graph_cross_body_selftest's, in every session: this fixture writes no record holding a body yet, since
+       each such record has another gap. */
     int cold_park_scripts = g_sess == SESS_PARK && g_cp.scripts > 0;
-    int cold_resumed_bodies = g_sess == SESS_RESUME && g_cr.same_build && g_cr.scripts > 0 &&
-                              g_cr.scripts_compiled == g_cr.scripts && g_cr.bodies > 0 && g_cr.cross_refused == 0;
     /* AND BENEATH ALL THREE OF THEM, THE PARK'S REACHABILITY LADDER — because every row above is an OUTCOME
        row and `park-wrote=0` is ONE column over a CONJUNCTION. solver/cold.h has already counted what that
        column folds: FOUR conjuncts, hence fifteen non-satisfying states, every one of them reported as the
@@ -33383,7 +33382,6 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
         { "resumed-segs", cold_resumed_segs, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-same-build", cold_resumed_same, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-cross-slots", cold_resumed_cross_slots, "state.code", SESS_RESUME, .gate = "resumed-same-build" },
-        { "resumed-cross-bodies", cold_resumed_bodies, "state.code", SESS_RESUME, .gate = "resumed-same-build" },
         { "resumed-cand", cold_resumed_cand, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-fired", cold_fired, "state.code", SESS_RESUME },
         { "resumed-keyed-fired", cold_kfired, "state.code", SESS_RESUME },
