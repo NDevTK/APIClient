@@ -7350,9 +7350,12 @@ const SLICE_TWIN_HOST_TURN = { what: "a host turn every microsecond", args: ["--
 const SLICE_TWINS_WORK = SLICE_TWIN_WORKS.map((n) => ({ what: `a slice of ${n} units`, args: ["--slice-work", String(n)],
                                                         rows: ["standSeries", "standMoves", "stepWork"],
                                                         retired: false, drained: true }));
+/* `abort` takes the 31013 twin alone: at 7919 its statements are all answered before its frontier drains, so the
+   fixture ends that twin with members live and the stage could only answer NOT ASKED. */
 const SLICE_PARITY_DOCS = {
   min: [SLICE_TWIN_HOST_TURN], standslice: [SLICE_TWIN_HOST_TURN, ...SLICE_TWINS_WORK],
   ...Object.fromEntries(["envarm", "evsrc", "gridrun", "layoutshed", "saleown", "timers"].map((d) => [d, SLICE_TWINS_WORK])),
+  abort: [SLICE_TWINS_WORK[1]],
 };
 function sliceParityStages(bin, runs) {
   const mine = runs.filter((r) => r.doc && r.doc in SLICE_PARITY_DOCS && "captured" in r);
