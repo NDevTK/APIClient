@@ -9082,16 +9082,18 @@ static JSValue tf_xbody_value(uint32_t name, uint64_t locator, void *opaque)
     const TfXBody *t = opaque;
     return name == 1 ? JS_ProgramBody(t->ctx, t->prog, locator) : JS_UNDEFINED;
 }
+/* A runtime sealed over its pre-boot heap: everything before the seal is born at generation 0, so it is named. */
 static JSContext *tf_xbody_runtime(void)
 {
-    JSRuntime *rt = JS_NewRuntime();
+    JSRuntime *rt;
     JSContext *ctx;
 
+    JS_SetFlowGen(0);
+    rt = JS_NewRuntime();
     CHECK(rt != NULL, "the cross-session body witness could not make a runtime");
     JS_SetGCThreshold(rt, (size_t)-1);
     ctx = JS_NewContext(rt);
     CHECK(ctx != NULL, "the cross-session body witness could not make a context");
-    JS_SetFlowGen(0);
     JS_BaselineSeal(rt);
     return ctx;
 }
