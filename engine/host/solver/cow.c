@@ -3002,9 +3002,10 @@ void cow_slot_each(const CowDelta *d, const void *seg, void (*visit)(const CowSl
     else cow_slot_chunk(d->e, d->n, &w);
 }
 
-/* The cross-session form of a state entry (cow.h's cow_state_cross_each): a body's entered mark is its body and
-   two bytes, so it is the one kind that crosses; every other kind names a C record or an engine blob by address. */
-static bool cow_state_crosses(int kind) { return kind == COW_STATE_BODY; }
+/* The cross-session form of a state entry (cow.h's cow_state_cross_each). A body's entered mark is its body and
+   two bytes, and a shared async object's settlement is its owner and each half's engine blob, whose fields are
+   plain bytes and values (JS_AsyncStateWrite); every other kind names a C record or a blob by address. */
+static bool cow_state_crosses(int kind) { return kind == COW_STATE_BODY || kind == COW_STATE_ASYNC; }
 bool cow_state_kind_crosses(int kind) {
     DCHECKF(kind >= 0 && kind < COW_STATE_KIND_N, "a state kind %d outside COW_STATE_KINDS was asked whether it "
             "crosses a session", kind);
@@ -3013,16 +3014,39 @@ bool cow_state_kind_crosses(int kind) {
 
 typedef struct { JSContext *ctx; void (*put)(JSValue v, void *arg); void *arg; int at; } CowStateWalk;
 static int cow_state_byte(const void *blob) { return blob ? *(const uint8_t *)blob : -1; }
+/* An async blob's bytes as values: each chunk JS_AsyncStateWrite puts is its length, then its bytes four at a
+   time, so the values alone say how the reader's gets divide them. */
+static void cow_state_put_bytes(const void *p, size_t n, void *arg) {
+    CowStateWalk *w = arg;
+
+    w->put(JS_NewInt32(w->ctx, (int32_t)n), w->arg);
+    for (size_t i = 0; i < n; i += 4) {
+        int32_t v = 0;
+        memcpy(&v, (const uint8_t *)p + i, n - i < 4 ? n - i : 4);
+        w->put(JS_NewInt32(w->ctx, v), w->arg);
+    }
+}
+static void cow_state_take(JSValue v, void *arg) { CowStateWalk *w = arg; w->put(v, w->arg); }
 static void cow_state_chunk(CowEntry *e, int n, void *arg) {
     CowStateWalk *w = arg;
 
     for (int i = 0; i < n; i++, w->at++) {
         if (!e[i].is_state || !cow_state_crosses(e[i].state_kind)) continue;
-        DCHECK(e[i].a_len == 1 && JS_VALUE_GET_TAG(e[i].obj) == JS_TAG_FUNCTION_BYTECODE,
-               "a body mark entry holds no bytecode owner or more than its one byte (cow_capture_body_mark)");
         w->put(JS_NewInt32(w->ctx, -1 - e[i].state_kind), w->arg);
         w->put(JS_NewInt32(w->ctx, w->at), w->arg);
         w->put(JS_DupValue(w->ctx, e[i].obj), w->arg);
+        if (e[i].state_kind == COW_STATE_ASYNC) {
+            JSStateBlobIO io = { .put = cow_state_put_bytes, .take = cow_state_take, .arg = w };
+
+            for (int h = 0; h < 2; h++) {
+                const void *blob = h ? e[i].a_cur : e[i].a_base;
+                w->put(JS_NewBool(w->ctx, blob != NULL), w->arg);
+                if (blob) JS_AsyncStateWrite(blob, &io);
+            }
+            continue;
+        }
+        DCHECK(e[i].a_len == 1 && JS_VALUE_GET_TAG(e[i].obj) == JS_TAG_FUNCTION_BYTECODE,
+               "a body mark entry holds no bytecode owner or more than its one byte (cow_capture_body_mark)");
         w->put(JS_NewInt32(w->ctx, cow_state_byte(e[i].a_base)), w->arg);
         w->put(JS_NewInt32(w->ctx, cow_state_byte(e[i].a_cur)), w->arg);
     }
