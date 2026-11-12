@@ -5603,7 +5603,40 @@ static int64_t g_service_work;
 static int64_t g_step_open_work;
 static int64_t g_step_open_compile;   /* …and on quickjs's compile-work counter */
 static int64_t g_step_open_frameless; /* …and on its frameless-work counter */
+static uint64_t g_step_open_births;   /* …and on quickjs's count of the program's births */
 static int g_in_step;
+
+/* The JS objects live when the session's baseline was sealed, which every path's population model begins from. */
+static uint64_t g_gc_path_base;
+static bool g_gc_path_base_set;
+
+int64_t engine_path_births_first(void) {
+    DCHECK(g_gc_path_base_set, "a flow was made before its session sealed the baseline its births are counted over");
+    return (int64_t)JS_GCPathOwe(g_gc_path_base);
+}
+
+/* JSFlowControlHooks.births: the running member's path has borne the JS objects its next path collection is owed at.
+   The collection is owed and priced here, over the path's own population (the objects live at the seal and every
+   birth since), so whether and at what price a crossing owes one is a function of the member's path, whatever
+   other members' births and residency did to the heap. The collector runs it at its next slice and banks the price
+   as service (engine_collect_slice).
+   Named residual. Not covered: the frees the path made, which leave its population model counting every object it
+   bore, because an object its arms share is freed by whichever drops it last. Next diff builds: a path's frees of
+   objects only its own delta holds, counted at the free. Absence shows as: a path collection priced above the
+   collector work it does on a document whose objects die young. */
+static void engine_path_births_due(void) {
+    Flow *f = flow_running();
+    int64_t births;
+
+    DCHECK(f != NULL && g_in_step > 0, "a path's births reached its crossing with no member stepping — the scheduler "
+                                       "arms the count at a step's opening and disarms it at its close");
+    births = f->pc.gc_births + (int64_t)(JS_FlowBirthsLife() - g_step_open_births);
+    DCHECKF(births == f->pc.gc_due, "a member's births reached the crossing armed at %lld with %lld borne — the arm "
+            "and the count read one counter", (long long)f->pc.gc_due, (long long)births);
+    JS_GCOwePath(JS_GetRuntime(g_sess_ctx), JS_GCPathPrice(g_gc_path_base + (uint64_t)births));
+    f->pc.gc_due = births + (int64_t)JS_GCPathOwe(g_gc_path_base + (uint64_t)births);
+    JS_FlowBirthsArm(f->pc.gc_due - births);
+}
 
 /* See engine.h. The open step's part is the fork's coordinate at a branch (engine_sibling_assemble). */
 int64_t engine_reply_clock(const Flow *f) {
@@ -5759,6 +5792,7 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
         sib->pc.path_work += g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work
                           - ((int64_t)JS_FlowCompileWorkLife() - g_step_open_compile);
         sib->pc.framed_work += engine_step_framed();
+        sib->pc.gc_births += (int64_t)(JS_FlowBirthsLife() - g_step_open_births);
     }
     sib->started = 1;                 /* hot: resume from the blobs (and the cloned frame, when there is one) */
     /* The clone is of the parent's selected agent's base, so the arm selects that agent; every other agent's
@@ -12503,7 +12537,7 @@ static const JSFlowControlHooks FC_EXPLORE = { .branch = engine_branch_hook, .ou
                                                .budget_period = ENGINE_QUANTUM_ASK_EVERY,
                                                .work = engine_work_hook,
                                                .parse_units_per_byte = THREAD_WORK_UNITS_PER_BYTE_SCRIPT,
-                                               .stand = engine_stand_rest };
+                                               .stand = engine_stand_rest, .births = engine_path_births_due };
 static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook,      /* candidate re-fire: no fork, still preemptible */
                                                .budget = engine_budget_hook, /* and the same slice: a candidate
                                                                                 holds the thread as any flow does */
@@ -12513,7 +12547,7 @@ static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook,      /* 
                                                                                 sink reading a duration must see the
                                                                                 one the explore run saw */
                                                .parse_units_per_byte = THREAD_WORK_UNITS_PER_BYTE_SCRIPT,
-                                               .stand = engine_stand_rest };
+                                               .stand = engine_stand_rest, .births = engine_path_births_due };
 static const JSFlowControlHooks FC_OFF     = { 0 };
 
 /* The wall clock, which times nothing the scheduler decides on: the cooperative slice and the WFQ's aging charge
@@ -14142,6 +14176,14 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
            "alternative seedings");
     /* The baseline is whole before either seeding: a park names its build by it and a resume compares it. */
     cold_set_baseline_digest(engine_baseline_seal(ctx));
+    {
+        JSLiveCounts lc;
+
+        JS_GetLiveCounts(JS_GetRuntime(ctx), &lc);
+        DCHECK(lc.objects >= 0, "the runtime counts a negative number of live JS objects at the seal");
+        g_gc_path_base = (uint64_t)lc.objects;
+        g_gc_path_base_set = true;
+    }
     /* A residue refused whole for an older name spelling seeds the boot flow, as no residue does. */
     if (!(recipes && *recipes && cold_resume(ctx, recipes)))
         flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* the first flow: the page's scripts, empty decision vector */
@@ -14590,6 +14632,9 @@ static int engine_sched_slice(void) {
             g_step_open_work = step_work0;
             g_step_open_compile = step_compile0;
             g_step_open_frameless = step_frameless0;
+            /* And the births the step bears, counted to the member's next crossing from the same opening. */
+            g_step_open_births = JS_FlowBirthsLife();
+            JS_FlowBirthsArm(cur->pc.gc_due - cur->pc.gc_births);
             /* The stand's count from the same opening: the step's charge reads everything banked from here, and
                what already stands in the interpreter is in it as framed work. */
             JS_FlowStandArm(cur->pc.stand_next - cur->pc.framed_work - (int64_t)JS_FlowPeekRetiredWork());
@@ -14748,6 +14793,8 @@ static int engine_sched_slice(void) {
                into this flow's delta and queues its task on this flow, so its allocations may sell the tail like
                the step's. Nothing since flow_step holds a position in the frontier, and the sale never takes the
                running flow. */
+            if (flow_running() == cur) cur->pc.gc_births += (int64_t)(JS_FlowBirthsLife() - g_step_open_births);
+            JS_FlowBirthsArm(INT64_MAX);
             g_in_step--;
             engine_reclaim_set(prev_reclaim);
             /* The charge, billed to the flow that ran: `flow_age_running` bills whoever the registry says is
@@ -15311,15 +15358,11 @@ int64_t engine_residency_work(void) { return g_residency_work + (int64_t)thread_
    units until nothing is owed or the slice's collector work reaches the quantum, going on from one finished
    collection to the next owed, offering the host its turn after each step (quantum_step_turn_point). No flow
    runs in it. Work is
-   priced at THREAD_WORK_UNITS_PER_KI_GC. A collection that answers the program's own crossing (a path one) is
-   banked in the instance's currency at its price, a function of the path (JSGCCycleStats' `price`), rounded once
-   at its finish, so Level 1 sees the same service whatever is resident; its work past the price, which the
-   resident population caused, is residency work (g_residency_work), as all of a collection residency owed is. It answers YIELD: every flow is where it was. */
-/* Named residual. Not covered: the crossing and the price count the runtime's births and survivors, every
-   member's, so which collection is a path one and what it is priced at depend on how the schedule interleaved
-   the members. Next diff builds: each member's births counted on its path, and a path collection owed by and
-   priced at that member's own crossing. Absence shows as: a drained document's slice twins agreeing on stepWork
-   and differing in serviceWork. */
+   priced at THREAD_WORK_UNITS_PER_KI_GC. A collection that answers members' own crossings (a path one) is banked in
+   the instance's currency at their prices, each a function of its member's path (engine_path_births_due), rounded
+   once at its finish, so Level 1 sees the same service whatever is resident; its work past the price, which the
+   resident population caused, is residency work (g_residency_work), as all of a collection residency owed is. It
+   answers YIELD: every flow is where it was. */
 static int engine_collect_slice(JSRuntime *rt) {
     const uint64_t budget = rest_unit_items(REST_UNIT_GC_WORK);
     int64_t t0 = quantum_thread_us();

@@ -3385,7 +3385,8 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     f->val = 0.0; f->work = 0; f->work_gen = 0; f->visits = 0; f->orphan_seen = 0;
     f->park_slots = 0; f->trail = NULL; f->trail_seen = 0;
     f->pc = (FlowPathCounters){ .path_work = 0, .framed_work = 0, .stand_next = ENGINE_QUANTUM_WORK,
-                                .stand_digest = 14695981039346656037ULL, .stand_moves = 0, .reply_skip = 0 };
+                                .stand_digest = 14695981039346656037ULL, .stand_moves = 0, .reply_skip = 0,
+                                .gc_births = 0, .gc_due = engine_path_births_first() };
     f->resume_armed = 0; f->resume_met = 0; f->resume_restored = 0;
     /* And the dispatch count, which nothing else writes to zero: a member arrives never-chosen and the number only
        rises. */

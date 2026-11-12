@@ -686,6 +686,13 @@ JS_EXTERN bool JS_GCOwed(JSRuntime *rt);
 /* Owe a collection in a driven runtime now, whatever the threshold says: the embedder has a reason of its own (RAM
    pressure). The next step it drives begins it. */
 JS_EXTERN void JS_GCOwe(JSRuntime *rt);
+/* A path collection, owed in a driven runtime by one flow's crossing and priced at `price` units of collector work:
+   the next whole-heap collection answers it and is priced at what every crossing owed since the last one began. */
+JS_EXTERN void JS_GCOwePath(JSRuntime *rt, uint64_t price);
+/* A path's population model, one formula for both owers: the births after which a collection over `population`
+   JS objects owes the next (half again, up to the minimum threshold while they are few), and its price. */
+JS_EXTERN uint64_t JS_GCPathOwe(uint64_t population);
+JS_EXTERN uint64_t JS_GCPathPrice(uint64_t population);
 /* A residency span, for an embedder moving a holder of its own out of the heap and back (a sold flow's release and
    its restore): a JS object born inside one is the embedder's rebuild, not the program's, so it counts toward no
    threshold crossing (JSGCCycleStats' `residency_births`). Spans nest. */
@@ -723,8 +730,8 @@ typedef struct JSGCCycleStats {
     uint64_t births, births_owe, survivors;
     int64_t absent;
     uint64_t residency_births;
-    /* The work the standing (or last) collection did so far, and the work a path collection is priced at: its
-       path population (the last survivors and the births since) at JS_GC_WORK_PER_OBJECT, 0 for any other. */
+    /* The work the standing (or last) collection did so far, and the work a path collection is priced at: the
+       prices of the crossings it answers (JS_GCOwePath), 0 for any other. */
     uint64_t cycle_work, price;
 } JSGCCycleStats;
 JS_EXTERN void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out);
@@ -2287,6 +2294,10 @@ typedef struct JSFlowControlHooks {
        crossing, so where it is called is a function of the path, after `work` has banked and before `preempt` is
        asked. The host moves the flow's stand to the code it is executing and re-arms the count. NULL declines. */
     void (*stand)(JSContext *ctx);
+    /* The running flow's path has borne the JS objects JS_FlowBirthsArm armed: called at the birth that reaches the
+       count, before the object exists, in a driven runtime. The host owes and prices the flow's path collection
+       (JS_GCOwePath) and re-arms; it allocates nothing. NULL with no flow to count for. */
+    void (*births)(void);
 } JSFlowControlHooks;
 JS_EXTERN void JS_SetFlowControlHooks(const JSFlowControlHooks *hooks);
 /* Re-arm the budget's dispatch countdown to a whole period: the scheduler calls it where a slice opens, so the
@@ -2308,6 +2319,10 @@ JS_EXTERN void JS_FlowRetireWork(uint64_t units);
    An arm at or below zero raises the rest at once; the count keeps falling below zero until it is re-armed. */
 JS_EXTERN void JS_FlowStandArm(int64_t left);
 JS_EXTERN int64_t JS_FlowStandLeft(void);
+/* The program's JS object births in a driven runtime on this thread, over the process, and the births left before
+   JSFlowControlHooks.births is called (positive; INT64_MAX arms none). */
+JS_EXTERN uint64_t JS_FlowBirthsLife(void);
+JS_EXTERN void JS_FlowBirthsArm(int64_t left);
 /* The retired-work count standing in the interpreter, unbanked and unchanged: what a budget adds to the work
    already banked to know the running flow's whole work so far. */
 JS_EXTERN uint64_t JS_FlowPeekRetiredWork(void);

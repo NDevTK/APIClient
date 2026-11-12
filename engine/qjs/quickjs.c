@@ -264,12 +264,13 @@ typedef struct JSGCCycle {
        the program's own crossing: only such a collection moves the threshold, so where the next one is owed is a
        function of the program's path and not of what the embedder's residency released. */
     bool owed, owed_host, path;
-    /* What owes a path collection, as functions of the program's path: its JS object births since the last one,
-       births inside a residency span left out (JS_GCResidencyBegin), against `births_owe`, which that collection
-       set from its survivors, the live objects with those a settled flow write holds out of the heap (`absent`,
-       JS_FlowGraphSettle).
-       `price` is the work a standing path collection is priced at. */
-    uint64_t births, births_owe, survivors, price, residency_births;
+    /* The program's JS object births since the last path collection, births inside a residency span left out
+       (JS_GCResidencyBegin), against `births_owe`, which that collection set from its survivors, the live objects
+       with those a settled flow write holds out of the heap (`absent`, JS_FlowGraphSettle). They owe a collection
+       only in a runtime no embedder drives; in a driven one each flow's own crossing owes it (JS_GCOwePath).
+       `price` is the work a standing path collection is priced at, and `price_owed` what the crossings owed since
+       it began are priced at, which the next one takes. */
+    uint64_t births, births_owe, survivors, price, price_owed, residency_births;
     int64_t absent;
     uint32_t residency;
     /* Which collection the trial counts belong to; raised at every begin and restart, never 0. */
@@ -3302,11 +3303,19 @@ JSValue JS_DupValueRT(JSRuntime *rt, JSValueConst v)
    collections, the census's gcWork over the population their trials began with. */
 #define JS_GC_WORK_PER_OBJECT 4
 
+/* The program's JS object births on this thread, over the process (JS_FlowBirthsLife), and the births left before
+   the running flow's next crossing (JS_FlowBirthsArm), whose zero calls the embedder's hook. */
+static _Thread_local uint64_t g_flow_births_life;
+static _Thread_local int64_t g_flow_births_left = INT64_MAX;
+static _Thread_local void (*g_flow_births_due)(void);
+
 /* Asked before a JS object is born. Whether a collection is owed is a function of the flow's path: it counts the
-   program's own births since the last path collection, never the live objects or the allocator's bytes, which move
-   with what the embedder's residency released and rebuilt and differ between builds and hosts. Memory pressure is
-   the embedder's other signal (JS_GCOwe). A birth inside an unpriced span (an assert's condition) owes nothing,
-   since a release build has no such birth, and one inside a residency span is the embedder's rebuild. */
+   program's own births, never the live objects or the allocator's bytes, which move with what the embedder's
+   residency released and rebuilt and differ between builds and hosts. In a driven runtime the births are counted on
+   the running flow's path and its crossing owes the collection (JS_GCOwePath); otherwise the runtime's own count
+   since the last path collection does. Memory pressure is the embedder's other signal (JS_GCOwe). A birth inside an
+   unpriced span (an assert's condition) owes nothing, since a release build has no such birth, and one inside a
+   residency span is the embedder's rebuild. */
 static void js_trigger_gc(JSRuntime *rt)
 {
     bool force_gc;
@@ -3318,6 +3327,14 @@ static void js_trigger_gc(JSRuntime *rt)
         return;
     }
     rt->gc_cycle.births++;
+    if (rt->gc_driven) {
+        g_flow_births_life++;
+        if (unlikely(--g_flow_births_left == 0)) {
+            DCHECK(g_flow_births_due != NULL, "a flow's births reached the crossing it armed with no hook installed");
+            g_flow_births_due();
+        }
+        return;
+    }
 #ifdef FORCE_GC_AT_MALLOC
     force_gc = true;
 #else
@@ -3334,20 +3351,13 @@ static void js_trigger_gc(JSRuntime *rt)
            or run like any other; JS_RunGC finishes the freeing first. */
         if (rt->gc_cycle.in_free_step)
             return;
-        if (rt->gc_driven) {
-            /* Owed, not run: the embedder's scheduler begins it at its next step, where no mutator stands
-               between the begin and the first decref (JS_GCOwed). The threshold moves when it finishes. */
-            rt->gc_cycle.owed = true;
-            return;
-        }
         JS_RunGC(rt);
     }
 }
 
-/* A path collection finished: the next one is owed once the program has borne half again the JS objects that
-   survived this one (up to JS_GC_OBJ_THRESHOLD_MIN while they are few), and a crossing the host made while this
-   one stood is answered by it. The survivors are the live objects with those the embedder holds written out of the
-   heap, which a run that wrote none holds live, so the count is the path's. */
+/* A path collection finished. In a runtime no embedder drives, the next one is owed once the program has borne
+   JS_GCPathOwe of the JS objects that survived this one, the live objects with those the embedder holds written out
+   of the heap. In a driven one a flow's crossing made while this one stood owes the next. */
 static void gc_cycle_finished(JSRuntime *rt)
 {
     JSGCCycle *c = &rt->gc_cycle;
@@ -3357,11 +3367,36 @@ static void gc_cycle_finished(JSRuntime *rt)
             "absent ones", (long long)rt->js_obj_live, (long long)c->absent);
     s = (uint64_t)rt->js_obj_live + (uint64_t)c->absent;
     c->collections++;
-    c->owed = false;
+    c->owed = c->price_owed > 0;   /* a crossing made while this one stood owes the next */
     c->survivors = s;
     c->births = 0;
     if (c->births_owe != UINT64_MAX)
-        c->births_owe = s + (s >> 1) > JS_GC_OBJ_THRESHOLD_MIN ? s >> 1 : JS_GC_OBJ_THRESHOLD_MIN - s;
+        c->births_owe = JS_GCPathOwe(s);
+}
+
+uint64_t JS_GCPathOwe(uint64_t population)
+{
+    return population + (population >> 1) > JS_GC_OBJ_THRESHOLD_MIN ? population >> 1
+                                                                     : JS_GC_OBJ_THRESHOLD_MIN - population;
+}
+
+uint64_t JS_GCPathPrice(uint64_t population) { return population * JS_GC_WORK_PER_OBJECT; }
+
+void JS_GCOwePath(JSRuntime *rt, uint64_t price)
+{
+    DCHECK(rt->gc_driven && price > 0, "a path crossing was owed in a runtime its embedder does not drive, or at "
+                                       "no price");
+    rt->gc_cycle.owed = true;
+    rt->gc_cycle.price_owed += price;
+}
+
+uint64_t JS_FlowBirthsLife(void) { return g_flow_births_life; }
+
+void JS_FlowBirthsArm(int64_t left)
+{
+    DCHECKF(left > 0, "a flow's births were armed %lld short of its crossing — the crossing's hook re-arms past it",
+            (long long)left);
+    g_flow_births_left = left;
 }
 
 /* max overhead for size >= 64: 12.5% */
@@ -11257,8 +11292,10 @@ static void gc_trial_begin(JSRuntime *rt, bool whole)
     init_list_head(&c->scan_done);
     c->step = JS_GC_CYCLE_DECREF;
     c->scoped = !whole;
+    DCHECK(c->price_owed == 0 || c->owed, "path crossings are priced with no collection owed for them");
     c->path = whole && c->owed;
-    c->price = c->path ? (c->survivors + c->births) * JS_GC_WORK_PER_OBJECT : 0;
+    c->price = c->path ? c->price_owed : 0;
+    if (c->path) c->price_owed = 0;
     c->work_begin = c->work;
     if (whole)
         c->owed = c->owed_host = false;
@@ -27261,7 +27298,12 @@ void JS_SetFlowGen(uint32_t gen) { g_flow_gen = gen; }
    two billion dispatches a host that installed none is counting off. It ARMS and does not POLL: a policy is
    installed on the host's own time, outside any slice, and asking the budget there is the one thing the gate's
    flow-base conjunct exists to prevent. */
-void JS_SetFlowControlHooks(const JSFlowControlHooks *h) { g_flow_control = *h; flow_budget_arm(); }
+void JS_SetFlowControlHooks(const JSFlowControlHooks *h)
+{
+    g_flow_control = *h;
+    g_flow_births_due = h->births;
+    flow_budget_arm();
+}
 void JS_FlowBudgetArm(void) { flow_budget_arm(); }
 void JS_SetTimeTravelHooks(const JSTimeTravelHooks *h) { g_time_travel = *h; }
 void JS_SetConcolicHooks(const JSConcolicHooks *h)

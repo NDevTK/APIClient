@@ -7340,15 +7340,15 @@ function pressureParityStages(bin, runs) {
    (engine/regimeparity.mjs's compareSlicing). A host turn every microsecond (`--host-turn-us 1`) moves no slice
    boundary, so its twin keeps the pick digest, the steps and the instance's work as well as the stand series and
    the steps' work. A slice of other work (`--slice-work`, at two odd sizes) moves where steps end, so its twins keep
-   only what is a function of the members' paths, the stand series and the steps' work, and only between two runs
-   that drained. Not the instance's whole work: it holds the collector's path price, a residual named at
-   solver/engine.c's engine_collect_slice. A difference is a DEFECT: something moved where a slice or a turn ended. */
+   only what is a function of the members' paths, the stand series, the steps' work and the service (the steps' work
+   with the path collections' prices, solver/engine.c's engine_path_births_due), and only between two runs that
+   drained. A difference is a DEFECT: something moved where a slice or a turn ended. */
 const SLICE_TWIN_WORKS = [7919, 31013];
 const SLICE_TWIN_HOST_TURN = { what: "a host turn every microsecond", args: ["--host-turn-us", "1"],
                                rows: ["standSeries", "standMoves", "pickDigest", "steps", "stepWork"],
                                retired: true, drained: false };
 const SLICE_TWINS_WORK = SLICE_TWIN_WORKS.map((n) => ({ what: `a slice of ${n} units`, args: ["--slice-work", String(n)],
-                                                        rows: ["standSeries", "standMoves", "stepWork"],
+                                                        rows: ["standSeries", "standMoves", "stepWork", "serviceWork"],
                                                         retired: false, drained: true }));
 /* `abort` takes the 31013 twin alone: at 7919 its statements are all answered before its frontier drains, so the
    fixture ends that twin with members live and the stage could only answer NOT ASKED. */

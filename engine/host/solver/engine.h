@@ -580,6 +580,9 @@ struct Flow;
 int64_t engine_reply_clock(const struct Flow *f);
 int64_t engine_reply_due(const struct Flow *f);
 void engine_reply_wait(struct Flow *f, int64_t work);
+/* The births at which a path from the baseline owes its first path collection: the population it begins with is
+   the JS objects live at the session's seal (engine.c's engine_path_births_due). */
+int64_t engine_path_births_first(void);
 
 /* The disk tier a written stub's bytes and a frozen heap segment's entries move to at the RAM floor and are read
    back from within the session (engine.c's engine_reclaim_tail, engine_sale_restore, cow.c's chain fill): a file

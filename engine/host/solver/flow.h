@@ -178,10 +178,12 @@ typedef struct FlowAgent {
    stand_digest, stand_moves: the stand series, a digest folded at every move to a different code site over the
      move's `framed_work` coordinate and the site's identity, and the number of such moves (flow_stand_at).
    reply_skip: the work an idle flow's reply clock moved to reach its next due point, or with an event loop jump
-     to a deadline (engine.h's engine_reply_clock, engine_reply_wait): the wait while a request is in flight. */
+     to a deadline (engine.h's engine_reply_clock, engine_reply_wait): the wait while a request is in flight.
+   gc_births, gc_due: the JS objects the path has borne since the baseline, and the count at which its next path
+     collection is owed (engine.c's engine_path_births_due). */
 #define FLOW_PATH_COUNTERS(X) \
     X(int64_t, path_work) X(int64_t, framed_work) X(int64_t, stand_next) X(uint64_t, stand_digest) \
-    X(int64_t, stand_moves) X(int64_t, reply_skip)
+    X(int64_t, stand_moves) X(int64_t, reply_skip) X(int64_t, gc_births) X(int64_t, gc_due)
 #define FLOW_PATH_COUNTER_FIELD(type, name) type name;
 typedef struct { FLOW_PATH_COUNTERS(FLOW_PATH_COUNTER_FIELD) } FlowPathCounters;
 #undef FLOW_PATH_COUNTER_FIELD
