@@ -1961,13 +1961,15 @@ void     flow_running_pay(FlowPaidKind kind, uint64_t key, uint64_t len, uint64_
 /* A just-seeded drive's product count (flow.h's `orphan_seen`), re-keyed and raised as a rank change. */
 void  flow_set_orphan_seen(Flow *f, int64_t seen);
 /* The member stands at a code site (FlowSite's identity): a code position named by quickjs's JS_RunningSiteHash
-   (or a program's entry, by its content digest), a driven body named by its orphan hash, or an act the engine
-   forces named by its rung's step unit (solver/step_unit.h). Moves it to its class at that code site in its family
+   (or a program's entry, by its content digest), a driven body named by its orphan hash, an act the engine
+   forces named by its rung's step unit (solver/step_unit.h), or a program's compile, by its content digest. Moves
+   it to its class at that code site in its family
    and raises a rank change; a move to a different code site is folded into the stand series at `coord`, the
    member's `framed_work` at the move (the running member's includes its open step's). */
 #define FLOW_SITE_CODE  1
 #define FLOW_SITE_DRIVE 2
 #define FLOW_SITE_ACT   3
+#define FLOW_SITE_COMPILE 4
 void  flow_stand_at(Flow *f, int kind, uint64_t key, int64_t coord);
 /* The stand series over every member this instance has held, departed and live: the sum of their digests and of
    their move counts. Both are functions of the members' paths, so two runs of one document whose slices end at
@@ -1985,6 +1987,8 @@ void  flow_resume_stand(long *armed, long *met, long *left);
 int64_t flow_optimism_den(const Flow *f);
 /* The work the code site the member stands at has received in its family. */
 int64_t flow_site_served(const Flow *f);
+/* Does `f` stand at the code site (`kind`, `key`)? */
+int     flow_stands_at(const Flow *f, int kind, uint64_t key);
 /* A flow's chain of drives (`orphan_chain`): one more member, or an arm's copy of its parent's first `n`. */
 /* Takes `act` (may be NULL); `doc` is the member's document ordinal. `repeat` admits a body the chain already holds:
    a listener driven again is the next event, where a take hands a body over once per timeline. */
@@ -2124,6 +2128,8 @@ void  flow_age_running(int64_t us, int64_t compile, int64_t frameless);
    shares (flow_age_running). */
 int64_t flow_site_work_lifetime(void);
 int64_t flow_compile_work_lifetime(void);
+/* Lifetime: the work charged to compile sites (FLOW_SITE_COMPILE), every row compile's work among it. */
+int64_t flow_compile_site_work_lifetime(void);
 int64_t flow_frameless_work_lifetime(void);
 int64_t flow_act_work_lifetime(void);
 int64_t flow_charged_work_lifetime(void);

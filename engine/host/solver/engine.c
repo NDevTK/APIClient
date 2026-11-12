@@ -9779,6 +9779,11 @@ int64_t engine_module_parse_bytes(void)  { return g_module_parse_bytes; }
    ended record nothing holds the result of (a SyntaxError is each world's own completion). Lifetime; a report. */
 static int64_t g_compile_paid_work;
 static long    g_compile_rederived;
+/* And the compile work a row's stints ran (not re-run in a residency span): with the paid units, the row compiles'
+   whole work, which the member is charged standing at the compile's site (engine_stand_entry asserts it). A parse
+   inside running code (an event handler's body, `eval`) is not a row compile and stays service of that code. */
+static int64_t g_compile_stint_work;
+int64_t engine_row_compile_work(void) { return g_compile_paid_work + g_compile_stint_work; }
 /* A flow pays a program body's compile the first time its own path asks for it, whoever ran the stints
    (solver/dyn_body.h's record): the work the record holds past what the path paid is charged as compile work, and
    at each of the compile's marks the rest its stint offered there is offered again, so the flow's charges and
@@ -9830,6 +9835,7 @@ static int compile_paid_stint(DynBody *pb, JSContext *realm, const char *name, i
             "a compile stint charged %llu units of compile work and moved its record by %llu — every unit a stint "
             "runs is the compile's progress", (unsigned long long)(JS_FlowCompileWorkLife() - work0),
             (unsigned long long)(dyn_body_compile_done(pb) - done));
+    g_compile_stint_work += (int64_t)(JS_FlowCompileWorkLife() - work0);
     flow_running_pay(FLOW_PAID_COMPILE_WORK, id, 0, dyn_body_compile_done(pb));
     return r;
 }
@@ -10208,17 +10214,18 @@ typedef struct {
     int index;                  /* the register entry a fork rung names, else -1 */
     RowClass row;               /* the cursor row's class, read for the rungs at and below the sequence */
     int job_precedes;           /* a queued task arrived before the row at the cursor (flow_task_precedes) */
-    int site_kind;              /* FLOW_SITE_CODE when `site` names the code the unit enters, else 0 */
+    int site_kind;              /* FLOW_SITE_CODE or FLOW_SITE_COMPILE when `site` names the unit's entry, else 0 */
     uint64_t site;
 } FlowNextUnit;
 
 /* The ladder, read: which rung flow_step takes next for the switched-in flow `f`, and the code that unit enters.
    It writes nothing, so the scheduler asks it after a step to stand the member at its next unit, and flow_step
    asks it at each pass and dispatches on the answer. `entry` is the step's first pass (the one rest point where
-   an agent is chosen); `task_done` is flow_step's `turn_task_done`. A program entry is named by its row's content
-   digest, a job's by JS_JobSiteHash over its callee; flow_step stands the member there as the unit begins
-   (engine_stand_unit). Where a step ended names no site, since whether a step ends between two units is the
-   slice's decision; page code a unit runs moves the member at its rests (engine_stand_rest), on its own path.
+   an agent is chosen); `task_done` is flow_step's `turn_task_done`. A program's start is named by its compile's
+   site (its row's content digest; engine_stand_entry), a job's by JS_JobSiteHash over its callee; flow_step stands
+   the member there as the unit begins (engine_stand_unit). Where a step ended names no site, since whether a step
+   ends between two units is the slice's decision; page code a unit runs moves the member at its rests
+   (engine_stand_rest), on its own path.
    A host rung or a step-machine job names no entry: its own work runs with no page frame and is service at the site
    the member stands at (flow_age_running).
    Named residual. Not covered: the agent choice of a flow with more than one agent, and the rungs below
@@ -10293,7 +10300,7 @@ static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry
             nu.arm = NEXT_PARSE_SPIN;
         } else {
             nu.arm = NEXT_START_PROGRAM;
-            nu.site_kind = FLOW_SITE_CODE;
+            nu.site_kind = FLOW_SITE_COMPILE;
             nu.site = dyn_body_digest(f->dyn[f->script_i]);
         }
         return nu;
@@ -10323,6 +10330,20 @@ static void engine_stand_unit(Flow *f, const FlowNextUnit *nu) {
     DCHECK(nu->arm == NEXT_START_PROGRAM || nu->arm == NEXT_RUN_TASK || nu->arm == NEXT_MICROTASK,
            "a unit entry was stood at for a rung that begins no program or job — only those three name an entry");
     if (nu->site_kind != 0) engine_stand_running(f, nu->site_kind, nu->site);
+}
+
+/* The running member's compile of the row at its cursor has given it a program, so it moves from the compile's site
+   to the program's entry (FLOW_SITE_CODE, the same digest): the compile's work is banked where it is ranked, and the
+   entry's service is the program's own. At one point of the path whichever stint ended the compile. */
+static void engine_stand_entry(Flow *f, const DynBody *pb) {
+    DCHECK(f == flow_running() && flow_stands_at(f, FLOW_SITE_COMPILE, dyn_body_digest(pb)),
+           "a program's entry was stood at by a member that was not standing at that row's compile — the start "
+           "rung names the compile's site, and nothing runs between it and the compile");
+    engine_stand_running(f, FLOW_SITE_CODE, dyn_body_digest(pb));
+    DCHECKF(flow_compile_site_work_lifetime() >= engine_row_compile_work(),
+            "the compile sites were charged %lld units and the row compiles ran %lld — a row's compile ran while its "
+            "member stood away from the compile's site", (long long)flow_compile_site_work_lifetime(),
+            (long long)engine_row_compile_work());
 }
 
 /* flow_step's own reading of the state a rung is decided by names rung `seen`; the answer it dispatches on must
@@ -11303,6 +11324,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     }
                 }
                 f->in_compile = 0;
+                if (have) engine_stand_entry(f, pb);
                 /* The evaluation folds an abrupt completion into its status, so `started` is one answer. */
                 started = have && JS_FlowEvalModuleRecord(prog_ctx, rec, &ev) > 0;
                 if (started) g_module_starts++;
@@ -11428,6 +11450,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 }
                 f->in_compile = 0;
                 started = (flow_frame(f) != NULL);
+                if (started) engine_stand_entry(f, pb);
                 /* §4.12.1.1's classic arm, steps 1-2, here rather than around a call: the arm's third step ("run
                    the classic script") is JS_FlowNew plus every JS_FlowResume after it, spread over any number of
                    scheduler steps with sibling flows running between. A C save/restore bracket would set the slot

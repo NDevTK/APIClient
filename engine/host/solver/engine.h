@@ -611,6 +611,8 @@ long    engine_module_parse_shared(void);
 long    engine_module_rows_reached(void);
 long    engine_module_starts(void);
 int64_t engine_module_parse_bytes(void);
+/* Lifetime: the row compiles' work, paid from a body's record or run in a stint (a report). */
+int64_t engine_row_compile_work(void);
 /* The same counter plus the running flow's standing, unbanked count: the instance's whole retired work at this
    instant, so a bracket's two readings differ by exactly the work done between them. */
 int64_t engine_work_retired(void);

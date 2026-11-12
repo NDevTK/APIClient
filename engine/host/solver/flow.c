@@ -321,7 +321,8 @@ typedef struct FlowAcct {
    The identity is (`kind`, `key`): `kind` 0 is a member that has decided nothing, FLOW_SITE_CODE a code position
    (quickjs's JS_RunningSiteHash: the body's cross-session locator folding the bundle's content digest, plus the
    opcode offset; or a program's entry, its row's content digest), FLOW_SITE_DRIVE a driven body (its orphan hash),
-   FLOW_SITE_ACT an act the engine forces (its rung's step unit).
+   FLOW_SITE_ACT an act the engine forces (its rung's step unit), FLOW_SITE_COMPILE a program's compile (its row's
+   content digest), so the parse is debited apart from the code the program runs at its entry.
    A member stands at its last decision, at the entry of the unit it last began (engine.c's engine_stand_unit), or
    at the code it executed at its last rest (engine_stand_rest, each quantum of service, never of the slice),
    whichever came last, so service is charged to the code whose work it is and every move is a function of the path. */
@@ -388,7 +389,11 @@ static int64_t g_compile_work = 0;
 static int64_t g_frameless_work = 0;
 static int64_t g_act_work = 0;
 static int64_t g_site_work = 0;
+/* And the share of the code sites' work charged at compile sites (FLOW_SITE_COMPILE), which holds every row
+   compile's (engine.c's engine_stand_entry asserts it). */
+static int64_t g_compile_site_work = 0;
 int64_t flow_site_work_lifetime(void) { return g_site_work; }
+int64_t flow_compile_site_work_lifetime(void) { return g_compile_site_work; }
 int64_t flow_compile_work_lifetime(void) { return g_compile_work; }
 int64_t flow_frameless_work_lifetime(void) { return g_frameless_work; }
 int64_t flow_act_work_lifetime(void) { return g_act_work; }
@@ -488,7 +493,7 @@ static FlowSite *flow_site_of(FlowAcct *fam, int kind, uint64_t key, int64_t see
     FlowSite *st;
     size_t i;
     DCHECK(fam != NULL && fam->up == NULL && seen >= 0 && priced >= 0 &&
-               (kind == 0 ? key == 0 : (kind == FLOW_SITE_CODE || kind == FLOW_SITE_DRIVE || kind == FLOW_SITE_ACT)),
+               (kind == 0 ? key == 0 : (kind >= FLOW_SITE_CODE && kind <= FLOW_SITE_COMPILE)),
            "a code site was asked of a node that is not a family root, with a negative drive or priced count, or "
            "with a kind this ledger does not name — sites are the family's, and kind 0 is the one keyless site");
     if (fam->sites) {
@@ -1758,6 +1763,7 @@ static void flow_code_charge(FlowCodeSite *c, int64_t us) {
     if (c->served == 0 && us > 0) pick_ledger_site_served(c->kind, c->key);
     c->served += us;
     g_site_work += us;
+    if (c->kind == FLOW_SITE_COMPILE) g_compile_site_work += us;
     for (FlowSite *st = c->classes; st; st = st->cnext) flow_ix_site_sync(st);
     frontier_rank_changed();
 }
@@ -1841,7 +1847,7 @@ static void flow_resume_meet(Flow *f, int64_t coord) {
 
 void flow_stand_at(Flow *f, int kind, uint64_t key, int64_t coord) {
     DCHECK(f != NULL && f->family != NULL && f->at != NULL &&
-               (kind == FLOW_SITE_CODE || kind == FLOW_SITE_DRIVE || kind == FLOW_SITE_ACT),
+               kind >= FLOW_SITE_CODE && kind <= FLOW_SITE_COMPILE,
            "a code site was stood at by a flow outside the frontier, or with a kind the ledger does not name");
     DCHECKF(coord >= f->pc.framed_work,
             "a member was stood at a code site at coordinate %lld, behind its own framed work %lld — the coordinate "
@@ -4599,6 +4605,10 @@ int64_t flow_optimism_den(const Flow *f) {
 }
 
 int64_t flow_site_served(const Flow *f) { return f->at->code->served; }
+
+int flow_stands_at(const Flow *f, int kind, uint64_t key) {
+    return f->at != NULL && f->at->code->kind == kind && f->at->code->key == key;
+}
 
 /* The queue coordinate: the reward plus the remainder above, what an arrival is placed at
    (flow_arrive_at_virtual_time); every term is a tag a newcomer can stand at, not a reading of its own payload.
