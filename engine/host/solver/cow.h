@@ -619,6 +619,13 @@ typedef struct {
 } CowSlotView;
 /* Each slot entry of `d`'s head (`seg` NULL; the head is not on the heap) or of frozen segment `seg`, in order. */
 void cow_slot_each(const CowDelta *d, const void *seg, void (*visit)(const CowSlotView *v, void *arg), void *arg);
+/* Each state entry of `d`'s head or of frozen segment `seg` whose kind has a cross-session form, as the values
+   `put` takes (a reference each): the negated kind less one, the entry's index, then the kind's fields. A body's
+   entered mark is the only such kind: its body and its base and current bytes (-1 for a half holding none).
+   cow_state_kind_crosses says which kinds these are, so a census names the others. */
+bool cow_state_kind_crosses(int kind);
+void cow_state_cross_each(JSContext *ctx, const CowDelta *d, const void *seg, void (*put)(JSValue v, void *arg),
+                          void *arg);
 /* `d`'s nearest frozen segment and a segment's own base, NULL past the chain's end: identities, borrowed. */
 const void *cow_delta_chain(const CowDelta *d);
 const void *cow_seg_below(const void *seg);

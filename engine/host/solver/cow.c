@@ -3001,3 +3001,39 @@ void cow_slot_each(const CowDelta *d, const void *seg, void (*visit)(const CowSl
     if (seg) cow_seg_each(seg, cow_slot_chunk, &w);
     else cow_slot_chunk(d->e, d->n, &w);
 }
+
+/* The cross-session form of a state entry (cow.h's cow_state_cross_each): a body's entered mark is its body and
+   two bytes, so it is the one kind that crosses; every other kind names a C record or an engine blob by address. */
+static bool cow_state_crosses(int kind) { return kind == COW_STATE_BODY; }
+bool cow_state_kind_crosses(int kind) {
+    DCHECKF(kind >= 0 && kind < COW_STATE_KIND_N, "a state kind %d outside COW_STATE_KINDS was asked whether it "
+            "crosses a session", kind);
+    return cow_state_crosses(kind);
+}
+
+typedef struct { JSContext *ctx; void (*put)(JSValue v, void *arg); void *arg; int at; } CowStateWalk;
+static int cow_state_byte(const void *blob) { return blob ? *(const uint8_t *)blob : -1; }
+static void cow_state_chunk(CowEntry *e, int n, void *arg) {
+    CowStateWalk *w = arg;
+
+    for (int i = 0; i < n; i++, w->at++) {
+        if (!e[i].is_state || !cow_state_crosses(e[i].state_kind)) continue;
+        DCHECK(e[i].a_len == 1 && JS_VALUE_GET_TAG(e[i].obj) == JS_TAG_FUNCTION_BYTECODE,
+               "a body mark entry holds no bytecode owner or more than its one byte (cow_capture_body_mark)");
+        w->put(JS_NewInt32(w->ctx, -1 - e[i].state_kind), w->arg);
+        w->put(JS_NewInt32(w->ctx, w->at), w->arg);
+        w->put(JS_DupValue(w->ctx, e[i].obj), w->arg);
+        w->put(JS_NewInt32(w->ctx, cow_state_byte(e[i].a_base)), w->arg);
+        w->put(JS_NewInt32(w->ctx, cow_state_byte(e[i].a_cur)), w->arg);
+    }
+}
+
+void cow_state_cross_each(JSContext *ctx, const CowDelta *d, const void *seg, void (*put)(JSValue v, void *arg),
+                          void *arg) {
+    CowStateWalk w = { ctx, put, arg, 0 };
+
+    DCHECK(seg != NULL || (d != NULL && !d->head_applied),
+           "a head's state entries were read while it is on the heap — its current halves are the live heap's");
+    if (seg) cow_seg_each(seg, cow_state_chunk, &w);
+    else cow_state_chunk(d->e, d->n, &w);
+}

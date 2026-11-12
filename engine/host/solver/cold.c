@@ -1425,7 +1425,9 @@ static void park_cross_val_none(JSValueConst v, void *arg) { (void)v; (void)arg;
      h<id>,<base-id|-|x>,<hex> a frozen heap segment's slot entries, once per document, over the segment below it
                                (`x`: that one has a part no name reaches and is unwritten);
      p<seg-id|-|x>,<hex>       the parked member's own head's slot entries, a field of the flow record before it.
-   Each <hex> is a JS_FlowGraphCrossWrite over PARK_SLOT_ROOTS values per entry. The heap shows the baseline while
+   Each <hex> is a JS_FlowGraphCrossWrite over PARK_SLOT_ROOTS values per slot entry, then the state entries that
+   cross (cow_state_cross_each), each led by a negative kind where a slot entry's index stands. The heap shows the
+   baseline while
    they are written (cow_baseline_shown), so a shared object's body is the one every member's entries apply over. */
 enum { PARK_SLOT_ROOTS = 13 };
 typedef struct { const void **k; uint32_t *v; size_t cap, n; } ParkPtrMap;
@@ -1575,6 +1577,7 @@ static void park_vals_free(ParkVals *pv)
     free(pv->v);
     memset(pv, 0, sizeof *pv);
 }
+static void park_val_take(JSValue v, void *arg) { park_vals_put(arg, v); }
 /* One slot entry's roots, in the order park_slot_check reads them back. */
 static void park_slot_roots(const CowSlotView *s, void *arg)
 {
@@ -1723,6 +1726,7 @@ static uint32_t park_heap_chain(const void *seg, ParkCrossKinds *k)
         size_t len = 0;
 
         cow_slot_each(NULL, s, park_slot_roots, &pv);
+        cow_state_cross_each(pending_ctx(), NULL, s, park_val_take, &pv);
         b = park_slot_bytes(&pv, UINT32_MAX, "heap slot", &own, &len);
         park_vals_free(&pv);
         if (b) {
@@ -1782,6 +1786,7 @@ static bool park_heap_slots(Flow *f, ParkCrossKinds *k, uint8_t **head, size_t *
     chain_ok = !top || !park_map_get(&g_park_chain_fail, top);
     if (top && !*chain_id) *chain_id = PARK_SEG_UNWRITABLE;
     cow_slot_each(d, NULL, park_slot_roots, &pv);
+    cow_state_cross_each(pending_ctx(), d, NULL, park_val_take, &pv);
     *head = park_slot_bytes(&pv, cow_delta_fork_gen(d), "heap slot", k, head_len);
     park_vals_free(&pv);
     return chain_ok && *head != NULL;
@@ -1882,7 +1887,7 @@ static void park_cross_census(Flow *f, ParkCrossKinds *kinds, bool slots)
         if (c.coro) park_cross_kind(&k, "heap coro");
         if (c.maps) park_cross_kind(&k, "heap map");
         for (int i = 0; states && i < cow_state_kind_count(); i++)
-            if (c.states[i]) {
+            if (c.states[i] && !cow_state_kind_crosses(i)) {
                 char sk[48];
                 snprintf(sk, sizeof sk, "heap state %s", cow_state_kind_name(i));
                 park_cross_kind(&k, sk);
