@@ -25225,7 +25225,7 @@ TF_UNIT void probes_envmix(const char *js, Probe *tab, int *n) {
         int ok = rr_has(js, t[i].at, t[i].want);
         rows[i] = (Probe){ t[i].row, ok, t[i].at, SESS_EXPLORE,
                            ok ? NULL : rr_why(js, t[i].at, t[i].why, whys[i], sizeof whys[i]),
-                           .reach = i ? "envmix-free" : NULL };
+                           .gate = i ? "envmix-free" : NULL };
     }
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
