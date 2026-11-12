@@ -791,7 +791,11 @@ static bool cssd_undef_is_declaration(const char *name, const char *value)
     if (css_var_references(value)) return true;
     /* A `<color>` a later level defines than the vendored grammar — css-color-4 §10.1's color() and CSS Color
        5 §3's color-mix() — is the same question for a property whose value is one: core/css/css_color.h owns
-       that grammar, and a value it refuses stays CSS Syntax 3's invalid declaration. */
+       that grammar, and a value it refuses stays CSS Syntax 3's invalid declaration.
+       Named residual: a shorthand lexbor types with such a colour as one component (`border`, `background`,
+       `text-decoration`) is not admitted. The next diff routes those shorthands through css_shorthand.c's
+       expansion asking css_color_parse for the colour component. Its absence shows as such a shorthand
+       computing every longhand it sets to its initial value. */
     if (cssd_value_is_color(name)) {
         CssColor scratch;
 
