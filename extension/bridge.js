@@ -1824,9 +1824,10 @@ async function frontierGet(key) {
 function frontierAddressRange(sourceUrl) {
   return IDBKeyRange.bound(sourceUrl + "|", sourceUrl + "|￿");
 }
-/* A document's frontier key: its address, its identity (frontierIdentityTag: the cookie partition key and
-   whether its load carries the session) and its bundle id. Two documents at one address under different
-   partitions or credential states park and resume apart. Its caller has asked the address's host. */
+/* A document's frontier key: its address, its identity (frontierIdentityTag: its principal, the cookie partition
+   key and whether its load carries the session) and its bundle id. Two documents at one address under different
+   principals, partitions or credential states park and resume apart, so a residue an engine wrote is read back
+   only by an instance holding the same principal and session. Its caller has asked the address's host. */
 function frontierKeyOf(address, origin, credentialed, bundle) {
   DCHECK(typeof bundle === "string" && /^[0-9a-z]+$/.test(bundle),
          "a frontier key was composed with the bundle id " + JSON.stringify(bundle) + ", not a base-36 number");
@@ -2012,9 +2013,9 @@ function frontierBodiesReady() {
   })();
   return _frontierBodiesConverted;
 }
-/* The one reader of the address-only key: an entry an older build keyed `address|bundle` moves to its
-   identity key (frontierKeyOf over its stored principal and session state), in one transaction that asserts
-   the new key is free. Its body is named by the same one entry, so no reference count moves. */
+/* The one reader of an older key grammar: an entry an older build keyed `address|bundle`, or with an identity
+   naming no principal, moves to its identity key (frontierKeyOf over its stored principal and session state),
+   in one transaction that asserts the new key is free. Its body is named by the same one entry, so no reference count moves. */
 async function frontierKeysConverted(db) {
   const all = await new Promise((res, rej) => {
     const t = db.transaction("frontier").objectStore("frontier").getAll();
@@ -2511,12 +2512,14 @@ function documentIdentityOf(address, origin, credentialed) {
   const pk = _documentPartitionKey(address, origin, credentialed);
   return JSON.stringify([address, pk.topLevelSite, pk.hasCrossSiteAncestor, credentialed]);
 }
-/* The identity half of a frontier key (frontierKeyOf): the same partition key and session state, spelled
-   with no `|`. */
+/* The identity half of a frontier key (frontierKeyOf): the principal, the same partition key and session state,
+   spelled with no `|`. The principal is the stored one, never `stampOrigin`'s: an opaque document's
+   "null:<uuid>" is unique to it, so its residue resumes only through its own rehydration, and a sandboxed
+   document's residue never seeds an instance of its address's tuple origin. */
 function frontierIdentityTag(address, origin, credentialed) {
   const pk = _documentPartitionKey(address, origin, credentialed);
-  return encodeURIComponent(pk.topLevelSite === null ? "" : pk.topLevelSite) + "," +
-         (pk.hasCrossSiteAncestor ? 1 : 0) + "," + (credentialed ? 1 : 0);
+  return encodeURIComponent(origin) + "," + encodeURIComponent(pk.topLevelSite === null ? "" : pk.topLevelSite) +
+         "," + (pk.hasCrossSiteAncestor ? 1 : 0) + "," + (credentialed ? 1 : 0);
 }
 function _documentPartitionKey(address, origin, credentialed) {
   DCHECK(typeof address === "string" && URL.canParse(address) && typeof origin === "string" &&
@@ -3754,6 +3757,12 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          (prior && documentIdentityOf(prior.sourceUrl, prior.origin, prior.credentialed)) + " vs " +
          documentIdentityOf(msg.sourceUrl, msg.origin, msg.credentialed) + ") — the key names the identity, " +
          "so the store and its key have parted");
+  /* …and by a document of the same principal, always: the residue carries engine-written bytes (C offsets
+     among them), so one parked under another principal would let that principal's engine steer this one. */
+  CHECK(!prior || prior.origin === msg.origin,
+        "the cold tier answered this document's frontier key with a residue parked under another principal (" +
+        (prior && prior.origin) + " vs " + msg.origin + ") — frontierKeyOf names the principal, so the store and " +
+        "its key have parted");
   // Phase 2: seed the frontier, fresh or from parked recipes. Each step is one slice, ended at the work quantum.
   /* The residue handed over, named before it is sent: solver/engine.c seeds from recipes or a boot flow and
      never both, so "" is this zone's own statement that nothing was resumed. */

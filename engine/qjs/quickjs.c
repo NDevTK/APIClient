@@ -48647,7 +48647,13 @@ int JS_FlowGraphCrossRead(JSContext *ctx, const uint8_t *bytes, size_t len, cons
     }
     FGX_U32(k);
     if (k > len) goto done;
-    /* An offset is this binary's: the caller reads the cross-session form only under a matching binary digest. */
+    /* An offset is this binary's: the caller reads the cross-session form only under a matching binary digest,
+       which the residue itself states, so a dishonest engine can forge both. Two facts bound what a forged one
+       reaches. The trusted zone hands a residue back only to an instance of the principal and session that
+       parked it (bridge.js frontierKeyOf, CHECKed in engineRoot), so it grants nothing that instance lacked. On
+       the WASM build a 't' offset is a function-table index whose call_indirect checks the call's signature, so
+       a wrong one traps or runs another C function of that type, and a 'd' one is an address in this instance's
+       own linear memory: neither leaves the sandbox. On the native development host neither is a boundary. */
     if (k) {
         g->cfns = fg_grow(NULL, sizeof *g->cfns * k);
         g->cfn_kinds = fg_grow(NULL, k);

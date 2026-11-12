@@ -733,7 +733,11 @@ included. The mark can only narrow `actor`, never widen it, and a `page` caller 
   offscreen directly, so the service worker cannot launder a renderer's message into an extension-origin
   one. What it relays of page traffic is the browser's own webRequest record, which no renderer can author.
 - The engine frame has an opaque origin and keeps nothing between sessions; parked work persists through the
-  offscreen's frontier.
+  offscreen's frontier. A parked residue is engine-written bytes (a same-build resume reads C code offsets out
+  of it), so its key (`frontierKeyOf`) names the principal, cookie partition and session state of the document
+  that parked it, and `engineRoot` `CHECK`s the principal on the way back: only an instance of that principal
+  and session reads it, so a dishonest engine's residue grants nothing beyond what its own instance held. An
+  opaque document's principal is unique to it, so its residue resumes only through its own rehydration.
 
 ## The engine is attacker-controlled
 
