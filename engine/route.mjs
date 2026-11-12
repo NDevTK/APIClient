@@ -639,10 +639,9 @@ async function drainNotices(e) {
       }
       /* The provenance is counted and read nowhere else here, for the `document.fetch` branch's reason: this
          driver serves a literal and spends no network.
-         The parent is not part of the container beside it and is passed on its own: this fixture's `a` opens a
-         cross-origin window, which §7.3.1.7 step 8 makes an auxiliary navigable (a full policy container, no
-         parent and no container element), so the record carries `u` and `null` there, and a driver that folded
-         either into the container could not tell that from a frame.
+         The parent is not part of the container beside it and is passed on its own: an auxiliary navigable
+         (§7.3.1.7 step 8: a full policy container, no parent and no container element) carries `u` and `null`
+         there, and a driver that folded either into the container could not tell that from a frame.
          The child has no response headers of its own in this fixture, so that slot is empty. */
       else engines.push(await makeEngine(HTML_B, f[C.address], f[C.child], '', f[C.topLevelUrl], undefined,
                                          `${f[C.provenance]},${f[C.driven]},${f[C.pinned]}`,
@@ -659,9 +658,9 @@ async function drainNotices(e) {
        only the creator could state (a top-level traversable's is its own address). The instance is NEW rather
        than joined because a swap changes the group, which is half of SECURITY.md's `(browsing context group,
        origin)` key.
-       NOT REACHED BY THIS FIXTURE, and that is stated rather than left to be discovered: `a` opens a
-       CROSS-ORIGIN window, which navigable.c hands to the create notice without ever fetching, so no load job
-       of `a`'s obtains an opener policy at all. What would drive it is a SAME-ORIGIN `window.open` — the
+       Not reached by this fixture, and that is stated rather than left to be discovered: `a`'s cross-origin
+       popup is navigated to a peer by the `navigable.navigate` branch below, and no load job of `a`'s obtains
+       an opener policy that requires a swap. What would drive it is a SAME-ORIGIN `window.open` — the
        navigable is then built in `a`'s own heap and its load job runs here — answered by the `document.fetch`
        branch above with a `cross-origin-opener-policy: same-origin` field line, which `a`'s own `unsafe-none`
        does not match. That is one line in HTML_A and one URL-keyed header in the reply this driver serves. */
@@ -684,6 +683,22 @@ async function drainNotices(e) {
          none. Both are defaults because both are what the section says, not because nothing was known. */
       engines.push(await makeEngine(HTML_B, f[P.address], f[P.document], '', f[P.address], undefined,
                                     `${f[P.provenance]},${f[P.driven]},${f[P.pinned]}`, '', '', ''));
+    }
+    /* A top-level traversable navigated to a document of another origin with §7.1.3.2 keeping its browsing
+       context (core/frame/navigable.c's nav_navigate_to_peer): `a`'s popup, which `window.open` created holding
+       its initial about:blank. The incoming Document is a top-level one at its own address, provisioned in a
+       new instance as for a swap, and its §7.2.2.4 opener survives the navigation: the record states it, and
+       `b` posts to it. */
+    else if (f[0] === 'navigable.navigate') {
+      const P = NAVIGABLE_NOTICE.provision;
+      if (f.length !== P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
+          !f[P.pinned] || !f[P.issuer] || !f[P.opener] || !f[P.held])
+        fail(`a navigable.navigate notice was short of its fields: ${n}`);
+      if (holderOf(f[P.document]))
+        fail(`a navigable.navigate named a document an instance already holds: ${f[P.document]}`);
+      engines.push(await makeEngine(HTML_B, f[P.address], f[P.document], '', f[P.address], undefined,
+                                    `${f[P.provenance]},${f[P.driven]},${f[P.pinned]}`, '', '', '', undefined,
+                                    undefined, undefined, undefined, undefined, 'u', f[P.opener]));
     }
     else if (f[0] === 'windowproxy.post') posts.push({ doc: f[1], world: f[2], record: n, origin: e.origin });
     /* A COMPLETION THIS INSTANCE PRODUCED for an operation it was asked to perform, naming the token this zone
