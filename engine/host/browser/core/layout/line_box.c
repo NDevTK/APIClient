@@ -2534,15 +2534,36 @@ static bool lb_run_holds_child(lxb_dom_element_t *container, BlockFlowRun run, l
     return true;
 }
 
+/* CSS 2.2 §9.6 "Absolute positioning": `position` absolute or fixed. */
+static bool lb_is_absolutely_positioned(lxb_dom_node_t *n)
+{
+    lxb_dom_element_t *el;
+
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    el = lxb_dom_interface_element(n);
+    return css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) ||
+           css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED);
+}
+
 static bool lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbContext *ctx)
 {
     BlockFlowAnonBox *v = NULL;
     size_t n = 0, i, found = 0;
+    BoxTreeChild cc = box_tree_child_of_node(child);
+    bool inline_box = block_flow_child_kind(container, cc) == BLOCK_FLOW_CHILD_INLINE;
     /* §9.2.1.1's own predicate, read only to assert with: the collection below does not branch on it, so it
-       is a second derivation of one fact the closing asserts compare. */
-    bool breaks = block_flow_child_breaks_inline_box(container, box_tree_child_of_node(child));
+       is a second derivation of one fact the closing asserts compare. The one child here with no in-flow
+       inline box is line_box_static_position_ask's own subject, an absolutely positioned box (CSS 2.2 §9.6
+       "Absolute positioning" removes it from the normal flow) whose placeholder lies in one run, so nothing
+       breaks it. */
+    bool breaks = inline_box && block_flow_child_breaks_inline_box(container, cc);
     char cbuf[64], nbuf[64];
 
+    DCHECKF(inline_box || lb_is_absolutely_positioned(child),
+            "<%s> (display `%s`), child <%s>: CSS 2.2 §9.2.1.1's runs were asked for a child that generates no "
+            "in-flow inline-level box and is not the absolutely positioned subject of a static position",
+            lb_el_name(container, cbuf, sizeof cbuf), lb_el_display(container),
+            lb_node_name(child, nbuf, sizeof nbuf));
     ctx->box = NULL;
     ctx->n = 0;
     if (!block_flow_anonymous_boxes_ask(container, &v, &n)) return false;

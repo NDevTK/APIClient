@@ -5,9 +5,10 @@
    Position and the Static-Position Rectangle" puts the static position on that run's line, at its line-over
    side (20px down #sc) and at the inline position the line reached (30px in). #sd's hypothetical box is
    block-level, so §9.2.1.1 breaks the `b` around it: it sits below the anonymous block box holding the
-   first fragment's one 20px line, 20px down #sb and at its left edge. The numbers are derived from those
-   sections, not read off a browser. One of test_forced.c's exploring documents (its TF_DOCS table); it
-   ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
+   first fragment's one 20px line, 20px down #sb and at its left edge. #sw is #sv's shape with no inline box
+   around it, a direct child of the mixed container #sm, so its own run is the one asked. The numbers are
+   derived from those sections, not read off a browser. One of test_forced.c's exploring documents (its
+   TF_DOCS table); it ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_INLINEBOXSTATIC_H
 #define ENGINE_HOST_FIXTURE_INLINEBOXSTATIC_H
 #ifndef TF_CANVAS_INK
@@ -19,10 +20,14 @@ static const char HTML_INLINEBOXSTATIC[] =
     "<div id=sc style=\"position:relative\"><div style=\"height:20px\"></div>"
     "<label><i style=\"display:inline-block;width:30px;height:10px\"></i>"
     "<span id=sv style=\"position:absolute;width:1px;height:1px;overflow:hidden\">x</span></label></div>"
+    "<div id=sm style=\"position:relative\"><div style=\"height:20px\"></div>"
+    "<i style=\"display:inline-block;width:30px;height:10px\"></i>"
+    "<span id=sw style=\"position:absolute;width:1px;height:1px;overflow:hidden\">x</span></div>"
     "<div id=sb style=\"position:relative;font:10px/20px monospace\"><b>aaaa"
     "<div id=sd style=\"position:absolute;width:5px;height:5px\"></div></b></div>"
-    "<script>var v=document.getElementById('sv'),d=document.getElementById('sd');"
-    "fetch('/api/inlineboxstatic?t='+v.offsetTop+'&l='+v.offsetLeft+'&bt='+d.offsetTop+'&bl='+d.offsetLeft);"
+    "<script>var v=document.getElementById('sv'),d=document.getElementById('sd'),w=document.getElementById('sw');"
+    "fetch('/api/inlineboxstatic?t='+v.offsetTop+'&l='+v.offsetLeft+'&bt='+d.offsetTop+'&bl='+d.offsetLeft+"
+    "'&mt='+w.offsetTop+'&ml='+w.offsetLeft);"
     "</script>"
     TF_CANVAS_INK "</body></html>";
 

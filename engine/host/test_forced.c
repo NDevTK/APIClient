@@ -22584,8 +22584,9 @@ TF_UNIT void probes_layoutnest(const char *js, Probe *tab, int *n) {
 /* The rows of the `inlineboxstatic` and `shadowfloats` documents (fixture/inlineboxstatic.h,
    fixture/shadowfloats.h). */
 TF_UNIT void probes_inlineboxstatic(const char *js, Probe *tab, int *n) {
-    const char *si_why = NULL, *sf_why = NULL;
+    const char *si_why = NULL, *sf_why = NULL, *sm_why = NULL;
     int si_tt = !!strstr(js, "\"/api/inlineboxstatic\""), sf_tt = !!strstr(js, "\"/api/shadowfloats\"");
+    int sm_tt = si_tt;
 
     fold_row(&si_tt, &si_why, si_tt,
              "NOT REACHED: there is no /api/inlineboxstatic record at all, so the document aborted before its fetch");
@@ -22598,12 +22599,19 @@ TF_UNIT void probes_inlineboxstatic(const char *js, Probe *tab, int *n) {
              "anonymous block box its split leaves before it");
     fold_row(&si_tt, &si_why, param_value_is(js, "/api/inlineboxstatic", "bl", "0"),
              "CSS 2.2 §9.4.1: a block-level hypothetical box is not at its containing block's left edge");
+    fold_row(&sm_tt, &sm_why, sm_tt,
+             "NOT REACHED: there is no /api/inlineboxstatic record at all, so the document aborted before its fetch");
+    fold_row(&sm_tt, &sm_why, param_value_is(js, "/api/inlineboxstatic", "mt", "20") &&
+                              param_value_is(js, "/api/inlineboxstatic", "ml", "30"),
+             "css-position-3 §3.5.3: an absolutely positioned child of a mixed block container is not on its "
+             "run's line, 20px down and 30px along");
     fold_row(&sf_tt, &sf_why, sf_tt,
              "NOT REACHED: there is no /api/shadowfloats record at all, so the document aborted before its fetch");
     fold_row(&sf_tt, &sf_why, param_value_is(js, "/api/shadowfloats", "w", "10"),
              "CSS 2.2 §10.3.9: a shadow host's shrink-to-fit width is not its shadow tree's 10px");
     const Probe rows[] = {
         { "static-position-in-inline-box", si_tt, "/api/inlineboxstatic", SESS_EXPLORE, si_why },
+        { "static-position-in-mixed-container", sm_tt, "/api/inlineboxstatic", SESS_EXPLORE, sm_why },
         { "float-scan-over-shadow-host", sf_tt, "/api/shadowfloats", SESS_EXPLORE, sf_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
