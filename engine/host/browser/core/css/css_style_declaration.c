@@ -132,6 +132,7 @@
 #include "core/css/css_shorthand.h"
 #include "core/css/css_var.h"   /* css-variables-1 §3's var(), for the parse-time rule below */
 #include "core/timing/thread_work.h"
+#include "core/css/css_color.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
@@ -721,6 +722,23 @@ static bool cssd_has_math_function(const char *value)
    whose grammar says which position is which, and that grammar lives in the component that owns the shorthand;
    a value that is nonetheless one lone math function is still decided here, because a `{1,4}` repetition or an
    omitted optional makes the one-component spelling legal (`margin: calc(1rem)`, `text-indent: calc(2em)`). */
+/* The longhands lexbor's registry types whose whole `Value:` line is `<color>`: css-color-4 §3.2 "Foreground
+   Color: the color property", css-backgrounds-3 §2.2 "Base Color: the background-color property" and §3.1
+   "Line Colors: the border-color properties", and css-text-decor-4 §2.3 "Text Decoration Color: the
+   text-decoration-color property". */
+static bool cssd_value_is_color(const char *name)
+{
+    static const char *const COLOR_LONGHANDS[] = {
+        "color", "background-color", "border-top-color", "border-right-color", "border-bottom-color",
+        "border-left-color", "text-decoration-color",
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof COLOR_LONGHANDS / sizeof COLOR_LONGHANDS[0]; i++)
+        if (strcmp(name, COLOR_LONGHANDS[i]) == 0) return true;
+    return false;
+}
+
 static bool cssd_undef_is_declaration(const char *name, const char *value)
 {
     CssNumericShape shape;
@@ -771,6 +789,14 @@ static bool cssd_undef_is_declaration(const char *name, const char *value)
        was right and the transcription was a typo, and core/css/css_pending_substitution.h now holds the
        sentence checked against the fetched draft.) */
     if (css_var_references(value)) return true;
+    /* A `<color>` a later level defines than the vendored grammar — css-color-4 §10.1's color() and CSS Color
+       5 §3's color-mix() — is the same question for a property whose value is one: core/css/css_color.h owns
+       that grammar, and a value it refuses stays CSS Syntax 3's invalid declaration. */
+    if (cssd_value_is_color(name)) {
+        CssColor scratch;
+
+        return css_color_parse(value, strlen(value), &scratch);
+    }
     if (!cssd_has_math_function(value)) return false;
     shape = css_property_numeric(name, &prods);
     /* The grammar names no numeric production anywhere, so a math function is not a value of this property and
