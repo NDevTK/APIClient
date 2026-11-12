@@ -439,19 +439,6 @@ static char *proxy_strdup(const char *s)
     return c;
 }
 
-/* The one WindowProxy per remote document: the importing half of a navigable's identity, a table rather than a
-   mint at each call site because `w[0] === w[0]`, `w.frames[0] === iframe.contentWindow` and
-   `event.source === event.source` are page-visible identities over one navigable, each false once two sites mint
-   their own proxy for it.
-   The row borrows, which is what allows the table. core/dom/document.h refuses a registry keyed by document, and
-   it is right about the owning kind: a navigable is created per `open()` per flow, so an owning row would be an
-   immortal root holding a proxy for every navigable a forced-execution frontier ever created. A borrowed entry
-   exists only while something else holds the proxy, and proxy_finalizer takes the row out when the collector
-   takes the object, so the table is exactly the set of live remote navigables and names keep nothing alive. */
-typedef struct { uint32_t doc; JSValueConst proxy; } RemoteNav;
-static RemoteNav *g_remote_navs;
-static int        g_remote_navs_n, g_remote_navs_cap;
-
 /* Every WindowProxy this agent has minted, scanned on the proxy's own per-flow `doc`: the (document, world) keying
    a per-document registry row cannot express. A document's realm is a POD field inside the record a write
    captures (PROXY_REC above), so two flows that each read through one srcless navigable hold two realms for one
@@ -581,16 +568,9 @@ static void proxy_finalizer(JSRuntime *rt, JSValue val)
     ProxyData *p = proxy_collector_record(val);
     int i;
     (void)rt;
-    /* The row goes first, unconditionally: it names this object by pointer, so a row left behind would hand the
-       next ask for that document a freed proxy. Above the `p` assert because the table's claim is about the
-       object, not the record hanging off it. */
-    for (i = 0; i < g_remote_navs_n; i++)
-        if (JS_VALUE_GET_PTR(g_remote_navs[i].proxy) == JS_VALUE_GET_PTR(val)) {
-            g_remote_navs[i] = g_remote_navs[--g_remote_navs_n];
-            break;
-        }
-    /* The live-navigable row, for the same reason and in the same place: a row left behind would have the next
-       scan read a freed record's `doc` and answer a realm for a navigable that no longer exists. */
+    /* The live-navigable row goes first, unconditionally: it names this object by pointer, so a row left behind
+       would have the next scan read a freed record's `doc` and hand back a freed proxy. Above the `p` assert
+       because the table's claim is about the object, not the record hanging off it. */
     for (i = 0; i < g_live_navs_n; i++)
         if (JS_VALUE_GET_PTR(g_live_navs[i]) == JS_VALUE_GET_PTR(val)) {
             g_live_navs[i] = g_live_navs[--g_live_navs_n];
@@ -1182,47 +1162,11 @@ static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origi
     p->doc = doc;
     p->creator = flow_running_world();
     JS_SetOpaque(obj, p);
-    /* A remote proxy is in both tables, which answer two questions. The remote table answers a peer's navigable's
-       identity (`w[0] === w[0]` over a document another instance holds); this one answers which navigable of
-       this agent names a document in the asking timeline, and a remote one's realm is a NULL that
-       `world_doc_hosted` already gates every caller on. Recording it keeps live_nav_of_document's
-       at-most-one-row-per-document invariant total. */
+    /* The live-navigable table answers a peer document's navigable as it answers a hosted one's, per timeline
+       (window_proxy_of_document), which is what makes `w[0] === w[0]` and `event.source === w` one object; a
+       remote proxy's realm is a NULL that `world_doc_hosted` already gates every caller on. */
     live_nav_record(obj);
     return obj;
-}
-
-/* The row that makes a peer's navigable one object: this instance's proxy for document `doc`. Without it the next
-   ask mints a second proxy and `w.frames[0] === iframe.contentWindow` is false about one window. A function for
-   its two invariants, which hold for every row however it got there: a row for a document this agent hosts is a
-   second answer to a question the document's own realm answers, and a second row for one document makes
-   `w[0] === w[0]` decide by which row the scan reached first. Both are properties of the table, so they are
-   asserted where a row is made. */
-static void remote_nav_record(JSValueConst proxy, uint32_t doc)
-{
-    int i;
-
-    DCHECK(!world_doc_hosted(doc),
-           "a remote-navigable row was recorded for a document whose realm this agent HOLDS — the row is what "
-           "window_proxy_of_document answers a peer's identity from, and a hosted document is answered by its "
-           "own realm instead, so a row for one is a second answer to a question that already has one");
-    for (i = 0; i < g_remote_navs_n; i++)
-        DCHECK(g_remote_navs[i].doc != doc || nav_row_gone(g_remote_navs[i].proxy) ||
-               !proxy_of_this_timeline(JS_GetOpaque(g_remote_navs[i].proxy, g_proxy_class)),
-               "a SECOND remote-navigable row was recorded for one document in one timeline — the table maps a "
-               "peer's document to the one proxy that resolves it in each timeline, so two rows make `w[0] === "
-               "w[0]` decide by which row the scan reached first");
-    if (g_remote_navs_n == g_remote_navs_cap) {
-        int cap = g_remote_navs_cap ? g_remote_navs_cap * 2 : 8;
-        RemoteNav *g = lexbor_realloc(g_remote_navs, (size_t)cap * sizeof *g);
-
-        CHECK(g != NULL, "window proxy: OOM recording a remote navigable's identity — an unrecorded navigable "
-                         "is minted again on the next ask, and `w[0] === w[0]` is then false about one window");
-        g_remote_navs = g;
-        g_remote_navs_cap = cap;
-    }
-    g_remote_navs[g_remote_navs_n].doc = doc;
-    g_remote_navs[g_remote_navs_n].proxy = proxy;   /* borrowed: proxy_finalizer takes the row out */
-    g_remote_navs_n++;
 }
 
 /* Which realm of this agent the document named `doc` is, in the timeline that is asking (see the header, and
@@ -1273,15 +1217,12 @@ WindowProxyDocumentState window_proxy_document_state(uint32_t doc)
 
 JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc)
 {
-    int i;
-
     DCHECK(doc != 0, "the WindowProxy of document zero was asked for — zero is the world registry's NONE, so "
                      "the caller is holding a handle it never resolved rather than a document");
-    /* A document this agent hosts is answered by its own navigable, never out of the remote table below, which maps
-       a peer's document to the one proxy that resolves it; a row there for a hosted document would be a second
-       answer. The navigable is the authority and the realm is read off it (no instance-global document-to-realm
-       row is right once two timelines have each materialized one), and the round trip is asserted below: the two
-       directions of the binding must name one object. */
+    /* A document this agent hosts is answered by its own navigable. The navigable is the authority and the realm
+       is read off it (no instance-global document-to-realm row is right once two timelines have each
+       materialized one), and the round trip is asserted below: the two directions of the binding must name one
+       object. */
     if (world_doc_hosted(doc)) {
         JSValueConst held = live_nav_of_document(doc);
         JSContext *realm;
@@ -1341,11 +1282,13 @@ JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc)
                "the (document -> navigable) and (realm -> navigable) directions of one binding disagree");
         return JS_DupValue(ctx, held);
     }
-    for (i = 0; i < g_remote_navs_n; i++)
-        if (g_remote_navs[i].doc == doc && !nav_row_gone(g_remote_navs[i].proxy) &&
-            proxy_of_this_timeline(JS_GetOpaque(g_remote_navs[i].proxy, g_proxy_class)))
-            return JS_DupValue(ctx, g_remote_navs[i].proxy);
-    return JS_UNDEFINED;
+    /* A peer's document is answered by this agent's navigable whose active document it is in this timeline: one
+       minted remote (window_proxy_new_remote) or one navigated to the peer (window_proxy_navigate_to_peer), the
+       latter being the opener's own `w` for the popup it opened. */
+    {
+        JSValueConst held = live_nav_of_document(doc);
+        return JS_IsUndefined(held) ? JS_UNDEFINED : JS_DupValue(ctx, held);
+    }
 }
 
 JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *origin, const char *name,
@@ -1362,7 +1305,7 @@ JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *or
            "by §7.4 before any navigable is minted (world_doc_adopt), and minting would give one navigable a "
            "second proxy that resolves nothing");
     /* The refusal is a guard as well as an assert, because `!world_doc_hosted(doc)` is the mint's own
-       precondition (window_proxy_new_remote and remote_nav_record assert it too), and all three asserts are
+       precondition (window_proxy_new_remote asserts it too), and both asserts are
        compiled out of the shipped build. Minting in release would `live_nav_record` a second row for `doc`,
        breaking live_nav_of_document's at-most-one-row invariant, and hand the next scan a record whose `window`
        is undefined and whose origin is a peer's, so a same-origin read of this agent's own navigable would answer
@@ -1384,7 +1327,6 @@ JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *or
     if (world_doc_hosted(doc)) return JS_UNDEFINED;
     obj = window_proxy_new_remote(ctx, doc, origin, name, parent, opener);
     if (JS_IsException(obj)) return obj;
-    remote_nav_record(obj, doc);
     return obj;
 }
 
@@ -3953,7 +3895,6 @@ void window_proxy_init(JSContext *ctx)
         agent_state_atom(WP_COMPONENT, &g_xo_fallback[i],
                          "one of §7.2.1.3.2 CrossOriginPropertyFallback ( P )'s names, interned");
     agent_state_ptr(WP_COMPONENT, &g_strings, "every origin and name string a proxy of this agent recorded");
-    agent_state_ptr(WP_COMPONENT, &g_remote_navs, "the one WindowProxy per REMOTE document of this agent");
     agent_state_ptr(WP_COMPONENT, &g_live_navs, "every live WindowProxy of this agent, scanned on its per-flow doc");
     /* §7.2.2.1's name is an attacker source where it is minted unknown (window_proxy_name_value): another
        document names this navigable and then navigates it here. */
@@ -3997,11 +3938,6 @@ void window_proxy_free(JSRuntime *rt)
        released with the agent that interned them. */
     for (i = 0; i < CROSS_ORIGIN_NAME_N; i++) { JS_FreeAtomRT(rt, g_xo_atom[i]); g_xo_atom[i] = JS_ATOM_NULL; }
     for (i = 0; i < XO_FALLBACK_N; i++) { JS_FreeAtomRT(rt, g_xo_fallback[i]); g_xo_fallback[i] = JS_ATOM_NULL; }
-    /* The remote-navigable rows borrow, so this frees the table and nothing in it. Emptying it keeps a finalizer
-       running later in the teardown from scanning freed storage: the loop reads n == 0 and touches nothing. */
-    free(g_remote_navs);
-    g_remote_navs = NULL;
-    g_remote_navs_n = g_remote_navs_cap = 0;
     /* The live-navigable table borrows likewise and is emptied for the same reason: a finalizer running later in
        this teardown scans it, and a freed table with a nonzero count is storage it would walk. */
     free(g_live_navs);
