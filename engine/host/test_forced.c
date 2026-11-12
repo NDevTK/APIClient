@@ -9067,6 +9067,111 @@ TF_UNIT void flow_graph_closure_selftest(void)
     JS_FreeRuntime(rt);
 }
 
+/* @GRAPHRT across two runtimes of one build, each sealed over the same pre-boot heap: a closure born after the seal
+   over a private cell, from a program JS_FlowCompileStep compiled, is written in the cross-session form in the
+   first and read in the second, which parsed the first's recorded program again (JS_CompiledScriptGet) and ran
+   none of it. The rebuilt closure runs the second runtime's body at the same locator over a cell holding the
+   original's value, and written again it gives the same bytes. A third runtime, holding a program one byte
+   different, has no body at that locator, and its read is refused. */
+static uint32_t tf_xbody_born_name(JSValueConst v, void *opaque) { (void)v; (void)opaque; return 0; }
+static JSValue tf_xbody_born_value(uint32_t name, void *opaque) { (void)name; (void)opaque; return JS_UNDEFINED; }
+static uint32_t tf_xbody_script_name(uint32_t script, void *opaque) { (void)opaque; return script + 1; }
+typedef struct { JSContext *ctx; JSValue prog; } TfXBody;
+static JSValue tf_xbody_value(uint32_t name, uint64_t locator, void *opaque)
+{
+    const TfXBody *t = opaque;
+    return name == 1 ? JS_ProgramBody(t->ctx, t->prog, locator) : JS_UNDEFINED;
+}
+static JSContext *tf_xbody_runtime(void)
+{
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx;
+
+    CHECK(rt != NULL, "the cross-session body witness could not make a runtime");
+    JS_SetGCThreshold(rt, (size_t)-1);
+    ctx = JS_NewContext(rt);
+    CHECK(ctx != NULL, "the cross-session body witness could not make a context");
+    JS_SetFlowGen(0);
+    JS_BaselineSeal(rt);
+    return ctx;
+}
+/* The second half: `src` parsed in a fresh sealed runtime, then `bytes` read against it; answers the read's code,
+   and the rebuilt closure's two calls and its bytes written again when it was read. */
+static int tf_xbody_read(const JSCompiledScriptView *sv, const char *src, const uint8_t *bytes, size_t len,
+                         int32_t *ran, uint8_t **again, size_t *again_len)
+{
+    JSContext *ctx = tf_xbody_runtime();
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    TfXBody t = { ctx, JS_UNDEFINED };
+    const JSFlowGraphCross x = { tf_xbody_born_name, tf_xbody_born_value, NULL, &t, false, tf_xbody_script_name,
+                                 tf_xbody_value };
+    JSValue back[1] = { JS_UNDEFINED }, g, v;
+    int rc;
+
+    CHECK(JS_FlowCompileStep(ctx, src, strlen(src), sv->name, sv->flags, &t.prog, NULL) == 1,
+          "the cross-session body witness's second runtime could not parse the recorded program");
+    CHECK(JS_CompiledScriptCount(rt) == 1, "the second runtime did not record the program it parsed");
+    JS_SetFlowGen(9);
+    rc = JS_FlowGraphCrossRead(ctx, bytes, len, &x, back, 1);
+    if (rc == 0) {
+        *again = JS_FlowGraphCrossWrite(ctx, back, 1, 0, &x, again_len);
+        g = JS_GetGlobalObject(ctx);
+        CHECK(JS_SetPropertyStr(ctx, g, "rebuilt", back[0]) >= 0, "the witness could not name its closure");
+        JS_FreeValue(ctx, g);
+        v = tf_graph_program(ctx, "rebuilt() * 100 + rebuilt()");
+        JS_ToInt32(ctx, ran, v);
+        JS_FreeValue(ctx, v);
+    }
+    JS_FreeValue(ctx, t.prog);
+    JS_SetFlowGen(0);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+    return rc;
+}
+TF_UNIT void flow_graph_cross_body_selftest(void)
+{
+    static const char src[] = "(function () { var c = 41; return () => ++c; })()";
+    static const char other[] = "(function () { var c = 41; return () => ++c; })() ";
+    JSContext *ctx = tf_xbody_runtime();
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    const JSFlowGraphCross x = { tf_xbody_born_name, tf_xbody_born_value, NULL, NULL, false, tf_xbody_script_name,
+                                 NULL };
+    JSCompiledScriptView sv;
+    JSValue fn;
+    JSFlowGraph *s;
+    uint8_t *bytes, *again = NULL;
+    size_t len, again_len = 0;
+    int32_t ran = 0, ran_other = 0;
+    int rc, rc_other, same;
+
+    JS_SetFlowGen(5);
+    fn = tf_graph_program(ctx, src);
+    CHECK(JS_CompiledScriptCount(rt) == 1, "the first runtime did not record the program it compiled");
+    JS_CompiledScriptGet(rt, 0, &sv);
+    s = JS_FlowGraphCrossSurvey(ctx, &fn, 1, 0, &x);
+    CHECKF(JS_FlowGraphGap(ctx, s, UINT32_MAX, NULL, 0, &(uint32_t){ 0 }) == 0,
+           "the cross-session body witness's closure has a part no name reaches (%u gap kinds)",
+           JS_FlowGraphGap(ctx, s, UINT32_MAX, NULL, 0, &(uint32_t){ 0 }));
+    JS_FlowGraphFree(ctx, s);
+    bytes = JS_FlowGraphCrossWrite(ctx, &fn, 1, 0, &x, &len);
+    rc = tf_xbody_read(&sv, src, bytes, len, &ran, &again, &again_len);
+    rc_other = tf_xbody_read(&sv, other, bytes, len, &ran_other, &(uint8_t *){ NULL }, &(size_t){ 0 });
+    same = rc == 0 && again && again_len == len && !memcmp(again, bytes, len);
+    printf("@GRAPHRT {\"crossBodyBytes\":%zu,\"identical\":%d,\"ran\":%d,\"otherRefused\":%d}\n", len, same,
+           (int)ran, rc_other < 0);
+    CHECK(rc == 0, "a closure's body written in the cross-session form was refused by a runtime holding its program");
+    CHECK(same, "a closure rebuilt from the cross-session form did not write the same bytes as its original");
+    CHECKF(ran == 4243, "the rebuilt closure answered %d, not 42 then 43 (4243): it does not run its program's "
+           "body over a cell holding the original's value", (int)ran);
+    CHECK(rc_other < 0, "a runtime whose program differs by one byte read a body at the original's locator");
+    free(bytes);
+    free(again);
+    JS_FreeValue(ctx, fn);
+    JS_SetFlowGen(0);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+}
+
 /* @GRAPHRT over an Error's call sites, on a runtime of its own: an Error thrown from a nested function above the
    floor parks its frames as CallSite records in its stack slot. The Error is written, rebuilt and written again;
    the bytes must agree, and the rebuilt Error's rendered `stack` must be the original's. */
@@ -48683,6 +48788,7 @@ int main(int argc, char **argv) {
     gc_free_step_selftest();
     flow_graph_selftest();
     flow_graph_closure_selftest();
+    flow_graph_cross_body_selftest();
     flow_graph_callsite_selftest();
     flow_graph_brand_selftest();
     flow_graph_promise_selftest();
