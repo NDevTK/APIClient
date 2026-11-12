@@ -225,6 +225,11 @@ typedef struct {
        job navigates to `about:blank` for real, and that document is not the initial one.
        Per flow like the rest of this record, through the capture in proxy_of. */
     uint8_t ever_navigated;
+    /* Which of the Documents this navigable has shown is its active document: 0 for the one §7.4 created it
+       with, and one more at each write that replaces the active document (window_proxy_navigate,
+       window_proxy_navigate_to_peer). A document handle cannot say it: a load that replaces an unmaterialized
+       initial about:blank keeps that Document's handle (navigable.c). Per flow, through proxy_of. */
+    uint32_t active_document;
     /* HTML §7.3's "is created by web content", a top-level traversable's, one of the two disjuncts of §7.2.2.1's
        script-closable. §7.3's create-a-new-top-level-traversable is reached from `window.open()` (navigable_open),
        so every navigable window_proxy_new mints was created by web content, and the one window_proxy_new_self
@@ -784,6 +789,7 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
     /* The navigable no longer shows what §7.4 created it with (see `ever_navigated`), written at the site that
        replaces a navigable's active document. */
     p->ever_navigated = 1;
+    p->active_document++;
 }
 
 void window_proxy_navigate_to_peer(JSContext *ctx, JSValueConst proxy, uint32_t doc, const char *url,
@@ -820,6 +826,7 @@ void window_proxy_navigate_to_peer(JSContext *ctx, JSValueConst proxy, uint32_t 
     p->top_level_url = proxy_strdup(url);
     p->top_level_origin = origin;
     p->ever_navigated = 1;
+    p->active_document++;
     DCHECK(window_proxy_is_remote(proxy),
            "a navigable navigated to a peer's document still answers as one this agent hosts");
 }
@@ -1579,6 +1586,13 @@ bool window_proxy_familiar_with(JSContext *ctx, JSValueConst proxy)
     }
     JS_FreeValue(ctx, b);
     return ok;
+}
+
+uint32_t window_proxy_active_document(JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+    DCHECK(p != NULL, "the active document of something that is not a WindowProxy was asked for");
+    return p->active_document;
 }
 
 bool window_proxy_destroyed(JSValueConst proxy)

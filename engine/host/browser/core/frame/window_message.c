@@ -104,8 +104,10 @@ static int     g_deliver_stepid = -1;   /* §9.3.3's queued delivery task, as a 
 /* PQ_DATA_SRC is the attacker-source name this delivery's `data` is minted under, or null for a message whose
    sender is this agent. window_message_deliver_remote decides it where the stamp is in hand, so the task reads
    that decision rather than re-deriving it from the origin it carries. */
+/* PQ_TARGET_DOCUMENT is window_proxy_active_document of the target when the task was queued: §9.3.3 step 8
+   queues a global task given targetWindow, so the task's document is that Window's associated Document. */
 enum { PQ_DATA = 0, PQ_HOLDERS, PQ_TARGET_ORIGIN, PQ_SOURCE, PQ_SENDER_ORIGIN, PQ_ROUTED, PQ_SYMBOLS, PQ_DATA_SRC,
-       PQ_N };
+       PQ_TARGET_DOCUMENT, PQ_N };
 
 /* READ, NEVER DEFAULTED. A `JS_ToBool` over whatever came back would turn "the producer stopped writing this"
    into the perfectly plausible answer `false`, and the census would then quietly describe none of the routed
@@ -181,6 +183,26 @@ static void delivery_end(JSContext *ctx, WmDeliverTask *s, int end)
         engine_routed_task_end(end);
 }
 
+/* HTML §8.1.7.1 Definitions: "A task is runnable if its document is either null or fully active". The task's
+   document is the target Window's associated Document (§9.3.3 step 8 queues a global task given targetWindow),
+   and a navigable whose active document has since been replaced no longer shows it, so the task never runs: a
+   message posted to a popup's initial about:blank is not delivered to the document its navigation loads. */
+static bool delivery_document_replaced(JSContext *ctx, JSValueConst target, JSValueConst entry)
+{
+    JSValue v = JS_GetPropertyUint32(ctx, entry, PQ_TARGET_DOCUMENT);
+    uint32_t queued;
+
+    DCHECK(JS_IsNumber(v),
+           "a queued window message does not name the target document it was queued for — both halves of this "
+           "file set the slot where they enqueue the task");
+    CHECK(JS_ToUint32(ctx, &queued, v) == 0, "window message: a delivery's target document did not convert");
+    JS_FreeValue(ctx, v);
+    DCHECK(queued <= window_proxy_active_document(target),
+           "a queued window message names a target document the navigable has not shown yet — the slot is "
+           "written from the target's own answer at the enqueue, and the answer only grows in one flow");
+    return queued != window_proxy_active_document(target);
+}
+
 static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     WmDeliverTask *s = st;
@@ -203,7 +225,7 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
        document's own `message` listeners (`frameElement.remove()` in a handler), and the listeners after it
        belong to a document that no longer exists. Without this the fire's window_proxy_realm asks a destroyed
        navigable for an active document and crashes naming a capability that is not the missing one. */
-    if (window_proxy_destroyed(target)) {
+    if (window_proxy_destroyed(target) || delivery_document_replaced(ctx, target, step_arg(&s->hdr, 1))) {
         /* AND THIS IS AN END, WHICH IS NOT THE SAME AS BEING THE END THIS TASK REACHED. Asked at every stage,
            so a listener that destroys the navigable mid-dispatch (`frameElement.remove()` in a handler) brings
            the machine back here AFTER the event was already fired — and that task's end is the FIRE. The one
@@ -759,6 +781,7 @@ void window_message_deliver_remote(JSContext *ctx, const char *record, const cha
     }
     /* THIS IS THE ROUTED HALF, and the slot says so at the one place that knows. */
     JS_SetPropertyUint32(ctx, entry, PQ_ROUTED, JS_TRUE);
+    JS_SetPropertyUint32(ctx, entry, PQ_TARGET_DOCUMENT, JS_NewUint32(ctx, window_proxy_active_document(target)));
     {
         JSValueConst args[2];
         args[0] = target;
@@ -1039,6 +1062,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
         JS_FreeValue(ctx, entry);
         return JS_UNDEFINED;
     }
+    JS_SetPropertyUint32(ctx, entry, PQ_TARGET_DOCUMENT, JS_NewUint32(ctx, window_proxy_active_document(target)));
     /* §9.3.3 step 8: a TASK on the posted message task source. Not a microtask — a page that posts and then
        awaits observes its own continuation first, which is the ordering the event loop's two halves exist for. */
     {

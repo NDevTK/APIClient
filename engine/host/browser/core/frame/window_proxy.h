@@ -305,6 +305,9 @@ bool window_proxy_is_top_level(JSValueConst proxy);
  * (core/frame/document_lifecycle.c). */
 void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy);
 bool window_proxy_destroyed(JSValueConst proxy);
+/* Which Document this navigable shows (see the field in window_proxy.c): equal answers at two instants of one
+   flow mean the active document was not replaced between them. Per flow. */
+uint32_t window_proxy_active_document(JSValueConst proxy);
 
 /* HOW MANY TIMES §7.5.10 "Destroying documents" STEP 7'S RELEASE HAS RUN — the ASK, counted where the release
  * is PERFORMED and never inferred from whether a realm came back.
