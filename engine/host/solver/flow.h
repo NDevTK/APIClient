@@ -1484,6 +1484,9 @@ typedef struct {
        payload has no ladder and both fitness writers refuse to record one, so [0, dist_max] is the range. With
        `cands: 0` it is 0 by construction, which is a fact about the run's @S population. */
     double dist_max;
+    /* The member key's range (flow.c's flow_index_key: the fitness plus `fork_val`), floor 0, at least `dist_max`:
+       the weight of a member's share of its site's service, which the spread accounting charges. */
+    double key_max;
     double w_top;         /* flow_best's weight — what holds the front of the queue */
     double w_min;         /* the lowest weight in the frontier — the other end of the same order */
     double cand_w_max;    /* the best weight any @S candidate can offer against `w_top` */

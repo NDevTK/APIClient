@@ -745,6 +745,7 @@ char *result_wfq_json(void) {
     METRIC_SET(cand_dec_max, w.cand_dec_max);
     METRIC_SET(dec_max, w.dec_max);
     METRIC_SET_REAL(dist_max, w.dist_max);
+    METRIC_SET_REAL(key_max, w.key_max);
     METRIC_SET_REAL(w_top, w.w_top);
     METRIC_SET_REAL(w_min, w.w_min);
     METRIC_SET_REAL(cand_wmax, w.cand_w_max);

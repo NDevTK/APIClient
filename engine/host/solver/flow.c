@@ -6282,13 +6282,13 @@ static void flow_ix_check(void) {
    assertion holds the observed spread to, written term by term so that a term added to the weight without a range
    here is visible in one place and a fired assert in the other. `val` enters positively and contributes max−min.
    The unweighted optimism 1/(1+max(served,W*priced)/Q+orphan_seen) is decreasing, so its range is taken at the
-   denominator's ends in that order; the fitness D weights the service it divides, which raises a member's reading
-   to at most (1+D) times its unweighted one and so by at most D, and never lowers it, so `dist_max` bounds its part
-   (the distance's floor is 0, flow.h). The aging enters negatively at FLOW_AGE_QUANTUM per family notch, the census's
+   denominator's ends in that order; the member key K (the fitness plus `fork_val`) weights the service it divides,
+   which raises a member's reading to at most (1+K) times its unweighted one and so by at most K, and never lowers
+   it, so `key_max` bounds its part (the key's floor is 0, flow.h). The aging enters negatively at FLOW_AGE_QUANTUM per family notch, the census's
    `svc_fam*` rows exactly; a member's own notch is its turn and no summand. */
 static double wfq_accounted_spread(const WfqCensus *c) {
     return (c->val_max - c->val_min)
-         + c->dist_max
+         + c->key_max
          + ((double)ENGINE_PULL_WORK / (double)c->opt_den_min
             - (double)ENGINE_PULL_WORK / (double)c->opt_den_max)
          + (double)(c->svc_fam_max - c->svc_fam_min) * FLOW_AGE_QUANTUM;
@@ -6584,6 +6584,7 @@ void flow_wfq_census(WfqCensus *out) {
     out->cand_svc_max = 0;
     out->dec_max = 0;
     out->dist_max = 0.0;
+    out->key_max = 0.0;
     out->w_top = out->w_min = out->cand_w_max = 0.0;
     out->top_svc = out->top_svc_fam = 0;
     out->top_forgiven = 0;
@@ -6967,6 +6968,7 @@ void flow_wfq_census(WfqCensus *out) {
         /* The fitness term's range: its floor is 0 by the type (flow.h), so the maximum is the range. Over every
            member, because the bound below is over every member's weight. */
         { double d = flow_distance(f); if (d > out->dist_max) out->dist_max = d; }
+        { double k = flow_index_key(f); if (k > out->key_max) out->key_max = k; }
         /* And the same questions of the candidates alone (flow.h). `cand_src` is what a candidate session is, and
            engine.c copies it to a sibling, so this counts the search's whole live population. */
         if (f->cand_src) {

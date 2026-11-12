@@ -1846,7 +1846,8 @@ function wfqReading(out) {
         : `Nothing it forked has departed — it accumulates`) +
       `. Of the ${w.chargedWorkLife} microsecond(s) ever charged, ${w.brEmptyWorkLife} sit(s) in buckets nobody ` +
       `stands in and ${w.brRetiredWorkLife} in buckets wholly departed`;
-  const terms = `terms over the frontier: reward ${rangeVal.toFixed(3)}, fitness ${w.distMax.toFixed(3)}, ` +
+  const terms = `terms over the frontier: reward ${rangeVal.toFixed(3)}, member key ${w.keyMax.toFixed(3)} ` +
+                `(fitness ${w.distMax.toFixed(3)}), ` +
                 `optimism ${rangeUcb.toFixed(3)}, aging ${(rangeOwn + rangeFam).toFixed(3)} ` +
                 `(own ${rangeOwn.toFixed(3)}, family ${rangeFam.toFixed(3)}) — against a total order spread ` +
                 `of ${spread.toFixed(3)} and an aging term ${agingPts.toFixed(1)} points deep; ${fam}; ` +
@@ -1896,9 +1897,9 @@ function wfqReading(out) {
        frontier whose ranges are all zero is one the pick cannot distinguish at all — which is a true and
        reportable state (one fork family, equal reward, no candidates) and not a defect to be inferred into. */
     orderedBy: (() => {
-      /* One entry per term of flow_weight (reward + fitness + optimism + aging, Level 2's four); a term
+      /* One entry per term of flow_weight (reward + member key + optimism + aging, Level 2's four); a term
          missing here can be the one ordering the frontier while this answers another or "nothing". */
-      const t = [["reward", rangeVal], ["fitness", w.distMax], ["optimism", rangeUcb],
+      const t = [["reward", rangeVal], ["member key", w.keyMax], ["optimism", rangeUcb],
                  ["aging", rangeOwn + rangeFam]].sort((a, b) => b[1] - a[1]);
       return t[0][1] <= 0 ? "nothing — every term reads the same at both ends of this frontier" : t[0][0];
     })(),
