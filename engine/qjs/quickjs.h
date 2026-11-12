@@ -3940,8 +3940,8 @@ typedef struct JSFlowGraphRoots {
        live original. */
     bool released;
     /* A survey of the cross-session form, over values only: an anchor or part named only within this process
-       (a sibling's shared object, a body, a symbol no build predefines, a realm or cell the baseline seal did
-       not name, a C function's pointers) is a `processLocal` gap. */
+       (a sibling's shared object, a body of no recorded program, a symbol no build predefines, a realm or cell
+       the baseline seal did not name) is a `processLocal` gap. */
     bool cross_session;
 } JSFlowGraphRoots;
 /* The same walk where a case has no writer yet is recorded rather than stopped on: a class, a value tag, a symbol
