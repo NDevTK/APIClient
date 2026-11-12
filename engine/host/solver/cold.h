@@ -722,6 +722,7 @@ typedef struct {
        frozen heap segments and members' heads. The first two are written once per document, so neither is
        bounded by the members; a 'p' is a field of the flow record before it, at most one per member. */
     long born, heapsegs, heads;
+    long scripts;   /* 'j': the compiled programs whose bodies those records name, once per document */
 } ColdParked;
 void cold_parked(ColdParked *out);
 
@@ -1000,6 +1001,10 @@ typedef struct {
        as: `parkCrossRestorable` members still replaying in the session that resumes them. */
     long born, heapsegs, heads;
     long cross_identical, cross_differs, cross_refused, cross_skipped;
+    /* The 'j' records read: under the same build, each parsed again in its realm or refused (a realm this seal
+       does not name, a parse that failed); under another build, skipped. `bodies` counts the bodies the 'b', 'h'
+       and 'p' reads took from those programs. */
+    long scripts, scripts_compiled, scripts_refused, scripts_skipped, bodies;
 } ColdResumed;
 void cold_resumed(ColdResumed *out);
 

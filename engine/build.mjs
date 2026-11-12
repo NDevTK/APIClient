@@ -2948,7 +2948,8 @@ const COLDPARK_FIELDS = ["records", "segs", "flows", "cands", "orphans", "worlds
                          "counters", "bytes"];
 const COLDRESUME_FIELDS = ["segs", "flows", "cands", "orphans", "worlds", "commits", "delivers", "counters",
                            "orphansMet", "orphansUnmet", "standArmed", "standMet", "standLeft", "crossIdentical",
-                           "crossDiffers", "crossRefused", "crossSkipped"];
+                           "crossDiffers", "crossRefused", "crossSkipped", "scripts", "scriptsCompiled",
+                           "scriptsRefused", "scriptsSkipped", "bodies"];
 /* THE ORPHAN-DRIVE CENSUS, SPELLED AS THE RESULT DOCUMENT SPELLS IT — the
    same two producers reach a reader twice (this line, and `result_json`'s `_orphansDriven`/`_orphansAsked`
    which bridge.js asserts and the popup renders), so a reader who learns the names off `@RESULT` reads them

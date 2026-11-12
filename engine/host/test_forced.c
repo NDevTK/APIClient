@@ -32659,6 +32659,11 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
     int cold_resumed_cross_slots = g_sess == SESS_RESUME && g_cr.same_build && g_cr.heads > 0 &&
                                    g_cr.cross_identical == g_cr.born + g_cr.heapsegs + g_cr.heads &&
                                    g_cr.cross_differs == 0 && g_cr.cross_refused == 0;
+    /* The bodies born after the seal: their programs written at the park, and at the resume of the same build each
+       parsed again with nothing refused, and some record's body taken from them by its locator. */
+    int cold_park_scripts = g_sess == SESS_PARK && g_cp.scripts > 0;
+    int cold_resumed_bodies = g_sess == SESS_RESUME && g_cr.same_build && g_cr.scripts > 0 &&
+                              g_cr.scripts_compiled == g_cr.scripts && g_cr.bodies > 0 && g_cr.cross_refused == 0;
     /* AND BENEATH ALL THREE OF THEM, THE PARK'S REACHABILITY LADDER — because every row above is an OUTCOME
        row and `park-wrote=0` is ONE column over a CONJUNCTION. solver/cold.h has already counted what that
        column folds: FOUR conjuncts, hence fifteen non-satisfying states, every one of them reported as the
@@ -33266,10 +33271,12 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
         { "park-cand", cold_park_cand, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "park-cross-replays", cold_park_cross_rp, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "park-cross-slots", cold_park_cross_slots, "state.code", SESS_PARK, .gate = "park-wrote" },
+        { "park-scripts", cold_park_scripts, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "resumed", cold_resumed_any, "state.code", SESS_RESUME },
         { "resumed-segs", cold_resumed_segs, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-same-build", cold_resumed_same, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-cross-slots", cold_resumed_cross_slots, "state.code", SESS_RESUME, .gate = "resumed-same-build" },
+        { "resumed-cross-bodies", cold_resumed_bodies, "state.code", SESS_RESUME, .gate = "resumed-same-build" },
         { "resumed-cand", cold_resumed_cand, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-fired", cold_fired, "state.code", SESS_RESUME },
         { "resumed-keyed-fired", cold_kfired, "state.code", SESS_RESUME },
@@ -49231,10 +49238,12 @@ int main(int argc, char **argv) {
         printf("@COLDRESUME {\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"orphans\":%ld,\"worlds\":%ld,"
                "\"commits\":%ld,\"delivers\":%ld,\"counters\":%ld,\"orphansMet\":%ld,\"orphansUnmet\":%ld,"
                "\"standArmed\":%ld,\"standMet\":%ld,\"standLeft\":%ld,\"crossIdentical\":%ld,"
-               "\"crossDiffers\":%ld,\"crossRefused\":%ld,\"crossSkipped\":%ld}\n",
+               "\"crossDiffers\":%ld,\"crossRefused\":%ld,\"crossSkipped\":%ld,\"scripts\":%ld,"
+               "\"scriptsCompiled\":%ld,\"scriptsRefused\":%ld,\"scriptsSkipped\":%ld,\"bodies\":%ld}\n",
                g_cr.segs, g_cr.flows, g_cr.cands, g_cr.orphans, g_cr.worlds,
                g_cr.commits, g_cr.delivers, g_cr.counters, met, unmet, stand_armed, stand_met, stand_left,
-               g_cr.cross_identical, g_cr.cross_differs, g_cr.cross_refused, g_cr.cross_skipped);
+               g_cr.cross_identical, g_cr.cross_differs, g_cr.cross_refused, g_cr.cross_skipped, g_cr.scripts,
+               g_cr.scripts_compiled, g_cr.scripts_refused, g_cr.scripts_skipped, g_cr.bodies);
     }
 
     /* One result document — both surfaces and the scheduler's interleave count — serialized directly from the

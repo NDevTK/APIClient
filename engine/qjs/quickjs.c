@@ -779,6 +779,9 @@ struct JSRuntime {
     int ab_codec_n, ab_codec_size;
     /* The sealed pre-boot baseline's names (JS_BaselineSeal), NULL before the seal; freed with the runtime. */
     struct JSBaseline *baseline;
+    /* The programs JS_FlowCompileStep compiled in a realm the seal names, each once with a copy of its source
+       (JS_CompiledScript): a later process of this build parses them again to have their bodies. */
+    struct JSCompiledScripts *compiled;
 };
 
 struct JSClass {
@@ -1596,6 +1599,10 @@ typedef struct JSFunctionBytecode {
        the compile's, shared by every body of it; 0 for a body read back from serialized bytecode. */
     uint64_t script_digest;
     int script_line0;
+    /* The JSRuntime.compiled entry of the compile that made this body, plus one; 0 for a body of no recorded
+       compile (an eval, a module, a body read back from bytecode). Stamped on the whole nest once the compile
+       answers. */
+    uint32_t compiled;
     /* THIS BODY'S LOCATOR, FOLDED ONCE — (script content, position) as orphan_hash_body composes it. A MEMO and
        not a second name, asked lazily because the overwhelming majority of bodies are never named at all.
        0 MEANS "NOT YET FOLDED" AND IS NOT A SENTINEL OVER A POPULATION. Every other reserved value in this
@@ -3149,6 +3156,9 @@ static void add_gc_object(JSRuntime *rt, JSGCObjectHeader *h,
 static void remove_gc_object(JSRuntime *rt, JSGCObjectHeader *h);
 static void js_baseline_forget(JSRuntime *rt, JSGCObjectHeader *h);
 static void js_baseline_free(JSRuntime *rt);
+static void js_compiled_free(JSRuntime *rt);
+static void js_compiled_note(JSContext *ctx, const char *src, size_t len, const char *name, int flags,
+                             JSValueConst fn);
 static void js_async_function_free0(JSRuntime *rt, JSAsyncFunctionData *s);
 static void js_async_function_free(JSRuntime *rt, JSAsyncFunctionData *s);
 static void js_release_coro(JSRuntime *rt, JSGCObjectHeader *coro);
@@ -5062,6 +5072,7 @@ void JS_FreeRuntime(JSRuntime *rt)
         g_flow_base_rt = NULL;
     rt->in_free = true;
     js_baseline_free(rt);   /* before any death below asks it to forget */
+    js_compiled_free(rt);
     DCHECK(JS_IsUndefined(rt->suspended_on),
            "JS_FreeRuntime with a suspension the host never took (JS_TakeSuspension)");
     /* A PARKED FLOW AT TEARDOWN IS A DROPPED FLOW. The queue is not a GC root: each member holds a raw callback
@@ -45337,6 +45348,7 @@ int JS_FlowCompileStep(JSContext *ctx, const char *src, size_t len, const char *
     }
     DCHECK(carrier == NULL, "a compile that finished left a parked parse behind it");
     if (JS_IsException(fn)) return -1;   /* compile error: the exception is already pending */
+    js_compiled_note(ctx, src, len, filename, eval_flags, fn);
     *pfn = fn;
     return 1;
 }
@@ -47606,6 +47618,151 @@ static void js_baseline_free(JSRuntime *rt)
     (free)(rt->baseline);
     rt->baseline = NULL;
 }
+
+/* JSRuntime.compiled. HTML §8.1.4.3 Creating scripts parses by ECMA-262 §16.1.5 ParseScript, a function of the
+   source text and the realm that evaluates nothing (§16.1.6 ScriptEvaluation is its own step), and the compile's
+   name and flags are baked into its bytecode; so the same entry parsed again by this build holds its bodies at
+   the same positions (orphan_hash_body), which is how a cross-session graph names a body born after the seal. */
+typedef struct {
+    JSContext *realm;   /* one the seal named; a reader asks the seal again (bl_name) before naming it */
+    int flags;
+    char *name, *src;   /* owned; `src` holds `len` bytes and a NUL guard */
+    size_t len;
+    uint64_t digest;
+} JSCompiledScript;
+typedef struct JSCompiledScripts { JSCompiledScript *s; uint32_t n, cap; } JSCompiledScripts;
+
+static void js_compiled_free(JSRuntime *rt)
+{
+    JSCompiledScripts *c = rt->compiled;
+
+    if (!c) return;
+    for (uint32_t i = 0; i < c->n; i++) { (free)(c->s[i].name); (free)(c->s[i].src); }
+    (free)(c->s);
+    (free)(c);
+    rt->compiled = NULL;
+}
+
+/* The first body of the nest `root` heads for which `fn` answers true, root first, or NULL. A nest is as deep as
+   the page wrote it, so the walk keeps its own stack. */
+static JSFunctionBytecode *js_body_nest_find(JSFunctionBytecode *root, bool (*fn)(JSFunctionBytecode *, void *),
+                                             void *arg)
+{
+    JSFunctionBytecode **st = NULL, *hit = NULL;
+    uint32_t n = 0, cap = 0;
+
+    st = fg_room(st, n, &cap, sizeof *st);
+    st[n++] = root;
+    while (n && !hit) {
+        JSFunctionBytecode *b = st[--n];
+        if (fn(b, arg)) { hit = b; break; }
+        for (int i = 0; i < b->cpool_count; i++) {
+            if (JS_VALUE_GET_TAG(b->cpool[i]) != JS_TAG_FUNCTION_BYTECODE) continue;
+            st = fg_room(st, n, &cap, sizeof *st);
+            st[n++] = JS_VALUE_GET_PTR(b->cpool[i]);
+        }
+    }
+    (free)(st);
+    return hit;
+}
+static bool js_body_stamp(JSFunctionBytecode *b, void *arg)
+{
+    DCHECK(b->compiled == 0, "a body was stamped with a second compile — every compile makes its own nest");
+    b->compiled = *(const uint32_t *)arg;
+    return false;
+}
+static uint64_t orphan_hash_body(JSRuntime *rt, JSFunctionBytecode *b);
+typedef struct { JSRuntime *rt; uint64_t locator; } JSBodyAt;
+static bool js_body_at(JSFunctionBytecode *b, void *arg)
+{
+    const JSBodyAt *q = arg;
+    return orphan_hash_body(q->rt, b) == q->locator;
+}
+
+/* JS_FlowCompileStep's program `fn`, compiled in `ctx` from `src` under `name` and `flags`: its entry, made once,
+   stamped on every body of its nest. A realm the seal did not name has no cross-session name to give. */
+static void js_compiled_note(JSContext *ctx, const char *src, size_t len, const char *name, int flags,
+                             JSValueConst fn)
+{
+    JSRuntime *rt = ctx->rt;
+    JSCompiledScripts *c;
+    JSFunctionBytecode *root;
+    uint32_t i, mark;
+
+    if (!rt->baseline || !bl_name(rt->baseline, ctx)) return;
+    DCHECK(JS_VALUE_GET_TAG(fn) == JS_TAG_OBJECT && js_class_has_bytecode(JS_VALUE_GET_OBJ(fn)->class_id),
+           "a compiled program is not a closure over a body");
+    /* What JS_FlowCompileSource compiled under: the flags it keeps and the name it gives a nameless program. */
+    flags &= JS_EVAL_FLAG_STRICT | JS_EVAL_FLAG_INLINE_SCRIPT | JS_EVAL_FLAG_FUNCTION_CTOR;
+    if (!name) name = "<flow>";
+    root = JS_VALUE_GET_OBJ(fn)->u.func.function_bytecode;
+    if (!rt->compiled) {
+        rt->compiled = (calloc)(1, sizeof *rt->compiled);
+        CHECK(rt->compiled != NULL, "OOM recording a compiled program");
+    }
+    c = rt->compiled;
+    for (i = 0; i < c->n; i++) {
+        const JSCompiledScript *e = &c->s[i];
+        if (e->digest == root->script_digest && e->realm == ctx && e->flags == flags && e->len == len &&
+            !strcmp(e->name, name) && !memcmp(e->src, src, len)) break;
+    }
+    if (i == c->n) {
+        JSCompiledScript *e;
+
+        c->s = fg_room(c->s, c->n, &c->cap, sizeof *c->s);
+        e = &c->s[c->n++];
+        e->realm = ctx;
+        e->flags = flags;
+        e->digest = root->script_digest;
+        e->len = len;
+        e->name = (strdup)(name);
+        e->src = (malloc)(len + 1);
+        CHECK(e->name != NULL && e->src != NULL, "OOM copying a compiled program's source");
+        memcpy(e->src, src, len);
+        e->src[len] = '\0';
+    }
+    mark = i + 1;
+    js_body_nest_find(root, js_body_stamp, &mark);
+}
+
+uint32_t JS_CompiledScriptCount(JSRuntime *rt) { return rt->compiled ? rt->compiled->n : 0; }
+
+void JS_CompiledScriptGet(JSRuntime *rt, uint32_t i, JSCompiledScriptView *out)
+{
+    const JSCompiledScript *e;
+
+    DCHECK(rt->compiled != NULL && i < rt->compiled->n, "a compiled program was asked past the record's end");
+    e = &rt->compiled->s[i];
+    *out = (JSCompiledScriptView){ bl_name(rt->baseline, e->realm), e->flags, e->name, e->src, e->len };
+}
+
+JSContext *JS_BaselineRealm(JSRuntime *rt, uint32_t name)
+{
+    JSGCObjectHeader *gp;
+
+    DCHECK(rt->baseline != NULL, "a baseline realm was asked before the seal named anything");
+    if (name == 0 || name > rt->baseline->n) return NULL;
+    gp = rt->baseline->objs[name - 1];
+    return gp && JS_GC_TYPE(gp) == JS_GC_OBJ_TYPE_JS_CONTEXT ? (JSContext *)gp : NULL;
+}
+
+uint32_t JS_ProgramScript(JSValueConst program)
+{
+    DCHECK(JS_VALUE_GET_TAG(program) == JS_TAG_OBJECT && js_class_has_bytecode(JS_VALUE_GET_OBJ(program)->class_id),
+           "a program's compile was asked of a value that is not a closure over a body");
+    return JS_VALUE_GET_OBJ(program)->u.func.function_bytecode->compiled;
+}
+
+JSValue JS_ProgramBody(JSContext *ctx, JSValueConst program, uint64_t locator)
+{
+    JSBodyAt q = { ctx->rt, locator };
+    JSFunctionBytecode *b;
+
+    DCHECK(JS_VALUE_GET_TAG(program) == JS_TAG_OBJECT && js_class_has_bytecode(JS_VALUE_GET_OBJ(program)->class_id),
+           "a program's body was asked of a value that is not a closure over a body");
+    b = js_body_nest_find(JS_VALUE_GET_OBJ(program)->u.func.function_bytecode, js_body_at, &q);
+    return b ? js_dup(JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, b)) : JS_UNDEFINED;
+}
 static void fg_put(FGBuf *b, const void *p, size_t n)
 {
     if (b->len + n > b->cap) {
@@ -47716,6 +47873,14 @@ static uint32_t fg_born_name(FGWriter *w, JSValueConst v)
     return w->x->born_name(v, w->x->opaque);
 }
 
+/* The caller's name for the program a body born after the seal belongs to (JSFlowGraphCross.script_name), 0 for
+   none: a body of a recorded compile (JSRuntime.compiled) in a realm the seal named. */
+static uint32_t fg_script_name(const JSFlowGraphCross *x, JSRuntime *rt, JSFunctionBytecode *b)
+{
+    if (!x || !x->script_name || !b->compiled || !bl_name(rt->baseline, b->realm)) return 0;
+    return x->script_name(b->compiled - 1, x->opaque);
+}
+
 /* Whether a cross-session anchor `v` (an object at or below the floor or born-named, a body, a symbol) has a name
    another process of this build gives the same thing; when not, its gap is recorded in `out`. */
 static bool fg_cross_named(FGWriter *w, FGBuf *out, JSValueConst v)
@@ -47727,6 +47892,9 @@ static bool fg_cross_named(FGWriter *w, FGBuf *out, JSValueConst v)
         if (js_get_atom_index(w->ctx->rt, JS_VALUE_GET_PTR(v)) < JS_ATOM_END) return true;
         pl = FG_PL_SYMBOL;
     } else if (JS_BaselineName(w->ctx->rt, v) || fg_born_name(w, v)) {
+        return true;
+    } else if (JS_VALUE_GET_TAG(v) == JS_TAG_FUNCTION_BYTECODE &&
+               fg_script_name(w->x, w->ctx->rt, JS_VALUE_GET_PTR(v))) {
         return true;
     } else {
         pl = JS_VALUE_GET_TAG(v) == JS_TAG_FUNCTION_BYTECODE ? FG_PL_BODY
@@ -48245,8 +48413,9 @@ static JSGCObjectHeader *bl_thing_at(JSRuntime *rt, uint32_t name, int type)
 }
 
 /* The cross-session form's header, before the graph's own bytes: the root count, then each anchor ('g', a
-   baseline name and the shape the reader checks it against; 'y' and a predefined atom; 'b' and a born name), each
-   baseline cell's name and each realm's. */
+   baseline name and the shape the reader checks it against; 'y' and a predefined atom; 'b' and a born name; 'c', a
+   body born after the seal: its program's name, its locator high and low, and its shape), each baseline cell's
+   name and each realm's. */
 uint8_t *JS_FlowGraphCrossWrite(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor,
                                 const JSFlowGraphCross *x, size_t *len)
 {
@@ -48268,6 +48437,15 @@ uint8_t *JS_FlowGraphCrossWrite(JSContext *ctx, const JSValueConst *roots, int n
         } else if ((v = JS_BaselineName(rt, a)) != 0) {
             fg_u8(&o, 'g');
             fg_u32(&o, v);
+            v = fg_cross_shape(a);
+        } else if (JS_VALUE_GET_TAG(a) == JS_TAG_FUNCTION_BYTECODE) {
+            uint64_t loc = orphan_hash_body(rt, JS_VALUE_GET_PTR(a));
+            v = fg_script_name(x, rt, JS_VALUE_GET_PTR(a));
+            DCHECK(v != 0, "flow graph: a cross-session anchor is a body of no program the caller names");
+            fg_u8(&o, 'c');
+            fg_u32(&o, v);
+            fg_u32(&o, (uint32_t)(loc >> 32));
+            fg_u32(&o, (uint32_t)loc);
             v = fg_cross_shape(a);
         } else {
             v = x && JS_VALUE_GET_TAG(a) == JS_TAG_OBJECT ? x->born_name(a, x->opaque) : 0;
@@ -48333,6 +48511,17 @@ int JS_FlowGraphCrossRead(JSContext *ctx, const uint8_t *bytes, size_t len, cons
             if (!JS_IsUndefined(a) && fg_cross_shape(a) != shape) { JS_FreeValue(ctx, a); a = JS_UNDEFINED; }
         } else if (t == 'b' && x && x->born_value) {
             a = x->born_value(v, x->opaque);
+        } else if (t == 'c' && x && x->body_value) {
+            uint32_t hi, lo, shape;
+            FGX_U32(hi);
+            FGX_U32(lo);
+            FGX_U32(shape);
+            a = x->body_value(v, (uint64_t)hi << 32 | lo, x->opaque);
+            if (!JS_IsUndefined(a) &&
+                (JS_VALUE_GET_TAG(a) != JS_TAG_FUNCTION_BYTECODE || fg_cross_shape(a) != shape)) {
+                JS_FreeValue(ctx, a);
+                a = JS_UNDEFINED;
+            }
         }
         if (JS_IsUndefined(a)) goto done;
         g->anchors[g->n_anchors] = a;

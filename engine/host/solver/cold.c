@@ -909,17 +909,17 @@ static void park_doc_agrees(void)
     long sum = gen + g_parked_census.segs + g_parked_census.flows + g_parked_census.cands +
                g_parked_census.worlds + g_parked_census.orphans + g_parked_census.commits +
                g_parked_census.delivers + g_parked_census.counters + g_parked_census.born +
-               g_parked_census.heapsegs + g_parked_census.heads;
+               g_parked_census.heapsegs + g_parked_census.heads + g_parked_census.scripts;
 
     DCHECKF(g_park_recs == sum,
             "the park document holds %ld record(s) and its census accounts for %ld — g %ld, s %ld, f %ld, "
-            "c %ld, w %ld, o %ld, r %ld, m %ld, k %ld, b %ld, h %ld, p %ld. A record kind was written without "
-            "counting itself, so every host that asks what this residue carries is told a kind that ran did not, "
-            "and a census nobody can check is a census anybody can state",
+            "c %ld, w %ld, o %ld, r %ld, m %ld, k %ld, b %ld, h %ld, p %ld, j %ld. A record kind was written "
+            "without counting itself, so every host that asks what this residue carries is told a kind that ran did "
+            "not, and a census nobody can check is a census anybody can state",
             g_park_recs, sum, gen, g_parked_census.segs, g_parked_census.flows, g_parked_census.cands,
             g_parked_census.worlds, g_parked_census.orphans, g_parked_census.commits,
             g_parked_census.delivers, g_parked_census.counters, g_parked_census.born, g_parked_census.heapsegs,
-            g_parked_census.heads);
+            g_parked_census.heads, g_parked_census.scripts);
 }
 
 /* EMIT `seg` AND EVERY UNEMITTED SEGMENT BELOW IT, base first, and answer its ordinal. Iterative and not
@@ -1492,6 +1492,66 @@ static void park_born_free(ParkBorn *b)
     memset(b, 0, sizeof *b);
 }
 
+/* The compiled programs (quickjs.h's JS_CompiledScriptGet) as 'j' records, which name every body born after the
+   seal: j<realm>,<flags>,<name-hex>,<source-hex>, the realm by its baseline name. The park writes each program
+   once per document, in compile order, before a member's heap slots, so program i is the document's i + 1st 'j'.
+   A resume of the same build parses each again in its realm, HTML §8.1.4.3 Creating scripts' parse, which runs
+   nothing, and holds it while the records after it are read.
+   Named residual. Not covered: a 'j' record carries its source, so a document repeats bytes a body store would
+   hold once by content digest. Next diff builds: the record names the source by digest and the bytes go to that
+   store. Absence shows as: a park document whose size grows with the bundles its page compiled. */
+static uint32_t g_park_scripts_n;
+typedef struct { JSValue *prog; uint32_t n, cap; long bodies; } ParkPrograms;
+static ParkPrograms *g_park_programs;   /* the resume's programs while park_rebuild reads the records after them */
+
+static uint32_t park_script_name(uint32_t script, void *opaque)
+{
+    (void)opaque;
+    if (g_park_programs) {
+        for (uint32_t i = 0; i < g_park_programs->n; i++)
+            if (!JS_IsUndefined(g_park_programs->prog[i]) &&
+                JS_ProgramScript(g_park_programs->prog[i]) == script + 1)
+                return i + 1;
+        return 0;
+    }
+    DCHECKF(script < g_park_scripts_n, "a cross-session write named compiled program %u of %u written — "
+            "park_heap_slots writes every program before a member's records", script, g_park_scripts_n);
+    return script < g_park_scripts_n ? script + 1 : 0;
+}
+static JSValue park_body_value(uint32_t name, uint64_t locator, void *opaque)
+{
+    ParkPrograms *pp = g_park_programs;
+    JSValue b;
+
+    (void)opaque;
+    if (!pp || name == 0 || name > pp->n || JS_IsUndefined(pp->prog[name - 1])) return JS_UNDEFINED;
+    b = JS_ProgramBody(pending_ctx(), pp->prog[name - 1], locator);
+    if (!JS_IsUndefined(b)) pp->bodies++;
+    return b;
+}
+
+static void park_hex_bytes(const uint8_t *b, size_t n);
+/* Every compiled program this document does not hold yet, as 'j' records. */
+static void park_scripts_flush(void)
+{
+    JSRuntime *rt = JS_GetRuntime(pending_ctx());
+    char head[48];
+
+    for (uint32_t n = JS_CompiledScriptCount(rt); g_park_scripts_n < n; g_park_scripts_n++) {
+        JSCompiledScriptView s;
+
+        JS_CompiledScriptGet(rt, g_park_scripts_n, &s);
+        DCHECK(s.realm != 0, "a compiled program's realm left the seal — JSRuntime.compiled holds sealed realms");
+        snprintf(head, sizeof head, "j%u,%d,", s.realm, s.flags);
+        park_open_rec();
+        park_str(head);
+        park_hex(s.name);
+        park_str(",");
+        park_hex_bytes((const uint8_t *)s.src, s.len);
+        g_parked_census.scripts++;
+    }
+}
+
 /* Each heap segment's park ordinal + 1 once written, PARK_SEG_UNWRITABLE when a part of it had no name. */
 #define PARK_SEG_UNWRITABLE UINT32_MAX
 static ParkPtrMap g_park_heap_segs;
@@ -1577,7 +1637,8 @@ static bool park_born_name_all(const ParkVals *pv, uint32_t floor, ParkCrossKind
             park_vals_put(&fresh, JS_DupValue(ctx, anchors[i]));
     JS_FlowGraphFree(ctx, g);
     if (fresh.n) {
-        const JSFlowGraphCross x = { park_born_name, NULL, park_born_built, &g_park_born, true };
+        const JSFlowGraphCross x = { park_born_name, NULL, park_born_built, &g_park_born, true, park_script_name,
+                                     NULL };
         JSFlowGraph *s = JS_FlowGraphCrossSurvey(ctx, fresh.v, fresh.n, 0, &x);
 
         ok = park_cross_survey_gaps(s, "heap slot born", k) == 0;
@@ -1601,7 +1662,7 @@ static bool park_born_name_all(const ParkVals *pv, uint32_t floor, ParkCrossKind
 static uint8_t *park_slot_bytes(const ParkVals *pv, uint32_t floor, ParkCrossKinds *k, size_t *len)
 {
     JSContext *ctx = pending_ctx();
-    const JSFlowGraphCross x = { park_born_name, NULL, NULL, &g_park_born, false };
+    const JSFlowGraphCross x = { park_born_name, NULL, NULL, &g_park_born, false, park_script_name, NULL };
     JSFlowGraph *s;
     bool ok;
 
@@ -1710,6 +1771,7 @@ static bool park_heap_slots(Flow *f, ParkCrossKinds *k, uint8_t **head, size_t *
                                  "shared object's body would carry them into every member that names it");
     *head = NULL;
     *chain_id = 0;
+    park_scripts_flush();
     if (!d) return true;
     top = cow_delta_chain(d);
     *chain_id = park_heap_chain(top, k);
@@ -2542,7 +2604,7 @@ static void park_slot_check(JSContext *ctx, char kind, const char *q, const char
     CHECK(roots != NULL, "the cold tier could not hold a cross-session record's roots");
     {
         const JSFlowGraphCross rx = { park_born_name, park_born_value, kind == 'b' ? park_born_built : NULL, born,
-                                      false };
+                                      false, park_script_name, park_body_value };
         int rc;
 
         JS_SetFlowGen(JS_FLOW_GEN_COMPILE + 1);
@@ -2556,7 +2618,7 @@ static void park_slot_check(JSContext *ctx, char kind, const char *q, const char
     }
     {
         /* A 'b' record's own objects are not names while it is written again, as they were not at the park. */
-        const JSFlowGraphCross wx = { park_born_name, NULL, NULL, born, kind == 'b' };
+        const JSFlowGraphCross wx = { park_born_name, NULL, NULL, born, kind == 'b', park_script_name, NULL };
         uint32_t floor = kind == 'h' ? UINT32_MAX : 0;
         JSFlowGraph *s;
         bool gaps;
@@ -2575,6 +2637,62 @@ static void park_slot_check(JSContext *ctx, char kind, const char *q, const char
     for (uint32_t i = 0; i < n_roots; i++) JS_FreeValue(ctx, roots[i]);
     free(roots);
     free(bytes);
+}
+
+/* A 'j' record (park_scripts_flush): under the same build, the program parsed again in its realm and held at its
+   ordinal for the records after it; refused when this seal names no such realm or the parse fails, skipped under
+   another build. The bytes are input, so a malformed field is a refusal. */
+static void park_program(JSContext *ctx, const char *q, const char *end, ParkPrograms *pp, ColdResumed *c)
+{
+    JSValue prog = JS_UNDEFINED;
+    const char *name_hex = NULL, *src_hex = NULL;
+    unsigned long realm;
+    long flags = 0;
+    char *ep;
+
+    c->scripts++;
+    realm = strtoul(q, &ep, 10);
+    if (ep != q && ep < end && *ep == ',') {
+        q = ep + 1;
+        flags = strtol(q, &ep, 10);
+        if (ep != q && ep < end && *ep == ',') {
+            name_hex = ep + 1;
+            for (src_hex = name_hex; src_hex < end && *src_hex != ','; src_hex++)
+                ;
+            src_hex = src_hex < end ? src_hex + 1 : NULL;
+        }
+    }
+    if (!c->same_build) {
+        c->scripts_skipped++;
+    } else {
+        JSContext *rc = JS_BaselineRealm(JS_GetRuntime(ctx), (uint32_t)realm);
+
+        if (rc && src_hex && src_hex - 1 > name_hex && ((src_hex - 1 - name_hex) & 1) == 0 &&
+            ((end - src_hex) & 1) == 0) {
+            char *name = park_unhex(name_hex, src_hex - 1);
+            char *src = src_hex < end ? park_unhex(src_hex, end) : NULL;
+            int r;
+
+            /* Host work no flow's path pays: the parse retires into the residency count. */
+            JS_FlowResidencyBegin();
+            r = JS_FlowCompileStep(rc, src ? src : "", (size_t)(end - src_hex) / 2, name, (int)flags, &prog, NULL);
+            JS_FlowResidencyEnd();
+            if (r < 0) {
+                JS_FreeValue(rc, JS_GetException(rc));
+                prog = JS_UNDEFINED;
+            }
+            free(name);
+            free(src);
+        }
+        if (JS_IsUndefined(prog)) c->scripts_refused++;
+        else c->scripts_compiled++;
+    }
+    if (pp->n == pp->cap) {
+        pp->cap = pp->cap ? pp->cap * 2 : 16;
+        pp->prog = realloc(pp->prog, sizeof *pp->prog * pp->cap);
+        CHECK(pp->prog != NULL, "the cold tier could not hold a resumed document's programs");
+    }
+    pp->prog[pp->n++] = prog;
 }
 
 /* The records of one park document after its generation record, rebuilt as flows appended to the frontier and
@@ -2597,6 +2715,8 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
     long drives = 0;
     /* The born objects the 'b' records rebuilt, by document ordinal, for the records after them. */
     ParkBorn born = { 0 };
+    /* The programs the 'j' records parsed again, by document ordinal, which name the bodies those records reach. */
+    ParkPrograms programs = { 0 };
 
     /* THIS IS AN APPEND, NOT A SEED, and the two used to be one act. It asserted the frontier was EMPTY and
        assigned its park-local ordinals into it as though the document were the whole of what exists — which is
@@ -2614,6 +2734,8 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
        shape either side of the merge: every rebuilt flow lands at the end, and the count grows by exactly the
        number rebuilt. */
 
+    DCHECK(g_park_programs == NULL, "a park document was rebuilt inside another one's rebuild");
+    g_park_programs = &programs;
     while (*p) {
         const char *end = strchr(p, ';');
         const char *q;
@@ -2925,6 +3047,8 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
             /* The act is read when the member's call is built; a repeated body is a listener driven again. */
             flow_orphan_chain_push(last_flow, hash, NULL, (int)doc, 1);
             c->orphans++;
+        } else if (kind == 'j') {
+            park_program(ctx, q, end, &programs, c);
         } else if (kind == 'b' || kind == 'h' || kind == 'p') {
             DCHECK(kind != 'p' || last_flow != NULL, "a member's heap head record precedes every flow record");
             park_slot_check(ctx, kind, q, end, &born, c);
@@ -3237,6 +3361,13 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
        whole suspended frontier to it. FORMATTED, because the nine numbers are what localize it: the kind
        whose counter is short is the one whose row does not account for the gap. */
     park_born_free(&born);
+    c->bodies += programs.bodies;
+    for (uint32_t i = 0; i < programs.n; i++) JS_FreeValue(ctx, programs.prog[i]);
+    free(programs.prog);
+    g_park_programs = NULL;
+    DCHECKF(c->scripts == c->scripts_compiled + c->scripts_refused + c->scripts_skipped,
+            "the rebuild read %ld program record(s) and accounts for %ld outcomes", c->scripts,
+            c->scripts_compiled + c->scripts_refused + c->scripts_skipped);
     DCHECKF(c->born + c->heapsegs + c->heads ==
                 c->cross_identical + c->cross_differs + c->cross_refused + c->cross_skipped,
             "the rebuild read %ld cross-session record(s) and accounts for %ld outcomes",
@@ -3244,16 +3375,17 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
             c->cross_identical + c->cross_differs + c->cross_refused + c->cross_skipped);
     DCHECKF(recs == c->segs + c->flows + c->cands + c->cands_withdrawn +
                     c->worlds + c->orphans + c->commits + c->delivers + c->counters + c->born + c->heapsegs +
-                    c->heads,
+                    c->heads + c->scripts,
             "the rebuild read %ld record(s) and its census accounts for %ld — s %ld, f %ld, c %ld "
-            "(+%ld withdrawn), w %ld, o %ld, r %ld, m %ld, k %ld, b %ld, h %ld, p %ld. A record kind was parsed "
-            "without counting itself, so every host asking which arms of this grammar ran is told a kind that ran "
-            "did not, and a census nobody can check is a census anybody can state",
+            "(+%ld withdrawn), w %ld, o %ld, r %ld, m %ld, k %ld, b %ld, h %ld, p %ld, j %ld. A record kind was "
+            "parsed without counting itself, so every host asking which arms of this grammar ran is told a kind "
+            "that ran did not, and a census nobody can check is a census anybody can state",
             recs,
-            c->segs + c->flows + c->cands + c->cands_withdrawn +
-                c->worlds + c->orphans + c->commits + c->delivers + c->counters + c->born + c->heapsegs + c->heads,
+            c->segs + c->flows + c->cands + c->cands_withdrawn + c->worlds + c->orphans + c->commits +
+                c->delivers + c->counters + c->born + c->heapsegs + c->heads + c->scripts,
             c->segs, c->flows, c->cands, c->cands_withdrawn,
-            c->worlds, c->orphans, c->commits, c->delivers, c->counters, c->born, c->heapsegs, c->heads);
+            c->worlds, c->orphans, c->commits, c->delivers, c->counters, c->born, c->heapsegs, c->heads,
+            c->scripts);
     DCHECK(c->counters == flows,
            "the rebuild landed a flow without its path counters, or read counters for no flow — the park writes "
            "one 'k' record after every flow's own record");
@@ -3339,6 +3471,7 @@ void cold_free(void)
     free(g_cross_gaps); g_cross_gaps = NULL; g_cross_gaps_n = 0;
     memset(&g_cross, 0, sizeof g_cross);
     park_born_free(&g_park_born);   /* …and the cross-session form's names */
+    g_park_scripts_n = 0;
     park_map_free(&g_park_heap_segs);
     g_park_heap_seg_n = 0;
     park_map_free(&g_park_chain_fail);
