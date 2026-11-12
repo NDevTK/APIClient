@@ -93,20 +93,19 @@ const boot = factory.default ?? factory;
    and a post in the ROOT world, taken before the branch, put that world's segment at the peer before either
    child world arrives; the two arms then name it as their nearest ancestor and world_segment forks it. The
    fixture has to CREATE the precondition its own `forkedFromAncestor` check is about.
-   `a` posts once `b` says it has loaded. Until the navigation commits, `w` shows its initial about:blank (HTML
-   §7.2.2.1 step 15 navigates after open returns), and a message posted to that Window is never delivered to
-   the document the navigation loads (§9.3.3 step 8 queues the task given targetWindow). `/hold` keeps `a`'s boot
-   timeline live to receive the message; `e.source` is a concrete identity, so the guard forks nothing. */
+   `a` posts once `/ready` is answered, which this zone does only after it has provisioned `b`. Until the
+   navigation commits, `w` shows its initial about:blank (HTML §7.2.2.1 step 15 navigates after open returns),
+   and a message posted to that Window is never delivered to the document the navigation loads (§9.3.3 step 8
+   queues the task given targetWindow). A reply is used rather than a message from `b`, because a `message`
+   listener in `a` is a target for the attacker's own posts at every task boundary. */
 const HTML_A = `<!doctype html><script>
   var w = window.open("https://b.test/child", "child");
-  fetch("/hold");
-  window.addEventListener("message", function (e) {
-    if (e.source !== w) return;
+  fetch("/ready").then(function () {
     w.postMessage({hello:"root", n: w.length}, "*");
     if (__FLAGS.role === "admin") { w.postMessage({hello:"admin"}, "*"); } else { w.postMessage({hello:"public"}, "*"); }
     w.postMessage({hello:"length", n: w.length}, "*");
     fetch("/resume").then(function () { fetch("/closed?v=" + (typeof w.closed) + ":" + w.closed); });
-  }, { once: true });
+  });
 </script>`;
 /* `/hold` is NEVER answered, and that is the point: `b`'s boot flow stays live and owed, so the second and
    third arrivals have a timeline to arrive in. A document whose every flow has finished cannot receive, and
@@ -122,7 +121,6 @@ const HTML_A = `<!doctype html><script>
    COMPUTE, `closed` is a fact `a` is confidently WRONG about, and only the second one fails silently. */
 const HTML_B = `<!doctype html><script>
   fetch("/hold");
-  opener.postMessage("ready", "*");
   window.addEventListener("message", function (e) {
     fetch("/got?origin=" + e.origin + "&hello=" + e.data.hello + "&n=" + (typeof e.data.n) + ":" + e.data.n);
     if (e.data.hello === "length") window.close();
@@ -439,6 +437,8 @@ async function service(e) {
     if (driven !== 'driven' && driven !== 'undriven')
       fail(`a pending line states the drive mark \`${driven}\`, which is neither token solver/engine.h declares`);
     if (u.includes('/hold')) continue;
+    /* `/ready` is answered once `b` is provisioned, so `a`'s navigation of `w` to it has committed. */
+    if (u.includes('/ready') && engines.length < 2) continue;
     if (u.includes('/resume') && resumeOwed) { if (e === engines[0]) resumeSeen = true; continue; }
     if (u.includes('/got')) {
       got.push(u); gotMarks.push({ u, pinned, provenance });
@@ -687,8 +687,7 @@ async function drainNotices(e) {
     /* A top-level traversable navigated to a document of another origin with §7.1.3.2 keeping its browsing
        context (core/frame/navigable.c's nav_navigate_to_peer): `a`'s popup, which `window.open` created holding
        its initial about:blank. The incoming Document is a top-level one at its own address, provisioned in a
-       new instance as for a swap, and its §7.2.2.4 opener survives the navigation: the record states it, and
-       `b` posts to it. */
+       new instance as for a swap, and its §7.2.2.4 opener survives the navigation: the record states it. */
     else if (f[0] === 'navigable.navigate') {
       const P = NAVIGABLE_NOTICE.provision;
       if (f.length !== P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
