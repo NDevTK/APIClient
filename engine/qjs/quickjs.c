@@ -48276,11 +48276,14 @@ static uint32_t fg_cfn(FGWriter *w, const void *c, uint8_t kind)
 }
 
 /* A C function: its realm, its body by the graph's C code, its length, prototype kind, machine and user-code
-   declarations, magic and constructor bit. */
+   declarations, magic and constructor bit. A step machine's function has no body: its magic names the machine. */
+static bool fg_cfunc_is_step(uint8_t cproto) { return cproto == JS_CFUNC_step || cproto == JS_CFUNC_step_ctor; }
 static void fg_cfunc(FGWriter *w, FGBuf *out, JSObject *p)
 {
-    DCHECK(p->u.cfunc.realm != NULL && p->u.cfunc.c_function.generic != NULL,
-           "flow graph: a C function holds no realm or no body");
+    DCHECK(p->u.cfunc.realm != NULL, "flow graph: a C function holds no realm");
+    DCHECKF((p->u.cfunc.c_function.generic != NULL) != fg_cfunc_is_step(p->u.cfunc.cproto),
+            "flow graph: a C function of prototype kind %d %s a body", p->u.cfunc.cproto,
+            p->u.cfunc.c_function.generic ? "holds" : "holds no");
     fg_u32(out, fg_realm(w, p->u.cfunc.realm));
     fg_u32(out, fg_cfn(w, (const void *)p->u.cfunc.c_function.generic, 't'));
     fg_u8(out, p->u.cfunc.length);
@@ -48501,31 +48504,6 @@ static const void *fg_code_at(int64_t off, uint8_t kind)
     uintptr_t a = kind == 't' ? (uintptr_t)(void *)JS_FlowGraphCrossWrite : (uintptr_t)fg_data_anchor;
     return (const void *)(a + (uintptr_t)off);
 }
-/* Every C address a live C function of this runtime holds, by kind: what a cross-session read may name, since an
-   offset read back is input and only an address this process already calls through is code. */
-static void fg_code_live(JSRuntime *rt, FGMap *fns, FGMap *defs)
-{
-    struct list_head *el;
-
-    list_for_each(el, &rt->gc_obj_list) {
-        JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
-        JSObject *p;
-
-        if (JS_GC_TYPE(gp) != JS_GC_OBJ_TYPE_JS_OBJECT) continue;
-        p = (JSObject *)gp;
-        if (p->class_id == JS_CLASS_C_FUNCTION && p->u.cfunc.c_function.generic) {
-            if (!fg_map_get(fns, (const void *)p->u.cfunc.c_function.generic, &(uint32_t){ 0 }))
-                fg_map_put(fns, (const void *)p->u.cfunc.c_function.generic, 1);
-        } else if (p->class_id == JS_CLASS_C_FUNCTION_DATA && p->u.c_function_data_record) {
-            const JSCFunctionDataRecord *d = p->u.c_function_data_record;
-            if (d->func && !fg_map_get(fns, (const void *)d->func, &(uint32_t){ 0 }))
-                fg_map_put(fns, (const void *)d->func, 1);
-            if (d->step_def && !fg_map_get(defs, d->step_def, &(uint32_t){ 0 }))
-                fg_map_put(defs, d->step_def, 1);
-        }
-    }
-}
-
 /* The cross-session form's header, before the graph's own bytes: the root count, then each anchor ('g', a
    baseline name and the shape the reader checks it against; 'y' and a predefined atom; 'b' and a born name; 'c', a
    body born after the seal: its program's name, its locator high and low, and its shape), each baseline cell's
@@ -48669,33 +48647,22 @@ int JS_FlowGraphCrossRead(JSContext *ctx, const uint8_t *bytes, size_t len, cons
     }
     FGX_U32(k);
     if (k > len) goto done;
+    /* An offset is this binary's: the caller reads the cross-session form only under a matching binary digest. */
     if (k) {
-        FGMap fns = { 0 }, defs = { 0 };
-        bool ok = true;
-
-        fg_code_live(rt, &fns, &defs);
         g->cfns = fg_grow(NULL, sizeof *g->cfns * k);
         g->cfn_kinds = fg_grow(NULL, k);
-        for (; ok && g->n_cfns < k; g->n_cfns++) {
-            int64_t off;
-            const void *c;
-            uint8_t t;
+    }
+    for (; g->n_cfns < k; g->n_cfns++) {
+        int64_t off;
+        uint8_t t;
 
-            if ((size_t)(end - p) < 1 + sizeof off) { ok = false; break; }
-            t = *p++;
-            memcpy(&off, p, sizeof off);
-            p += sizeof off;
-            c = fg_code_at(off, t);
-            if ((t != 't' && t != 'd') || !fg_map_get(t == 't' ? &fns : &defs, c, &(uint32_t){ 0 })) {
-                ok = false;
-                break;
-            }
-            g->cfns[g->n_cfns] = c;
-            g->cfn_kinds[g->n_cfns] = t;
-        }
-        (free)(fns.s);
-        (free)(defs.s);
-        if (!ok) goto done;
+        if ((size_t)(end - p) < 1 + sizeof off) goto done;
+        t = *p++;
+        memcpy(&off, p, sizeof off);
+        p += sizeof off;
+        if ((t != 't' && t != 'd') || off == 0) goto done;
+        g->cfns[g->n_cfns] = fg_code_at(off, t);
+        g->cfn_kinds[g->n_cfns] = t;
     }
     fg_put(&g->bytes, p, (size_t)(end - p));
     g->cross = x;
@@ -49189,10 +49156,11 @@ static void fg_rcfunc(FGReader *r, JSObject *p)
 
     CHECK(ri < r->g->n_realms, "flow graph: a C function's realm is no realm the graph holds");
     fn = fg_rcfn(r, 't');
-    CHECK(fn != NULL, "flow graph: a C function has no body");
     p->u.cfunc.c_function.generic = (JSCFunction *)fn;
     p->u.cfunc.length = fg_r8(r);
     p->u.cfunc.cproto = fg_r8(r);
+    CHECK((fn != NULL) != fg_cfunc_is_step(p->u.cfunc.cproto),
+          "flow graph: a C function's body disagrees with its prototype kind");
     p->u.cfunc.native_machine = fg_r8(r);
     p->u.cfunc.no_user_code = fg_r8(r);
     memcpy(&p->u.cfunc.magic, fg_take(r, sizeof p->u.cfunc.magic), sizeof p->u.cfunc.magic);
