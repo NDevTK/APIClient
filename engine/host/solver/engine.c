@@ -6865,6 +6865,18 @@ long engine_orphan_scripts(void) {
 static uint32_t g_orphan_gen_seen;
 static WorldId  g_orphan_gen_world;
 static int      g_orphan_gen_valid;
+/* …and the entries that walk could see, which a memo answer is priced at: the walk it stands for would see them. */
+static uint64_t g_orphan_gen_visible;
+
+/* Charges an orphan ask its walk's price, the index entries the running timeline can see, as the seed's act (the
+   walk is the act whatever it finds, so its work is FLOW_SITE_ACT's even when the step falls through to a rung of the
+   page's own loop). */
+static void engine_orphan_walk_charge(uint64_t visible) {
+    const uint64_t frameless0 = JS_FlowFramelessWorkLife();
+
+    thread_work_charge(THREAD_WORK_ORPHAN_WALK, visible);
+    flow_act_bank_running(STEP_UNIT_ORPHAN_SEED, (int64_t)(JS_FlowFramelessWorkLife() - frameless0));
+}
 /* What each ask did. engine_orphan_seed has five exits past `g_orphan_asks++`, and solver/step_unit.h names only the
    three a take ends in (`seed-one-orphan-flow`, `hand-a-parked-drive-its-function`,
    `retire-an-orphan-of-a-destroyed-document`), so the residue would be
@@ -7435,6 +7447,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     g_orphan_asks++;
     if (g_orphan_gen_valid && gen == g_orphan_gen_seen && world_eq(f->world, g_orphan_gen_world)) {
         g_orphan_asks_memo++;
+        engine_orphan_walk_charge(g_orphan_gen_visible);
         return engine_orphan_redrive(ctx, f);
     }
     /* Named residual. An empty walk is not "this bundle ships no uncalled code": the take can hand over only a
@@ -7461,21 +7474,21 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     /* The memo is recorded only by an empty walk: a one-at-a-time take leaves the rest of the set standing at
        the same generation (seeding a flow creates no function object), so recording it after a successful take
        would declare a heap of untaken orphans empty for the session. */
-    /* The walk is priced by the heap entries it visited, the one input its cost grows with.
-       Named residual. Not covered: those entries include closures other timelines built and dead ones the
-       collector has not freed, and the generation memo above is one slot every member overwrites, so the price
-       is not a function of this member's path. Next diff builds: the price as the entries this timeline can
-       take (orphan_candidate's timeline test) and the memo on the member. Absence shows as: a member of a drained
-       document retiring a few units more or less at a slice twin, at a step that asked for an orphan. */
-    /* The walk is the seed's act whatever it finds, so its work is the act's (FLOW_SITE_ACT) even when the step
-       falls through to a rung of the page's own loop. */
-    uint64_t walked0 = JS_OrphanWalkCost(JS_GetRuntime(ctx)).entries;
+    /* The walk is priced by the entries this timeline can see, the input its cost grows with on this path: the
+       index also holds closures other timelines built, whose number is the schedule's. A memo answer is priced as
+       the walk it stands for, so whether the slot still held this member's walk moves nothing.
+       Named residual. Not covered: a dead closure of this timeline the collector has not freed is still seen, and
+       a walk that exits early on a preferred candidate stops where the runtime-wide take counts place it. Next
+       diff builds: the index pruned at a closure's death on this path, and the per-script quota as this path's
+       takes. Absence shows as: a member of a drained document retiring a few units more or less at a slice twin,
+       at a step that asked for an orphan. */
+    uint64_t visible0 = JS_OrphanWalkCost(JS_GetRuntime(ctx)).visible;
     int took = JS_OrphanTakeOne(ctx, engine_orphan_record, &t);
-    const uint64_t walk_frameless0 = JS_FlowFramelessWorkLife();
-    thread_work_charge(THREAD_WORK_ORPHAN_WALK, JS_OrphanWalkCost(JS_GetRuntime(ctx)).entries - walked0);
-    flow_act_bank_running(STEP_UNIT_ORPHAN_SEED, (int64_t)(JS_FlowFramelessWorkLife() - walk_frameless0));
+    const uint64_t visible = JS_OrphanWalkCost(JS_GetRuntime(ctx)).visible - visible0;
+    engine_orphan_walk_charge(visible);
     if (!took) {
         g_orphan_gen_seen = gen; g_orphan_gen_world = f->world; g_orphan_gen_valid = 1;
+        g_orphan_gen_visible = visible;
         g_orphan_asks_empty++;
         DCHECK(JS_IsUndefined(t.fn), "an orphan take that reported nothing still left a function on the record");
         return engine_orphan_redrive(ctx, f);
@@ -16040,7 +16053,7 @@ void solver_agent_free(JSContext *ctx)
     /* And the ask's partition with it: the parts sum to `g_orphan_asks`, so a summand a second session kept would
        break the equality at its first census. */
     g_orphan_asks_memo = 0; g_orphan_asks_empty = 0; g_orphan_asks_took = 0;
-    g_orphan_gen_seen = 0; g_orphan_gen_world = WORLD_NONE; g_orphan_gen_valid = 0;
+    g_orphan_gen_seen = 0; g_orphan_gen_world = WORLD_NONE; g_orphan_gen_valid = 0; g_orphan_gen_visible = 0;
     /* And the round trip's three numbers, for the same reason: what an inherited drive did with its recipe is a
        fact about one session's residue, and the latch about one frontier's members; kept, they would report the
        first session's round trip and skip the routing walk on a frontier just rebuilt with claims in it. */

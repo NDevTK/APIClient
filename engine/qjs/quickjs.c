@@ -493,6 +493,7 @@ struct JSRuntime {
        to have would read about four times that. The host asserts it where all three are in one hand. */
     uint64_t orphan_walks;
     uint64_t orphan_walk_entries;
+    uint64_t orphan_walk_visible;   /* …of which the running timeline can see (JSOrphanWalkCost's `visible`) */
     uint64_t orphan_walks_full;
     uint64_t orphan_walk_full_candidates;
     /* HOW MANY TAKES EACH SCRIPT HAS ALREADY HAD, AND THE QUOTA EVERY SCRIPT IS CURRENTLY ENTITLED TO — the
@@ -87011,6 +87012,7 @@ JSOrphanWalkCost JS_OrphanWalkCost(JSRuntime *rt)
 
     c.walks = rt->orphan_walks;
     c.entries = rt->orphan_walk_entries;
+    c.visible = rt->orphan_walk_visible;
     c.walks_full = rt->orphan_walks_full;
     c.full_candidates = rt->orphan_walk_full_candidates;
     return c;
@@ -87106,6 +87108,18 @@ static void js_orphan_fn_remove(JSRuntime *rt, JSObject *p)
         rt->orphan_fn_map[j] = NULL;
         i = j;
     }
+}
+
+/* Whether the running timeline can see this index entry: a closure built outside every flow, or by a timeline this
+   one continues. Every entry of the index is a function object with a body. */
+static bool orphan_visible(JSGCObjectHeader *gp)
+{
+    JSObject *p = (JSObject *)gp;
+
+    DCHECK(JS_GC_TYPE(gp) == JS_GC_OBJ_TYPE_JS_OBJECT && js_class_has_bytecode(p->class_id),
+           "the orphan index holds an entry that is not a function object with a body");
+    return p->u.func.timeline == 0 || !g_time_travel.timeline_continues ||
+           g_time_travel.timeline_continues(p->u.func.timeline);
 }
 
 static bool orphan_candidate(JSGCObjectHeader *gp, JSObject **pp, JSFunctionBytecode **pb)
@@ -87288,6 +87302,7 @@ int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
         uint32_t t;
 
         rt->orphan_walk_entries++;
+        if (orphan_visible(gp)) rt->orphan_walk_visible++;
         if (!orphan_candidate(gp, &p, &b)) continue;
         candidates++;
         t = orphan_script_takes_of(rt, b->filename);

@@ -3522,6 +3522,9 @@ typedef struct {
     uint64_t entries;          /* object-list entries those walks stepped over */
     uint64_t walks_full;       /* …of which ran to the end of the list rather than exiting early */
     uint64_t full_candidates;  /* candidates seen by THOSE walks only — see above for why not by all of them */
+    uint64_t visible;          /* …of the entries, those the running timeline can see (a baseline closure or one
+                                  its own path built): the walk's price, which other timelines' closures leave
+                                  unmoved */
 } JSOrphanWalkCost;
 JS_EXTERN JSOrphanWalkCost JS_OrphanWalkCost(JSRuntime *rt);
 /* HOW MANY OF THAT WALK'S TAKES CAME FROM ITS PREFERRED PASS — a body whose source resolved a network door's own
