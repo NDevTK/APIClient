@@ -3173,6 +3173,11 @@ int concolic_member_environment(const char *p, size_t n)
     return src_row(p, n) < 0 && (j < 0 || g_pres[j].observed);   /* a principal is a column of a delivery row */
 }
 
+int concolic_member_delivered(const char *p, size_t n)
+{
+    return src_row(p, n) >= 0;
+}
+
 int concolic_root_assumable_any(const char *root)
 {
     const char *p;
@@ -7923,7 +7928,7 @@ static const char *keyname_atom(JSContext *ctx, JSValueConst key, const char *sh
 /* The name an unknown key denotes: its shape (or the shape of the value it is the string form of) as a real
    string, stable per source, so every key-taking operation agrees (see the contract at JS_ToPropertyKeyInternal). */
 /* §7.1.21 ToPropertyKey ( arg ) of the example an environment unknown holds, or JS_UNINITIALIZED for any other
-   key. No party sets an environment unknown (decide.c's dec_subject_environment reads the same two root facts),
+   key. No party sets a key every root member of which is an environment unknown (concolic_member_environment),
    so the running world is its example's until this flow takes an arm against it, and an element access through
    it is the real access at that key. Owned.
    Named residual. Not covered: the worlds where the key is another member's. Next diff builds: the access as a
@@ -9501,6 +9506,17 @@ int concolic_root_every(JSValueConst v, int (*member)(const char *p, size_t n)) 
     for (i = 0; root_member(root, i, &p, &n); i++)
         if (!member(p, n)) return 0;
     return 1;
+}
+
+int concolic_root_some(JSValueConst v, int (*member)(const char *p, size_t n)) {
+    const char *root = concolic_root_c(v), *p;
+    size_t n;
+
+    DCHECK(member != NULL, "a property over a value's root members was asked with no property");
+    if (!root) return 0;
+    for (int i = 0; root_member(root, i, &p, &n); i++)
+        if (member(p, n)) return 1;
+    return 0;
 }
 
 const char *concolic_ident_c(JSValueConst v) {

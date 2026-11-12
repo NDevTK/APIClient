@@ -2755,7 +2755,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
        out of the optimism. */
     DCHECK(at_branch.assumed_slot < 0 || at_branch.env_slot < 0,
            "a fork priced its sibling's one arm twice, as an assumption and as an arm against an environment "
-           "unknown — decide.c classifies a subject by its root's declared kind, which is one or the other");
+           "unknown — decide.c asks the environment question only of a subject it did not price as an assumption");
     DCHECK((at_branch.assumed_slot >= 0 || at_branch.env_slot >= 0) == (at_branch.priced_name != NULL),
            "a fork's priced arm and its name disagree — engine_prepare_fork interns the name exactly when decide.c "
            "prices the sibling's arm");

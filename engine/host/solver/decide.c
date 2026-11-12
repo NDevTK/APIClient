@@ -1648,15 +1648,23 @@ static int dec_subject_assumed(JSValueConst v) {
     return concolic_root_every(v, concolic_member_absent_state);
 }
 
-/* Is `v` an environment unknown: a value the page reads that no party is declared to set? Every root member is the
-   world's (supplied from outside the served bytes, so not a served value or a hole this engine minted) and names
-   no row of concolic.c's source tables: no delivery (an attacker source, whose arms cost nothing), no
-   precondition the observed world does not hold (application state and the origin's own stores, absent.c's
-   injected state among them) and no principal. Math.random, the clock, a device fact and a server's reply (an
-   observed precondition) are such roots. An arm against its example costs as an assumption does, so the
-   example's world runs first. */
+/* A member that may stand in an environment unknown's root: an environment unknown itself (a value no party is
+   declared to set, concolic_member_environment: Math.random, the clock, a device fact, a server's reply), an attacker
+   source (whose own arms cost nothing, so it adds no price and takes none away) or absent application state (itself
+   an assumption, so the arm is one priced decision, not two). A held precondition is none of these: an arm against a
+   value the observed state holds is no assumption. */
+static int dec_member_beside_environment(const char *p, size_t n) {
+    return concolic_member_environment(p, n) || concolic_member_delivered(p, n) || concolic_member_absent_state(p, n);
+}
+
+/* Is an arm over `v` against its example an arm against an environment unknown's example, whatever attacker sources
+   share its root? Every root member is the world's (supplied from outside the served bytes, so not a served value
+   or a hole this engine minted), some member is an environment unknown, and every member stands beside one (above).
+   It costs as an assumption does, so the example's world runs first. Asked only after dec_subject_assumed answered
+   no, so a root of absent state alone is priced as that and a mixed root once. */
 static int dec_subject_environment(JSValueConst v) {
-    return concolic_root_whose_all(v, CONCOLIC_WHOSE_WORLD) && concolic_root_every(v, concolic_member_environment);
+    return concolic_root_whose_all(v, CONCOLIC_WHOSE_WORLD) && concolic_root_some(v, concolic_member_environment) &&
+           concolic_root_every(v, dec_member_beside_environment);
 }
 
 /* A decision consumed at `slot` on the arm its example contradicts (`forced_arm`), recorded where its subject

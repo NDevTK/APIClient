@@ -2065,6 +2065,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/declines.h"
 #include "fixture/absentarm.h"
 #include "fixture/envarm.h"
+#include "fixture/envmix.h"
 #include "fixture/envtypes.h"
 #include "fixture/framerace.h"
 #include "fixture/standslice.h"
@@ -2902,6 +2903,7 @@ TF_DOCS[] = {
     { "declines", HTML_DECLINES },
     { "absentarm", HTML_ABSENTARM },
     { "envarm", HTML_ENVARM },
+    { "envmix", HTML_ENVMIX },
     { "envtypes", HTML_ENVTYPES },
     { "framerace", HTML_FRAMERACE },
     { "standslice", HTML_STANDSLICE },
@@ -25169,6 +25171,32 @@ TF_UNIT void probes_recordrankframe(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `envmix` document (fixture/envmix.h): the arm against an environment unknown's example is one
+   priced decision whatever shares its root (solver/decide.c's dec_subject_environment), and an attacker source's
+   arms cost nothing. */
+TF_UNIT void probes_envmix(const char *js, Probe *tab, int *n) {
+    static const char *const env[] = { "\"kind\":\"environment-arm\"", "!\"assumes\":[[]", NULL };
+    static const char *const free_[] = { "\"assumes\":[[]]", NULL };
+    static const struct { const char *row, *at, *const *want, *why; } t[] = {
+        { "envmix-free", "/api/mxfree", free_, "NOT REACHED, or the request behind a branch over window.name alone "
+          "states a priced decision — an attacker source's arms cost nothing" },
+        { "envmix-attacker-priced", "/api/mxatk", env, "the request behind the arm against Math.random()'s example, "
+          "whose root window.name shares, does not state one environment-arm on every path to it" },
+        { "envmix-absent-priced", "/api/mxck", env, "the request behind the arm against Math.random()'s example, whose "
+          "root the absent cookies share, does not state one environment-arm on every path to it" },
+    };
+    Probe rows[COUNTOF(t)];
+    static char whys[COUNTOF(t)][1024];
+
+    for (size_t i = 0; i < COUNTOF(t); i++) {
+        int ok = rr_has(js, t[i].at, t[i].want);
+        rows[i] = (Probe){ t[i].row, ok, t[i].at, SESS_EXPLORE,
+                           ok ? NULL : rr_why(js, t[i].at, t[i].why, whys[i], sizeof whys[i]),
+                           .reach = i ? "envmix-free" : NULL };
+    }
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `storedreq` document (fixture/storedreq.h). Each request sending a value the page stored from
    an attacker source carries the security-relevant mark, and a witness of its record states the chain: the
    attacker's open of the address where a later load reads the value, and a verification by re-running to the
@@ -34306,6 +34334,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);
     probes_envarm(js, probes, &np);
+    probes_envmix(js, probes, &np);
     probes_envtypes(js, probes, &np);
     probes_framerace(js, probes, &np);
     probes_standslice(js, probes, &np);

@@ -102,6 +102,8 @@ int         concolic_root_whose_all(JSValueConst v, ConcolicRootWhose whose);
 /* The universal over a value's root members for a property the caller owns: 1 when `member` answers 1 for every
    member (a slice `p`/`n` of the root, not terminated), 0 for a value with no root, as `_all` answers. */
 int         concolic_root_every(JSValueConst v, int (*member)(const char *p, size_t n));
+/* The existential: 1 when `member` answers 1 for some member, 0 for a value with no root. */
+int         concolic_root_some(JSValueConst v, int (*member)(const char *p, size_t n));
 
 /* Mint a concolic value AT A SOURCE — the root of a derivation, where an unknown enters the program. `shape`
    is the @H/@S display form ("{location.hash}", "/api/{region}"); a DECLARED source's shape is its provenance
@@ -882,6 +884,8 @@ int         concolic_source_delivery(const char *root, const char **kind, char *
    (concolic_declare_observed_precondition)? The member property concolic_root_every asks to learn that a value
    is an environment unknown: no party is declared to set it, or the observed world holds it. */
 int         concolic_member_environment(const char *p, size_t n);
+/* Does the member slice `p`/`n` name a source declared with a browser delivery (an attacker source)? */
+int         concolic_member_delivered(const char *p, size_t n);
 /* Does any member of `root` name a precondition row whose value the observed world does not hold, so that an arm
    over it may take state as present the victim lacks? 0 for NULL. */
 int         concolic_root_assumable_any(const char *root);
