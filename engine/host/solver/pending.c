@@ -449,6 +449,13 @@ int pending_entry_declined(JSValueConst e)
     return hit;
 }
 
+/* A refusal whose arms the register has not forked, landed or not: it arrives at the entry's due point, as an
+   answer does (pending_land_due). */
+static int pend_decline_untaken(JSValueConst e)
+{
+    return pending_entry_declined(e) && !pending_get_int(e, PEND_DECLINE_TAKEN);
+}
+
 #if APICLIENT_DEV
 /* THE SCAN THE COUNT REPLACED, KEPT AS THE ORACLE AND NEVER AS A PATH. Nothing returns its answer: it is only
    ever compared against the count, at the two sites that already walk the whole register anyway — the fork and
@@ -552,30 +559,33 @@ void pending_land_due(JSValueConst reg, int64_t now, uint64_t (*next)(void))
 {
     DCHECK(next != NULL && now >= 0, "answers were landed with no clock to stamp them, or at a negative point");
     /* In due order, a tie by index; an unanswered entry the host owes stops the walk, since everything due after
-       it arrives after it. */
+       it arrives after it. A refusal is an answer here: it lands with its due cleared and takes no arrival
+       stamp, since its arms are forked (flow_decline_fork) rather than delivered. */
     for (;;) {
-        int n = pend_len(reg), i, at = -1, answered = 0;
+        int n = pend_len(reg), i, at = -1, answered = 0, have_at = 0;
         int64_t best = 0;
         JSValue e;
 
         for (i = 0; i < n; i++) {
             int64_t due;
-            int have;
+            int have, refused;
 
             e = pending_entry(reg, i);
             due = pending_get_int(e, PEND_DUE);
             have = (int)pending_get_int(e, PEND_HAVE_VALUE);
-            if (due > 0 && due <= now && (have || pending_entry_host_owed(e)) && (at < 0 || due < best)) {
+            refused = pend_decline_untaken(e);
+            if (due > 0 && due <= now && (have || refused || pending_entry_host_owed(e)) && (at < 0 || due < best)) {
                 at = i;
                 best = due;
-                answered = have;
+                answered = have || refused;
+                have_at = have;
             }
             JS_FreeValue(pend_ctx(), e);
         }
         if (at < 0 || !answered) return;
         e = pending_unshare(reg, at);
         pending_set_int(e, PEND_DUE, 0);
-        pending_set_int(e, PEND_WORK_SEQ, (int64_t)next());
+        if (have_at) pending_set_int(e, PEND_WORK_SEQ, (int64_t)next());
         JS_FreeValue(pend_ctx(), e);
     }
 }
@@ -601,8 +611,8 @@ int64_t pending_next_due(JSValueConst reg)
         JSValue e = pending_entry(reg, i);
         int64_t due = pending_get_int(e, PEND_DUE);
 
-        if (due > 0 && (pending_get_int(e, PEND_HAVE_VALUE) || pending_entry_host_owed(e)) &&
-            (best == 0 || due < best))
+        if (due > 0 && (pending_get_int(e, PEND_HAVE_VALUE) || pending_entry_host_owed(e) ||
+                        pend_decline_untaken(e)) && (best == 0 || due < best))
             best = due;
         JS_FreeValue(pend_ctx(), e);
     }
@@ -764,7 +774,7 @@ int pending_declined_outstanding(JSValueConst reg)
 
 int pending_entry_decline_fork_owed(JSValueConst e)
 {
-    return pending_entry_declined(e) && !pending_get_int(e, PEND_DECLINE_TAKEN);
+    return pend_decline_untaken(e) && pending_get_int(e, PEND_DUE) == 0;
 }
 
 int pending_arrival_outstanding(JSValueConst reg)
@@ -774,7 +784,7 @@ int pending_arrival_outstanding(JSValueConst reg)
     for (i = 0; i < n && !hit; i++) {
         JSValue e = pending_entry(reg, i);
 
-        hit = pending_entry_host_owed(e) || pending_entry_decline_fork_owed(e);
+        hit = pending_entry_host_owed(e) || pend_decline_untaken(e);
         DCHECK(!hit || pend_owed(e),
                "an arrival is outstanding on an entry its flow does not wait on — an entry the host can still "
                "answer and a refusal whose arms are not forked both carry no value, so a refused record took a "

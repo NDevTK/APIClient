@@ -698,7 +698,7 @@ int  pending_host_outstanding(JSValueConst reg);
 int  pending_declined_outstanding(JSValueConst reg);
 
 /* Can anything still arrive on this register in its flow's own timeline: an entry the host can still be asked
-   about (pending_entry_host_owed), a refusal whose arms this register has not forked
+   about (pending_entry_host_owed), a refusal whose arms this register has not forked, landed or not
    (pending_entry_decline_fork_owed), or an answered reply the timeline has not taken (a replay holds one until
    its recorded point, and the delivery arm's own race stands before one). The event loop's clock asks it (core/timing/event_loop.h's
    event_loop_may_advance). It answers 0 for the waiting arm's own copy of a refusal, which stays outstanding
@@ -724,9 +724,10 @@ int  pending_arrival_outstanding(JSValueConst reg);
    exported predicate — that is, when no register-level caller can ask the wrong one at all. */
 int  pending_entry_declined(JSValueConst e);
 
-/* Has this register still to fork the arms of this entry's refusal: `declined` without `declineTaken`.
-   flow_decline_fork's failure and success arms each take an arrival, so until the fork the refusal is an event
-   its timeline has not reached. A replay holds a refusal in this state until its recorded slot
+/* Has this register still to fork the arms of this entry's refusal: `declined` without `declineTaken`, landed at
+   the entry's due point (pending_land_due), so where the fork falls on the path does not depend on when the zone
+   refused. flow_decline_fork's failure and success arms each take an arrival, so until the fork the refusal is an
+   event its timeline has not reached. A replay holds a refusal in this state until its recorded slot
    (decide_completion_ahead); the recording session's request was in flight over the same stretch. */
 int  pending_entry_decline_fork_owed(JSValueConst e);
 
@@ -787,11 +788,12 @@ uint64_t pending_ready_next_seq(JSValueConst reg);
    deadline race's deadline-first arm calls it after its timer fires. */
 void pending_restamp_answered(JSValueConst reg, uint64_t (*next)(void));
 /* A network answer reaches its flow at its due point on that flow's path (PEND_DUE), never when the zone wrote
-   it. `pending_land_due` lands the entries due at or before `now` in due order, up to the first one the host has
-   not answered: each a private copy, its due cleared and its arrival stamped by `next`, so it arrives after every
-   task its flow queued before that point. `pending_answer_ahead` asks whether an answered entry has not landed yet; `pending_next_due` answers
-   the earliest due point of an entry not yet landed that the host can still answer or has answered (0 for
-   none); `pending_due_owed` whether a host-owed entry's due point is at or before `now`. */
+   it, and a refusal the same way. `pending_land_due` lands the entries due at or before `now` in due order, up to
+   the first one the host has not answered: each a private copy, its due cleared and an answer's arrival stamped by
+   `next`, so it arrives after every task its flow queued before that point. `pending_answer_ahead` asks whether an
+   answered entry has not landed yet; `pending_next_due` answers the earliest due point of an entry not yet landed
+   that the host can still answer, has answered or has refused (0 for none); `pending_due_owed` whether a
+   host-owed entry's due point is at or before `now`. */
 void pending_land_due(JSValueConst reg, int64_t now, uint64_t (*next)(void));
 int pending_answer_ahead(JSValueConst reg);
 int64_t pending_next_due(JSValueConst reg);

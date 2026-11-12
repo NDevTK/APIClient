@@ -1287,6 +1287,9 @@ static uint32_t host_request_make_async(JSContext *ctx, uint32_t id, JSValueCons
                                         "be owed to nobody and its flow could never finish");
     DCHECK(!JS_IsUndefined(e), "an async host rendezvous is not on its flow's register after the ask");
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, deliver));
+    /* The zone's answer to a send in parallel is a network answer: it lands at its due point on the asker's path
+       (pending_land_due), as a fetch()'s does, never when the zone wrote it. */
+    pending_set_int(e, PEND_DUE, engine_reply_due(f));
     pending_mark_async(f->pending, e);
     JS_FreeValue(ctx, e);
     DCHECK(!flow_blocked(f), "an async host rendezvous left its flow blocked — the flow is meant to run on while "
@@ -6558,10 +6561,10 @@ static int flow_decline_held(JSContext *ctx, const Flow *f, int i) {
     return held;
 }
 
-/* A refusal is due once the flow can fork, and a replay takes it where its record took it: a refusal that
-   reaches a replaying flow before that point (the trusted zone answered sooner than in the recording session,
-   or the recording parked before it was taken) is held, since taking it early leaves the recorded path at the
-   cursor and re-explores what it recorded. flow_step's resting arm ends a hold nothing can reach the end of. */
+/* A refusal is due once it has landed at its entry's due point and the flow can fork, and a replay takes it where
+   its record took it: a refusal that reaches a replaying flow before that point (the trusted zone answered sooner
+   than in the recording session, or the recording parked before it was taken) is held, since taking it early
+   leaves the recorded path at the cursor and re-explores what it recorded. flow_step's resting arm ends a hold nothing can reach the end of. */
 static int flow_decline_fork_at(JSContext *ctx, const Flow *f) {
     int i;
 
