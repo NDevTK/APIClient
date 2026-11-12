@@ -2488,6 +2488,15 @@ static const char *HTML_MIN =
     "var _x = open('https://other.test/p'), _sop = '';"
     "try { _sop += 'name=' + _x.name; } catch (e) { _sop += e.name; }"
     "fetch('/api/sop?v=' + _sop + ':' + (_x.closed === false ? 'closedok' : 'wrong'));"
+    /* §9.3.3 step 8 queues the delivery given targetWindow, the Window of the navigable's document at the post:
+       here each navigable's initial about:blank. HTML §8.1.7.1 runs a task only while its document is fully
+       active, so neither message reaches the document the navigation loads; the srcdoc document's own log
+       says which messages it received, and only `late`, posted after its load, may be among them. */
+    "var _sd = document.createElement('iframe');"
+    "_sd.srcdoc = '<script>var _g = []; onmessage = function (e) { _g.push(e.data);"
+    " if (e.data === \"late\") fetch(\"/api/blankpost?v=\" + _g.join(\".\")); };<\\/script>';"
+    "_sd.onload = function () { _sd.contentWindow.postMessage('late', '*'); };"
+    "document.body.appendChild(_sd); _sd.contentWindow.postMessage('early', '*'); _x.postMessage('early', '*');"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
@@ -18415,8 +18424,19 @@ TF_UNIT void probes_min(const char *js, Probe *tab, int *n) {
              "the statement RAN and /api/optiter's `b` does not carry `{state}.items.1` as a whole value: "
              "position 1's read is not an independent source on its own param — the per-POSITION key in the "
              "outcome seam answered some other position here, or answered one source twice");
+    /* HTML §8.1.7.1's runnable task over §9.3.3 step 8's targetWindow: a message posted to a navigable's initial
+       about:blank is not delivered to the document its navigation loads. */
+    const char *blankpost_why = NULL;
+    int blankpost_tt = 1;
+    fold_row(&blankpost_tt, &blankpost_why, strstr(js, "\"/api/blankpost") != NULL,
+             "NOT REACHED: there is no /api/blankpost record, so the srcdoc document never received the message "
+             "posted after its load");
+    fold_row(&blankpost_tt, &blankpost_why, param_value_only(js, "/api/blankpost", "v", "late"),
+             "the srcdoc document received a message other than `late`: the one posted to its navigable's initial "
+             "about:blank before the load was delivered to the loaded document, whose Window was not the target");
     const Probe rows[] = {
         { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE, optiter_why },
+        { "blank-post", blankpost_tt, "/api/blankpost", SESS_EXPLORE, blankpost_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
