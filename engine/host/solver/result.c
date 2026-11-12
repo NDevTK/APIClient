@@ -550,12 +550,12 @@ static char *errs_json_array(ErrsArray which) {
 static char *weight_operands_json(const FlowWeightOperands *o) {
     return composef("{\"w\":%.17g,\"reward\":%.17g,\"coordNotch\":%lld,\"ownNotch\":%lld,\"siteServed\":%lld,"
                     "\"pullWork\":%lld,\"visits\":%lld,\"orphanSeen\":%lld,\"replay\":%.17g,"
-                    "\"surv\":%.17g,\"rung\":%d,\"assumed\":%lld,\"againstEnv\":%lld,\"picks\":%lld,"
+                    "\"surv\":%.17g,\"rung\":%d,\"forkVal\":%.17g,\"assumed\":%lld,\"againstEnv\":%lld,\"picks\":%lld,"
                     "\"hostOwed\":%d,\"running\":%d,"
                     "\"unit\":%d,\"nextArm\":%d,\"siteServedElsewhere\":%lld,\"siteKind\":%d}",
                     o->w, o->reward, (long long)o->coord_notch, (long long)o->own_notch, (long long)o->site_served,
                     (long long)o->pull_work, (long long)o->visits, (long long)o->orphan_seen, o->replay,
-                    o->surv, o->rung, (long long)o->assumed, (long long)o->against_env,
+                    o->surv, o->rung, o->fork_val, (long long)o->assumed, (long long)o->against_env,
                     (long long)o->picks, o->host_owed, o->running, (int)o->unit, o->next_arm,
                     (long long)o->site_served_elsewhere, o->site_kind);
 }

@@ -8,14 +8,14 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const END_FIELDS = ["w", "reward", "coordNotch", "ownNotch", "siteServed", "pullWork", "visits", "orphanSeen",
-                    "replay", "surv", "rung", "assumed", "againstEnv", "picks", "hostOwed", "running"];
+                    "replay", "surv", "rung", "forkVal", "assumed", "againstEnv", "picks", "hostOwed", "running"];
 
 /* The terms of one member's weight, each as flow_order_key composes it, and the weight they sum to. The aging is the
    family's (in `coord`, with the reward); `ownNotch` is the member's turn, which orders it only among members level
    on the weight and is no term here. The optimism is read off the member's site (`siteServed` in quanta of
-   `pullWork`), its service divided by one plus the member's fitness `D`, with each priced decision a floor of `p`
-   work: `opt` is the reading at no fitness and no price, `dist` what the fitness added to it, and `assume` what the
-   priced decisions took, so `opt + dist + assume` is the optimism the weight sums. `visits` is an operand the row
+   `pullWork`), its service divided by one plus the member's key `D` (its fitness plus `forkVal`), with each priced
+   decision a floor of `p` work: `opt` is the reading at no key and no price, `dist` what the key added to it, and
+   `assume` what the priced decisions took, so `opt + dist + assume` is the optimism the weight sums. `visits` is an operand the row
    carries and no term reads. */
 function termsOf(o, q, p, rungs, where) {
   for (const k of END_FIELDS)
@@ -24,7 +24,7 @@ function termsOf(o, q, p, rungs, where) {
                       `weight_operands_json writes all of ${END_FIELDS.join(", ")}`);
   const coord = o.reward - o.coordNotch * q;
   const least = (o.assumed + o.againstEnv) * p;
-  const D = (o.replay + o.surv + o.rung) / rungs;
+  const D = (o.replay + o.surv + o.rung) / rungs + o.forkVal;
   const v = o.siteServed / (1.0 + D);
   const priced = 1.0 / (1.0 + (v > least ? v : least) / o.pullWork + o.orphanSeen);
   const fit = 1.0 / (1.0 + v / o.pullWork + o.orphanSeen);

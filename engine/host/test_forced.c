@@ -2066,6 +2066,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/absentarm.h"
 #include "fixture/envarm.h"
 #include "fixture/envmix.h"
+#include "fixture/ownval.h"
 #include "fixture/envtypes.h"
 #include "fixture/framerace.h"
 #include "fixture/standslice.h"
@@ -2904,6 +2905,7 @@ TF_DOCS[] = {
     { "absentarm", HTML_ABSENTARM },
     { "envarm", HTML_ENVARM },
     { "envmix", HTML_ENVMIX },
+    { "ownval", HTML_OWNVAL },
     { "envtypes", HTML_ENVTYPES },
     { "framerace", HTML_FRAMERACE },
     { "standslice", HTML_STANDSLICE },
@@ -10899,6 +10901,9 @@ static TfErrEdges g_tf_err_edges[] = {
        order. */
     { "envBOOMenvLO", 0, 0, 0, 0 },
     { "envBOOMenvHI", 0, 0, 0, 0 },
+    /* HTML_OWNVAL's two throws, the productive arm's and its sibling's; `ov-productive-first` reads their order. */
+    { "ovBOOMovP", 0, 0, 0, 0 },
+    { "ovBOOMovQ", 0, 0, 0, 0 },
     /* HTML_STOREARM's three throws, the example's world and one per arm against a stored-state example;
        `store-example-first` reads their order. */
     { "saBOOMsaOBS", 0, 0, 0, 0 },
@@ -20697,6 +20702,25 @@ TF_UNIT void probes_envarm(const char *js, Probe *tab, int *n) {
     const Probe rows[] = {
         { "env-example-first", ord_tt, "envBOOM", SESS_EXPLORE, ord_why },
         { "env-attacker-arms", atk_tt, "envNAMED", SESS_EXPLORE, atk_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `ownval` document (fixture/ownval.h). Inside one family the member that emitted since its fork
+   reads its code sites' service at a share weighted by that value (solver/flow.c's flow_index_key), so it throws
+   first though its loop is half again as long. */
+TF_UNIT void probes_ownval(const char *js, Probe *tab, int *n) {
+    const TfErrEdges *p = tf_err_edges("ovBOOMovP"), *q = tf_err_edges("ovBOOMovQ");
+    const char *r_why = NULL, *o_why = NULL; int r_tt = 1, o_tt = 1;
+
+    fold_row(&r_tt, &r_why, !!strstr(js, "\"/api/ov-paid") && p->first > 0 && q->first > 0,
+             "NOT REACHED: no /api/ov-paid record, or the stream did not announce both arms' timer throws");
+    fold_row(&o_tt, &o_why, p->first > 0 && p->first < q->first,
+             "the arm that emitted since its fork announced its throw after its sibling's — within a family the "
+             "value a member's own prefix emitted since the fork orders it above its siblings at one service count");
+    const Probe rows[] = {
+        { "ov-ran", r_tt, "ovBOOM", SESS_EXPLORE, r_why },
+        { "ov-productive-first", o_tt, "ovBOOM", SESS_EXPLORE, o_why, .gate = "ov-ran" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -34335,6 +34359,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_absentarm(js, probes, &np);
     probes_envarm(js, probes, &np);
     probes_envmix(js, probes, &np);
+    probes_ownval(js, probes, &np);
     probes_envtypes(js, probes, &np);
     probes_framerace(js, probes, &np);
     probes_standslice(js, probes, &np);

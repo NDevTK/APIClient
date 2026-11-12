@@ -409,25 +409,26 @@ static int64_t g_branch_retired_work = 0;
    step separates the two at the next one. Whole work units keep flow_optimism_den an exact integer. */
 #define FLOW_PRICED_WORK ((int64_t)4500000)
 
-/* A member's optimism from its operands: `1/(1 + max(served/(1+fit), W*priced)/Q + seen)`, the one expression the
-   order, its index and the census operands compose. `fit` is the member's @S fitness (flow_distance, in [0, 1]), the
-   weight of its share of the code site's service in WFQ's sense: a member of fitness `fit` reads the site's service
-   at 1/(1+fit) of its count, so at equal optimism its site has received (1+fit) times the service of a fitness-0
-   member's. It cannot lift a member above an unserved site (the reading stays at most 1), and the price stays a floor
-   of service the fitness does not discount. At `fit` 0 the division is exact, so every non-candidate reads the
-   unweighted count to the bit. Non-decreasing in `fit`, which is what lets the index bound a treap by its largest
-   key. */
-static double site_optimism(int64_t served, int64_t seen, int64_t priced, double fit) {
-    double v = (double)served / (1.0 + fit), least = (double)(priced * FLOW_PRICED_WORK);
+/* A member's optimism from its operands: `1/(1 + max(served/(1+key), W*priced)/Q + seen)`, the one expression the
+   order, its index and the census operands compose. `key` is the member's key (flow_index_key: its @S fitness plus
+   what it emitted since its fork), the weight of its share of the code site's service in WFQ's sense: a member of
+   key `key` reads the site's service at 1/(1+key) of its count, so at equal optimism its site has received (1+key)
+   times the service of a key-0 member's. It cannot lift a member above an unserved site (the reading stays at most
+   1), and the price stays a floor of service the key does not discount. At `key` 0 the division is exact, so a
+   member with neither reads the unweighted count to the bit. Non-decreasing in `key`, which is what lets the index
+   bound a treap by its largest key. */
+static double site_optimism(int64_t served, int64_t seen, int64_t priced, double key) {
+    double v = (double)served / (1.0 + key), least = (double)(priced * FLOW_PRICED_WORK);
     return 1.0 / (1.0 + (v > least ? v : least) / (double)ENGINE_PULL_WORK + (double)seen);
 }
 
-/* The site-relative half of the order for a member of fitness `fit` standing in class `st`: its optimism, read off
+/* The site-relative half of the order for a member of key `key` standing in class `st`: its optimism, read off
    the code site's count and the class's operands. Asked of a treap's largest key it bounds every member there, and of
    its smallest it bounds them from below. */
-static double site_key(const FlowSite *st, double fit) {
-    DCHECK(fit >= 0.0 && fit <= 1.0, "an optimism was weighted by a fitness outside [0, 1] — flow_distance's range");
-    return site_optimism(st->code->served, st->seen, st->priced, fit);
+static double site_key(const FlowSite *st, double key) {
+    DCHECK(key >= 0.0 && key < INFINITY, "an optimism was weighted by a member key that is negative or not finite — "
+                                         "a fitness in [0, 1] plus emitted points, each positive");
+    return site_optimism(st->code->served, st->seen, st->priced, key);
 }
 
 static size_t site_slot(int kind, uint64_t key, int64_t seen, int64_t priced, size_t cap) {
@@ -1464,13 +1465,14 @@ int flow_credit_emit(double v) {
        the order; this is what this flow emitted, which the census asks (a frontier retiring members while every
        one reads zero here is coasting on an ancestor's findings). Never copied, inherited or read by flow_weight. */
     g_running->val += v;
-    /* An emission does not touch the optimism term's site count. The reward is the family's, so within a family it
-       is a common offset; forgiving the site's service here would present one credit twice (to the family through
-       `val`, and to every member standing at the emitter's site). A within-family preference for the productive
-       member is what `Flow.val` would express, and it is deliberately unranked. The rank still changes on an
-       emission through the reward, every turn and the generation bump. The family's work (`fam_work`) is not
-       touched: it is the debit, in work, and zeroing it would pay the emitter every unit it was given since its
-       last finding on top of the point, a credit in another unit than the one this function writes. */
+    /* And what its prefix emitted since its fork, the member's key (flow_index_key), re-keyed below: within the
+       family, where the reward is a common offset, it is what orders the productive member above its siblings. */
+    g_running->fork_val += v;
+    /* An emission does not touch the optimism term's site count: forgiving the site's service here would present one
+       credit twice (to the family through `val`, and to every member standing at the emitter's site). The family's
+       work (`fam_work`) is not touched: it is the debit, in work, and zeroing it would pay the emitter every unit it
+       was given since its last finding on top of the point, a credit in another unit than the one this function
+       writes. */
     /* And the window, in one statement about the account: every member's turn is read over it. `Flow.work` is written
        only for the flow holding the thread, so a separate per-flow reset would leave a never-dispatched member carrying
        its parent's fork-instant burn for ever. The generation bump makes every turn read zero at once, in O(1). It does
@@ -1526,6 +1528,7 @@ int flow_credit_emit(double v) {
     /* The emitter's turn is its own burn of the closed window, part of the family's work, and every other arm's turn
        is zero. */
     DCHECK_AGING_ONE_WINDOW(g_running, "an emission restarted this family's turns");
+    flow_ix_rekey(g_running);
     /* Credit and debit at one accounting unit each: the emission moved the ledger by `v` and the family's work by
        nothing, so no finding repays work in a unit it is not paid in. */
     DCHECKF(g_running->family->earned == earned0 + v && g_running->family->fam_work == work0,
@@ -2641,7 +2644,8 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
            "the branch and only grow, so this is a mark read off another flow or a bit that is not one");
     /* Nothing may have been credited or charged first, because the inheritance assigns both terms: a sibling run or
        credited before receiving its account ran at a rank nobody chose, and the assignment would erase the result. */
-    DCHECK(sib->val == 0.0 && sib->work == 0 && sib->work_gen == 0 && sib->visits == 0 && sib->orphan_seen == 0 &&
+    DCHECK(sib->val == 0.0 && sib->fork_val == 0.0 && parent->fork_val == 0.0 && sib->work == 0 &&
+           sib->work_gen == 0 && sib->visits == 0 && sib->orphan_seen == 0 &&
            sib->picks == 0 &&
            sib->cand_replay == 0.0 && sib->cand_replay_of == 0 && sib->cand_replay_arms == 0 &&
            sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
@@ -2649,9 +2653,9 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
            sib->assumed_reads == 0 && sib->assumed_slots_n == 0 && sib->env_slots_n == 0 &&
            sib->family == sib->acct && sib->family->fam_work == 0 && sib->family->emit_gen == 0 &&
            sib->family->base == 0.0 && sib->family->earned == 0.0 && !sib->family->placed,
-           "a forked sibling was credited, charged, dispatched or decided before inheriting its parent's account — "
-           "the inheritance assigns every one of these fields, and `picks` must still be zero because no dispatch "
-           "may precede it");
+           "a forked sibling was credited, charged, dispatched or decided before inheriting its parent's account, or "
+           "its parent was not restarted (flow_fork_restart) — the inheritance assigns every one of these fields, and "
+           "`picks` must still be zero because no dispatch may precede it");
     /* And it may not already stand under a flow in the fork tree: flow_new mints a root node, so a non-NULL `up` is
        a second inheritance, leaking the first parent's node and charging every arm it sheds to the wrong chain. */
     DCHECK(sib->acct != NULL && sib->acct->up == NULL,
@@ -2795,8 +2799,9 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
        what its parent is worth. It fires the moment anything enters flow_weight that a fork does not carry (a depth
        bonus, a script-index term, a separate visit counter, a "prefer flows that have run" tiebreak).
        flow_weight is `fam_val + 1/(1+max(served/(1+D),W*priced)/Q+orphan_seen) − fam_work*RATE` with
-       D = (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N, and the turn is `work` over `work_gen`, so a fork
-       carries nine things: the three `cand_*` (decide_fork_blob hands the sibling the parent's cursor); `work` and
+       D = (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N + fork_val, and the turn is `work` over `work_gen`;
+       `fork_val` is zero on both arms (flow_fork_restart), so a fork carries nine things: the three `cand_*`
+       (decide_fork_blob hands the sibling the parent's cursor); `work` and
        `work_gen`; the family tag, joined, which carries the reward and the aging (a fresh root would read 0 and fire);
        the code site, which carries the site's count; `orphan_seen`; and the priced decisions.
        What it cannot see: it compares the arm with the parent after the fork has written both, so a term over a
@@ -2818,6 +2823,17 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
            "must be worth the same at the instant of the branch apart from the one priced decision the sibling's "
            "arm may take; a weight term the fork does not carry lets a flow change its own rank by branching, "
            "which is the one thing the WFQ may never let it do");
+}
+
+/* Both arms of a fork start `fork_val` at zero, and this is the parent's half, run before the sibling is minted.
+   It is what makes the term rank-neutral at the fork: the two arms read it equal (zero), and so do two arms of one
+   parent forked at two instants, since each reads zero at its birth whatever the parent emitted between them. What
+   the parent emitted before the branch is on the prefix both arms share, and the family's reward, which both read,
+   already holds it, so restarting the parent drops no value from the order and gives none to either arm. */
+void flow_fork_restart(Flow *parent) {
+    DCHECK(parent != NULL && parent->fork_val >= 0.0, "a fork restarted no flow, or one whose own value is negative");
+    parent->fork_val = 0.0;
+    flow_ix_rekey(parent);
 }
 
 static int g_flows_assembling;   /* siblings between flow_assembly_begin and flow_assembly_end, 0 or 1 */
@@ -4649,14 +4665,21 @@ uint64_t flow_birth_seq(const Flow *f) {
 /* The member half of the weight, the key the order's index is keyed on: every operand that is a reading of this
    member and of nothing it shares. The weight's operands partition by scope three ways: acct_family_val and the
    family notch are per account, the site's service is per site (one count read by every member standing there), and
-   the fitness distance, which weights the member's reading of that count, is per member (`f->cand_replay`/
-   `cand_surv`/`cand_rung`), which no other member can move. The index holds each scope where it moves (family, site,
-   member), so no write re-keys more members than it moved. A member's priced decisions are read in the optimism,
-   through the class it stands in, and its turn (flow_service_notch) orders it only among members equal in all
-   three. */
+   the key, which weights the member's reading of that count, is per member, which no other member can move. The
+   index holds each scope where it moves (family, site, member), so no write re-keys more members than it moved. A
+   member's priced decisions are read in the optimism, through the class it stands in, and its turn
+   (flow_service_notch) orders it only among members equal in all three.
+   The key is `D + fork_val`: the @S fitness and what the member's own prefix emitted since its fork (heuristic, on
+   the evidence of mdn at 68591d20, where the own run landed all 19 paid identities, its forks none, and it held
+   3.0% of the work). Inside a family, where the reward and the aging are common offsets, it orders a productive
+   member above its siblings at one service count; as a weight of the service and not a summand it decays as the
+   member's own work raises its site's count, so it is no tier, and a fork, which restarts it on both arms, can only
+   lower it, so no member gains by departing. */
 static double flow_index_key(const Flow *f) {
-    return flow_distance(f);
+    return flow_distance(f) + f->fork_val;
 }
+
+double flow_member_key(const Flow *f) { return flow_index_key(f); }
 
 /* The service the same code site (`kind`, `key`, `seen`) has received in every family's ledger but `f`'s own: what
    the census sets beside `site_served` to say whether a member's unserved site is code another family has run. A
@@ -4687,8 +4710,8 @@ static int64_t flow_site_served_elsewhere(const Flow *f) {
 /* A member's weight rebuilt from its operands, in flow_order_key's composition and order of operations, so it is
    the same double: the census publishes the operands and a reader recomputes this. */
 static double flow_weight_recompose(const FlowWeightOperands *o) {
-    double dist = (o->replay + o->surv + (double)o->rung) / (double)FLOW_RUNGS_N;
-    double opt = site_optimism(o->site_served, o->orphan_seen, o->assumed + o->against_env, dist);
+    double key = (o->replay + o->surv + (double)o->rung) / (double)FLOW_RUNGS_N + o->fork_val;
+    double opt = site_optimism(o->site_served, o->orphan_seen, o->assumed + o->against_env, key);
     return (o->reward - (double)o->coord_notch * FLOW_AGE_QUANTUM) + opt;
 }
 
@@ -4708,6 +4731,7 @@ static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
     o->replay = f->cand_replay;
     o->surv = f->cand_surv;
     o->rung = f->cand_rung;
+    o->fork_val = f->fork_val;
     o->w = flow_weight(f);
     o->age_quantum = FLOW_AGE_QUANTUM;
     o->assumed = flow_assumed(f);
@@ -5026,6 +5050,7 @@ static int ix_t_cmp(const FlowIxTreap *a, const FlowIxTreap *b) {
     if (a->rung != b->rung) return a->rung < b->rung ? -1 : 1;
     if (a->replay != b->replay) return a->replay < b->replay ? -1 : 1;
     if (a->surv != b->surv) return a->surv < b->surv ? -1 : 1;
+    if (a->fork_val != b->fork_val) return a->fork_val < b->fork_val ? -1 : 1;
     return 0;
 }
 
@@ -5202,6 +5227,7 @@ static void ix_t_stamp(Flow *f) {
     f->ix_t.replay = f->cand_replay;
     f->ix_t.surv = f->cand_surv;
     f->ix_t.rung = f->cand_rung;
+    f->ix_t.fork_val = f->fork_val;
 }
 
 static void flow_ix_insert(Flow *f) {
@@ -5266,6 +5292,7 @@ static void flow_ix_rekey(Flow *f) {
     fresh.key = flow_index_key(f); fresh.notch = flow_service_notch(f);
     fresh.replay = f->cand_replay; fresh.surv = f->cand_surv;
     fresh.rung = f->cand_rung;
+    fresh.fork_val = f->fork_val;
     if (fresh.key == f->ix_t.key && ix_t_cmp(&fresh, &f->ix_t) == 0) return;
     flow_ix_remove(f);
     flow_ix_insert(f);

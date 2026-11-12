@@ -5727,6 +5727,9 @@ static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *c
         if (parent == flow_running() && JS_RunningSiteHash(ctx, &site))
             engine_stand_running(parent, FLOW_SITE_CODE, site);
     }
+    /* Both arms start what they emit since the fork at zero, the parent first, before the sibling's arrival raises
+       the rank change. */
+    flow_fork_restart(parent);
     /* Unseeded: an arm inherits its parent's sequence (copied below), so seeding would allocate the root
        document's rows onto it and leak them under the copy. */
     Flow *sib = flow_add_unseeded(ctx, parent->fn, fork_point);
@@ -9066,7 +9069,7 @@ static uint64_t g_rival_miss_gen = 0, g_rival_miss_cur = 0, g_rival_miss_both = 
    in every build and read only in dev, like `g_ranked_*`: four stores after an O(members) walk, and guarding them
    would put the assertion's operands behind a second condition. */
 static int64_t g_rival_own_notch = 0, g_rival_opt_den = 0;
-static double g_rival_val = 0.0, g_rival_dist = 0.0;
+static double g_rival_val = 0.0, g_rival_key = 0.0;
 /* The integer the rival's family coordinate prices (solver/flow.c's acct_family_coord): its family's notch.
    flow_age_running charges the family without a rank change, so this moves between two generations, and only up.
    The fifth term, and the one-sided one. */
@@ -9099,9 +9102,9 @@ static int64_t g_ranked_silence = 0;
    served across a quantum or the flow stands at another site, and a flow can be re-picked without a switch-in, so it
    can change while the silence notch stands still. */
 static int64_t g_ranked_opt_den = 0;
-/* The fitness distance, which weights the optimism (`reward + ucb(served/(1+dist)) - silence`), and so a
-   coordinate of the weight. */
-static double g_ranked_dist = 0.0;
+/* The member key (the fitness plus what the member emitted since its fork), which weights the optimism
+   (`reward + ucb(served/(1+key)) - silence`), and so a coordinate of the weight. */
+static double g_ranked_key = 0.0;
 /* Suspend points reached: every call to this hook is one, which the seam assertion needs and quickjs's counters do
    not give (g_flow_preempt_requested counts preempts wanted, raised only where the hook returns true). A lifetime
    count raised in every build: the seam assertion reads its per-step delta, and the @WFQ census publishes it as
@@ -9215,7 +9218,7 @@ static int preempt_hook(int kind) {
            whoever in that family holds it, the one movement this interval permits. */
         if (g_rival) {
             g_rival_own_notch = flow_service_notch(g_rival); g_rival_opt_den = flow_optimism_den(g_rival);
-            g_rival_val = flow_reward(g_rival); g_rival_dist = flow_distance(g_rival);
+            g_rival_val = flow_reward(g_rival); g_rival_key = flow_member_key(g_rival);
             g_rival_fam_coord_notch = flow_family_notch(g_rival);
             g_rival_w = flow_weight(g_rival);
         }
@@ -9245,16 +9248,16 @@ static int preempt_hook(int kind) {
        rescan by its second half. */
     DCHECKF(!g_rival ||
             (flow_service_notch(g_rival) == g_rival_own_notch && flow_optimism_den(g_rival) == g_rival_opt_den &&
-             flow_reward(g_rival) == g_rival_val && flow_distance(g_rival) == g_rival_dist &&
+             flow_reward(g_rival) == g_rival_val && flow_member_key(g_rival) == g_rival_key &&
              flow_family_notch(g_rival) >= g_rival_fam_coord_notch),
             "a term of the cached rival's weight moved while the frontier generation stood still (own notch %lld -> "
-            "%lld, optimism denominator %lld -> %lld, reward %g -> %g, distance %g -> %g, "
+            "%lld, optimism denominator %lld -> %lld, reward %g -> %g, member key %g -> %g, "
             "family notch %lld -> %lld, still a member: %d; -1 and 0 mean it departed) — raise "
             "frontier_rank_changed() at the writer that moved it",
             (long long)g_rival_own_notch, (long long)flow_service_notch(g_rival),
             (long long)g_rival_opt_den, (long long)(flow_is_member(g_rival) ? flow_optimism_den(g_rival) : -1),
             g_rival_val, flow_reward(g_rival),
-            g_rival_dist, flow_distance(g_rival),
+            g_rival_key, flow_member_key(g_rival),
             (long long)g_rival_fam_coord_notch, (long long)flow_family_notch(g_rival), flow_is_member(g_rival));
     /* The same claim over the whole weight, after the five so that a fire here is a movement the five have no
        name for: five terms in bounds and a weight that rose, which no term of today's weight can do. See the
@@ -9270,7 +9273,7 @@ static int preempt_hook(int kind) {
            must still be running ("a top-ranked flow runs on at ~zero switch cost"). What can change the answer is
            exactly what is snapshotted at switch-in: the frontier generation (a fork or finish, and an emission, bump
            it), the running flow's silence notch (its own and its family's thread time since emission, in whole
-           cooperative quanta), its completed-unit count, its family's reward, and its fitness distance. A parked
+           cooperative quanta), its completed-unit count, its family's reward, and its member key. A parked
            flow burns no CPU and its `val` cannot change without running. The list is re-derived whenever
            flow_weight's formula changes; a term left off makes this fire on a legitimate rank change.
            The eligible set is also an input (the comparison is best-eligible-other > cur), and host-owed marks
@@ -9284,9 +9287,9 @@ static int preempt_hook(int kind) {
         DCHECK(flow_frontier_gen() != g_ranked_gen ||
                flow_family_notch(cur) != g_ranked_silence ||
                flow_optimism_den(cur) != g_ranked_opt_den || flow_reward(cur) != g_ranked_val ||
-               flow_distance(cur) != g_ranked_dist,
+               flow_member_key(cur) != g_ranked_key,
                "the value yield fired on a flow whose rank nothing changed since it was switched in — generation, "
-               "silence notch, optimism denominator, reward and distance are unchanged, so the pick and the hook are "
+               "silence notch, optimism denominator, reward and member key are unchanged, so the pick and the hook are "
                "answering one state two ways");
         return 1;
     }
@@ -12330,7 +12333,7 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
     g_ranked_gen = flow_frontier_gen(); g_ranked_val = flow_reward(f);   /* the reward term, the family's */
     g_ranked_silence = flow_family_notch(f);  /* the aging term — see the assertion in preempt_hook */
     g_ranked_opt_den = flow_optimism_den(f);   /* …and the optimism term's, which is a count and not a clock */
-    g_ranked_dist = flow_distance(f);          /* …and the fitness term's, which is a reading and not a payment */
+    g_ranked_key = flow_member_key(f);         /* …and the member key's: its fitness and its own emitted value */
 }
 
 static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down its interleaving state + remove */

@@ -57,7 +57,7 @@ typedef struct FlowSite FlowSite;
 
 /* One member's weight as its operands, in the order flow_order_key composes them (solver/flow.c's
    flow_weight_operands): `w = (reward - coord_notch*Q) + 1/(1 + max(site_served/(1 + D), (assumed + against_env)*W)
-   / pull_work + orphan_seen)` with D = (replay + surv + rung)/FLOW_RUNGS_N, Q = FLOW_AGE_QUANTUM and
+   / pull_work + orphan_seen)` with D = (replay + surv + rung)/FLOW_RUNGS_N + fork_val, Q = FLOW_AGE_QUANTUM and
    W = FLOW_PRICED_WORK. `coord_notch` is the family notch; `own_notch` is the member's turn, which orders it only
    among members level on the weight and is no summand. `site_served` is the work the member's code site has
    received in its family and `pull_work` the quantum it is counted in (ENGINE_PULL_WORK).
@@ -77,6 +77,7 @@ typedef struct {
     int64_t coord_notch, own_notch, site_served, pull_work, visits, orphan_seen, picks;
     double replay, surv;
     int rung;
+    double fork_val;      /* Flow.fork_val, added to D */
     double w;
     double age_quantum;   /* FLOW_AGE_QUANTUM, which the family notch is priced at */
     int64_t assumed;      /* flow_assumed */
@@ -103,11 +104,11 @@ typedef struct FlowIxNode {
 } FlowIxNode;
 
 /* A member's operand tuple and, while it represents its class, its node in its branch bucket's treap (flow.c's
-   flow_ix_* banner). A class is the members of one site with one tuple (turn, the three fitness fields), which weigh
-   the same to the bit and take one turn; the treap holds one node per class, in search order by the tuple and
-   heap order by `prio`, carrying the class's key and, over its subtree, the largest key (`max`), the least turn
-   among the classes at it (`maxturn`), the lowest birth sequence among the classes at both (`floor`), the largest
-   key of a class holding a never-dispatched member (`nmax`, -INFINITY when none) and the smallest key (`min`). `cls` is the
+   flow_ix_* banner). A class is the members of one site with one tuple (turn, the three fitness fields and
+   `fork_val`), which weigh the same to the bit and take one turn; the treap holds one node per class, in search
+   order by the tuple and heap order by `prio`, carrying the class's key and, over its subtree, the largest key
+   (`max`), the least turn among the classes at it (`maxturn`), the lowest birth sequence among the classes at both
+   (`floor`), the largest key of a class holding a never-dispatched member (`nmax`, -INFINITY when none) and the smallest key (`min`). `cls` is the
    class's members in a heap by birth sequence, `ncls` and `nnever` how many there are and how many were never
    dispatched; all of these are read off the representative, the class's oldest member, only. */
 typedef struct FlowIxTreap {
@@ -116,6 +117,7 @@ typedef struct FlowIxTreap {
     int64_t notch, maxturn;
     double replay, surv;
     int rung;
+    double fork_val;
     uint64_t seq, floor;
     uint64_t prio;
     struct FlowIxNode *cls;
@@ -237,6 +239,12 @@ typedef struct Flow {
        Never copied, never inherited, never read by flow_weight; flow_fork_inherit asserts it is still zero,
        because a value copied at a fork differs between two arms by birth order rather than merit. */
     double val;
+    /* What this member's own prefix emitted since the fork that made it, in `val`'s points: a fact about the executed
+       prefix, read by the order as part of the member's key (flow.c's flow_index_key), so it orders the member among
+       its siblings while the family's reward orders families. Every fork restarts it on both arms
+       (flow_fork_restart), since what the parent emitted before the branch is on the prefix both arms share and is
+       already its family's reward. Zero at an arrival and at a rebuild, which founds its own family. */
+    double fork_val;
     /* The member's own silence: the work this flow retired since its fork family last emitted, never a step or
        opcode count. Its whole quanta are the member's turn (flow.c's flow_service_notch), which rotates the thread
        among members level on every term of the weight; the aging itself is the family's (`fam_work`). int64_t
@@ -2135,6 +2143,11 @@ void  flow_act_bank_running(uint64_t act, int64_t us);
    the fork is rank-neutral (reasoning at the definition). `at_branch` is the parent's path marks read where the
    fork took the sibling's decision and pin blobs. */
 void  flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch);
+/* A fork restarts its parent's `fork_val`, before the sibling is minted: both arms start the term at zero. */
+void  flow_fork_restart(Flow *parent);
+/* The member's key in the order (flow.c's flow_index_key): its fitness plus `fork_val`, the weight of its share of
+   its code site's service. */
+double flow_member_key(const Flow *f);
 /* The account of an @S candidate assembled as an arm of a held snapshot (solver/source_cut.h) instead of re-run
    from the baseline: the from-baseline candidate's own account at the frontier's virtual time, since a candidate
    founds its account whichever state it starts from, with the facts about the prefix the snapshot executed
