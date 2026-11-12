@@ -1906,8 +1906,9 @@ static void park_cross_census(Flow *f, ParkCrossKinds *kinds, bool slots)
         char name[160], kind[176];
         uint32_t refs, n_gaps;
 
+        /* The pending register is not among them: park_register wrote it with the born names, and its gaps are
+           already the member's. */
         vals[n++] = f->fn;
-        vals[n++] = f->pending;
         vals[n++] = f->orphan_claim_fn;
         for (int a = 0; a < f->n_agents && n < (int)(sizeof vals / sizeof vals[0]); a++) vals[n++] = f->agents[a].jobs;
         if (f->n_agents > 8) park_cross_kind(&k, "agents");
