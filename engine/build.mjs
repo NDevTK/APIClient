@@ -141,7 +141,7 @@ const coldFields = sourceFact(() => censusDefRowSet(["cold"],
    "stepUnitOverrunAskArms", "stepUnitOverrunGapArms",
    "outOfProgramsAtTheLadderUnits", "programCursors",
    "programsAhead", "epDoors", "epAddressClass", "epWitnessClass",
-   "ramLimitSource", "saleCensus", "parkCrossGaps", "floorChainStubRecByClass", "recUnwrittenDroppedByClass", "chainRecByClass"],
+   "ramLimitSource", "saleCensus", "parkCrossGaps", "floorChainStubRecByClass", "recFrozenByClass", "chainRecByClass"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer's declaration rather than from a list beside it"));
 /* Checks that `parts` sum to `total` within one census, before any reading quotes them. The engine asserts
@@ -3459,19 +3459,20 @@ function censusReading(out) {
                           `\`${kind}\` against ${x.parkCrossReplays} replaying in all — each member counts a kind once`);
     /* The floor's component records by owner class partition `floorChainStubRecKiB`: each class row's KiB is its
        bytes rounded down, so the rows sum to the total less under one KiB per row; its unwritten part is within it. */
-    /* So do the frozen chains' records now (`chainRecKiB`), and the entries freezes dropped as reads
-       (`recUnwrittenDroppedKiB`, their entries `recUnwrittenDropped`), each of those wholly unwritten. */
+    /* So do the frozen chains' records now (`chainRecKiB`), and the entries freezes have frozen (`recFrozenKiB`,
+       their entries `recFrozen`, the equal ones `recFrozenSame`). */
     for (const x of [c.a, c.b])
-      for (const [obj, total, n, all] of [["floorChainStubRecByClass", "floorChainStubRecKiB", null, false],
-                                          ["chainRecByClass", "chainRecKiB", null, false],
-                                          ["recUnwrittenDroppedByClass", "recUnwrittenDroppedKiB", "recUnwrittenDropped", true]]) {
+      for (const [obj, total, n] of [["floorChainStubRecByClass", "floorChainStubRecKiB", null],
+                                     ["chainRecByClass", "chainRecKiB", null],
+                                     ["recFrozenByClass", "recFrozenKiB", "recFrozen"]]) {
         const rows = Object.entries(x[obj]);
         const kib = rows.reduce((t, [, r]) => t + r[1], 0), cnt = rows.reduce((t, [, r]) => t + r[0], 0);
-        if (rows.some(([, r]) => r.length !== 4 || r[2] > r[0] || r[3] > r[1] || (all && (r[2] !== r[0] || r[3] !== r[1]))) ||
-            kib > x[total] || kib + rows.length < x[total] || (n && cnt !== x[n]))
+        const same = rows.reduce((t, [, r]) => t + r[2], 0);
+        if (rows.some(([, r]) => r.length !== 4 || r[2] > r[0] || r[3] > r[1]) ||
+            kib > x[total] || kib + rows.length < x[total] || (n && (cnt !== x[n] || same !== x.recFrozenSame)))
           throw new Error(`[build] the @COLD census's ${obj} ${JSON.stringify(x[obj])} does not partition ${total} ` +
-                          `${x[total]}${n ? ` and ${n} ${x[n]}` : ""}: each row is [records, KiB, unwritten records, KiB] ` +
-                          `with the unwritten part within it${all ? " and the whole of it" : ""}, and the KiB sum to ` +
+                          `${x[total]}${n ? ` and ${n} ${x[n]} (equal ${x.recFrozenSame})` : ""}: each row is [records, KiB, unwritten records, KiB] ` +
+                          `with the unwritten part within it, and the KiB sum to ` +
                           `the total less under one per row`);
       }
     /* THE MEMBER-SIDE SUBSET CHAIN, CHECKED HERE FOR THE REASON THE @WFQ PAIRS ARE CHECKED IN THEIR OWN

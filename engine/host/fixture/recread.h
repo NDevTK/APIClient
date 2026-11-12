@@ -1,6 +1,6 @@
 /* The component-record read document: two DOMPoints made before any fork, so their records are shared state, then
    a branch on an unknown (an injected global the document does not spell, which solver/absent.c mints). One arm
-   writes `q.x`; both read `p.y` and the other reads `q.x`, so each arm's head holds a record it only read. A second
+   writes `q.x`; both read `p.y` and the other reads `q.x`, so only the writing arm's head may hold a record. A second
    branch freezes those heads, and each world reports `q.x`: 9 in the writing arm and 5 in the other, which reads
    the baseline its sibling's write must not reach. One of test_forced.c's exploring documents (its TF_DOCS table).
    It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */

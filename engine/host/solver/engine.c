@@ -13144,10 +13144,12 @@ static long engine_rec_classes_json(const CowChainBytes *acc, char *buf, size_t 
 
 void engine_floor_rec_json(char *buf, size_t cap) { engine_rec_classes_json(&g_floor.stub, buf, cap); }
 
-long engine_rec_dropped_json(char *buf, size_t cap, long *kib) {
-    const CowChainBytes *d = cow_rec_unwritten_dropped();
+long engine_rec_frozen_json(char *buf, size_t cap, long *kib, long *same) {
+    const CowChainBytes *d = cow_rec_frozen();
 
     *kib = d->rec / 1024;
+    *same = d->rec_other.same_n;
+    for (int k = 0; k < d->n_cls; k++) *same += d->cls[k].same_n;
     return engine_rec_classes_json(d, buf, cap);
 }
 

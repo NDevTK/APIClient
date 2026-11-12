@@ -534,7 +534,7 @@ long cow_chain_bytes(void);
    reaches it, else under the first stub reaching it, its bytes split into its entries, the component bytes
    (HOST, BODY) and the component records (HOST_REC) they own. Allocates nothing. The records are also split by
    their owner's class (the first COW_SPLIT_REC_CLASSES classes met; the rest in `rec_other`), each with the records
-   whose flow side equals their baseline: a capture no write followed. */
+   whose flow side equals their baseline: a write that left the record as it found it. */
 #define COW_SPLIT_REC_CLASSES 48
 typedef struct { uint32_t cls; long n, bytes, same_n, same_bytes; } CowRecClass;
 typedef struct {
@@ -542,10 +542,10 @@ typedef struct {
     int n_cls;
     CowRecClass cls[COW_SPLIT_REC_CLASSES], rec_other;
 } CowChainBytes;
-/* The component record entries freezes dropped because their flow side equals their baseline, a read a frozen
-   segment does not keep (cow_delta_fork): their blocks' bytes in `rec`, and by owner class each class's entries
-   and bytes. Lifetime counts. */
-const CowChainBytes *cow_rec_unwritten_dropped(void);
+/* The component record entries freezes have frozen into segments (cow_delta_fork): their blocks' bytes in `rec`,
+   and by owner class each class's entries and bytes, with those whose flow side equals their baseline. Only a write
+   captures a record, so an equal pair is a write that put back what it found. Lifetime counts. */
+const CowChainBytes *cow_rec_frozen(void);
 void cow_chain_split_begin(void);
 void cow_chain_split_resident(const CowDelta *d, CowChainBytes *acc);
 void cow_chain_split_stub(const CowDelta *d, CowChainBytes *acc);
